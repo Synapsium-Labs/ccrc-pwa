@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=05f07ebd968085d1226a5812bfd33e764a09f15948b84842123d5d4992de645b
+# ccrc:generated 1 sha256=aedb658b07d09f12f7c2f05b4d3c5787c1e53f06967d7123ccc81cca44b391cb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1094,11 +1094,60 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # (ccd/ccd:12229-12230): the field is bytes off disk. Here it also decides the answer — an
 # empty or half-written marker is NOT a verdict, and reading one as "dead" would
 # let a truncated write bar an account nothing ever measured.
+# `-f` BEFORE THE OPEN, the same rung `_reg_read` and `_reg_get` carry and for
+# the same reason — and this path is reached by NEITHER of them (#69 review
+# round 3, R2). They build `$REG/<id>.<field>`; this one builds the DOTLESS
+# `$REG/<account>-authdead`, so round 2's `_reg_get` guard cannot cover it and
+# the hang class it was written to close stayed open on the same 5-second tick.
+# `cat` opens whatever is here with no regard for TYPE, and both call sites are
+# inside ACCOUNT loops (`_swap_target`, `_ws_least_loaded`): one bad file wedges
+# the tick of EVERY row that reaches the loop, not just the row on that account.
+# MEASURED on the shipped body: a FIFO with no writer and a symlink to
+# `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, 17 inputs
+# all answer in under 0.05 s.
+#
+# IT NARROWS NOTHING, measured across those 14 inputs: absent, empty, garbage, a
+# leading space, `chmod 000`, a directory, a dangling symlink, a symlink loop and
+# `/dev/null` all answer rc 1 before and after; a regular marker, a symlink to
+# one and a hardlink answer rc 0 before and after. Only the two that answer
+# NOTHING today change, and no writer in this tree can make one —
+# `ccd-account-health`'s `_ah_mark` is mktemp -> printf -> `mv -f`.
+#
+# THE FOLD IS ALREADY HERE AND ITS DIRECTION IS THE FILE'S OWN RULING. An
+# unreadable marker answering "not condemned" folds "no marker" with "cannot
+# tell", exactly as a `chmod 000` marker already did; the digits gate above
+# argues that direction. Both consumers spend this on PREFERENCE only — rank 101
+# in `_swap_target`, a second-tier fallback in `_ws_least_loaded` — so the fold
+# costs at most one rescue landing on a lane that may not authenticate, and "a
+# rescue must always have a destination". The opposite fold is the unsafe one.
+#
+# AND IT ENDS A DIVERGENCE rather than starting one: the second body of this
+# same contract, in `ccd/ccd-telemetry-keepalive`, already opens with
+# `[ -f "$f" ] || return 1`. This copy was the one left behind.
 _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it
-  local t; t=$(cat "$REG/$1-authdead" 2>/dev/null); t="${t%% *}"
+  local f="$REG/$1-authdead" t
+  [[ -f "$f" ]] || return 1
+  t=$(cat "$f" 2>/dev/null); t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]]
 }
 _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
+# NO PROJECT ON THIS BOX CAN BE IN ANY POOL — the one question whose answer does
+# not depend on reading a project's name (#69 review round 3, R3). `$POOLS_DIR`
+# has exactly one `mkdir` in the tree, inside `cmd_project_pool`, so until an
+# operator tags a first project the directory is absent and `_project_pool_state`
+# answers `untagged` for every name there is. A caller that could not measure a
+# `.project` field may therefore proceed EXACTLY as before on such a box: the
+# value it failed to read could not have changed the verdict. The two level
+# tests are `_project_pool_state`'s own first two, asked in its order and for
+# its reasons — `$REG` before `$POOLS_DIR`, `-e` paired with `-L` in one
+# statement so a dangling symlink or a loop is not read as absence.
+# rc 1 (something COULD be tagged) is the conservative answer, and it is what an
+# unsearchable `$REG` gets: this predicate never licenses proceeding on a box it
+# could not measure.
+_pool_untaggable() {   # rc 0 = no project can be in any pool, whatever its name
+  [[ -d "$REG" && -x "$REG" ]] || return 1
+  [[ ! -e "$POOLS_DIR" && ! -L "$POOLS_DIR" ]]
+}
 # THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
 # and it may never `die`: every decider calls it once per decision and one of
 # those deciders is `_auto_swap_check`, inside the long-lived `cmd_supervise`
@@ -1113,22 +1162,22 @@ _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is 
 # chmod would quietly make a project unconstrained. `_pool_ok` answers rc 2
 # for both — nobody decides.
 #
-# SEVERAL CALLERS OF `_pool_ok` NOW BRANCH THREE WAYS ON ITS EXIT CODE —
-# landed this wave: `_swap_target`, `cmd_swap`, `cmd_start` and `cmd_prefer`
-# each read rc 2 (undecidable) and rc 1 (mismatch) as distinct outcomes
-# directly, at their own `_pool_ok` call. `_auto_swap_check` gets the same
-# distinction a different way, NOT by testing `-eq 2` itself: its own two
-# direct `_pool_ok` calls (the home re-seed and the `aff_verb` assignment)
-# each test only `-eq 1`, and the rc-2 outcome reaches it MOSTLY through its
-# nested call to `_swap_target`, whose early returns on rc 2 the comments
-# there explain. CORRECTED (#69 review): this used to end "do not go looking
-# for a literal `-eq 2` branch inside `_auto_swap_check` itself; there is
-# none", and C1 falsified it in the same commit that left the sentence
-# standing — the `strc == 2` arm IS a literal `-eq 2` branch in that
-# function, and the round after it added a second (`prc`, to name WHICH
-# undecidable). A navigation note that sends a reader away from this wave's
-# central branch is worse than no note; both are `grep -n '\-eq 2' ccd/ccd`
-# away. That is no longer an
+# EVERY CALLER OF `_pool_ok` THAT DECIDES ANYTHING NOW BRANCHES THREE WAYS ON
+# ITS EXIT CODE — landed this wave: `_swap_target`, `cmd_swap`, `cmd_start`,
+# `cmd_prefer` and `_auto_swap_check` each read rc 2 (undecidable) and rc 1
+# (mismatch) as distinct outcomes. `grep -n '\-eq 2' ccd/ccd` is the census
+# and it is the whole census — do not take a claim about where the branches
+# are from this comment, take it from that command.
+#
+# REWRITTEN, NOT APPENDED TO (#69 review round 3). What stood here first said
+# "do not go looking for a literal `-eq 2` branch inside `_auto_swap_check`;
+# there is none". Round 2 retracted that closing sentence and left its premise
+# standing — "its own two direct `_pool_ok` calls … each test only `-eq 1`" —
+# so the paragraph asserted P three lines above ¬P. Both halves were false:
+# `_auto_swap_check` tests `-eq 2` twice, and the `prc` it tests is the one
+# assigned by the `aff_verb` call the sentence named as testing only `-eq 1`.
+# A correction that leaves the falsehood in place is not a correction; it is
+# two claims and no way to pick. That is no longer an
 # obligation on a later wave; it landed at every site named above. The two
 # call sites this comment used to name as the WHOLE of `_pool_ok`'s
 # callers still fold rc 1 into rc 2 exactly as before — `_ws_least_loaded`'s
@@ -1393,15 +1442,18 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 19 matching LINES now, 11 of
-# them call sites — the other eight are prose, this sentence's own quoting of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 11 of
+# them call sites — the other six are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
-# of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round:
-# each of the three added exactly one PROSE mention and no call site. C1's was
-# `_auto_swap_check`'s measurement paragraph; the review round's is the
-# derivation at `_swap_target`'s candidate loop recording that rc 2 is
-# unreachable THERE once the tag check above returns 2. The call-site half has
-# not moved once, which is the number that would matter if it did.) CORRECTED at merge review (M5): this read "finds 16 call sites now
+# of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
+# 17/11 after round 3, which rewrapped one prose mention and replaced another
+# with a grep anchor.
+# CORRECTED (round 3): the round-2 sentence attributed its new mention to
+# `_swap_target`'s candidate loop, and the line was in `_auto_swap_check` —
+# the candidate-loop paragraph matches this grep zero times. The call-site
+# half has not moved once, which is the number that would matter if it did,
+# and it is the only half worth defending: a prose count moves whenever a
+# comment is rewrapped, as it just did.) CORRECTED at merge review (M5): this read "finds 16 call sites now
 # (a count this sentence's own quoting of the pattern adds one to)", which
 # asserts 15 call sites, and the answer is 11. `grep -c` counts LINES, and
 # five of the sixteen are comments. Two quantities, so the pin in
@@ -1616,38 +1668,79 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # `-f` FIRST, FOR THE SAME REASON `_reg_read` HAS ONE (#69 review, S3). C1
 # closed the FIFO/character-device hang for `_reg_read` and then added a NEW
 # unguarded read to the supervise loop through THIS function — so the class was
-# only half closed, and the half left open is the one with 135 call sites. The
-# tick alone reaches it for `project`, `lastswap` and `swapblocked`; a FIFO or a
-# symlink to `/dev/zero` at any of those blocks in `open(2)`/`read(2)` forever
-# and wedges a supervisor with no exit code and nothing on stdout.
+# only half closed, and the half left open is the one with 133 call sites. A
+# FIFO or a symlink to `/dev/zero` at any of them blocks in `open(2)`/`read(2)`
+# for ever and wedges a supervisor with no exit code and nothing on stdout.
+#
+# THE TICK'S OWN SURFACE, RE-MEASURED (#69 review round 3). This said "the tick
+# alone reaches it for `project`, `lastswap` and `swapblocked`" — three fields,
+# and the supervise loop runs `_auto_swap_check` AND `_auto_compact_check` on
+# the same tick (`grep -n '_auto_compact_check "\$id"' ccd/ccd`). The compact
+# lane adds `lastcompact`, `lastswap` and `wrapper`; `_strand_mark`, itself on
+# the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
+# rather than three — and it included `wrapper`, the very field the strand arm
+# exists to report on. `project` has since left this list entirely: it reads
+# through `_reg_read` now, because there the fold decided something (R3).
 #
 # THIS IS NOT THE WIDENING THE PARAGRAPH BELOW WARNS ABOUT, and the two must not
 # be confused. That warning is about turning `_reg_get` into a THREE-ANSWER read,
-# which would force all 135 callers to decide what to do with rc 2. A type check
+# which would force all 133 callers to decide what to do with rc 2. A type check
 # adds no distinction and narrows none: every input that answers today answers
-# BYTE-IDENTICALLY (a directory, a `chmod 000` file, a dangling symlink, a
-# missing file and `/dev/null` all yield `""` before and after, rc 1 either way).
+# BYTE-IDENTICALLY — a directory, a `chmod 000` file, a dangling symlink, a
+# missing file and `/dev/null` all yield `""` before and after.
+#
+# ONE EXIT CODE DOES MOVE, AND THE SENTENCE THAT DENIED IT WAS THE ARGUMENT FOR
+# TOUCHING EVERY CALL SITE (#69 review round 3). This read "rc 1 either way" and
+# named `/dev/null` among the five. Measured: `cat /dev/null` exits 0, so that
+# one input goes rc 0 -> rc 1. Four of the five are rc 1 either way; the fifth
+# is not, and it was the one the round's own pinning case asserted had "been
+# refused on content before".
+#
+# WHAT ACTUALLY LICENSES THE CHANGE IS A PROPERTY OF THE CALLERS, and unlike the
+# claim it replaces it is measurable in one command per clause: all 133
+# invocations sit inside `$(_reg_get …)` — none outside a capture, none followed
+# by a read of `$?`, and the twenty-eight lines that carry `||` or `&&` all test
+# the captured STRING inside `[[ ]]` (`-n`, `==`), never the status; no
+# assignment from the capture is followed by `||` or `&&` at all. NO CALL SITE CAN SEE THE
+# EXIT CODE AT ALL, so a change confined to it is invisible fleet-wide. Anyone
+# adding the FIRST rc-consuming caller inherits that duty from here.
+#
 # The only inputs whose behaviour changes are the ones that today return NO
 # ANSWER AT ALL — and no ccd writer can produce one: `_reg_set` writes a regular
-# file through printf -> tmp -> atomic rename, and the one direct writer
-# (`.svcfailed`) is a plain `printf >`.
+# file through printf -> tmp -> atomic rename. CORRECTED (round 3): this named
+# `.svcfailed` as "the one direct writer". `_pr_py`, inside this same file,
+# writes `prphase`, `prnumber` and `prcheckedat` through its own tmp +
+# `os.replace` and appends `.prhistory` with a bare `open(…, 'a')` — four more
+# field files, none of them `_reg_set` and none of them `.svcfailed`. The
+# CONCLUSION survives, because all of them produce regular files; the census
+# carrying it did not.
 #
 # NOT DERIVED FROM `_reg_read`, and the reason is cost, not doctrine. The
 # io.ts pattern this file cites has the convenience read derive from its
 # measured sibling, and `_reg_get() { _reg_read "$1" "$2"; return 0; }` would
-# read better — but `_reg_read`'s ladder does two extra stats on every MISS, and
-# a miss is the ordinary case for most fields on most rows, 135 call sites deep,
-# every five seconds, across ~20 supervisors. The fold is kept local and the
-# divergence is written down here rather than discovered later.
+# read better — but `_reg_read`'s ladder does FOUR extra path syscalls on every
+# MISS, and a miss is the ordinary case for most fields on most rows, 133 call
+# sites deep, every five seconds, across ~20 supervisors. Measured with strace
+# over a healthy `$REG`: after the shared `-f`, `stat($REG)`, `faccessat2($REG,
+# X_OK)`, `stat($f)`, `lstat($f)`. CORRECTED (#69 review round 3) — this said
+# "two extra stats", which understates by half the sole quantitative reason for
+# diverging from a pattern this tree names as doctrine. The divergence is
+# written down here rather than discovered later, and it is now written down
+# at its real price.
 _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; }   # id field
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: 135 call sites, by
-# `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l` (measured
-# 2026-09-09 — re-measure it; the figure is not the point, the order of
-# magnitude is; it read 134 for one commit, and the 135th is the one C1's own
-# `_tick_strand_undecidable` added — #69 review). Two spellings that do NOT answer this question, both tried
+# and the reason is a count rather than a preference: 133 invocations across 110
+# lines, by `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l`
+# (measured 2026-09-09 — re-measure it; the figure is not the point, the order
+# of magnitude is). CORRECTED (#69 review round 3): the round-2 sentence said
+# "the 135th is the one C1's own `_tick_strand_undecidable` added". That
+# function does not exist in C1's commit at all — it was added by this PR's own
+# pre-review commit — so the site was this branch's, not C1's, and the stale
+# 134 stood for the span of this PR rather than of C1. The figure is 133 now
+# because round 3 converted the two `.project` reads to `_reg_read`, which is
+# the answer to what a count is FOR: it moves when the code moves. Two spellings that do NOT answer this question, both tried
 # while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
 # prose too, including this line's own quoting of it, and `grep -c` counts
 # LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`
@@ -1778,8 +1871,20 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # field this file adds tomorrow, which a hardcoded allowlist would not be —
   # the two are the same shape either way.
   #
-  # The dot-free claim, measured against every registry file a session has
-  # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The dot-free claim, measured against every `$REG/<id>.<field>` file a
+  # session has today — and that SHAPE is the scope of the claim, corrected
+  # (#69 review round 3): one per-session registry file sits outside it and is
+  # neither listed below nor purged. `$REG/.<id>.starts`, the start-limiter
+  # window (`grep -n '_sl_file=' ccd/ccd`), leads with a DOT, so the loop's
+  # `"$REG/$id".*` glob cannot match it and neither explicit `rm -f` names it.
+  # Disclosed rather than fixed here: it is a handful of bytes per reaped row,
+  # it belongs to the start limiter rather than to this wave, and widening the
+  # glob is a change to what `_reg_purge` MEANS — the nested-id guard below
+  # turns on that glob's shape. What is not acceptable is the sentence that
+  # stood here, which claimed a completeness it had not measured, in the one
+  # paragraph whose own moral is that "an inventory that omits files is an
+  # inventory a future reader trusts and a future writer copies".
+  # The 34: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
@@ -12366,8 +12471,18 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
   # never dies — it runs inside the long-lived supervise loop.
-  local project pps prc cvrc cross_cur="" cross_home=""
-  project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
+  local project pps prc prjrc cvrc cross_cur="" cross_home=""
+  # THE SECOND READ IS MEASURED TOO (#69 review round 3, R3), for the reason
+  # `_crosspool_tick` gives about its own second read: the field can turn
+  # unreadable BETWEEN the caller's read and this one, and this function would
+  # then compute a destination off a tag nobody measured — the same silent
+  # constraint lift, one seam further in. rc 2 is this function's own declared
+  # NOBODY CAN SAY. `_pool_untaggable` gates it for the same reason it gates the
+  # caller: on a box with no `pools/` the unread name could not have changed the
+  # answer, so refusing there would break the limit rescue to close nothing.
+  project=$(_reg_read "$id" project); prjrc=$?
+  [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable && return 2
+  pps=$(_project_pool_state "$project")
   # UNDECIDABLE IS NOT A DECISION — FOR THE MARKER TOO, NOT ONLY FOR THE TAG
   # (C1, D-1991). rc 2 says the marker's own record could not be read, so this
   # function cannot say whether a deliberate crossing stands. Taking that as
@@ -12396,7 +12511,9 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # UNDECIDABLE IS NOT A DECISION, AND IT ANSWERS 2 (#69 review, S1). An
   # unreadable or malformed tag means nobody decides — the same "nobody can say"
   # this function's own header declares, and the same one the crossing record
-  # answers eight lines up. It used to `return 0`, and the paragraph that stood
+  # answers at the two `cvrc` guards above (`grep -n 'cvrc" -eq 2' ccd/ccd` —
+  # this said "eight lines up" and no reading of the block yields eight; #69
+  # review round 3). It used to `return 0`, and the paragraph that stood
   # here ADMITTED the fold: "indistinguishable at this call site… folding it
   # into 'stay' would be right by accident". Right by accident is the shape this
   # wave exists to remove, and the accident was measurable: with an undecidable
@@ -12641,7 +12758,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
-  local project pps prc crossed="" ctrc wrc hrc strc new aff_verb=auto-home
+  local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
@@ -12704,7 +12821,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `_swap_target` is told so explicitly through `hrc` rather than through an
   # empty string it would mistake for an account.
   home=$(_home_measured "$id"); hrc=$?
-  if [[ "$hrc" -eq 2 ]]; then _tick_undecidable "$id" home; home=""; else hrc=0; fi
+  # SAID BY THE VERDICT BELOW, NOT HERE (#69 review round 3, R1). This line
+  # used to call `_tick_undecidable "$id" home` itself. Four callers each
+  # writing the stamp for their own field, with a fifth clearing it in the
+  # middle, is what defeated the debounce; the tick now takes ONE verdict once
+  # every read has answered, and this one only records the answer.
+  if [[ "$hrc" -eq 2 ]]; then home=""; else hrc=0; fi
   # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
   # THIS READ happens once, here, and BEFORE the cooldown gates below — that
   # is not the same claim as "once per tick": `_project_pool_state` runs
@@ -12715,7 +12837,44 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # a relocation — nothing restarts, no transcript moves — so it must not
   # wait 900 s behind a gate that exists to stop swap storms, and it is
   # idempotent the moment `.home` is back in pool.
-  project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
+  # THE PROJECT TAG'S OWN READ IS MEASURED (#69 review round 3, R3). `_reg_get`
+  # folds ABSENT, EMPTY and UNREADABLE into `""`, and `_project_pool_state`
+  # answers `untagged` for `""` — deliberately, for the pre-2026-07-28 rows
+  # that carry no `.project` at all. But `untagged` is the ONE state `_pool_ok`
+  # admits every account under, so an UNREADABLE `.project` silently LIFTED the
+  # pool constraint: measured, with `demo` tagged `pool-a` and `.project` a
+  # FIFO, the next limit block wrote `auto-rescue claude-demo: claude (blocked)
+  # -> claude-b` and dispatched it, where the measured tag refuses every
+  # out-of-pool candidate and strands by name. Worse, and also measured: the
+  # same fold reaches `_crosspool_tick`, whose guard sees the folded `untagged`
+  # rather than the unreadable it is, DELETES a deliberate crossing marker and
+  # logs `crosspool-ended <id>: project pool is now untagged` — a destructive
+  # act on a false reason. ABSENT and EMPTY still mean untagged; only rc 2
+  # stops the tick.
+  #
+  # GATED ON `_pool_untaggable`, AND THAT GATE IS THE WHOLE DIFFERENCE BETWEEN
+  # THIS AND A REGRESSION. `$POOLS_DIR` has exactly one `mkdir` in the tree
+  # (`grep -n 'mkdir -p "$POOLS_DIR"' ccd/ccd`), inside `cmd_project_pool`, so
+  # on every box that has never tagged a project the directory does not exist
+  # and `_project_pool_state` answers `untagged` for EVERY project name — the
+  # unmeasured field cannot change the answer, no constraint is being lifted,
+  # and the limit rescue is fully sound. Refusing there would kill the rescue
+  # on every un-adopted box to close a hole that box does not have, which is
+  # the #67 R1 shape this function's own header forbids. Measured both ways:
+  # with `pools/` absent and `.project` a FIFO the rescue still fires and
+  # dispatches; with `pools/` present it stands still and says so.
+  #
+  # ABOVE THE VERDICT, AND THAT IS WHY IT IS AN EARLY RETURN. `_tick_decided`
+  # clears the stamp when the row decides; a `_tick_undecidable` reported below
+  # it would have no debounce at all. Wherever the verdict moves, this guard
+  # stays above it.
+  project=$(_reg_read "$id" project); prjrc=$?
+  if [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
+    _tick_undecidable "$id" project
+    _tick_strand_undecidable "$id" project "$wrapper"
+    return 0
+  fi
+  pps=$(_project_pool_state "$project")
   # THREE OUTCOMES, NOT TWO (C1, D-1988). `_crosspool_tick` answers rc 2 —
   # "nobody can say" — when an input it would have ended the crossing on could
   # not be measured. `&& crossed=1` reads that as "no crossing stands", which
@@ -12739,10 +12898,16 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # deleting the marker, which is exactly the act C1 exists to prevent.
   ctrc=2
   [[ "$hrc" -eq 0 ]] && { _crosspool_tick "$id" "$wrapper" "$home" "$pps"; ctrc=$?; }
-  # THE ROW'S VERDICT IS WHAT DECIDES THE VOICE, not any one read: this is the
-  # only place that has all three answers, so the stamp is set and cleared here
-  # rather than inside the reads (D-1995).
-  if [[ "$ctrc" -eq 2 ]]; then _tick_undecidable "$id" crosspool; else _tick_decided "$id"; fi
+  # THE ROW'S VERDICT IS WHAT DECIDES THE VOICE, not any one read — and it is
+  # taken BELOW, once the fourth answer exists. The verdict stood HERE with
+  # three answers (`wrc`, `hrc`, `ctrc`) and a comment claiming it was "the
+  # only place that has all three"; round 2 then added a FOURTH undecidable
+  # source — the project's pool tag — 108 lines below it, and the two-way
+  # `else _tick_decided` cleared the stamp every tick before that fourth source
+  # re-wrote it. Measured on a fixture row with an unreadable tag and a QUIET
+  # pane: 4 ticks, 4 `tick-undecidable` lines, 4 `_reg_set` cycles and 4 `rm`s,
+  # into an unrotated `swap.log`. The sentence naming the invariant and the
+  # line breaking it shipped in one commit (#69 review round 3, R1).
   [[ "$ctrc" -eq 0 ]] && crossed=1
   # ONE BIT, TWO DECISIONS WITH DIFFERENT SUBJECTS — DELIBERATE, review round
   # 1 (Minor 2). `_swap_target` asks `cross_cur`/`cross_home` SEPARATELY,
@@ -12793,13 +12958,38 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # inside a tick: when the CURRENT account is the thing that failed the pool
   # rule, the move's cause was a retag and the line must say so. `[[ "$prc"
   # -eq 1 ]]` rather than `-ne 0` is CORRECT-BY-CONSTRUCTION, not a guarded
-  # branch worth a fixture of its own: `_swap_target` already returns empty
-  # on rc 2 (`_pool_ok "$cur" "$pps"; [[ "$prc" -eq 2 ]] && return 0`), and
+  # branch worth a fixture of its own: `_swap_target` already refuses on rc 2
+  # (`grep -n 'prc" -eq 2' ccd/ccd` — quoted by anchor, not by text, because
+  # the round that changed `return 0` to `return 2` there left this comment
+  # quoting the deleted line verbatim; #69 review round 3), and
   # the affinity arm below is unreachable without a non-empty `$target` — so
   # `prc=2` can never reach this line at all, and writing `-ne 0` here would
   # cover a case that cannot occur rather than change what the line does.
   _pool_ok "$wrapper" "$pps"; prc=$?
   [[ "$prc" -eq 1 && -z "$crossed" ]] && aff_verb=auto-pool
+  # ── THE TICK'S VERDICT (D-1995), IN ONE PLACE, ONCE EVERY READ HAS ANSWERED ─
+  # Here rather than 60 lines up because `prc` — the project's pool tag against
+  # THIS row's account — is the fourth answer, and a verdict that cannot see it
+  # is the storm above. No `return` sits between the reads and this line, so
+  # every tick that gets past the `wrapper` guard reaches it.
+  #
+  # SET ONLY. The CLEAR is below the `_swap_target` call, because "the row
+  # decided" is not knowable until it has: `_swap_target` re-reads the crossing
+  # record and can answer 2 off a marker that changed since `_crosspool_tick`
+  # read it. Clearing here and letting that arm re-write is precisely the
+  # defect being removed. The cooldown returns between here and there touch
+  # neither — a tick that declines to act has neither decided nor failed to,
+  # and leaving the stamp alone is the conservative side: the cost is a
+  # suppressed line for a REPEAT of the SAME condition inside one cooldown,
+  # never a suppressed new one, because the debounce compares the field.
+  #
+  # PRECEDENCE, NOT A SET: the deepest read that failed is the one an operator
+  # must fix first, and `home` failing forces `ctrc=2` on the line above, so
+  # naming `crosspool` there would send them to the wrong file.
+  [[ "$hrc"  -eq 2 ]] && stuck=home
+  [[ -z "$stuck" && "$ctrc" -eq 2 ]] && stuck=crosspool
+  [[ -z "$stuck" && "$prc"  -eq 2 ]] && stuck=pool
+  [[ -n "$stuck" ]] && _tick_undecidable "$id" "$stuck"
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
@@ -12839,21 +13029,49 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # rather than borrowing `_strand_why`'s "no account in pool X can take it",
     # which would be flatly false.
     # WHICH undecidable — measured, not guessed, and with no extra read.
-    # `_swap_target` answers 2 for two different conditions, and an operator
-    # sent to the wrong one is sent to the wrong file. `prc` is already in
-    # scope from `_pool_ok "$wrapper" "$pps"` below-but-earlier in this tick,
-    # over the same `$pps` and the same account (`wrapper` IS `cur` here), so
-    # the caller can tell them apart for free.
+    # `_swap_target` answers 2 for three different conditions, and an operator
+    # sent to the wrong one is sent to the wrong file. All three answers are
+    # already in scope: `hrc` from `_home_measured`, and `prc` from `_pool_ok
+    # "$wrapper" "$pps"` ABOVE this line in the same tick, over the same `$pps`
+    # and the same account (`wrapper` IS `cur` here). CORRECTED (#69 review
+    # round 3): this said "two conditions" and "below-but-earlier", and `hrc`
+    # was not among them — so a row whose `.home` could not be measured was
+    # told its crossing record was unreadable.
     local ucause="the crossing record could not be read, so no destination could be computed"
     local uword=crosspool
-    if [[ "$prc" -eq 2 ]]; then
+    if [[ "$hrc" -eq 2 ]]; then
+      uword=home
+      ucause="the home account could not be measured, so no destination could be computed"
+    elif [[ "$prc" -eq 2 ]]; then
       uword=pool
       ucause="the project's pool tag could not be read ($POOLS_DIR/$project), so no destination could be computed"
     fi
-    _tick_undecidable "$id" "$uword"
+    # ONLY IF THE VERDICT ABOVE SAID NOTHING, and that condition is the fix
+    # rather than a tidy-up. The verdict already names `home`, `crosspool` and
+    # `pool`; calling again here would either repeat it (harmless — the
+    # debounce compares the field) or, on an `hrc` 2 row where `prc` is a clean
+    # 0, CONTRADICT it with a different word every tick, flipping the stamp and
+    # logging on every flip. What is left for this line is the one case the
+    # verdict genuinely cannot see: `_swap_target` re-reads the crossing record
+    # and can answer 2 off a marker that changed since `_crosspool_tick` read
+    # it, three lines of shell earlier. That case says itself, once.
+    [[ -z "$stuck" ]] && _tick_undecidable "$id" "$uword"
     [[ -n "$hard_blocked" ]] && _strand_mark "$id" "$wrapper" "$project" "$ucause"
     return 0
   fi
+  # THE ROW DECIDED — the only clear, and BOTH halves of its condition are
+  # load-bearing. It is here because this is the first line at which
+  # `_swap_target` has answered; it is gated on `$stuck` because answering is
+  # not the same as measuring. An `hrc` 2 row still reaches this line with a
+  # perfectly good destination — `_swap_target` skips the home arm and ranks
+  # the pool loop instead — so an unguarded clear here retracts, every tick,
+  # the stamp the verdict just wrote, and the next tick says it again: five
+  # lines from five ticks. MEASURED, by `ccd-crosspool.test.ts`'s own S5 case
+  # ("the debounce holds THROUGH THE TICK"), which went red on exactly that
+  # while this fix was being written — the storm being removed, reintroduced
+  # 100 lines below its own removal. `_tick_decided` is a `rm -f` behind its
+  # own `-e`, so a healthy row writes nothing at all.
+  [[ -z "$stuck" ]] && _tick_decided "$id"
   # RULING 6, AND THE LINE THAT USED TO SIT HERE IS WHY. `|| return 0`
   # discarded the one fact worth keeping: a hard-blocked session with nowhere
   # to go, retried every five seconds with no marker, no log line and no
@@ -12918,6 +13136,16 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
+  # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
+  # an unbounded character device, inside the 5-second tick. MEASURED on the
+  # shipped body with a stubbed tmux: a FIFO and a symlink to `/dev/zero` each
+  # hung the whole lane at 6 s; with the guard both answer NOOP and the idle+
+  # quiet positive control still swaps. Behaviour-identical for every input that
+  # answers today — absent, a directory, a `chmod 000` file and `/dev/null` all
+  # make `grep` produce nothing, `st` stays empty, and the line below already
+  # returns 0. The same guard is on `_auto_compact_check`'s identical read.
+  [[ -f "$sf" ]] || return 0
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ "$st" == "idle" ]] || return 0
   # Quiet gate (short): don't relocate a session someone just touched from any surface —
@@ -12956,6 +13184,9 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   wrapper=$(_reg_get "$id" wrapper)
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  # `-f` BEFORE THE GREP — same rung, same reason, same measurement as
+  # `_auto_swap_check`'s copy above (`grep -n '\-f "\$sf"' ccd/ccd`).
+  [[ -f "$sf" ]] || return 0
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ "$st" == "idle" ]] || return 0
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
@@ -14806,7 +15037,7 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # §5.7.3 gives. Pre-existing looseness rather than a regression, and the
   # banner text is asserted VERBATIM by `ccd-auto-swap-pool.test.ts`, so
   # rewording it is a test change in the same commit, not a comment.
-  local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg
+  local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg prev prc pat
   now=$(date +%s)
   pps=$(_project_pool_state "$p")
   pool='-'; pdesc='(untagged)'
@@ -14818,9 +15049,43 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
     why=$(_strand_why "$id" "$p")
     msg="cc swap STRANDED: $id is blocked on $w and no account in pool $pdesc can take it — $why"
   fi
+  # THE MARKER IS A CURRENT-STATE CLAIM; THE LOG LINE IS A HISTORICAL ONE (#69
+  # review round 3, R4). The `-e` test debounces the LOG LINE — correctly, an
+  # append storms — and until this branch it froze the MARKER'S CAUSE with it.
+  # Measured: one tick of registry trouble stranded a row with "wrapper could
+  # not be measured"; the genuine census that stood for the rest of the limit
+  # window never replaced it, because the pane stays blocked and none of the
+  # tick's three `_strand_clear` sites is reachable while it does. That text is
+  # not internal — `SessionRecord.stranded.reason` (`server/src/registry.ts`,
+  # shipped by `fleet.ts`) carries it VERBATIM to every surface.
+  #
+  # A MARKER REWRITE CANNOT STORM, which is why it takes no floor of its own:
+  # `_reg_set` is one tmp-plus-rename over one file. The reason string CAN
+  # change tick to tick — a candidate crossing `SWAP_CEILING` adds or drops a
+  # `:limit` token — which is exactly why the APPEND is not keyed on it.
+  #
+  # READ THROUGH `_reg_read`, AND THE DISTINCTION IS LOAD-BEARING. `_reg_get`
+  # would fold a marker that is a directory, a FIFO or mode 000 into the same
+  # `""` an EMPTY one gives, and this branch would then decide a WRITE off a
+  # path it had proved only `-e` for: measured, one unsuppressed `mv: cannot
+  # overwrite directory` per stranded row per tick, for ever, from the two
+  # `_strand_mark` call sites in `_auto_swap_check` that carry no redirect
+  # group. rc != 0 stands still and writes nothing — the same rule the caller
+  # states about `.wrapper` — and `registry.ts` already fail-shuts an unreadable
+  # marker to `STRANDED_UNREADABLE`, so nothing is lost by not repairing it.
+  #
+  # THE EPISODE'S OWN EPOCH SURVIVES. `stranded.at` is "since when", not "last
+  # touched"; re-stamping it would make a four-hour strand read as new on every
+  # tick, and `fleet.ts` ships that number to the PWA. A torn stamp degrades to
+  # `$now` rather than writing a non-numeric field the wire would have to fail
+  # shut on.
+  prev=$(_reg_read "$id" stranded); prc=$?
   if [[ ! -e "$REG/$id.stranded" ]]; then
     _reg_set "$id" stranded "$now $why"
     echo "$(date '+%F %T') stranded $id: $w (blocked) -> nowhere [pool=$pool] ($why)" >> "$REG/swap.log"
+  elif [[ "$prc" -eq 0 && "${prev#* }" != "$why" ]]; then
+    pat="${prev%% *}"; [[ "$pat" =~ ^[0-9]+$ ]] || pat="$now"
+    _reg_set "$id" stranded "$pat $why"
   fi
   # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]`, so `&&`
   # short-circuits before the arithmetic ever sees a torn or hand-edited field
@@ -15087,7 +15352,39 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
   # stated window. Writing the line whether or not the stamp lands keeps the
   # BEHAVIOUR (say it once per episode when the registry works) and refuses to
   # make the report depend on the thing being reported.
-  [[ -e "$REG/$1.tickstuck" ]] && return 0
+  #
+  # THE DEBOUNCE FOLLOWS THE TRUTH; IT DOES NOT MERELY COUNT (#69 review round
+  # 3, R1). The test here was `[[ -e … ]]` — bare EXISTENCE — and an episode is
+  # not a file, it is a CONDITION. With four callers naming four different
+  # fields, existence alone made the FIRST condition of a row silence every
+  # later one for as long as the stamp stood, and `ccd` never re-chmods a
+  # registry file, so "for as long" can be forever: measured, a row whose
+  # `.home` went unreadable and then recovered onto an unreadable POOL TAG
+  # logged the home episode once and the pool episode NEVER, while the stamp
+  # went on naming a condition that had ended. That is the same shape as the
+  # stale `.stranded` marker this round's S2 fix retracts one function down,
+  # and it gets the same answer: compare the stamp to the condition, and let a
+  # CHANGED condition through.
+  #
+  # READ THROUGH `_reg_read`, NOT `_reg_get`, AND THE DISTINCTION IS THE POINT:
+  # an UNREADABLE stamp must not be read as "no stamp". Folding those would put
+  # this function back to writing one line and one `_reg_set` per row per five
+  # seconds in exactly the condition it exists to report — the storm, arrived
+  # at through the fold instead of through the clear. rc 2 therefore answers
+  # ALREADY-SAID, which keeps the best-effort contract above unchanged: a
+  # registry too broken to read the stamp is also too broken to have written
+  # it, and the line is already being written unconditionally below.
+  #
+  # THE RESIDUAL, DISCLOSED RATHER THAN CAPPED: a row whose undecidable field
+  # FLAPS between two values on successive ticks now logs on every flip. That
+  # needs two faults alternating at 5 s, and the result is LOUD rather than
+  # silent — the failure direction this file chooses everywhere else. A floor
+  # would have to sit on the re-stamp path only, never on an episode's first
+  # line, and no measured case asks for one yet.
+  local _tu_prev _tu_rc
+  _tu_prev=$(_reg_read "$1" tickstuck); _tu_rc=$?
+  [[ "$_tu_rc" -eq 2 ]] && return 0
+  [[ "$_tu_rc" -eq 0 && "${_tu_prev#* }" == "$2" ]] && return 0
   _reg_set "$1" tickstuck "$(date +%s) $2" 2>/dev/null || true
   # THE GROUP CARRIES THE REDIRECT, and the order is the whole point: in
   # `cmd >> file 2>/dev/null` the redirections are applied left to right, so
@@ -15100,7 +15397,7 @@ _tick_undecidable() {   # id field — one swap.log line per episode of standing
       >> "$REG/swap.log"; } 2>/dev/null || true
   return 0
 }
-_tick_strand_undecidable() {   # id field — the LOUD half of standing still
+_tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standing still
   # `swap.log` is not a surface. Measured, not assumed:
   # `grep -rn 'swap\.log' server/src agent/src shared pwa/src` finds three
   # hits and all three are comments — no reader anywhere in the product.
@@ -15117,6 +15414,20 @@ _tick_strand_undecidable() {   # id field — the LOUD half of standing still
   # up. `_pane_hard_blocked` is the same classifier the ordinary rescue path
   # uses, asked the same way; it needs only `_tmux "$1"`, never the field that
   # could not be read.
+  # THE CAPTURE'S COST, DISCLOSED (#69 review round 1 S7, ruled NO FIX as
+  # D-2162 and RE-MEASURED in round 3). This `capture-pane` is unconditional and
+  # sits above `_auto_swap_check`'s two cooldown gates, so on an affected row it
+  # is a fork the gates cannot stop. Measured with a counting `tmux` first on
+  # PATH over ten trip shapes: the lane is a strict +1 per tick per affected
+  # row, and the affected ceiling is 2 — exactly what a HEALTHY row costs in its
+  # ordinary steady state, and one below the 3 it costs on a tick that compacts.
+  # No affected row rises above the ordinary per-row cost, which is the whole
+  # argument; the earlier one — that `_auto_compact_check` already captures on
+  # such a row, so this only doubles it — is true of the registry-level shapes
+  # and FALSE of the six `.wrapper`-only ones, where this is the tick's only
+  # capture (0 -> 1). Three remedies were measured and all three are defects;
+  # the nearest one, replicating the cooldown tests here, leaves every case
+  # green while un-stranding a hard-blocked row and stranding a healthy one.
   local pane
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE CLEARS NOTHING, and this line stays a BARE return
@@ -15141,13 +15452,47 @@ _tick_strand_undecidable() {   # id field — the LOUD half of standing still
   _pane_hard_blocked "$pane" || { _strand_clear "$1"; return 0; }
   # THE GROUP CARRIES THE REDIRECT (#69 review, S6), same spelling and same
   # reason as `_tick_undecidable` above: `_strand_mark`'s two `_reg_set` writes
-  # and its own `swap.log` append are unwrapped, and this is the only caller of
-  # it that runs every five seconds on a row whose registry may itself be the
-  # broken thing. Measured with `$REG` at mode 000: 5 shell errors per row per
-  # tick without this group, 0 with it, against origin/main's 3. `cmd_swap`'s
-  # `_strand_mark` call stays LOUD on purpose — an operator running a verb by
-  # hand should see a failed registry write.
-  { _strand_mark "$1" "<unmeasured>" "$(_reg_get "$1" project)" \
+  # and its own `swap.log` append are unwrapped, and this caller runs every five
+  # seconds on a row whose registry may itself be the broken thing. Measured
+  # with `$REG` at mode 000: 5 shell errors per row per tick without this group,
+  # 0 with it. `cmd_swap`'s `_strand_mark` call stays LOUD on purpose — an
+  # operator running a verb by hand should see a failed registry write.
+  #
+  # WHY IT REPEATS, which is the half that makes it a storm and which the
+  # sentence above did not say (#69 review round 3, R6). `_strand_mark`'s own
+  # `[[ ! -e … ]]` debounce cannot stat anything at mode 000, so it is TRUE on
+  # every tick: the burst is not 5 lines once per episode, it is 5 lines per row
+  # per tick, for ever. Measured 15 over 3 ticks, not 5 then 0.
+  #
+  # TWO CORRECTIONS TO THE SENTENCE THIS REPLACES, both measured. (1) It said
+  # "the only caller of it that runs every five seconds". `_auto_swap_check`
+  # calls `_strand_mark` TWICE on the same tick (`grep -n '_strand_mark "\$id"'
+  # ccd/ccd`), and neither call carries a group — so a narrower fault, `$REG`
+  # searchable but `.stranded`/`swap.log` unwritable, still reaches those two
+  # unwrapped. That is disclosed here rather than fixed: wrapping them is a
+  # separate decision about the ORDINARY strand path, not about this one.
+  # (2) It said "against origin/main's 3" as though the 3 were this code's.
+  # They are `_tick_undecidable`'s — `main` carries no strand arm at all
+  # (`grep -c _tick_strand_undecidable` on main is 0), so the baseline is a
+  # different function's cost, not a smaller version of this one.
+  #
+  # `_strand_clear` STAYS OUTSIDE, and that is measured rather than conceded.
+  # At mode 000 its own `-e` test is FALSE, so it writes nothing this group
+  # could silence. The only shape where it does write is `$REG` READ-ONLY with
+  # a `.stranded` it cannot remove — and there the SAME two lines come out of
+  # `_auto_swap_check`'s ordinary healthy-pane clear, on every tick of every
+  # healthy session, which `origin/main` does too. Moving the rarest of the six
+  # `_strand_clear` call sites inside would silence two lines nobody is seeing
+  # and leave the common one untouched.
+  # `$3` IS THE ACCOUNT WHEN THE CALLER MEASURED ONE (#69 review round 3, R3).
+  # The `wrapper` guard above this function's own caller has no account to give
+  # — that is the field it could not read — so `<unmeasured>` stays the default
+  # and that call site is unchanged. The project guard, which sits BELOW the
+  # wrapper read, does have one, and a banner reading "blocked on <unmeasured>"
+  # for an account that WAS measured is a fabricated claim of the same kind this
+  # round keeps removing. Nothing in `server/test` or `ccd/` matches the
+  # `<unmeasured>` literal (grepped), so no assertion moves.
+  { _strand_mark "$1" "${3:-<unmeasured>}" "$(_reg_get "$1" project)" \
       "$2 could not be measured, so no destination could be computed"; } 2>/dev/null
   return 0
 }

@@ -18,9 +18,12 @@ nothing has shipped either defect." That was already false when it was written. 
 The operator's hold was ruled at ~21:32Z, twenty-two minutes after the install — a sound ruling on a
 premise that was already false, and the premise was mine to check before I put the question. **And the
 sweep ran**: every supervisor start time is AFTER the install, so the running processes hold the NEW
-inode and C1 is EXECUTING on the box, not merely installed. That distinction is the one `:14876` was
-rewritten to make (D-2034), and it is the criterion D-1999 states — so the embargo is genuinely lifted,
-by the refined criterion rather than the loose one.
+inode and C1 is EXECUTING on the box, not merely installed. That distinction is the one the embargo
+paragraph was rewritten to make (D-2034) — `grep -n 'EMBARGO IT CARRIED' ccd/ccd`, by anchor rather than
+by number, because this sentence said `:14876` while D-2034's own entry said `:14766` and the paragraph
+has since moved twice more. Two line numbers sixty lines apart for one rewrite, in one document, is not
+a citation. It is the criterion D-1999 states — so the embargo is genuinely lifted, by the refined
+criterion rather than the loose one.
 
 **What that changes about this fix, and what it does not.** It is not a change landing before the risk
 goes live; it lands on a box already carrying it. The fix itself is right for reasons that do not
@@ -33,8 +36,11 @@ measurement of the STEADY state across one instant, and every trip condition is 
 THROUGH rather than rests in: a row mid-creation before `.wrapper` lands, a `.wrapper` removed out of
 band, one tick of permission trouble. A five-second tick lives in the transient.
 
-**Deviations DEFINED here:** D-2026–D-2035 (floor to 2036). Every number below is defined here and
-nowhere else.
+**Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
+2) and D-2194–D-2207 (round 3). Every number is defined here and nowhere else. **CORRECTED twice:** this
+sentence claimed only the first band for two rounds while the file went on defining two more below it —
+the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
+contents by eight, then by twenty-two.
 
 ---
 
@@ -171,11 +177,20 @@ the check that caught mutation 4 of Task 3 landing on the wrong function earlier
 
 - The two the review knocked down (`rm -f` at `:14850` reachable through `pps`; the ABSENT/EMPTY
   carry) are NOT chased, per its instruction, and its reasoning was read at the cited lines.
-- The `.project` fold (D-2000, defined in the C1 plan; widened as D-2009, whose entry is in
-  `docs/superpowers/plans/2026-09-05-account-pools-wave3-server.md`, not in the C1 plan) is a wave-3
-  DEPLOY PREREQUISITE by the coordinator's re-ruling, to be taken as its own small `ccd` PR.
-  Spelled that way on the #69 review's advice so it needs no second correction: it names the wrong
-  home it is retracting, and it is true before and after wave 3 merges.
+- The `.project` fold (D-2000, defined in the C1 plan) was widened as **D-2009**, and **D-2017** is
+  cited above in D-2035's own prose. Neither number is DEFINED on any ref this PR merges into:
+  `git grep -n 'D-2009\|D-2017' origin/main` returns nothing, and both entries live only on the
+  unmerged `ws/clear-meadow` wave-3 plan. **CORRECTED TWICE (round 3, D-2206).** Round 1 filed the
+  dangling reference; round 2 "fixed" it by naming
+  `docs/superpowers/plans/2026-09-05-account-pools-wave3-server.md` as the home — a file that exists on
+  `origin/main` and contains neither number — which turned a repo-wide dead end into a directed one,
+  and left D-2017 untouched. `deviation-refs.test.ts` is green throughout: it scans for COLLISIONS and
+  floor seeding, and has no case for a number REFERENCED but nowhere defined.
+  What is true before and after wave 3 merges, and is what this now says: **both numbers are allocated
+  to account-pools wave 3, their entries land with that wave's plan, and neither is reachable from this
+  branch.** The `.project` fold itself is a wave-3 DEPLOY PREREQUISITE by the coordinator's re-ruling,
+  to be taken as its own small `ccd` PR — except for the half round 3 closed here, which is the fold's
+  effect on the TICK (D-2199).
 - The verb-gate scanner counts `CCD_ARGV.projectPoolClear('')[0]` — a NAME READ that is never run —
   as an ungated call site. That is wave-3 fallout, so the scanner fix travels with wave 3 and NOT with
   this PR, which stays the smallest `ccd` change that closes the regression.
@@ -260,21 +275,69 @@ had their remedies corrected.** Deviations D-2155–D-2162.
   `$REG` at mode 000: 5 unsilenced lines per row per tick against `origin/main`'s 3. Fixed at the one
   caller that runs every five seconds; `cmd_swap`'s `_strand_mark` stays loud, because an operator
   running a verb by hand should see a failed registry write.
-- **D-2162 (2026-09-09)** — **one finding killed by reproducing it, and this is the entry that earns
-  the round.** The report said `_tick_strand_undecidable`'s unconditional `tmux capture-pane` sits
-  above both cooldown gates and adds an un-debounced fork every five seconds. Every mechanical claim is
-  TRUE and the severity claim is FALSE, because both the reviewer and my first verifier measured
-  `_auto_swap_check` in isolation while the supervise loop drives four things per tick:
-  `_auto_compact_check` ALREADY captures the pane unconditionally on exactly such a row, since its
-  `lastcompact`/`lastswap` gates read empty precisely because that row's registry is the unreadable
-  thing. So the lane does not add a capture to a row that had none — it doubles one already there,
-  10 → 20 per ten ticks, not 0 → 10. **And both proposed remedies measured as defects**: gating on
-  `.tickstuck` shuts the gate from tick 2 and reproduces `main`'s silence exactly for the
-  undecidable-then-blocked case the function exists to catch; hoisting the call below the cooldown
-  gates is unreachable from the branch it serves. NO FIX. Recorded because a finding that survives 38
-  refute passes and dies on the 39th is the argument for the 39th.
+- **D-2162 (2026-09-09; RE-MEASURED 2026-09-09 as D-2204, and the ground replaced)** — **one finding
+  killed by reproducing it, then the killing argument itself killed by re-measuring it.** The report
+  said `_tick_strand_undecidable`'s unconditional `tmux capture-pane` sits above `_auto_swap_check`'s
+  two cooldown gates and adds an un-debounced fork every five seconds. Every mechanical claim is TRUE
+  and the severity claim is FALSE — but the sentence written here to justify that was decoration. It
+  said `_auto_compact_check`'s `lastcompact`/`lastswap` gates "read empty precisely because that row's
+  registry is the unreadable thing", so the lane "doubles one already there, 10 → 20 per ten ticks, not
+  0 → 10". Measured with a counting `tmux` first on PATH and the supervise loop's `live` arm run
+  verbatim, 32 cells over eight trip shapes and four gate states:
+
+  | row | pre-lane | with lane |
+  |---|---|---|
+  | healthy, ordinary steady state (control) | 2 | 2 |
+  | healthy, `lastswap` younger than `SWAP_COOLDOWN` (900 s) | 0 | 0 |
+  | `$REG` unsearchable — any gate state | 1 | 2 |
+  | `.wrapper` absent / zero-byte / mode 000 / dangling / a directory / a FIFO, stamps stale or absent | 1 | 2 |
+  | **the same six shapes, with either stamp younger than `COMPACT_COOLDOWN` (1800 s)** | **0** | **1** |
+
+  **THE PREMISE IS TRUE OF THE REGISTRY-LEVEL SHAPES AND FALSE OF THE SIX `.wrapper`-ONLY ONES.** A
+  tripped row never reaches `_auto_swap_check`'s own capture — it returns at the `wrapper` guard — so
+  its whole pre-lane cost is the compact lane's, and that lane reads its gates with `_reg_get`, which
+  needs only `$REG` to be enterable. The gates read empty precisely when `$REG` itself is the broken
+  thing, and not otherwise. On D-2026's own "removed out of band" and "row mid-creation" shapes the
+  stamps read fine, `COMPACT_COOLDOWN` returns the compact lane with no capture, and this lane's
+  capture is the tick's ONLY one: **0 → 1**.
+
+  **AND THE 0 → 1 CLASS IS NOT CORRELATED WITH A SWAP** — the first re-measurement claimed it was, and
+  that was a NEW false mechanism in the entry written to convict one. `_reg_set` writes printf → tmp →
+  atomic rename, and `ccd-reg-set-atomic.test.ts` pins both halves that kill it ("REPLACES the inode
+  rather than truncating it" and "never unlinks its destination"), so the swap window produces neither
+  an absent nor a zero-byte `.wrapper`; a concurrent reader sees whole old bytes or whole new bytes.
+  The only writers of `lastswap` are ccd's three swap paths and of `lastcompact` its one auto-compact
+  path, so the ordinary absent-`.wrapper` transient carries NEITHER stamp and lands in the 1 → 2 class.
+  Reaching 0 → 1 needs a `.wrapper` fault inside the ≤1800 s shadow of an unrelated swap or compact:
+  two independent events. That does not change the ruling; it changes how loudly it may be stated.
+
+  **WHAT SURVIVES IS THE CEILING, AND IT IS A DIFFERENT ARGUMENT.** The delta is a strict **+1 capture
+  per tick per affected row** — never a doubling as such — and the affected ceiling is **2 per tick**,
+  which is exactly what a HEALTHY row costs in its ordinary steady state. No affected row rises above
+  the ordinary per-row cost. That closes the finding far more cleanly than the doubling claim, and it
+  is the sentence the next reviewer needs: measuring the ordinary shape against the old entry gives
+  0 → 10 and either refiles the finding or trusts a false number.
+
+  **THREE remedies measured, all three defects** — correcting "both", which undercounted. (1) Gating on
+  the `tickstuck` stamp shuts from tick 2 and reproduces `main`'s silence for the
+  undecidable-then-blocked case the lane exists to catch. (2) Hoisting the call below the cooldown gates
+  is unreachable from the branch it serves. (3) The one not considered — replicating those two cooldown
+  tests INSIDE the lane — removes every 0 → 1 cell and is a defect twice over: a hard-blocked
+  unmeasurable row that swapped within `SWAP_COOLDOWN` is not stranded at all, and a stale strand is not
+  retracted when the pane recovers, so a healthy row wears a STRANDED banner for up to 900 s. **All 76
+  cases stay green on it**, so it is a defect the mutation table cannot see.
+
+  NO FIX — **and now DISCLOSED at the site**, which the first ruling omitted. This file's convention is
+  that an accepted cost is written where it is paid (`grep -ci disclosed ccd/ccd` = 49); a NO FIX whose
+  disclosure lives only in a plan is a decision the next reader of the code cannot see.
 
 ### Corrections carried in the same round, without their own numbers
+
+> **Three of the sentences in this paragraph were themselves wrong, and round 3 retracts them under
+> D-2206** — the 135th call site was not C1's, the `_pool_ok` correction named the wrong function, and
+> the `-eq 2` note was "corrected" by deleting its conclusion and keeping its false premise. Left
+> standing as written, with this pointer, because the record of a round is what that round claimed;
+> rewriting it in place would hide the pattern the next round needs to see.
 
 The `_reg_get` census said 134 and its own command now yields **135** — the 135th is the call C1's
 `_tick_strand_undecidable` added, in the paragraph rewritten to correct a count. `svcfailed` is a 34th
@@ -284,3 +347,195 @@ branch inside `_auto_swap_check`; there is none" was falsified by C1 in the comm
 standing, and by this round again. `_swap_target`'s contract line declared two exit codes for a
 function that returns three. And this plan's own claim that `server/src/pools.ts` "does not exist on
 `main`" is false — the FILE is on main; the LINE the scanner trips on is not.
+
+---
+
+## Round 3 — the #69 review, second pass (2026-09-09)
+
+**The coordinator's headline: "the fourth consecutive round in which the fix introduced a defect."** It
+is right, and round 2's three were the worst of them because one was live on the ordinary path. What
+follows is that round's own review, run the way the last one should have been: every finding reproduced
+against the tree, and then every REMEDY handed to a separate skeptic told to kill it. **All six
+remedies were killed, with measurements.** Every fix below is the survivor, not the first draft — and
+one of the survivors was itself caught by an existing test while being written (D-2196).
+
+### Deviations found
+
+- **D-2194 (2026-09-09)** — **the tick's verdict sat above the answer it needed, and the round that
+  added the answer did not move it.** `_auto_swap_check` decided its voice from THREE reads and cleared
+  the `tickstuck` stamp on every tick where the crossing read decided — which is every row with no
+  crossing marker, i.e. every row on the box. Round 2 then added a FOURTH undecidable source, the
+  project's pool tag, 108 lines below, which re-wrote the stamp the verdict had just deleted. Measured
+  on a fixture row with an unreadable tag and a QUIET pane: one `swap.log` append, one `_reg_set` (tmp
+  write + atomic rename) and one `rm` per row per five seconds, for ever, into an unrotated file — and
+  on a healthy pane, because `_strand_mark` is gated on `hard_blocked` and the tick's voice is not.
+  The comment naming the invariant ("the only place that has all three answers") and the line breaking
+  it shipped in the same commit. **The verdict now runs once, after `prc`**, with no `return` between
+  the reads and it.
+  **Reachability, corrected against the report that filed it:** it is ARMED IN CODE and DORMANT ON THIS
+  FLEET. Read-only census of the live registry: 27 rows, 0 crossing markers, 0 stamps, **no `pools/`
+  directory** — so every project reads `untagged`, `_pool_ok` returns 0, and the arm is unreachable
+  today. The finding said "live on healthy rows"; it needs one more condition than that, and the
+  condition is one tag away. `swap.log` is 617,946 bytes and nothing rotates it.
+- **D-2195 (2026-09-09)** — **an episode is a condition, not a file.** The debounce tested bare
+  EXISTENCE of the stamp, so with four callers naming four fields the FIRST condition on a row silenced
+  every later one for as long as the stamp stood — and `ccd` never re-chmods a registry file, so "as
+  long" can be for ever. Measured: a row whose `.home` went unreadable and then recovered onto an
+  unreadable pool tag logged the home episode once and the pool episode **never**, while the stamp went
+  on naming a condition that had ended. This is the same shape as the stale `.stranded` marker round
+  2's own S2 fix retracts one function down, and it gets the same answer: compare the stamp to the
+  condition. Read through `_reg_read`, not `_reg_get` — folding "stamp unreadable" into "no stamp"
+  would restore the storm through the fold instead of through the clear.
+  **Disclosed residual:** a field that FLAPS between two values on successive ticks now logs on every
+  flip. Two faults alternating at 5 s, and the result is loud rather than silent.
+- **D-2196 (2026-09-09)** — **the fix's own regression, caught by a test the fix did not write.**
+  Moving the clear below `_swap_target` is right; leaving it ungated is not. An `hrc` 2 row reaches
+  that line with a perfectly good destination — `_swap_target` skips the home arm and ranks the pool
+  loop instead — so an unguarded clear retracts, every tick, the stamp the verdict just wrote. Five
+  ticks, five lines: **the storm being removed, reintroduced 100 lines below its own removal.**
+  `ccd-crosspool.test.ts`'s existing S5 case went red on it. Booked with its own number because it is
+  the fifth consecutive instance of the pattern this round exists to break, and it was caught by
+  mechanism rather than by care.
+- **D-2197 (2026-09-09)** — **D-2157's hang class was half closed, and the half left open is on the
+  same tick.** `_authdead` cats `$REG/<account>-authdead` with no type check, and round 2's `_reg_get`
+  guard cannot reach it: that path is DOTLESS, not `$REG/<id>.<field>`. Measured on the shipped body
+  under `timeout 5`: a FIFO with no writer and a symlink to `/dev/zero` each returned **rc 124**. Both
+  call sites are inside ACCOUNT loops, so one bad file wedges the tick of every row that reaches the
+  loop, not just the row on that account. Fourteen inputs measured identical before and after. The fold
+  it keeps — unreadable answers "not condemned" — already existed for `chmod 000`, is spent on
+  PREFERENCE only at both consumers, and folds toward "a rescue must always have a destination".
+- **D-2198 (2026-09-09)** — **and the sweep the coordinator asked for found a second one.**
+  `grep -oE … "$sf"` on the session-status file opens by name and blocks for ever on a FIFO or an
+  unbounded character device — a read neither `_reg_get` nor `_reg_read` can guard, because it is not a
+  registry field. Both tick lanes carry it. Measured with a stubbed tmux: the compact lane hung at 6 s
+  on a FIFO and on `/dev/zero`; with the guard both answer NOOP and the idle+quiet positive control
+  still fires. **Reported and NOT taken, each needing a decision rather than a reflex:** the ten
+  tick-reachable `>> "$REG/swap.log"` appends (a bare `-f` guard would silently DROP the line, which
+  collides head-on with D-1995 — the right shape is one `_swaplog` writer with one guard and a fallback
+  channel); `"$REG/notify.sh"`, where `-x` is not a type check and there is no timeout; and
+  `source "$CCRC_ACCOUNTS_SH"`, which is guarded `-e`+`-r` but not `-f` and hangs `ccd supervise`
+  before its loop starts — arguably the highest-value one left, and its two `die` messages are pinned
+  by four suites, so adding a rung means deciding which message a non-regular roster gets.
+- **D-2199 (2026-09-09)** — **the `-f` guard round 2 added to `_reg_get` turned a loud failure into a
+  silent constraint lift, at the one site where the fold decides something.** `_reg_get` folds
+  UNREADABLE into `""`, `_project_pool_state` answers `untagged` for `""`, and `untagged` is the ONE
+  state `_pool_ok` admits every account under. Measured with `demo` tagged `pool-a` and `.project` a
+  FIFO: `auto-rescue claude-demo: claude (blocked) -> claude-b`, dispatched, out of its pool, with no
+  strand and no line — where the measured tag refuses every out-of-pool candidate and strands by name.
+  **And worse than filed:** the same fold reaches `_crosspool_tick`, whose guard sees the folded
+  `untagged` rather than the unreadable it is, **DELETES a deliberate crossing marker** and logs
+  `crosspool-ended <id>: project pool is now untagged` — a destructive act on a false reason. Both
+  reads, the caller's and `_swap_target`'s own, now measure. ABSENT and EMPTY still mean untagged;
+  only rc 2 stops the tick.
+- **D-2200 (2026-09-09)** — **and the obvious fix for D-2199 is the #67 R1 shape, so it is gated.**
+  Refusing on an unreadable `.project` unconditionally kills the limit rescue on every box that has
+  never tagged a project: `$POOLS_DIR` has exactly one `mkdir` in the tree, so until then
+  `_project_pool_state` answers `untagged` for EVERY name, the unread field could not have changed the
+  verdict, and the rescue is fully sound. Measured: with `pools/` absent and `.project` a FIFO, the
+  patched-without-the-gate tree performs NO rescue and writes a fabricated strand. `_pool_untaggable`
+  is the one predicate that answers "could any project here be in a pool at all", and it restates
+  `_project_pool_state`'s own first two levels in its order and for its reasons. The suite carries the
+  case in the OPPOSITE direction — no `pools/`, unreadable `.project`, hard-blocked pane, **the
+  dispatch still happens** — or the regression would be unmeasurable.
+- **D-2201 (2026-09-09)** — **round 2's S2 fix was half a fix, and the half it missed is the ordinary
+  one.** It retracts a stale strand only through a HEALTHY pane. When the unreadable field recovers
+  while the pane stays blocked — a 429 banner standing for a five-hour window — no healthy tick ever
+  intervenes, and `_strand_mark`'s `-e` debounce swallows the genuine strand that follows: the row wears
+  "wrapper could not be measured" for the whole window while the truth is a pool census. That text is
+  not internal; `SessionRecord.stranded.reason` carries it VERBATIM to every surface. **The marker is a
+  CURRENT-STATE claim and now follows the truth; the swap.log line keeps its per-episode floor, the
+  banner keeps its `SWAPBLOCK_COOLDOWN` floor, and the episode keeps its own epoch** — `stranded.at` is
+  "since when", and re-stamping it would make a four-hour strand read as new on every tick. A marker
+  rewrite cannot storm: it is one tmp-plus-rename over one file. The append is not keyed on the reason
+  precisely because the reason CAN change tick to tick.
+- **D-2202 (2026-09-09)** — **and the obvious spelling of D-2201 walks into this program's own named
+  defect.** Reading the previous cause with `_reg_get` folds a marker that is a directory, a FIFO or
+  mode 000 into the same `""` an EMPTY one gives — so the branch would commit a WRITE to a path it had
+  proved only `-e` for. Measured: one unsuppressed `mv: cannot overwrite directory` per stranded row
+  per tick, for ever, from the two `_strand_mark` call sites in `_auto_swap_check` that carry no
+  redirect group. `_reg_read` stands still on rc ≠ 0, and `registry.ts` already fail-shuts an
+  unreadable marker to `STRANDED_UNREADABLE`, so nothing is lost by not repairing it.
+- **D-2203 (2026-09-09)** — **D-2161's stderr group was the one change of eight that was never
+  mutated, and nothing in the tree could red it.** With the group deleted the whole ccd sweep is green;
+  the only red is `ownership.test.ts`'s provenance stamp, which reds on ANY byte change and so is a red
+  naming the wrong case. It is now pinned the root-safe way (D-1997): `swap.log` planted as a DIRECTORY
+  makes the append fail with "Is a directory" at every uid, where `chmod 000` is a no-op for root — and
+  that is the exact failure the sibling comment says the spelling exists to catch, so the pin measures
+  the argument the code makes. **The comment's own measurement DOES reproduce** (5 / 0 / 3), and three
+  things around it did not: it repeats every tick rather than once per episode, because `_strand_mark`'s
+  `-e` debounce cannot stat anything at mode 000 (15 lines over 3 ticks, not 5 then 0); it is not "the
+  only caller that runs every five seconds", since `_auto_swap_check` calls `_strand_mark` twice with no
+  group, disclosed here rather than fixed; and `origin/main`'s 3 are `_tick_undecidable`'s, a different
+  function's cost, since `main` carries no strand arm at all. **`_strand_clear` stays outside the
+  group** — the round-2 review asked for it to move in, and at mode 000 its own `-e` test is false so it
+  writes nothing; the only shape where it does write is a read-only `$REG`, and there the same two lines
+  come from `_auto_swap_check`'s ordinary healthy-pane clear on every tick of every healthy session,
+  which `origin/main` does too. Moving the rarest of six call sites inside would silence two lines
+  nobody is seeing and leave the common one untouched.
+- **D-2204 (2026-09-09)** — **D-2162's measurement was decoration, and the round's own words convict
+  it: "a count is a measurement or it is decoration."** Re-measured in full above, in that entry. The
+  refutation stands on a better ground the entry never stated — the ceiling, not the doubling — and the
+  first re-measurement's replacement mechanism ("the CORRELATED case") was itself false and is gone.
+  The NO FIX is now disclosed at the site in `ccd/ccd`, in the idiom this file already uses 49 times.
+- **D-2205 (2026-09-09)** — **the sentence licensing a change to every `_reg_get` call site was false,
+  and the case written to pin it certified a history that did not happen.** The comment said every
+  enumerated input answers "rc 1 either way" and named `/dev/null` among the five; `cat /dev/null`
+  exits 0, so that one input goes **rc 0 → rc 1**. The pinning case was titled "and every input that
+  answered before still answers the SAME" and its own last assertion measured the input that does not,
+  with a message saying it had been "refused on content before" — it was not refused at all.
+  **What actually licenses the change is a property of the CALLERS, and it is measurable clause by
+  clause:** all 133 invocations sit inside `$(_reg_get …)`; none outside a capture; none followed by a
+  read of `$?`; the twenty-eight lines carrying `||` or `&&` all test the captured STRING inside
+  `[[ ]]`; and no assignment from the capture is followed by `||` or `&&`. No call site can see the
+  exit code at all. That is now the argument, and a new case reds if the first rc-consuming caller
+  appears.
+- **D-2206 (2026-09-09)** — **the misattribution sweep, and it is the third round running that one of
+  these was a failed CORRECTION rather than fresh drift.** (a) The `-eq 2` navigation note: round 2
+  deleted its closing sentence and left its premise, so the paragraph asserted P three lines above ¬P —
+  `_auto_swap_check` tests `-eq 2` twice, and the `prc` it tests is the one assigned by the very
+  `_pool_ok` call the sentence named as testing only `-eq 1`. Rewritten, not appended to. (b) The
+  D-2009 "correction" named a file containing no D-2009 on any ref this PR merges into, and D-2017 was
+  never touched — both retracted above. (c) The `_pool_ok` census attributed its new prose mention to
+  `_swap_target`'s candidate loop; the line is in `_auto_swap_check`, and the candidate-loop paragraph
+  matches the grep zero times. (d) A comment quoted `_pool_ok "$cur" "$pps"; [[ "$prc" -eq 2 ]] &&
+  return 0` verbatim for a line the same PR had changed to `return 2` — now cited by grep anchor. (e)
+  "the crossing record answers eight lines up" — no reading of the block yields eight; cited by anchor.
+  (f) "`_reg_read`'s ladder does two extra stats on every MISS" — strace measures **four**, and it is
+  the sole quantitative justification for diverging from a pattern this tree names as doctrine. (g) The
+  135th `_reg_get` site was attributed to C1; `_tick_strand_undecidable` does not exist in C1's commit
+  — it was added by this PR's own pre-review commit. (h) "the one direct writer (`.svcfailed`)" —
+  `_pr_py` writes four more field files inside the same file. (i) The `_reg_get` hang-surface
+  enumeration named three fields; the tick's real surface was at least six, and it included `wrapper`.
+- **D-2207 (2026-09-09)** — **`_reg_purge`'s inventory is complete for the shape it measured and its
+  sentence claimed a wider one.** "Measured against every registry file a session has today" is false:
+  `$REG/.<id>.starts`, the start-limiter window, leads with a DOT, so the loop's `"$REG/$id".*` glob
+  cannot match it and neither explicit `rm -f` names it. Disclosed rather than fixed — it is a handful
+  of bytes per reaped row, it belongs to the start limiter, and widening the glob changes what
+  `_reg_purge` MEANS, since the nested-id guard turns on that glob's shape. The paragraph whose own
+  moral is "an inventory that omits files is an inventory a future reader trusts and a future writer
+  copies" is not the place to claim a completeness nobody measured. The suite now requires the
+  disclosure to be present, not merely the scope narrowed.
+
+### Mutation table — 11 mutations, 11 red, each red naming its own case
+
+| # | mutation | predicted red | measured |
+|---|---|---|---|
+| M1 | restore the verdict's clear above the pool answer | 5 lines from 5 ticks | RED — `expected […(5)] to have a length of 1 but got 5` |
+| M2 | `_tick_undecidable` debounces on bare existence again | the 2nd episode is swallowed | RED — `expected [Array(1)] to have a length of 2 but got 1` |
+| M3 | un-gate the clear from the verdict | 5 lines on an `hrc` 2 row | RED — `one line, whatever _swap_target found: … got 5` |
+| M4 | delete the clear entirely | the stamp never lifts | RED — `a decided row carries no stamp: expected '… pool' to be null` |
+| M5 | `_authdead` opens without `-f` | rc 124 | RED — `expected 'rc=124' to be 'rc=1'` |
+| M6 | the status-file grep without `-f` | rc 124 | RED — `expected 'rc=124' to contain 'rc=0'` |
+| M7 | fold BOTH `.project` reads | a cross-pool dispatch | RED — `expected 'dispatch claude-demo -> claude-b' not to contain 'dispatch'` |
+| M8 | drop the `_pool_untaggable` gate | the rescue stops firing | RED — `the rescue still fires: expected '' to contain 'dispatch'` |
+| M9 | delete the cause-rewrite branch | the stale cause stands | RED — `expected '1700000000 wrapper could not be measu…' not to contain …` |
+| M10 | read the old cause with `_reg_get` | stderr per tick | RED — `expected […(3)] to deeply equal []` |
+| M11 | remove the `{ …; } 2>/dev/null` group | one "Is a directory" line | RED — `expected [Array(1)] to deeply equal []` |
+
+**M7 is the row worth reading twice.** Folding only ONE of the two `.project` reads still reds the
+case — but on the *message* assertion, not the dispatch, because `_swap_target`'s own guard catches
+what the caller let through and then names the wrong condition (`crosspool`, since `pps` folded to
+`untagged` and `prc` came back 0). The two guards are not redundant: either alone prevents the
+relocation, and only both produce a true sentence about why. A one-site mutation here would have
+measured green on the harm and red on the wording, which is the "red naming the wrong case" trap this
+table exists to catch — found by running it rather than by reading it.
