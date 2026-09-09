@@ -1771,6 +1771,59 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('compact');
     fs.rmSync(sf);
   });
+
+  it('and it says WHICH — an absent status file and an unopenable one are different sentences', () => {
+    // THE MERGE WITH #70 IS WHAT MADE THIS A DISTINCTION WORTH KEEPING. On the
+    // pre-merge tree the line below the guard only returned, so folding every
+    // failure into `|| return 0` was genuinely behaviour-identical and the
+    // guard's own comment said so. #70 turned that line into a
+    // `status-unreadable` note — and the first spelling of this guard then
+    // narrowed a distinction it had received, silently, for exactly the inputs
+    // it newly admits. `ccd-auto-compact.test.ts`'s case caught it, and its
+    // second spelling reported "not a regular file" about a file that was
+    // simply ABSENT, which is a false sentence.
+    //
+    // Both conditions keep the same NOTE WORD — neither says anything about
+    // idleness — and get their own detail, because "there is no file" and
+    // "there is something here I refuse to open" send an operator to different
+    // places. Collapse the `if/elif` to a bare `[[ -f ]] || return 0` and the
+    // FIFO case below reds with no note at all.
+    seedRow();
+    const pane = 'ctx ▓▓▓▓ 80%\n❯ ';
+    const stubs = `
+      tmux() { case "\${1:-}" in
+                 capture-pane) printf '%s\\n' "${pane}" ;;
+                 list-panes)   echo ${PANE_PID} ;;
+               esac; return 0; };
+      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+    const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
+    fs.mkdirSync(sfDir, { recursive: true });
+    const sf = path.join(sfDir, `${PANE_PID}.json`);
+    // THE FIELD is `compactskip` (`<epoch> <reason>`); the DETAIL goes only to
+    // swap.log, behind `_compact_note`'s own `COMPACT_NOTE_FLOOR`. So the floor
+    // stamp is cleared between the two phases — otherwise the second sentence
+    // is debounced away and this case would pass by measuring nothing.
+    const skip = (): string => String(h.reg(ID, 'compactskip') ?? '');
+    const lastSkipLine = (): string => logLines('compact-skip').slice(-1)[0] ?? '';
+
+    // ABSENT — byte-identical to what the lane says with no guard at all.
+    fs.rmSync(sf, { force: true });
+    h.sh(`${stubs} _auto_compact_check ${ID}`);
+    expect(skip(), 'absent: the field is status-unreadable, never not-idle')
+      .toContain('status-unreadable');
+    expect(lastSkipLine(), 'and the sentence says there is no status there')
+      .toContain('no status in');
+
+    // NON-REGULAR — the same field, a different sentence.
+    fs.rmSync(reg(`${ID}.compactnote`), { force: true });
+    execFileSync('mkfifo', [sf]);
+    h.sh(`${stubs} _auto_compact_check ${ID}`);
+    expect(skip(), 'a FIFO: still status-unreadable, never not-idle')
+      .toContain('status-unreadable');
+    expect(lastSkipLine(), 'and the sentence names what was actually measured')
+      .toContain('not a regular file');
+    fs.rmSync(sf);
+  });
 });
 
 describe('R3 — an unreadable `.project` stops the tick, but ONLY where a pool could exist', () => {

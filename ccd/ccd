@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5cbdb58221d354552e7afe1a7173fd44cb2c3527b9ac289866fd10f3ae9d0a72
+# ccrc:generated 1 sha256=2683b8825a12d08f9e656b5413f93695b64e60c849cc1f7a613c31cb32076eb2
 # ccrc:generated 1 sha256=PLACEHOLDER
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
@@ -13197,7 +13197,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # quiet positive control still swaps. Behaviour-identical for every input that
   # answers today — absent, a directory, a `chmod 000` file and `/dev/null` all
   # make `grep` produce nothing, `st` stays empty, and the line below already
-  # returns 0. The same guard is on `_auto_compact_check`'s identical read.
+  # returns 0 — true HERE, where the only answers are idle and not-idle.
+  # `_auto_compact_check` carries the same rung over the same path and a
+  # DIFFERENT arm, because #70 gave that lane a `status-unreadable` note this
+  # one has no equivalent of; the sentence that stood here called the two reads
+  # identical and the merge falsified it.
   [[ -f "$sf" ]] || return 0
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ "$st" == "idle" ]] || return 0
@@ -13353,9 +13357,42 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { _compact_note "$id" no-pane-pid "tmux list-panes named no pane pid, ctx ${pct}%"; return 0; }
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
-  # `-f` BEFORE THE GREP — same rung, same reason, same measurement as
-  # `_auto_swap_check`'s copy above (`grep -n '\-f "\$sf"' ccd/ccd`).
-  [[ -f "$sf" ]] || return 0
+  # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
+  # copy above, but NOT the same arm, and the difference is the whole point.
+  # That lane has two answers here (idle / not) and folds every failure into a
+  # silent `return 0`. THIS lane has a vocabulary: #70 gave it
+  # `status-unreadable`, deliberately distinct from `not-idle`, so an operator
+  # can tell "I could not read the status" from "the status said busy". A bare
+  # `|| return 0` here would be an ADAPTER NARROWING A DISTINCTION IT RECEIVED
+  # — the ring rule this tree names as its highest-yield one — and it would do
+  # it silently, for exactly the inputs the guard newly admits.
+  #
+  # MEASURED, and this is why the guard is written as an arm rather than a
+  # return: on the pre-merge tree `|| return 0` WAS behaviour-identical, because
+  # the line below only returned. #70 changed that line to record a note, and
+  # `ccd-auto-compact.test.ts`'s "an UNREADABLE sessions JSON is NOT `not-idle`"
+  # went red on the merge — the merge measuring a claim that had been true when
+  # it was written and was not any more.
+  #
+  # TWO CONDITIONS, TWO SENTENCES, ONE NOTE WORD. `status-unreadable` is the
+  # right FIELD for both — neither says anything about idleness — but "there is
+  # no file" and "there is something here I refuse to open" send an operator to
+  # different places, and folding them would be this program's own defect
+  # committed inside its own fix. The absent arm is byte-identical to what #70
+  # writes with no guard at all (`grep` finds nothing, `st` stays empty, its own
+  # line says "no status in"), so `ccd-auto-compact.test.ts`'s case — whose
+  # fixture writes NO sessions JSON — keeps its exact sentence. The first
+  # spelling of this guard said "not a regular file" for that fixture, which is
+  # a false sentence about an absent file, and the suite caught it.
+  #
+  # `-e` PAIRED WITH `-L` IN ONE STATEMENT, for D-1848's reason one lane over: a
+  # DANGLING SYMLINK is not absence, and reporting it as "no status in" would
+  # send the operator looking for a file that is not the problem.
+  if [[ ! -e "$sf" && ! -L "$sf" ]]; then
+    _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0
+  elif [[ ! -f "$sf" ]]; then
+    _compact_note "$id" status-unreadable "not a regular file: $sf, ctx ${pct}%"; return 0
+  fi
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ -n "$st" ]] || { _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0; }
   [[ "$st" == "idle" ]] || { _compact_note "$id" not-idle "status=$st ctx ${pct}%"; return 0; }
