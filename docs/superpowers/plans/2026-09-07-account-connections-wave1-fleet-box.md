@@ -17363,3 +17363,44 @@ remaining task adds sites to a list nobody can execute from, and the list's own 
 construction. One citation must be **excluded by name**: `ccrc-install-graphify.test.ts:1188` quotes a
 plan's line numbers as *history* under D-1343, and a mechanical sweep would "fix" a sentence whose
 entire point is what the plan once said.
+
+### D-2208 — the sentinel moves below the control-character loop, and the self-citation debt is worse than D-2186 measured
+
+**The reordering, accepted.** Splitting D-2184's one sentence into two exposed an ordering question the
+single sentence hid. The reader's guards now run **count → control-character loop → sentinel**, not
+count → sentinel → loop.
+
+The argument, and it is the right one: **the sentinel is the only guard here that interpolates a
+roster-derived FIELD into its sentence.** The shape it exists to catch is a helper that grew a field
+where `END` was — and that field is one a roster fills. Naming it before the control-character loop has
+scrubbed it would put an unvalidated byte into a terminal message, which is precisely the hazard the
+loop's own header cites as its reason to exist. Measured: with the sentinel above the loop, a raw TAB
+appears in the refusal detail. Pinned by its own mutation.
+
+The count stays first for a mechanical reason worth recording: `${f[7]}` is **unbound under `set -u`**
+until the count passes, so no later guard can safely read slot 7 before it. Three guards, one
+order, each position argued.
+
+This is the divergence from `_box_build_fields`, which can check both first because it returns a bare
+count and interpolates nothing. The difference is named at the line rather than left for a reader to
+find — a neighbouring function with a different order is exactly the shape D-2141 ruled on: *a
+difference between two neighbouring calls is a decision or a bug, and if nobody can tell which by
+reading, it is already a bug.*
+
+**A known gap, flagged rather than credited.** A fourth registry condition — `~/.cc-sessions` existing
+as a **non-directory** — rides in the same predicate as the mode check. It costs nothing and is
+correct, but it has no fixture of its own: the mutation deletes the whole predicate, so it is measured
+only **jointly** with the mode arm. Recorded as a gap rather than counted as coverage, which is the
+distinction this wave has spent thirteen unmeasured mechanisms learning.
+
+**The self-citation debt is worse than D-2186's spot-check implied.** That entry found twenty
+self-citations across the whole file. Measured in **one band alone** — the sites at or past the round-2
+insertion — there are **21 `ccd/ccrc` self-citations plus 40 prefixed cross-file sites**, all moved by
+this commit. So the sweep's true unit count is larger again, and the ratio matters more than the number:
+self-citations are the majority of the debt and were invisible to every census this wave ran, because
+each counted *cross-file* citers.
+
+One genuinely good outcome for that task: the seven sites landing inside the **rewritten** band are all
+*historical quotes* — five in a graphify plan plus two that say in their own words *"Cited BY NAME, not
+by line (D-1343)"*. So this round adds **no new live in-band citation**; it adds `+76` to sixty-one
+existing ones. The rewritten band needs re-expression, and nothing live points into it.
