@@ -2915,13 +2915,27 @@ _mem_homes() {   # -> one agent-home path per line
 # defect (Task 4 fix round 2 measured this: deleting `-d` alone leaves the
 # store-is-a-file case silently `converged`).
 #
-# THE COST, ACCEPTED: `ccrc memory --apply` skips pairs `_mem_state` already
-# calls `converged` (by design — see `_mem_apply` below), so a relative-but-
-# correct link is now LEFT AS WRITTEN rather than normalised to the canonical
-# absolute form `--apply` itself would write. Memory is still correctly
-# shared into one store either way; only the link's own spelling is left
-# alone. This is a real, deliberate narrowing of what `--apply` will ever
-# touch, not an oversight.
+# THE COST THIS COMMENT ONCE ACCEPTED IS NO LONGER PAID — ruling R27, and the
+# correction matters because the sentence that stood here was WRONG about a
+# defect, not merely out of date. It read: "`--apply` skips pairs
+# `_mem_state` calls `converged`, so a relative-but-correct link is LEFT AS
+# WRITTEN rather than normalised … only the link's own spelling is left alone."
+# The second half is what was false. `-ef` follows a CHAIN, so the pairs left
+# alone included `.claude-corp -> .claude's link -> store` — not a spelling but
+# a shape the design forbids, in which one account's link is load-bearing for
+# another's, permanently (re-running `--apply` never repaired it) and invisibly
+# (`_check_memory` printed PASS). It is also the ordering a real box produces:
+# `.claude` sorts first, so its own pair converges first and manufactures the
+# chain mid-run.
+#
+# THE SPLIT R27 SETTLES ON: this function's definition of `converged` is
+# unchanged and still right — the memory really is shared into the one store,
+# so the census and doctor should say so, and nothing here newly fails. What
+# changed is that `_mem_apply` no longer treats `converged` as "nothing to do":
+# it now re-points any converged link whose TEXT is not the store, with a bare
+# `ln -sfn` and no absorb. Read that arm for why the absorb must not happen.
+# So `converged` is a statement about where the bytes are, and `--apply` owes
+# a second property on top of it — that every home reaches them DIRECTLY.
 _mem_state() {   # <home> <slug> -> converged | forked | absent
   local link="$1/projects/$2/memory" store="$HOME/.ccrc/memory/$2"
   if [ -L "$link" ]; then
@@ -3150,7 +3164,56 @@ _mem_apply() {
       # wrong alone. `[ -L "$link" ]` catches it without dereferencing.
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"
-      [ "$(_mem_state "$h" "$slug")" = converged ] && continue
+      # ── R27: CONVERGED IS NOT NORMALISED, AND `--apply` OWES THE SECOND ───
+      # `_mem_state` calls a pair `converged` when the link RESOLVES to the
+      # store (R20) — which is the right answer for the census and for doctor,
+      # because the memory genuinely IS shared into the one store. But
+      # "resolves to" admits a shape the design forbids: a CHAIN. With
+      # `.claude/projects/<slug>/memory` -> the store and
+      # `.claude-corp/projects/<slug>/memory` -> `.claude`'s link, `-ef`
+      # follows the whole chain and answers true, so a bare
+      # `= converged && continue` here skipped that pair FOREVER — `--apply`
+      # never repaired it and `_check_memory` printed `PASS memory`.
+      #
+      # IT IS THE ORDERING A REAL BOX PRODUCES, not a contrived one. `_mem_homes`
+      # emits glob-collation order and `.claude` sorts before `.claude-corp` (a
+      # prefix always sorts first), so `.claude`'s own plain-directory pair
+      # converges FIRST and turns the very directory `.claude-corp` points at
+      # into a link to the store. The pair that was going to be repaired becomes
+      # a pair that reads converged, in the same run, by construction.
+      #
+      # WHY A CHAIN IS A DEFECT AND NOT A SPELLING. It makes one account's link
+      # LOAD-BEARING FOR ANOTHER'S — `.claude` becomes the master — which is the
+      # second defect the spec names in the prior art it replaces: retire, reset
+      # or lose `.claude` and every shared store on the box goes with it. That is
+      # the whole failure this branch exists to end, reintroduced one level up.
+      #
+      # NO `_mem_absorb` ON THIS PATH, DELIBERATELY — it is what makes the
+      # re-point safe. The source here RESOLVES TO THE STORE; absorbing it would
+      # copy the store into itself and land every file a second time in
+      # `<name>.from-<home>` conflict slots, because `_mem_absorb`'s whole job is
+      # to treat its source as foreign data. There is nothing to move: the bytes
+      # are already in the one place. So this arm re-points and does nothing
+      # else, and that asymmetry against the forked arm below is the point, not
+      # an omission.
+      #
+      # `ln -sfn`, NOT `ln -sf`: without `-n`, `ln` DEREFERENCES an existing
+      # symlink-to-a-directory and creates the new link INSIDE the store
+      # (`$store/<slug>`) instead of replacing the link — silently, exit 0. `-n`
+      # is what makes the replacement a replacement.
+      if [ "$(_mem_state "$h" "$slug")" = converged ]; then
+        # Already spelled canonically — the steady state, and the whole cost on
+        # a converged box. `readlink`'s RAW text is the right test here (not
+        # `-ef`, which is what got us into this): the question is not "does it
+        # resolve to the store" — `_mem_state` just said yes — but "does it NAME
+        # the store", and only raw text can tell a direct link from a chain or a
+        # relative spelling.
+        [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && continue
+        ln -sfn -- "$store" "$link" \
+          || { echo "ccrc memory: cannot normalise $link" >&2; return 1; }
+        echo "ccrc memory: normalised $b $slug (link now names the store directly)"
+        continue
+      fi
       mkdir -p -- "$store" || { echo "ccrc memory: cannot create $store" >&2; return 1; }
       # `bk` is reset every pair: a plain-directory pair sets it below, but a
       # SYMLINK pair never does, and `local` lives for the whole function —

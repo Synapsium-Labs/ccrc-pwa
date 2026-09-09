@@ -261,22 +261,21 @@ describe('ccrc memory --apply — the union', () => {
     expect(fs.readFileSync(path.join(parent, backupName!, 'a.md'), 'utf8')).toBe('A');
   });
 
-  // R20 (fix round 2) changed this test's own expectation, deliberately.
-  // `.claude` sorts before `.claude-corp` (a prefix always sorts first), so
-  // its own plain-directory pair converges FIRST — which turns `other`
-  // itself into a symlink to the store. By the time `.claude-corp`'s pair is
-  // examined, its link already RESOLVES to the store TRANSITIVELY (`-ef`
-  // follows the whole chain), so `_mem_state` now correctly calls that pair
-  // `converged` already, and `_mem_apply` skips a pair it calls converged —
-  // by design (`_mem_state`'s own R20 comment states this cost: `--apply`
-  // no longer normalises an indirectly-correct link to the canonical direct
-  // form). Measured: before this fix, `.claude-corp`'s link was re-pointed
-  // straight at the store; after it, `.claude-corp`'s link is left pointing
-  // at `other`, which is now itself a symlink to the store. The invariant
-  // that actually matters — one store, no duplicated data, the same bytes
-  // reachable from both homes — still holds, so this test now asserts THAT,
-  // through `realpathSync`, rather than the exact link shape.
-  it('leaves a symlink that transitively resolves to the store alone once it does (R20)', () => {
+  // THE STAR ASSERTION, RESTORED (R27) — and the story of why it left is the
+  // reason it is back. The previous round weakened this line from
+  // `readlinkSync(...) === storeDir()` to `realpathSync` equality, reasoning
+  // that once `-ef` follows a chain, `.claude-corp`'s link "already resolves
+  // to the store" and `--apply` may leave it alone. That reasoning accepted a
+  // CHAIN as a spelling. It is not: `.claude` sorts before `.claude-corp`, so
+  // `.claude`'s plain-directory pair converges first and turns `other` into a
+  // link to the store, and `.claude-corp` is then left pointing at
+  // `.claude`'s link — one account's link load-bearing for another's, exactly
+  // the "`.claude` is the master" failure the spec names as the second defect
+  // of the prior art. `realpathSync` equality cannot see the difference; it
+  // passes even if `--apply` touched `.claude-corp` at all. So the assertion
+  // that pins the SHAPE is the one that belongs here, and R27's normalise in
+  // `_mem_apply` is what makes it true again.
+  it('re-points a symlink that targets another HOME straight at the store (R27)', () => {
     const other = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, 'a.md'), 'A');
@@ -284,8 +283,45 @@ describe('ccrc memory --apply — the union', () => {
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(other, path.join(d, 'memory'));
     run(['memory', '--apply']);
-    expect(fs.realpathSync(path.join(d, 'memory'))).toBe(fs.realpathSync(storeDir()));
+    expect(fs.readlinkSync(path.join(d, 'memory'))).toBe(storeDir());
     expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
+  });
+
+  // R27, the chain shape itself — the state the test above only produces as a
+  // side effect, seeded directly so it cannot stop being covered if home
+  // collation order ever changes. A -> B's link -> store is the shape a real
+  // box already carries (the spec's prior art: every pre-existing symlink on
+  // this box points at `~/.claude`), and the invariant is a STAR, not a
+  // chain: after `--apply` BOTH homes must name the store directly, so that
+  // no home's link is load-bearing for another's and retiring `.claude`
+  // cannot take the other home's memory with it.
+  //
+  // THE THIRD ASSERTION IS THE ONE THAT WOULD CATCH AN ABSORB. Normalising
+  // must MOVE NOTHING: the source already resolves to the store, so calling
+  // `_mem_absorb` on it would copy the store into itself and land `a.md` a
+  // second time in a `<name>.<home>` conflict slot. Pinning the store's EXACT
+  // directory listing is what makes that loud — a re-point that quietly
+  // absorbed would still satisfy both readlinks. The expected listing is bare
+  // `a.md` with no `MEMORY.md`, and that too is a statement about the new
+  // path: `_mem_rebuild_index` runs only on the repair arm, and R27's arm
+  // changes no file in the store, so it correctly does not run here.
+  it('converts a chain into a star — A -> B\'s link -> store leaves BOTH naming the store (R27)', () => {
+    const store = storeDir();
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'a.md'), 'A');
+    // B: a home whose link already names the store directly.
+    const b = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(b, { recursive: true });
+    fs.symlinkSync(store, path.join(b, 'memory'));
+    // A: a home whose link names B's LINK, not the store — the chain.
+    const a = path.join(home, '.claude-corp', 'projects', '-p-demo');
+    fs.mkdirSync(a, { recursive: true });
+    fs.symlinkSync(path.join(b, 'memory'), path.join(a, 'memory'));
+    run(['memory', '--apply']);
+    expect(fs.readlinkSync(path.join(a, 'memory'))).toBe(store);
+    expect(fs.readlinkSync(path.join(b, 'memory'))).toBe(store);
+    expect(fs.readdirSync(store).sort()).toEqual(['a.md']);
+    expect(fs.readFileSync(path.join(store, 'a.md'), 'utf8')).toBe('A');
   });
 
   it('is idempotent — a second run changes nothing and reports zero forked', () => {
