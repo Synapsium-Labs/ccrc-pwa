@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
+  ASK_STATES, isAskState,
 } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -1842,6 +1843,31 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     // badge and the board come to disagree about the same box.
     oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
     oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
+  });
+
+  describe('AskState', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_STATE_MAP')).toEqual(['shared/api.ts']);
+      expect(oneDefinition('ASK_STATES')).toEqual(['shared/api.ts']);
+    });
+
+    it('derives its runtime list from the map, never a second array', () => {
+      const src = read('shared/api.ts');
+      expect(src).not.toMatch(/ASK_STATES[^=]*=\s*\[/);
+    });
+
+    it('round-trips every member and refuses non-members', () => {
+      expect(ASK_STATES.length).toBe(6);
+      expect(new Set(ASK_STATES).size).toBe(ASK_STATES.length);
+      for (const s of ASK_STATES) expect(isAskState(s)).toBe(true);
+      expect(isAskState('nope')).toBe(false);
+      expect(isAskState(null)).toBe(false);
+      expect(isAskState(7)).toBe(false);
+    });
   });
 });
 

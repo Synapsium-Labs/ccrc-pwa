@@ -1388,6 +1388,29 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
   return typeof v === 'string' && (READY_VERDICTS as readonly string[]).includes(v);
 }
 
+/** The life of one ask — a child's live `AskUserQuestion` that its parent may
+ *  pre-empt before the operator is notified.
+ *
+ *  `held`      the push is deferred; the parent may answer.
+ *  `answering` a principal has taken the row and is pressing a key (D-2171).
+ *  `answered`  a digit landed. `answeredBy` says which principal.
+ *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
+ *  `unknown`   a token this build does not know, read off disk after a deploy
+ *              rollback. Never accepted at ingress; a writer claiming it is
+ *              refused `bad-state`. */
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+
+export const ASK_STATE_MAP: Record<AskState, true> = {
+  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+};
+
+export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
+
+export function isAskState(v: unknown): v is AskState {
+  return typeof v === 'string' && (ASK_STATES as readonly string[]).includes(v);
+}
+
 /** The five measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;
