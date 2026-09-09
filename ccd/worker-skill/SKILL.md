@@ -49,10 +49,10 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These twelve clauses are the boundary between "a wave worker" and "an agent with
+These thirteen clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these twelve lines are pinned verbatim by
+**Editing note (D-104):** these thirteen lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -62,7 +62,7 @@ clause, where they would have to be escaped on the other side.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
 3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
 4. Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.
-5. Every question for the operator rides the AskUserQuestion tool — the structured ask the session hook captures and the PWA surfaces — never free text in your pane.
+5. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may.
 6. Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.
 7. Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.
@@ -70,6 +70,7 @@ clause, where they would have to be escaped on the other side.
 10. Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.
 11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
 12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
+13. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning, only its question. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
@@ -81,9 +82,10 @@ nothing at all.
 
 **Clause 5 is not a style preference.** A question typed as prose into your
 pane renders as a session that has gone quiet; the same question asked with
-the AskUserQuestion tool becomes a structured ask the hook captures and the
-PWA puts in front of the operator with its options. Free text waits forever.
-The tool gets answered.
+the AskUserQuestion tool becomes a structured ask the hook captures, and it
+is read first by this session's parent, if it has one and answers in time,
+before it ever reaches the operator. Free text reaches neither one. The tool
+gets answered.
 
 ## How to call the API
 
@@ -194,7 +196,8 @@ re-send the old numbers.
 - **A dialog or permission menu is stuck on your pane.** You cannot answer a
   menu by typing prose at it. Answer it as the menu it is, or — if it is a
   question of yours that should have been an operator decision — ask it as an
-  AskUserQuestion so it reaches a human who can act on it (clause 5).
+  AskUserQuestion so it reaches whoever can act on it first, your parent or
+  the operator (clause 5).
 - **You cannot reach the server.** Nothing is invented and nothing is done by
   hand. Stop, say so plainly, and leave the run where it is: a wave that stalls
   honestly is recoverable, and a wave that reports work it did not verify is
