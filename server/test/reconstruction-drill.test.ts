@@ -304,14 +304,14 @@ describe('the reconstruction drill', () => {
     // production module" survives this, since `import type` is erased.)
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
-      project: true, sessionId: true, workspace: true, branch: true, state: true,
+      project: true, homeProject: true, sessionId: true, workspace: true, branch: true, state: true,
       claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(21);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(22);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

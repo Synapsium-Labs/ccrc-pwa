@@ -210,6 +210,7 @@ export type AskTakeResult =
  *  its title. */
 interface RunRowDb {
   id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
+  homeProject: string | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
   state: string; claimedBy: string | null;
   resumed: number; clearedAt: number | null; openedAt: number;
@@ -221,7 +222,8 @@ interface RunRowDb {
 }
 
 const RUN_ROW_COLUMNS =
-  'r.id, r.program, p.title AS programTitle, r.wave, r.waveOf, r.project, r.sessionId, ' +
+  'r.id, r.program, p.title AS programTitle, p.homeProject AS homeProject, ' +
+  'r.wave, r.waveOf, r.project, r.sessionId, ' +
   'r.workspace, r.branch, r.state, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
@@ -553,6 +555,14 @@ export class CoordStore {
   openRun(input: {
     program: string; title: string; project: string;
     wave: number; waveOf: number | null; claimedBy: string;
+    /** The project whose repository holds this programme's ledger (design §3
+     *  F2). Written on the programme row's FIRST insert ONLY — the `ON
+     *  CONFLICT` arm below updates `title` and nothing else — so a later open
+     *  can never silently re-home a programme. Backfilling a stored NULL is
+     *  `setProgramHome`'s job, deliberately a second, narrower write.
+     *  OPTIONAL: during the legacy generation an open carries none, and the
+     *  column then stays NULL rather than taking a guess. */
+    homeProject?: string;
   }): OpenRunResult {
     return tx(this.db, () => {
       // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
@@ -599,9 +609,9 @@ export class CoordStore {
       }
       const now = Date.now();
       this.db.prepare(
-        'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
+        'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
         'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
-      ).run(input.program, input.title, now, 'active');
+      ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
       const res = this.db.prepare(
         'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
         'VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -1711,6 +1721,22 @@ export class CoordStore {
     return row?.homeProject ?? null;
   }
 
+  /**
+   * Backfill a programme's home — and ONLY a backfill (design §3 F2, "first
+   * writer wins").
+   *
+   * `WHERE homeProject IS NULL` is the whole method. A programme's home is a
+   * fact it carries forever, and an unconditional UPDATE here would make
+   * `home-mismatch` decorative: the route refuses a differing home, and a write
+   * that could overwrite one would be a second, quieter path to the same move.
+   * The predicate is in SQL rather than in a route branch so it holds for every
+   * future caller, not just today's one.
+   */
+  setProgramHome(slug: string, home: string): void {
+    this.db.prepare('UPDATE programs SET homeProject = ? WHERE slug = ? AND homeProject IS NULL')
+      .run(home, slug);
+  }
+
   /** `RunRowDb` -> `RunRow`. The one place a raw `runs` row becomes the typed
    *  shape everything else in this class and its callers use — every enum
    *  column goes through its guard here, never a cast, so this is also the
@@ -1718,6 +1744,10 @@ export class CoordStore {
   private hydrateRun(row: RunRowDb, health: RunHealth): RunRow {
     return {
       id: row.id, program: row.program, programTitle: row.programTitle,
+      // Straight off the `programs` join, on `programTitle`'s idiom: a free-form
+      // project name, no vocabulary to read it through. NULL means the programme
+      // row stores no home — never a value this build could not read.
+      homeProject: row.homeProject,
       wave: row.wave, waveOf: row.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',

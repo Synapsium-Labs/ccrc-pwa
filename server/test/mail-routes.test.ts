@@ -538,6 +538,21 @@ describe('the rejection table is total, in both directions', () => {
                               // wire vocabulary to do it. Its siblings `absent`
                               // and `parked` are one word each and never reach
                               // this scan at all.
+      'home-project-backfilled', // coord/routes.ts run_events.detail (cross-repo
+                                  // programmes §3 F2, Task 4) — recorded when a
+                                  // stored NULL homeProject is backfilled from
+                                  // the body on a later open. Not a wire code:
+                                  // no `refused`/`reject.code` ever carries it,
+                                  // and nothing switches on it over the wire —
+                                  // it is forensic history on the run, read
+                                  // back only through GET /api/runs/:id events.
+      'legacy-home-project',     // coord/routes.ts run_events.detail (§3 F2, §9
+                                  // wave 3) — recorded when an open omits
+                                  // `homeProject` while
+                                  // `HOME_PROJECT_LEGACY_ACCEPTED` is true. This
+                                  // is the row wave 3's flip counts to zero over
+                                  // seven consecutive days; same reasoning as
+                                  // its sibling above, not a wire code.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

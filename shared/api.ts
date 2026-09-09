@@ -4174,8 +4174,8 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Fourteen codes exist below today; the next new one would be the
- * fifteenth, not the ninth.
+ * Fifteen codes exist below today; the next new one would be the
+ * sixteenth, not the ninth.
  *
  * `project-mismatch` is cross-repo programmes' first guard (design
  * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
@@ -4188,6 +4188,16 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * `POST /api/runs/:id/dispatch`'s resume arm reads the live registry record.
  * Its body carries `by`, the project the session actually belongs to, so the
  * coordinator's report names the repo rather than the surprise.
+ *
+ * `home-mismatch` is its sibling and NOT a flavour of it (design §3 F2). A
+ * programme has ONE home — the project whose repository holds its ledger,
+ * spec and plan — and a later open naming a different one is refused rather
+ * than allowed to move it. The two are separate codes because the caller acts
+ * on them completely differently: `project-mismatch` says "open this wave
+ * without a `sessionId` and spawn fresh in the target repo", while
+ * `home-mismatch` says "you are addressing the wrong programme, or you typed
+ * the wrong home" — the wave does not move, the programme does not move, and
+ * `by` names the home this programme has carried since its first open.
  *
  * `hookstate-unmeasurable` is `worker-busy`'s twin at the same gate and the
  * distinction between them is the whole of D-115: `worker-busy` asserts a
@@ -4211,14 +4221,14 @@ export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch';
+  | 'project-mismatch' | 'home-mismatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
-  'project-mismatch': true,
+  'project-mismatch': true, 'home-mismatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -4427,6 +4437,25 @@ export interface RunSummary {
   wave: number;
   waveOf: number | null;
   project: string;
+  /**
+   * The project whose repository holds this run's PROGRAMME — its ledger, its
+   * spec and its plan — or `null` when the programme row stores none.
+   *
+   * `project` above is where THIS RUN works; this is where the programme
+   * lives, and the two differ exactly when the run is a crossing. That is the
+   * whole reason the board needs it (design §5, F4): a runs-screen row can
+   * only mark a crossing by comparing them.
+   *
+   * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. REQUIRED here because
+   * `hydrateRun` returns a literal and must therefore compute it — the same
+   * mechanism `health` relies on — and `null` is a first-class answer rather
+   * than a missing one: it is what every programme opened before this column
+   * had a writer says, and what one opened during the legacy generation says.
+   * A renderer marks NOTHING while it is null; absence permits. It is never
+   * derived from the registry or from the claimant — a fact the programme
+   * carries forever must not depend on a live read that can degrade.
+   */
+  homeProject: string | null;
   sessionId: string | null;
   workspace: string | null;
   branch: string | null;

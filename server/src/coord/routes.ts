@@ -239,6 +239,70 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
+ * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
+ * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
+ * live coordinator has redeployed and the field is required.
+ *
+ * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
+ * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
+ * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
+ * one generation (`coord/token.ts`, `server.ts`), then removed.
+ *
+ * Read ONCE, at the single call site below, and passed as an argument to
+ * `homeProjectVerdict` rather than read inside it — which is what makes the
+ * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ */
+export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+
+/** What the open route must DO about the body's `homeProject` and the
+ *  programme's stored one. SIX answers, none folded into another: `write` and
+ *  `agrees` both mean "nothing extra to do" but for different reasons and at
+ *  different moments (a first insert versus a later open), and collapsing them
+ *  would make the backfill event impossible to place correctly. */
+export type HomeProjectVerdict =
+  | { kind: 'write' }
+  | { kind: 'agrees' }
+  | { kind: 'backfill'; home: string }
+  | { kind: 'legacy' }
+  | { kind: 'required' }
+  | { kind: 'mismatch'; by: string };
+
+/**
+ * The home decision, pure and independently testable — no store, no reply, no
+ * clock — even though it is DEFINED here, in `server/src/coord/routes.ts`,
+ * which is L4 delivery and by the ring's own rule (`CLAUDE.md`) is NOT allowed
+ * to decide. It lives here anyway because the cross-wave contract fixes this
+ * exact file as both the constant's home and this function's, so that wave
+ * 3's flip stays the one-constant change the spec promises; moving the
+ * function to an L1 module would break that promise for a ring compliance
+ * this file's own text cannot buy back. Recorded as a further ring
+ * compromise, not argued away (a deviation beside the other six). The only
+ * L4 thing anywhere near this decision is the reply at the route's two call
+ * sites below, which this function never touches.
+ *
+ * `known` and `stored` are TWO INPUTS and not one, because `programHome`
+ * answers `null` both for a programme row with a NULL home and for a slug with
+ * no row, and this function's caller acts on those differently: the first is a
+ * BACKFILL that records an event, the second is a first insert that records
+ * nothing. Establishing existence is the caller's job (`coord.programs()`), and
+ * passing the answer in is what keeps that overloaded null out of the decision.
+ *
+ * An ABSENT body home is decided by `legacyAccepted` alone — never by `known`
+ * or `stored` — because the column stays NULL either way: nothing is guessed
+ * into it, so a later explicit home can backfill it instead of colliding.
+ */
+export function homeProjectVerdict(input: {
+  body: string | undefined; known: boolean; stored: string | null; legacyAccepted: boolean;
+}): HomeProjectVerdict {
+  if (input.body === undefined) {
+    return input.legacyAccepted ? { kind: 'legacy' } : { kind: 'required' };
+  }
+  if (!input.known) return { kind: 'write' };
+  if (input.stored === null) return { kind: 'backfill', home: input.body };
+  return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
+}
+
+/**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
  * holding a second copy of a contract, and six more routes inline would be six
@@ -979,14 +1043,19 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId } = body;
+    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
     if (typeof program !== 'string' || program.trim() === '' ||
         typeof title !== 'string' || title.trim() === '' ||
         typeof project !== 'string' || project.trim() === '' ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
         typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
         !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
-        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== ''))) {
+        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
+        // Present-and-empty is a malformed body, not an absent home: absence is
+        // the legacy generation saying nothing, and `'   '` is an edit somebody
+        // did not finish. Folding them would write a whitespace home onto a
+        // programme row forever.
+        !(homeProject === undefined || (typeof homeProject === 'string' && homeProject.trim() !== ''))) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const waveOfVal = (waveOf ?? null) as number | null;
@@ -1006,14 +1075,48 @@ export function registerCoordRoutes(
       }
     }
 
+    // F2 (design §3 F2) — the programme's home, decided BEFORE the row exists so
+    // a refusal leaves no `planned` orphan, exactly like the check above.
+    //
+    // `known` is measured separately from `stored` on purpose: `programHome`
+    // answers null for two conditions this route handles differently, and asking
+    // it only about a programme this box has proven exists is what keeps them
+    // apart. `programs()` is one read of a table with one row per programme.
+    const known = coord.programs().some((p) => p.slug === program);
+    const homeVerdict = homeProjectVerdict({
+      body: typeof homeProject === 'string' ? homeProject : undefined,
+      known, stored: known ? coord.programHome(program) : null,
+      legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+    });
+    if (homeVerdict.kind === 'mismatch') {
+      return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
+    }
+    if (homeVerdict.kind === 'required') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy });
+    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy,
+      ...(typeof homeProject === 'string' ? { homeProject } : {}) });
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
+    }
+
+    // The backfill and the legacy acceptance are RECORDED, not merely done:
+    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
+    // rows over seven consecutive days, and a fact nothing wrote down cannot
+    // date anything. `recordRunEvent` writes `fromState === toState`, so the
+    // notify lane skips it and no push impersonates a transition.
+    if (homeVerdict.kind === 'backfill') {
+      coord.setProgramHome(program, homeVerdict.home);
+      coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
+    }
+    if (homeVerdict.kind === 'legacy') {
+      coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
     }
 
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
@@ -1033,9 +1136,21 @@ export function registerCoordRoutes(
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     }
 
+    // Re-read rather than reasoned about: `openRun`'s first insert and the
+    // backfill above are two different writers of this column, and the response
+    // must say what the row now HOLDS, not what this request happened to send.
+    const ledgerRepo = coord.programHome(program);
     return reply.code(200).send({
       ok: true, id: opened.id, program: opened.program, state: opened.state,
+      // UNCHANGED. The coordinator keeps the relative path it has always had.
       ledgerPath: `docs/superpowers/programs/${program}.md`,
+      // Both null while the stored home is null, and never derived from the
+      // registry or the claimant (design §3 F2's rejected alternative): a fact
+      // the programme carries forever must not depend on a live read that can
+      // degrade.
+      ledgerRepo,
+      ledgerAbsPath: ledgerRepo === null ? null
+        : path.join(deps.cfg.projectsRoot, ledgerRepo, 'docs', 'superpowers', 'programs', `${program}.md`),
     });
     });
   });

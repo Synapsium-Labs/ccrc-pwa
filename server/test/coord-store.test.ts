@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
-         MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
+         MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
 import { releaseIsSafe } from '../src/coord/rundefs.js';
 import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
@@ -2420,5 +2420,51 @@ describe('sessionProject — which repo a reused session belongs to', () => {
     // ABSENCE PERMITS, and it is a real answer rather than a failure: every
     // wave-1 open that adopts an operator-made workspace lands here.
     expect(s.sessionProject('demo-never-run')).toBeNull();
+  });
+});
+
+describe('the programme row remembers its home', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const open = (s: CoordStore, over: Record<string, unknown> = {}) => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator', ...over } as Parameters<CoordStore['openRun']>[0]);
+    if ('refused' in r) throw new Error('open refused');
+    return r;
+  };
+
+  it('writes homeProject on the FIRST insert, and never rewrites it on a later open', () => {
+    const s = store();
+    open(s, { homeProject: 'demo' });
+    expect(s.programHome('build4')).toBe('demo');
+    // The ON CONFLICT arm updates `title` and nothing else — a second open of
+    // the same programme cannot silently re-home it, which is the whole reason
+    // `setProgramHome` exists as a separate, NULL-only write.
+    open(s, { wave: 2, homeProject: 'other-project' });
+    expect(s.programHome('build4')).toBe('demo');
+  });
+
+  it('leaves the column NULL when no home is given', () => {
+    const s = store();
+    open(s);
+    expect(s.programHome('build4')).toBeNull();
+  });
+
+  it('setProgramHome backfills a NULL home and REFUSES to overwrite a stored one', () => {
+    const s = store();
+    open(s);
+    s.setProgramHome('build4', 'demo');
+    expect(s.programHome('build4')).toBe('demo');
+    s.setProgramHome('build4', 'other-project');
+    expect(s.programHome('build4'), 'setProgramHome overwrote a home that was already stored')
+      .toBe('demo');
+  });
+
+  it('puts the home on the wire, null and non-null alike', () => {
+    const s = store();
+    const a = open(s, { homeProject: 'demo' });
+    expect(toRunSummary(s.run(a.id)!).homeProject).toBe('demo');
+    const t = store();
+    const b = open(t);
+    expect(toRunSummary(t.run(b.id)!).homeProject).toBeNull();
   });
 });

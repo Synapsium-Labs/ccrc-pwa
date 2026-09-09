@@ -258,6 +258,73 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('accepts homeProject, stores it, and answers with the ledger repo and its absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true, program: 'build4', state: 'planned',
+      // UNCHANGED, deliberately: the coordinator keeps the relative path it has
+      // always had, and the two new fields sit beside it.
+      ledgerPath: 'docs/superpowers/programs/build4.md',
+      ledgerRepo: 'demo',
+      ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    expect(w.coord.programHome('build4')).toBe('demo');
+  });
+
+  it('backfills a NULL stored home from a later open, and records the event', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app);                       // legacy: no homeProject
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    const id = (second.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('home-project-backfilled');
+  });
+
+  it('refuses a home that differs from the stored one, naming the stored value', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'other-project' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'home-mismatch', by: 'demo' });
+    // A SECOND code, not `project-mismatch`: the two conditions are handled
+    // differently by the caller, and a seam may not collapse them.
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+  });
+
+  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app);
+    expect(res.statusCode).toBe(200);
+    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
+    // possible instead of a collision.
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
+    const id = (res.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
+  });
+
+  it('refuses a present-but-empty homeProject as a malformed body', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, homeProject: '   ' })).statusCode).toBe(400);
+    expect((await postOpen(app, { ...OPEN_BODY, homeProject: 7 })).statusCode).toBe(400);
+  });
+
   it('answers 501 not-configured without a coordination store', async () => {
     const home = mkTmp('ccrc-runs-');
     app = await buildServer(testDeps(home));   // no `coord` key at all
@@ -918,7 +985,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2' }))
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
@@ -1037,7 +1104,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
@@ -1054,7 +1121,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
     const callsAfterFirst = calls.length;
@@ -2272,7 +2339,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
     w.coord.addWorkItem = (runId, title, blockedBy) => {
