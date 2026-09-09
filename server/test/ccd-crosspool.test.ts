@@ -727,6 +727,75 @@ describe('cmd_swap refuses a crossing that was not asked for', () => {
     expect(h.reg(ID, 'stranded')).toBeNull();
   });
 
+  it.each(['fifo', 'directory', 'devzero-symlink', 'dangling-symlink'])(
+    'refuses when the PROJECT FIELD itself cannot be read (%s) — the verb half of R3', (shape) => {
+      // THE HALF ROUND 3 LEFT. It converted the tick's two `.project` reads and
+      // left the VERBS — and the verbs are the half a PWA tap reaches. `_reg_get`
+      // folds UNREADABLE into `""`, `_project_pool_state ""` answers `untagged`,
+      // and `untagged` is the ONE state `_pool_ok` admits every account under —
+      // so both `die` arms were skipped and the session moved out of its pool
+      // silently, with no crossing marker.
+      //
+      // THREE OF THESE SHAPES ALREADY DID THIS ON `origin/main`; two could not,
+      // because they HUNG instead. This branch's `-f` on `_reg_get` turned those
+      // two hangs into the same silent move — so it widened the hole from three
+      // shapes to five rather than opening it. Said here because the first draft
+      // of the fix's own comment claimed the branch created all five, and that is
+      // false for three of them.
+      const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+      const p = reg(`${ID}.project`);
+      fs.rmSync(p, { force: true, recursive: true });
+      if (shape === 'fifo') execFileSync('mkfifo', [p]);
+      else if (shape === 'directory') fs.mkdirSync(p);
+      else if (shape === 'devzero-symlink') fs.symlinkSync('/dev/zero', p);
+      else fs.symlinkSync('/nonexistent/nowhere', p);
+
+      const r = shFail(`${SWAP_STUBS} cmd_swap ${ID} claude-b`, { TMUX: '' });
+      expect(r.code, `${shape}: the verb refuses`).not.toBe(0);
+      expect(r.stderr, 'and names the FIELD, not the pool tag')
+        .toContain(`the project field for ${ID} could not be read`);
+      expect(h.reg(ID, 'wrapper'), 'the session did not move').toBe('claude');
+      expect(h.reg(ID, 'crosspool'), 'and no crossing was recorded').toBeNull();
+      fs.rmSync(p, { force: true, recursive: true });
+    });
+
+  it('the flag does not override it either — there is no pool X to cross FROM', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = shFail(`${SWAP_STUBS} cmd_swap --cross-pool ${ID} claude-b`, { TMUX: '' });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(`the project field for ${ID} could not be read`);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    fs.rmSync(p, { recursive: true });
+  });
+
+  it('but an UNTAGGABLE box still swaps — the same gate the tick carries', () => {
+    // The regression guard, in the opposite direction. With no `pools/` at all,
+    // `_project_pool_state` answers `untagged` for every name, so the unread
+    // field could not have changed the verdict — and refusing there would break
+    // the one relocation verb on every box that never tagged a project.
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
+    expect(fs.existsSync(reg('pools')), 'this case is about a box with no pools').toBe(false);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = shFail(`${SWAP_STUBS} cmd_swap ${ID} claude-b`, { TMUX: '' });
+    expect(r.code, 'the swap still happens').toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    fs.rmSync(p, { recursive: true });
+  });
+
+  it('`cmd_prefer` carries it too — it rewrites `.home`, so it PINS a session out of pool', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = shFail(`${SWAP_STUBS} cmd_prefer ${ID} claude-b`, { TMUX: '' });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(`the project field for ${ID} could not be read`);
+    expect(h.reg(ID, 'home'), 'the home was not re-pinned').toBe('claude');
+    fs.rmSync(p, { recursive: true });
+  });
+
   it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'Pool Orate');
     const r = shFail(`${SWAP_STUBS} cmd_swap --cross-pool ${ID} claude-b`, { TMUX: '' });
@@ -1823,6 +1892,259 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     expect(lastSkipLine(), 'and the sentence names what was actually measured')
       .toContain('not a regular file');
     fs.rmSync(sf);
+  });
+});
+
+describe('B4 — the guards this round shipped that nothing could red', () => {
+  // MEASURED, NOT ASSUMED: eight guards were mutated one at a time against the
+  // four ccd pool suites. Four already redded (`_swap_target`'s project guard,
+  // the verdict's `hrc` and `prc` lines, `_pool_untaggable`'s `-L` half); the
+  // four below did not, and each guards a condition measured to hang, storm or
+  // silence a row. "A comment is a request; a red suite is a mechanism."
+
+  it('an UNREADABLE `.tickstuck` is not read as "no stamp" — that would storm', () => {
+    // `_tick_undecidable` reads the stamp through `_reg_read` precisely so that
+    // rc 2 can mean ALREADY-SAID. Fold it into "absent" and the debounce is
+    // defeated through the fold instead of through the clear: the row writes a
+    // line and a registry cycle every five seconds, in exactly the condition the
+    // function exists to report. The stamp is a DIRECTORY here, the root-safe
+    // unreadability this tree uses (D-1997).
+    seedRow(); plantNotify();
+    undecidablePoolTag();
+    const stamp = reg(`${ID}.tickstuck`);
+    fs.rmSync(stamp, { force: true }); fs.mkdirSync(stamp);
+    tick(QUIET, 4);
+    expect(logLines('tick-undecidable'),
+      'an unreadable stamp answers ALREADY-SAID — four ticks, no line').toHaveLength(0);
+    fs.rmSync(stamp, { recursive: true });
+  });
+
+  it('the SWAP lane types its status file too — deleting that rung hangs the tick', () => {
+    // The compact lane's copy is pinned by "and it says WHICH"; this one was
+    // not, and its guard is the one that stops a FIFO wedging the supervisor.
+    // Reaching it needs the AFFINITY path — a row off its home with the home
+    // available — because the read sits below the rescue arms, which is why no
+    // earlier case touched it.
+    // `seedRow` sets home AND wrapper to the same account, so `_swap_target`
+    // takes its "home is fine: stay" shortcut and the tick returns two hundred
+    // lines above the read. The home has to differ, or this case measures the
+    // shortcut — measured, the first spelling did exactly that and stayed green
+    // under the mutation it names.
+    seedRow('claude-b'); plantNotify();
+    h.sh(`_reg_set ${ID} home claude`);
+    writeLimits('claude-b', 60, 60); writeLimits('claude', 1, 1);
+    const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude-b)/sessions"`);
+    fs.mkdirSync(sfDir, { recursive: true });
+    const sf = path.join(sfDir, `${PANE_PID}.json`);
+    execFileSync('mkfifo', [sf]);
+    const out = h.sh(
+      `timeout 5 bash -c 'source "${CCD}"; ${QUIET} _auto_swap_check ${ID}'; echo "rc=$?"`);
+    expect(out, 'a FIFO status file: the lane returns, and rc 124 would mean it hung')
+      .toContain('rc=0');
+    expect(calls(), 'and it dispatches nothing off a file it could not read')
+      .not.toContain('dispatch');
+    fs.rmSync(sf);
+  });
+
+  it('an unreadable CROSSING RECORD stamps `crosspool` — the verdict line for it', () => {
+    // AND THE FIXTURE NEEDS A FRESH `lastswap`, or the case measures nothing.
+    // Without it the tick runs on to `_swap_target`, which refuses on the same
+    // unreadable record and says `crosspool` from its own arm — so deleting the
+    // verdict's `ctrc` line stays GREEN and the two lines look interchangeable.
+    // They are not: the verdict runs ABOVE the cooldown gates and the `strc` arm
+    // below them, so a row inside `SWAP_COOLDOWN` is reported by the verdict
+    // alone. Measured — the first spelling of this case was green under the very
+    // mutation it names, which is the "mutually redundant, only a pair-deletion
+    // reds" shape the review filed against two other lines here.
+    seedRow('claude-b'); tagPool('demo', 'pool-a'); plantNotify();
+    crossed('pool-a', 'claude-b');
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);
+    h.sh(`_reg_set ${ID} lastswap "$(date +%s)"`);
+    tick(QUIET, 2);
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the crossing record')
+      .toContain('crosspool');
+    expect(logLines('tick-undecidable')[0], 'and so does the line').toContain('crosspool');
+    fs.rmSync(marker, { recursive: true });
+  });
+
+  it('`_pool_untaggable` refuses on an UNMEASURABLE registry — it never licenses a guess', () => {
+    // The predicate answers "no project here can be in any pool", and it gates
+    // every refusal this round added. Its registry-level test is what stops it
+    // answering that from a box it could not read: with `$REG` unsearchable the
+    // honest answer is rc 1 (something COULD be tagged), never rc 0. Deleting
+    // that line makes an unreadable box look like an un-adopted one, which
+    // re-opens the constraint lift through the gate meant to bound it.
+    seedRow();
+    const runOn = (mode: number): string => {
+      fs.chmodSync(reg(''), mode);
+      try { return h.sh(`_pool_untaggable; echo "rc=$?"`); }
+      finally { fs.chmodSync(reg(''), 0o755); }
+    };
+    expect(h.sh('_pool_untaggable; echo "rc=$?"'), 'no pools dir: nothing can be tagged')
+      .toBe('rc=0');
+    // a registry that is a FILE, not a directory — the root-safe shape, since
+    // `chmod 000` is a no-op for root and this must measure at every uid.
+    const regPath = reg('');
+    const stash = `${h.home}/reg-stash`;
+    fs.renameSync(regPath, stash);
+    fs.writeFileSync(regPath, 'not a directory');
+    expect(h.sh('_pool_untaggable; echo "rc=$?"'),
+      'an unmeasurable registry refuses — it does not answer "untaggable"').toBe('rc=1');
+    fs.rmSync(regPath); fs.renameSync(stash, regPath);
+    void runOn;
+  });
+});
+
+describe('B2 — the stamp must not stick ON either', () => {
+  it('a cooldown gate clears a stamp whose condition ENDED, so the next episode is said', () => {
+    // THE INVERSION. Round 2 stormed because the clear ran BEFORE the setter;
+    // round 3 moved the clear to the bottom of the tick, below four `return 0`
+    // gates — and so a fault that ENDS while one of those gates holds leaves a
+    // stale stamp standing, and the debounce then swallows the NEXT genuine
+    // episode of that same field for as long as the gate holds. Round 3
+    // disclosed a suppressed repeat "inside one cooldown" as the accepted cost;
+    // this case is that cost measured, and it is worth closing where closing it
+    // is honest.
+    //
+    // A ROW INSIDE `SWAP_COOLDOWN` DECIDED — that is what a fresh `lastswap`
+    // means — so clearing there cannot be a fabricated clear. The empty-pane
+    // gate is deliberately NOT given the same treatment: a pane nobody could
+    // capture is a row nothing was measured about, and that stamp must stand.
+    seedRow(); plantNotify();
+    undecidablePoolTag();
+    tick(QUIET, 2);
+    expect(logLines('tick-undecidable'), 'episode one').toHaveLength(1);
+
+    // the tag is fixed, and the row swaps — so the next ticks return at the
+    // cooldown gate, above the clear.
+    fs.rmSync(path.join(reg('pools'), 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(reg('pools'), 'demo'), 'pool-a');
+    h.sh(`_reg_set ${ID} lastswap "$(date +%s)"`);
+    tick(QUIET, 2);
+    expect(h.reg(ID, 'tickstuck'),
+      'the condition ended and the row decided — the stamp must not survive the cooldown')
+      .toBeNull();
+
+    // a genuinely NEW episode of the SAME field must now be said again
+    undecidablePoolTag();
+    tick(QUIET, 2);
+    expect(logLines('tick-undecidable'), 'episode two is said, not swallowed').toHaveLength(2);
+  });
+
+  it('but an UNCAPTURABLE pane clears nothing — that row was never measured', () => {
+    // The other direction, and the reason the cooldown gates are treated
+    // differently from the pane gate. An empty capture is a pane nobody could
+    // read; clearing on it would be the fabricated clear this whole series
+    // exists to prevent, and it is the one gate that can hold indefinitely.
+    // THE FIXTURE HAS TO END THE CONDITION FIRST, or the case measures nothing:
+    // with the tag still broken the verdict re-sets `$stuck` every tick, so a
+    // clear wrongly added at this gate would be gated off anyway and the
+    // mutation would pass. Measured — the first spelling of this case did
+    // exactly that and stayed green under the very mutation it names.
+    seedRow(); plantNotify();
+    undecidablePoolTag();
+    tick(QUIET, 1);
+    expect(String(h.reg(ID, 'tickstuck'))).toContain('pool');
+
+    // the tag is fixed — but the pane goes dark before any tick can decide, so
+    // nothing about this row is measured from here on.
+    fs.rmSync(path.join(reg('pools'), 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(reg('pools'), 'demo'), 'pool-a');
+    tick(NOPANE, 3);
+    expect(String(h.reg(ID, 'tickstuck')),
+      'a pane nobody could read decides nothing — including that the row recovered')
+      .toContain('pool');
+    expect(logLines('tick-undecidable'), 'and nothing is re-said').toHaveLength(1);
+
+    // and once the pane IS readable the ordinary clear does its job.
+    tick(QUIET, 1);
+    expect(h.reg(ID, 'tickstuck'), 'the stamp lifts on the first tick that could measure')
+      .toBeNull();
+  });
+});
+
+describe('B5 — `_swap_target` SAYS which condition it could not decide', () => {
+  // ROUND 3 ADDED A FOURTH rc-2 CONDITION AND LEFT THE CALLER GUESSING.
+  // `_swap_target` refuses for four distinct reasons; the caller used to
+  // re-derive which from `hrc` and `prc` — two measurements of two DIFFERENT
+  // moments than the one that actually refused — and defaulted to `crosspool`.
+  // The exit code now carries the answer: 2 crossing, 3 the row's `.project`,
+  // 4 the pool rule. Crossing KEEPS 2, so every existing rc-2 assertion in this
+  // file stays green by construction.
+  //
+  // The two races below are the reason the inner reads exist at all, so they are
+  // the right fixtures: they make the field break BETWEEN the caller's read and
+  // `_swap_target`'s own, which is the only way to reach these codes.
+  const raceWrapper = (mutate: string): string =>
+    `eval "_real_swap_target() $(declare -f _swap_target | tail -n +2)"; `
+    + `_swap_target() { ${mutate}; _real_swap_target "$@"; }; `;
+
+  it('a `.project` that breaks INSIDE the tick names the project, not the crossing record', () => {
+    // THE DEFECT, VERBATIM: this used to strand naming `.crosspool` — a file the
+    // fixture does not even create — and stamp the debounce `crosspool`, so the
+    // next genuine crossing episode on the row was swallowed too.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    h.sh(`${BLOCKED} ${raceWrapper(`rm -rf "$REG/$1.project"; mkdir -p "$REG/$1.project"`)} `
+      + `_auto_swap_check ${ID}`);
+    expect(fs.existsSync(reg(`${ID}.crosspool`)),
+      'the fixture has no crossing record at all — naming it would be fabricated').toBe(false);
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the project').toContain('project');
+    expect(String(h.reg(ID, 'stranded')), 'and so does the operator sentence')
+      .toContain('project\'s own registry field could not be read');
+    expect(String(h.reg(ID, 'stranded')), 'never the crossing record')
+      .not.toContain('crossing record');
+  });
+
+  it('a pool TAG that breaks inside the tick names the pool, not the crossing record', () => {
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    h.sh(`${BLOCKED} ${raceWrapper(`rm -rf "$REG/pools/demo"; mkdir -p "$REG/pools/demo"`)} `
+      + `_auto_swap_check ${ID}`);
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the pool').toContain('pool');
+    expect(String(h.reg(ID, 'stranded')), 'and the sentence names the tag file')
+      .toContain("pool tag could not be read");
+    expect(String(h.reg(ID, 'stranded'))).not.toContain('crossing record');
+  });
+
+  it('the stamp and the strand sentence never name two different files in one tick', () => {
+    // THE DOUBLE FAULT, which is the one case that diverged in ORDINARY state
+    // rather than through a race: crossing record unreadable AND pool tag
+    // unreadable sent `.tickstuck` to `crosspool` and `.stranded` to the pool
+    // sentence. Both surfaces now derive from one word through
+    // `_undecidable_cause`, so they cannot drift.
+    seedRow(); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    undecidablePoolTag();
+    crossed('pool-a', 'claude-b');
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);
+    tick(BLOCKED);
+    const word = String(h.reg(ID, 'tickstuck')).split(' ')[1];
+    const sentence = String(h.reg(ID, 'stranded'));
+    const named = ['crosspool', 'pool', 'project', 'home']
+      .filter((w) => (w === 'crosspool' ? sentence.includes('crossing record')
+        : w === 'pool' ? sentence.includes('pool tag')
+          : w === 'project' ? sentence.includes('own registry field')
+            : sentence.includes('home account')));
+    expect(named, 'the sentence names exactly one condition').toHaveLength(1);
+    expect(named[0], `the stamp says ${word}; the sentence must agree`).toBe(word);
+  });
+
+  it('an exit code this build does not name is reported as ignorance, never as a healthy file', () => {
+    // The `*` arm. Unreachable today ON PURPOSE: it exists so that the next
+    // `return N` added upstream is reported as "this build does not name it"
+    // rather than silently inheriting `_strand_why`'s stock "no account in pool
+    // X can take it" — a fabricated positive claim about accounts nobody asked.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    h.sh(`${BLOCKED} _swap_target() { return 7; }; _auto_swap_check ${ID}`);
+    expect(String(h.reg(ID, 'stranded')), 'it says it does not know')
+      .toContain('this build does not name');
+    expect(String(h.reg(ID, 'stranded')), 'and never a pool census')
+      .not.toContain('can take it');
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp carries the code itself').toContain('rc7');
   });
 });
 

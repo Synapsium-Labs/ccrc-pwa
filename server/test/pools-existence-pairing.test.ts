@@ -549,9 +549,17 @@ const DOCTOR_SITES: string[] = [
 // do so. Read the two together: `_auto_swap_check` moved one list and owed
 // nothing, this one moved both and owes the pairing rule, and neither fact had
 // to be remembered by anyone.
+// AND ROUND 4 ADDS THE OTHER SHAPE AGAIN, which is what makes the pair of lists
+// worth having. `_undecidable_cause` (#69 review round 4, B5) interpolates
+// `$POOLS_DIR` into ONE of its five operator-facing sentences and holds no
+// existence test at all — so it joins THIS list and leaves `CCD_SITES`
+// byte-identical, exactly as `_auto_swap_check` did. Read the three together:
+// `_auto_swap_check` moved one list, `_pool_untaggable` moved both, this one
+// moves one again — and no one had to remember which obligation applies.
 const CCD_BLOCKS: string[] = [
   '_pool_untaggable',
-  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_auto_swap_check', 'cmd_start',
+  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_undecidable_cause',
+  '_auto_swap_check', 'cmd_start',
   '_strand_why', 'cmd_swap', 'cmd_prefer',
 ];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`
