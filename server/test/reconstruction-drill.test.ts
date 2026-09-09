@@ -278,6 +278,14 @@ describe('the reconstruction drill', () => {
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
       'coordinator caps counters',
+      // asks: LOST, AND THE LOSS IS FREE (D-2169). There is no flat file
+      // behind this table, deliberately: the live pane carries the question
+      // and the watcher's in-memory map carries the deferred push, so a
+      // rebuilt db simply pushes every ask immediately — the behaviour that
+      // shipped before this lane existed. What is genuinely gone is the
+      // RECORD of which parent ruled what, and that is why that record is
+      // also written to the feed at hold time.
+      'asks',
     ] as const;
     // Compile-time half of the same claim: if PR I adds or removes a
     // RunSummary field, this object satisfies-fails before any test runs —
@@ -299,7 +307,7 @@ describe('the reconstruction drill', () => {
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(15);
+    expect(UNRECOVERABLE.length).toBe(16);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {
