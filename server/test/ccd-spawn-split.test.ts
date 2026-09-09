@@ -680,9 +680,20 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  ORDER IS PART OF IT. A `toContain("--remote-control 'myid'")` passes just
    *  as happily with `$rcflag` moved after `$sidflag` (measured: 81/81 green),
    *  so the substring form pinned the flag's PRESENCE and nothing about the
-   *  command it composes. */
+   *  command it composes.
+   *
+   *  FIX ROUND 1 (D-TBD-resenv-composed-command-mismatch): Task 1 (D-2227)
+   *  threads `$resenv` — one line of `env` KEY=value assignments switching on
+   *  Claude Code's interrupted-turn resume — between `COLORTERM=truecolor` and
+   *  the wrapper path on both spawn lines. This suite is byte-exact, so it
+   *  must carry that token too — but hand-copying `RESUME_PROMPT`'s 430
+   *  characters into a second literal here would itself be the kind of
+   *  duplicate `single-definition.test.ts` exists to catch. Instead this asks
+   *  the real `ccd` for its own composed value via `_resume_env` (`h.sh`,
+   *  same mechanism every other suite in this file uses to read `ccd` state) —
+   *  one definition, read twice. */
   const expectedCommand = (sidflag: string, rc: boolean): string =>
-    `cd '${h.home}' && exec env COLORTERM=truecolor '${h.home}/.local/bin/claude' `
+    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude' `
     + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
 
   const UUID = 'deadbeef-0000-4000-8000-000000000000';
