@@ -120,4 +120,16 @@ describe('renderLitellmConfig', () => {
     const nasty = { ...CODEX, models: [{ ...CODEX.models[0]!, id: 'gpt: 6', hidden: false }] };
     expect(() => renderLitellmConfig(TEMPLATE, nasty)).toThrow(LitellmTemplateInvalid);
   });
+
+  // C10: the ONE case that isolates the `:` exclusion from the space that
+  // sits beside it in the case above. `gpt: 6` is refused by a mutant that
+  // widens YAML_SAFE_ID to allow `:` too, because the SPACE alone still fails
+  // — this id has no space, so only the `:` decides it. MODEL_ID_RE (the
+  // catalogue's own gate) allows `:` deliberately (an OpenRouter id like
+  // `anthropic/claude-opus-4.5:beta`), so this is a real, reachable value,
+  // not a contrived one.
+  it('refuses a bare colon with no space — MODEL_ID_RE allows it, this writer-side gate does not', () => {
+    const nasty = { ...CODEX, models: [{ ...CODEX.models[0]!, id: 'gpt-5.6-sol:', hidden: false }] };
+    expect(() => renderLitellmConfig(TEMPLATE, nasty)).toThrow(LitellmTemplateInvalid);
+  });
 });

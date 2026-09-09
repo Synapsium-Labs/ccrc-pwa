@@ -87,6 +87,18 @@ describe('modelEnvBlock', () => {
     expect(modelEnvBlock(noHaiku, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('s');
   });
 
+  // C1: the ONE case that can tell the sentinel apart from a fall-through to
+  // `fable` — both haiku and sonnet null, with BOTH opus and fable non-null,
+  // so a chain that (wrongly) fell through to fable would read a real model
+  // id rather than failing the same way the all-null case above does. Every
+  // other case in this file leaves `fable: null` too, which cannot make this
+  // distinction (a null fable and a stopped chain both read the sentinel).
+  it('ANTHROPIC_SMALL_FAST_MODEL stops at the sentinel — the chain never reaches fable (C1)', () => {
+    const noHaikuNoSonnet = reg({ classes: { haiku: null, sonnet: null, opus: 'o', fable: 'f' },
+      subagent: 'opus', discovery: ['o', 'f'], effort: {} });
+    expect(modelEnvBlock(noHaikuNoSonnet, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('ccrc-unavailable-haiku');
+  });
+
   it('neither fallback chain ever reaches `fable`, and a fable-only lane is refused', () => {
     // The two chains are spelled in §6.1 and STOP where they stop, deliberately:
     // a lane whose only class is Fable would otherwise silently run every
@@ -231,6 +243,15 @@ describe('mergeSettingsEnv', () => {
     expect(fs.readdirSync(path.join(home, '.claude-gpt'))).toEqual(['settings.json']);
   });
 
+  // C8: unpinned before this — dropping `{ mode: 0o600 }` at this write site
+  // survived the whole covering suite (127/127, measured). The settings file
+  // this writes carries every model alias a lane routes to.
+  it('writes settings.json at 0600 (C8)', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
+    expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
+  });
+
   it('refuses a settings file that is not JSON, rather than overwriting it', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     fs.writeFileSync(settings(), '{ this is not json');
@@ -252,6 +273,18 @@ describe('MODEL_ENV_KEYS', () => {
     expect([...MODEL_ENV_KEYS].sort()).toEqual(Object.keys(modelEnvBlock(SEEDED, CODEX)).sort());
     expect(Object.isFrozen(MODEL_ENV_KEYS)).toBe(true);
   });
+
+  // C26 (moved here from the monorepo review, whose own pin read a sibling
+  // worktree by a session-scoped absolute path and skipped everywhere else):
+  // `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` ride in the ccgpt wrapper
+  // (infra/handoff/ccgpt), never in a lane's settings.json — a re-materialise
+  // that ever wrote them here would silently override the operator's own
+  // timeout/retry knobs the next time `mergeSettingsEnv` ran. Pinned in-tree,
+  // on the shared/modelenv.mjs side, where this export actually lives.
+  it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccgpt wrapper (C26)', () => {
+    expect(MODEL_ENV_KEYS).not.toContain('API_TIMEOUT_MS');
+    expect(MODEL_ENV_KEYS).not.toContain('CLAUDE_CODE_MAX_RETRIES');
+  });
 });
 
 describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1 Lifecycle, §10)', () => {
@@ -268,6 +301,18 @@ describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(j.alwaysThinkingEnabled).toBe(true);
     expect(j.env).toEqual({ DISABLE_TELEMETRY: '1' });
+  });
+
+  // C8: unpinned before this — dropping `{ mode: 0o600 }` at this write site
+  // survived the whole covering suite (120/120, measured).
+  it('the rewrite lands at 0600 (C8)', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings(), JSON.stringify({
+      alwaysThinkingEnabled: true,
+      env: { ...modelEnvBlock(SEEDED, CODEX), DISABLE_TELEMETRY: '1' },
+    }, null, 2));
+    clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
   });
 
   it('removes env entirely once emptied by the deletion, rather than writing {}', () => {

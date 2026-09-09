@@ -225,6 +225,25 @@ describe('parseRegistry (§4.1)', () => {
     expect(() => parseRegistry(r)).toThrow(/discovery/);
   });
 
+  // models.mjs:218 minor: MODEL_ID_RE on a discovery entry is the ONLY
+  // validation an explicit discovery list gets when a registry is read off
+  // disk — a hand-edited file's entries never pass through
+  // deploy/models-op.mjs's own `--model` validation. No existing case feeds a
+  // shape MODEL_ID_RE actually refuses (a space); the cases above use
+  // well-formed ids and exercise only "not offered"/"duplicate"/"empty".
+  it('refuses a discovery entry MODEL_ID_RE does not accept, naming its index', () => {
+    try {
+      parseRegistry({
+        probe: 'codex', classes: { haiku: 'a', sonnet: null, opus: null, fable: null },
+        subagent: 'haiku', discovery: ['a', 'b c: #d'],
+      });
+      expect.unreachable('parseRegistry accepted a malformed discovery entry');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe('discovery[1]');
+    }
+  });
+
   it('refuses a duplicate in the discovery list', () => {
     const r = good(); r['discovery'] = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-sol'];
     expect(() => parseRegistry(r)).toThrow(/gpt-5\.6-sol/);
@@ -293,6 +312,34 @@ describe('parseRegistry (§4.1)', () => {
     }
   });
 
+  // models.mjs:145 minor: the top-level shape guard, discriminated from the
+  // fall-through a deleted guard leaves behind. `parseRegistry(7)` still
+  // reaches a later, unrelated refusal (`json['probe'] === undefined`) with
+  // the guard gone — only a non-object whose properties a TypeError-throwing
+  // access can't paper over (`null`) tells the two apart, which is why a
+  // FIELD, not just `toThrow()`, is the assertion.
+  it('a non-object top level refuses as RegistryInvalid with field ""', () => {
+    try {
+      parseRegistry(null);
+      expect.unreachable('parseRegistry accepted a null top level');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe('');
+    }
+  });
+
+  it('a missing "classes" refuses as RegistryInvalid with field "classes", not merely "throws"', () => {
+    const r = good();
+    delete r['classes'];
+    try {
+      parseRegistry(r);
+      expect.unreachable('parseRegistry accepted a registry with no classes');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe('classes');
+    }
+  });
+
   it('refuses every one of a batch of invalid registries', () => {
     // Fix round 1: this ran the same batch through both implementations before
     // the single-source ruling. One implementation, one pass — still worth
@@ -349,6 +396,16 @@ describe('classOfModel', () => {
     expect(classOfModel(SEEDED, '')).toBeNull();
   });
 
+  // C12: `''` cannot discriminate the type/empty guard — with the guard
+  // deleted, the loop compares `reg.classes[c] === ''`, and a null slot is
+  // not `''`, so `''` stays null either way. `null` DOES discriminate: with
+  // the guard gone, `reg.classes.fable === null` strictly matches a `null`
+  // modelId, and the loop answers the class name of a model that does not
+  // exist. SEEDED carries a null slot at `fable`.
+  it('a null modelId never matches a null slot either — the docblock\'s actual claim (C12)', () => {
+    expect(classOfModel(SEEDED, null as unknown as string)).toBeNull();
+  });
+
   it('the first class in CLASSES order wins when two slots hold one id', () => {
     const both = { ...SEEDED, classes: { haiku: 'x', sonnet: 'x', opus: null, fable: null } };
     expect(classOfModel(both, 'x')).toBe('haiku');
@@ -373,6 +430,15 @@ describe('parseCatalogue', () => {
     ['a model with a non-string id', { ...CODEX, models: [{ id: 7, label: 'x' }] }],
   ] as const)('refuses %s', (_why, bad) => {
     expect(() => parseCatalogue(bad)).toThrow(CatalogueInvalid);
+  });
+
+  // models.mjs:145 minor: `null`, not `7` — with the top-level guard deleted,
+  // `7` still refuses via the UNRELATED `json['probe'] === undefined` check
+  // (a property read off a number is just undefined), so the `.each` case
+  // above cannot discriminate this guard's removal. `null['probe']` throws a
+  // raw TypeError instead, which only the guard itself catches.
+  it('refuses a null top level as CatalogueInvalid, not a raised TypeError', () => {
+    expect(() => parseCatalogue(null)).toThrow(CatalogueInvalid);
   });
 
   it('fills the optional fields rather than demanding them', () => {

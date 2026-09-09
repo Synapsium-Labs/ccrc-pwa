@@ -135,6 +135,14 @@ const STUB_VALID_REFUSAL = '#!/usr/bin/env node\n'
 const STUB_VALID_NO_LANES = '#!/usr/bin/env node\n'
   + "process.stdout.write(JSON.stringify({ok:true}) + '\\n');\n"
   + 'process.exit(0);\n';
+/** C9: the mirror image of `STUB_VALID_REFUSAL` — a VALID object (passes the
+ *  shape check) at an exit code OUTSIDE the 0/1/2 clamp. `STUB_STACK`'s exit 7
+ *  trips both the shape check AND the clamp at once, so it cannot isolate
+ *  the clamp the way `STUB_STACK_EXIT0` isolates the shape check; nothing
+ *  before this paired a valid body with an out-of-contract code. */
+const STUB_VALID_EXIT7 = '#!/usr/bin/env node\n'
+  + "process.stdout.write(JSON.stringify({ok:true,op:'show',id:'gpt'}) + '\\n');\n"
+  + 'process.exit(7);\n';
 
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(h, { ...process.env, HOME: h, ...extra });
@@ -473,6 +481,22 @@ describe('the _models_answer seam ("no-answer")', () => {
     const b = oneObject(r);
     expect(b['error']).toBe('roster-absent');
     expect(b['detail']).toBe('stub refusal');
+  });
+
+  it('the node half prints a VALID object and exits 7: refused by the RC CLAMP alone (C9)', () => {
+    // The clamp's own comment names this exact case: "a node half that prints
+    // a VALID object but exits some fourth code ... must not leak that code
+    // past ccrc's own promise." STUB_VALID_EXIT7 is inside the shape check
+    // (a real JSON object) and outside the clamp (exit 7) — the one
+    // combination that isolates the clamp from the shape check, the mirror of
+    // what STUB_STACK_EXIT0 does for the shape check.
+    fs.rmSync(home, { recursive: true, force: true });
+    home = boxWithStubOp(STUB_VALID_EXIT7);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('no-answer');
+    expect(r.stderr).not.toBe('');
   });
 });
 

@@ -483,6 +483,18 @@ describe('set-class', () => {
     expect((r.body['moved'] as string[]).join(' ')).toContain('sonnet');
   });
 
+  // C11: the self-exclusion (`c !== a.class`) that keeps the TARGET class out
+  // of its own `moved` list. No existing case re-assigns a class the model it
+  // already holds, so dropping the clause survived unmeasured — `moved` would
+  // have named the class that was just SET as one that lost its model, a
+  // false statement in an `ok:true` body.
+  it('a no-op reassignment — the model the class already holds — moves nothing (C11)', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--model', 'gpt-5.6-terra');
+    expect(r.code).toBe(0);
+    expect(r.body['moved']).toEqual([]);
+    expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
+  });
+
   it('refuses a class that is not one of the four', () => {
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent', '--model', 'gpt-5.5');
     expect(r.code).toBe(1);
@@ -527,6 +539,21 @@ describe('set-class', () => {
     expect(r.body['field']).toBe('discovery');
     expect(String(r.body['detail'])).toMatch(/discovery add/);
     expect(classesOf('router')['sonnet']).toBeNull();
+  });
+
+  // minor (models-op.mjs:737): the not-discovered gate's own ERROR CODE, not
+  // only `field`/`detail` — removing the gate does not open a write
+  // (`parseRegistry`'s containment rule still refuses the same reassignment),
+  // and THAT fallback refusal also carries `field: "discovery"` with a
+  // remedy sentence that ALSO happens to contain the substring "discovery
+  // add" (FIELD_REMEDY's generic template), so the case above passes either
+  // way — measured: it does not red when this gate is deleted. Only the error
+  // CODE ("not-discovered" vs. "registry-invalid") tells the two apart.
+  it('openrouter set-class names the error "not-discovered", not merely a field/detail an unrelated refusal shares', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'a/c');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('not-discovered');
   });
 
   it('openrouter set-class succeeds once discovery add has whitelisted the id, without appending twice', () => {
@@ -860,6 +887,17 @@ describe('materialise', () => {
     expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
+  // C8: unpinned before this — dropping `{ mode: 0o600 }` at this write site
+  // survived the whole covering suite (171/171, measured: models-op.test.ts +
+  // ccrc-models.test.ts). Unlike the registry file's own pin (`the registry
+  // write` describe above), nothing asserted the mode of either file this
+  // same writer loop produces.
+  it('the TSV and the effort file both land at 0600 (C8)', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv')).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json')).mode & 0o777).toBe(0o600);
+  });
+
   it('on a lane with NO registry writes nothing and says so', () => {
     const r = op('materialise', '--file', rosterPath(), '--id', 'router');
     expect(r.code).toBe(0);
@@ -905,6 +943,45 @@ describe('materialise', () => {
         expect(r.code, `round ${round}: ${JSON.stringify(r.body)} stderr=${r.stderr}`).toBe(0);
       }
     }
+  });
+});
+
+// models-op.mjs:632 minor: the check-only/`--commit true` two-phase protocol
+// (Task 10 fix round 1's whole point, per progress.md:109) had zero coverage
+// at THIS layer — `grep -n commit server/test/models-op.test.ts` returned
+// nothing before this. It IS killed tree-wide, through
+// `test/ccrc-models.test.ts`'s `_models_litellm` calls, but this op is the
+// one writer of these bytes and its own suite could not tell check-only from
+// commit — a future edit to the bash caller's two-call sequence would take
+// the only pin with it.
+describe('litellm (§6.3) — the two-phase check-then-commit protocol', () => {
+  const TEMPLATE = path.join(REPO, 'deploy', 'litellm-config.template.yaml');
+  const out = (): string => path.join(home, '.handoff', 'litellm-config.yaml');
+
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('without --commit is CHECK-ONLY: reports changed:true and writes NOTHING at --out', () => {
+    const r = op('litellm', '--file', rosterPath(), '--id', 'gpt', '--template', TEMPLATE, '--out', out());
+    expect(r.code).toBe(0);
+    expect(r.body['changed']).toBe(true);
+    expect(fs.existsSync(out())).toBe(false);
+    expect(fs.existsSync(`${out()}.prev`)).toBe(false);
+  });
+
+  it('--commit true writes both --out and --out.prev', () => {
+    fs.mkdirSync(path.dirname(out()), { recursive: true });
+    fs.writeFileSync(out(), 'stale previous rendering\n');
+    const r = op('litellm', '--file', rosterPath(), '--id', 'gpt',
+      '--template', TEMPLATE, '--out', out(), '--commit', 'true');
+    expect(r.code).toBe(0);
+    expect(r.body['changed']).toBe(true);
+    expect(fs.existsSync(out())).toBe(true);
+    expect(fs.readFileSync(out(), 'utf8')).not.toBe('stale previous rendering\n');
+    expect(fs.existsSync(`${out()}.prev`)).toBe(true);
+    expect(fs.readFileSync(`${out()}.prev`, 'utf8')).toBe('stale previous rendering\n');
   });
 });
 
