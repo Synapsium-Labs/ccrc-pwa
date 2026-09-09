@@ -1,0 +1,7 @@
+{
+  "object": "list",
+  "data": [
+    {"id": "glm-5.2", "object": "model", "owned_by": "cortecs"},
+    {"id": "qwen3.5-9b", "object": "model", "owned_by": "cortecs"}
+  ]
+}
