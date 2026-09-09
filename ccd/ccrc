@@ -4404,25 +4404,23 @@ _acct_converge() {
 # alias is one pair in one object, not three edits across two modes — CLAUDE.md's
 # `PR_REASONS = Object.keys(PR_REASON_MAP)` rule, in jq.
 #
-# `ANTHROPIC_AUTH_TOKEN` IS DELIBERATELY ABSENT. The key lives in the 0600 file
-# the generated wrapper sources at exec time; this file sits beside the
-# transcripts, where the operator can read it and doctor can check it without
-# ever opening a secret (spec §4.3). `ANTHROPIC_API_KEY` is written EMPTY so the
-# sourced auth token wins — measured, §4.3.
+# `ANTHROPIC_AUTH_TOKEN` IS DELIBERATELY ABSENT. The key lives in the 0600 file the
+# generated wrapper sources at exec time; this file sits beside the transcripts, where
+# the operator can read it and doctor can check it without ever opening a secret (spec
+# §4.3). `ANTHROPIC_API_KEY` is written EMPTY so the sourced token wins — measured, §4.3.
 #
-# BESIDE THEIR ONE CONSUMER, NOT IN THE FILE-SCOPE CONSTANTS BLOCK, and that is
-# a DEVIATION from this task's plan snippet, argued rather than transcribed.
-# That block spells a value once because TWO sections read it (`ACCT_SECRETS_DIR`
-# states the reason: a writer and a reader that spelled the path separately is
-# the drift D-166 names). These three programs have exactly one reader —
-# `_acct_settings_env` below, which is itself the single writer in both
-# directions — so the block's own argument does not reach them, while the
-# installer this merge is copied from puts its jq programs immediately above the
-# loop that runs them (`install-session-hooks.sh:86`, used at `:118-121`). The
-# measured cost of the other placement is the reason it matters: inserting at
-# the constants block moves every line below it, which is ~98 line citations in
-# this tree against ~30 here, and 20 of those live in files this task may not
-# touch. D-1985's class, avoided rather than swept.
+# BESIDE THEIR ONE CONSUMER, NOT IN THE FILE-SCOPE CONSTANTS BLOCK, and that is a
+# DEVIATION from this task's plan snippet, argued rather than transcribed. That block
+# spells a value once because TWO sections read it (`ACCT_SECRETS_DIR` states the
+# reason: a writer and a reader that spelled the path separately is the drift D-166
+# names). These three programs have exactly one reader — `_acct_settings_env` below,
+# itself the single writer in both directions — so the block's own argument does not
+# reach them, while the installer this merge is copied from puts its jq programs
+# immediately above the loop that runs them (`install-session-hooks.sh:86`, used at
+# `:118-121`). The measured cost of the other placement is the reason it matters:
+# inserting at the constants block moves every line below it — ~98 line citations in
+# this tree against ~30 here, 20 in files this task may not touch. D-1985's class,
+# avoided rather than swept.
 JQ_ACCT_MANAGED='
 def modelmap: {opus:"ANTHROPIC_DEFAULT_OPUS_MODEL", sonnet:"ANTHROPIC_DEFAULT_SONNET_MODEL",
                haiku:"ANTHROPIC_DEFAULT_HAIKU_MODEL", subagent:"CLAUDE_CODE_SUBAGENT_MODEL"};
@@ -4443,22 +4441,27 @@ JQ_ACCT_CLEAR="$JQ_ACCT_MANAGED"'
 | if .env == {} then del(.env) else . end
 '
 
-_acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
-  # `install-session-hooks.sh:104-132`, clause for clause: jq validates BEFORE
-  # (:109) and AFTER (:128), the converge is byte-level under `jq -S` (:126) so a
-  # converged file is never touched, every rewritten file is backed up first
-  # (:129), and the write is tmp + `mv -f` (:130-131). Values enter through
-  # --arg/--argjson (:120), never shell interpolation. THE BEFORE PROBE IS
-  # STRUCTURAL, not `jq empty` (review round 1): an EMPTY settings.json passed
-  # `jq empty` and then compared CONVERGED, so the lane got no env block at exit
-  # 0; and an `env` that is not an object parses, then dies wearing ccrc's class.
-  local dir="$1" mode="$2" burl="${3:-}" models="${4:-{\}}" f cur next prog tmp fmode=""
+_acct_settings_env() {   # <cfgdir> <set|clear> <what-still-stands> [<base-url>] [<models-json>]
+  # `install-session-hooks.sh:104-132`, clause for clause: jq validates BEFORE (:109)
+  # and AFTER (:128), the converge is byte-level under `jq -S` (:126) so a converged
+  # file is never touched, every rewritten file is backed up first (:129), and the write
+  # is tmp + `mv -f` (:130-131). Values enter through --arg/--argjson (:120), never
+  # shell interpolation. THE BEFORE PROBE IS STRUCTURAL, not `jq empty` (review round
+  # 1): an EMPTY settings.json passed `jq empty` and compared CONVERGED, so the lane got
+  # no env block at exit 0; and a non-object `env` parses, then dies wearing ccrc's class.
+  #
+  # $3 IS THE CALLER'S "WHAT STILL STANDS" CLAUSE, ended onto every refusal below —
+  # D-2126, D-2051's ruling at `_acct_no_answer`'s own $3. Each here is true about THIS
+  # FILE and silent about the run: read as "nothing was written" it sends the operator
+  # back into `ccrc account add` and `duplicate-id`. Shared it would be false for
+  # `clear`, Task 32's caller, whose entry is on its way out. Required, never `${3:-}`.
+  local dir="$1" mode="$2" stands="$3" burl="${4:-}" models="${5:-{\}}" f cur next prog tmp fmode=""
   f="$dir/settings.json"
   if [ -f "$f" ]; then
     jq -e 'type == "object" and ((.env? // {}) | type == "object")' "$f" >/dev/null 2>&1 \
-      || _acct_refuse 1 settings-invalid "$f is not a JSON object whose \"env\" is an object (or absent), which is the shape this merge needs. This verb never rewrites a settings.json it could not validate, so that file is exactly as it was: fix it, or move it aside, and re-run."
+      || _acct_refuse 1 settings-invalid "$f is not a JSON object whose \"env\" is an object (or absent), which is the shape this merge needs. This verb never rewrites a settings.json it could not validate, so that file is exactly as it was: fix it, or move it aside. $stands"
     cur="$(cat "$f")" \
-      || _acct_refuse 1 settings-invalid "$f could not be read"
+      || _acct_refuse 1 settings-invalid "$f could not be read, so nothing was merged and that file is exactly as it was. $stands"
   else
     # NOTHING TO CLEAR FROM. A home with no settings.json must not gain one
     # from a removal — install-session-hooks.sh:112-114's rule.
@@ -4469,12 +4472,11 @@ _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
   prog="$JQ_ACCT_SET"
   [ "$mode" = clear ] && prog="$JQ_ACCT_CLEAR"
   next="$(jq --arg burl "$burl" --argjson models "$models" "$prog" <<<"$cur")" \
-    || _acct_refuse 1 settings-merge "merging the account env block into $f failed — that file is exactly as it was"
+    || _acct_refuse 1 settings-merge "merging the account env block into $f failed — that file is exactly as it was. $stands"
 
-  # AND NOTHING TO SET, EITHER. A `login` lane has no endpoint and no model map,
-  # so `next` is `{}` — measured against real jq. A settings.json created to hold
-  # `{}` in a home that never had one is a key that decides nothing: the empty
-  # distinction `_exp_env_write` refuses at :3501-3505, mirroring `clear` above.
+  # AND NOTHING TO SET, EITHER. A `login` lane has no endpoint and no model map, so
+  # `next` is `{}` — measured against real jq. A settings.json holding `{}` in a home
+  # that never had one decides nothing — `_exp_env_write` at :3501-3505, `clear` above.
   if [ ! -f "$f" ] && [ "$(jq -S -c . <<<"$next")" = '{}' ]; then
     return 0
   fi
@@ -4485,71 +4487,69 @@ _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
     return 0
   fi
   jq empty <<<"$next" >/dev/null 2>&1 \
-    || _acct_refuse 1 settings-merge "the merged settings for $f are not valid JSON — this is a bug in ccrc, not a fact about your box, and that file is exactly as it was"
+    || _acct_refuse 1 settings-merge "the merged settings for $f are not valid JSON — this is a bug in ccrc, not a fact about your box, and that file is exactly as it was. $stands"
   if [ -f "$f" ]; then
     # THE FILE'S OWN MODE RIDES THE SWAP, which that installer does NOT do: `mv`
     # replaces the inode, so an operator's 0600 came back at the umask — 664,
     # measured. D-1244's remedy, fallback and macOS reason verbatim, :6530-6536.
     local stamp bdir; fmode="$(_plat_mode "$f" 2>/dev/null || true)"
     # `date +%Y%m%d-%H%M%S`, NOT THE PLAN SNIPPET'S `date -u +%Y%m%dT%H%M%SZ`:
-    # `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the shape contractual — "a
-    # backup named outside that shape is a backup the pruner can never reclaim" —
-    # and the glob (deploy.sh:224-228, :7179's loop) is `[0-9]{8}-[0-9]{6}`, which
-    # `T…Z` matches nowhere: every backup here accumulates. EIGHT writers share
-    # this root and all spell it so — :3591, :6481, :6623, :6878, and `TS=` in
-    # all four installers, install-session-hooks.sh:38 among them.
+    # `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the shape contractual — "a backup
+    # named outside that shape is a backup the pruner can never reclaim" — and the glob
+    # (deploy.sh:224-228, :7179's loop) is `[0-9]{8}-[0-9]{6}`, which `T…Z` matches
+    # nowhere: every backup here accumulates. EIGHT writers share this root and spell it
+    # so — :3591, :6481, :6623, :6878, `TS=` in all four, install-session-hooks.sh:38.
     stamp="$(date +%Y%m%d-%H%M%S)" \
-      || _acct_refuse 1 settings-merge "cannot read the clock (date failed), and a backup needs a name — $f is exactly as it was"
+      || _acct_refuse 1 settings-merge "cannot read the clock (date failed), and a backup needs a name — $f is exactly as it was. $stands"
     bdir="$BOX_BACKUP_ROOT/$stamp"
-    # `${dir##*/}` and not `$(basename "$dir")`: the installer's naming, reached
-    # by pure parameter expansion, which is `CCRC_HERE`'s argument (:834-841) —
-    # a box whose PATH is broken is the box this must work on.
+    # `${dir##*/}` and not `$(basename "$dir")`: the installer's naming, reached by pure
+    # parameter expansion — `CCRC_HERE`'s argument (:834-841), for a box with no PATH.
     mkdir -p "$bdir" && cp -a "$f" "$bdir/${dir##*/}.settings.json" \
-      || _acct_refuse 1 settings-merge "could not back up $f to $bdir — refusing to rewrite it"
+      || _acct_refuse 1 settings-merge "could not back up $f to $bdir — refusing to rewrite it, so that file is exactly as it was. $stands"
   fi
   tmp="$f.tmp.$$"; [ -n "$fmode" ] || fmode=644
   jq . <<<"$next" > "$tmp" && chmod "$fmode" "$tmp" && mv -f "$tmp" "$f" \
-    || { rm -f "$tmp"; _acct_refuse 1 settings-merge "writing $f failed"; }
+    || { rm -f "$tmp"; _acct_refuse 1 settings-merge "writing $f failed — the write is tmp + mv, so that file is exactly as it was. $stands"; }
 }
 
 # THE STEPS THIS RUN ACTUALLY RAN, appended as they happen. An ARRAY and not a
-# printed list, deliberately: `_acct_provision` refuses through `_acct_refuse`,
-# which prints an envelope and `exit`s, and a caller that had wrapped it in
-# `$( … )` would have captured that envelope into a variable while the `exit`
-# killed only the subshell — the run would then continue and answer `ok:true`
-# with a refusal embedded in it. Nothing here runs in a subshell, so a refusal
-# ends the verb.
+# printed list, deliberately: `_acct_provision` refuses through `_acct_refuse`, which
+# prints an envelope and `exit`s, so a caller that had wrapped it in `$( … )` would have
+# captured that envelope into a variable while the `exit` killed only the subshell — the
+# run going on to answer `ok:true` with a refusal embedded in it. Nothing here runs in a
+# subshell, so a refusal ends the verb.
 ACCT_PROVISIONED=()
 _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PROVISIONED
-  # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs`
-  # (:6139), `_inst_hooks` (:6338), `_inst_skills` (:6376) and
-  # `_inst_graphify_skill` (:6391) take no arguments by contract and converge
-  # EVERY rostered home; this verb has one home to provision and the four
-  # standalone scripts all take `--homes <dir>…` (install-session-hooks.sh:63,
-  # and the identical line at install-coordinator-skill.sh:36,
-  # install-worker-skill.sh:36, install-graphify-skill.sh:77). So the scripts
-  # are called directly, `ccrc-install.test.ts:1966-2047`'s 23-entry `_inst_*`
-  # spine is untouched, and no agent restart is needed — every one of them is
-  # idempotent per home.
+  # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6139),
+  # `_inst_hooks` (:6338), `_inst_skills` (:6376) and `_inst_graphify_skill` (:6391) take
+  # no arguments by contract and converge EVERY rostered home; this verb has one home to
+  # provision, and the four standalone scripts all take `--homes <dir>…`
+  # (install-session-hooks.sh:63, and the identical line at
+  # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
+  # install-graphify-skill.sh:77). So the scripts are called directly,
+  # `ccrc-install.test.ts:1966-2047`'s 23-entry `_inst_*` spine is untouched, and no
+  # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step
   mkdir -p "$dir" \
     || _acct_refuse 1 provision-failed "cannot create the config directory $dir — the session hooks would have nowhere to be installed, and this lane's transcripts nowhere to live. The roster entry was written; run 'ccrc install' once the directory can be created."
-  _acct_settings_env "$dir" set "$burl" "$models"
+  # WHAT STILL STANDS IF THE MERGE REFUSES — this caller's half of D-2126. The roster
+  # entry is proved by control flow (`add-entry` and `_acct_converge` both returned 0
+  # above); the credential file by MEASUREMENT, `ACCT_SECRET_WRITTEN` being set only by
+  # the `mv` that landed it — so a login lane, which writes none, claims none.
+  _acct_settings_env "$dir" set "The roster entry was written and nothing rolls back${ACCT_SECRET_WRITTEN:+, and so was the 0600 credential file $ACCT_SECRET_WRITTEN that it names}, so 'ccrc account add' refuses this id as a duplicate now: fix the cause and run 'ccrc install', which converges this home." "$burl" "$models"
   ACCT_PROVISIONED+=(settings-env)
-  # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's —
-  # `_inst_hooks`' rule (:6325-6330): "the INSTALLED copy, never the one in the
-  # tree … It is also the copy every future run, and every operator, will
-  # reach." COORDINATOR BEFORE WORKER, because the worker skill points at
-  # ../ccrc-coordinator/references/… (`_inst_skills`, :6367-6370).
+  # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's — `_inst_hooks`'
+  # rule (:6325-6330): "the INSTALLED copy, never the one in the tree … It is also the
+  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER:
+  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6367-6370).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
            install-worker-skill.sh install-graphify-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged. The roster entry was written; run 'ccrc install' to place the installers, then re-run it to converge this home."
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
       || _acct_refuse 1 provision-failed "the installer $n refused for $dir — read its lines above; it converges one home at a time and never rewrites a settings.json it could not validate, so nothing was left half-written. The roster entry was written; run 'ccrc install' once the cause is fixed."
-    # PURE PARAMETER EXPANSION, no `sed`: this function makes no PATH lookup of
-    # its own, which is `CCRC_HERE`'s argument (:834-841) — a box whose
-    # environment is broken is the box this must work on.
+    # PURE PARAMETER EXPANSION, no `sed`: this function makes no PATH lookup of its own,
+    # `CCRC_HERE`'s argument (:834-841) — a broken-environment box is the box this runs on.
     step="${n#install-}"
     ACCT_PROVISIONED+=("${step%.sh}")
   done

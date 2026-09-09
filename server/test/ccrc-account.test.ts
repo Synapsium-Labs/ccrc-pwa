@@ -2141,6 +2141,13 @@ const installerCalls = (home: string): string[] => {
 const settingsAt = (home: string, suffix: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(home, suffix, 'settings.json'), 'utf8')) as Record<string, unknown>;
 
+/** The "what still stands" clause `_acct_settings_env` takes as $3 (D-2126).
+ *  These rows call the function DIRECTLY, so they are its caller and supply it —
+ *  a marked string rather than a plausible sentence, so an assertion can tell
+ *  the caller's clause apart from anything the function said on its own. The
+ *  real one `_acct_provision` passes is measured end to end further down. */
+const STANDS = 'STANDS-MARKER-4a91c2 the caller says this much.';
+
 describe('ccrc account add: the new home, provisioned', () => {
   it('creates the config dir, writes the managed env block, and runs the four installers', () => {
     const home = box('ccrc-account-prov-');
@@ -2257,7 +2264,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       + '        "ANTHROPIC_API_KEY": ""\n    }\n}\n';
     writeFileSync(join(dir, 'settings.json'), already);
     const r = sourceCall(home,
-      `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+      `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" '{}'`);
     expect(r.code, r.stderr).toBe(0);
     // The bytes are EXACTLY what they were — not re-serialised, not re-indented.
     expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(already);
@@ -2275,13 +2282,13 @@ describe('ccrc account add: the new home, provisioned', () => {
       env: { MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://orchard-api/v1',
         ANTHROPIC_API_KEY: '', CLAUDE_CODE_SUBAGENT_MODEL: 'orchard/haiku-1' },
     }));
-    expect(sourceCall(home, `_acct_settings_env "${dir}" clear`).code).toBe(0);
+    expect(sourceCall(home, `_acct_settings_env "${dir}" clear "${STANDS}"`).code).toBe(0);
     expect(settingsAt(home, '.claude-lab-dev0')).toEqual({ env: { MY_OWN_KEY: 'kept' } });
 
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({
       env: { ANTHROPIC_BASE_URL: 'https://orchard-api/v1' }, model: 'sonnet',
     }));
-    expect(sourceCall(home, `_acct_settings_env "${dir}" clear`).code).toBe(0);
+    expect(sourceCall(home, `_acct_settings_env "${dir}" clear "${STANDS}"`).code).toBe(0);
     expect(settingsAt(home, '.claude-lab-dev0')).toEqual({ model: 'sonnet' });
   });
 
@@ -2290,7 +2297,8 @@ describe('ccrc account add: the new home, provisioned', () => {
     const dir = join(home, '.claude-lab-dev0');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'settings.json'), '{ this is not json');
-    const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+    const r = sourceCall(home,
+      `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" '{}'`);
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('settings-invalid');
     expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe('{ this is not json');
@@ -2345,7 +2353,8 @@ describe('ccrc account: _acct_settings_env keeps what it did not come to change'
     for (const m of [0o600, 0o640]) {
       writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: { MY_OWN_KEY: 'kept' } }));
       chmodSync(join(dir, 'settings.json'), m);
-      const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+      const r = sourceCall(home,
+        `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" '{}'`);
       expect(r.code, r.stderr).toBe(0);
       // It really did rewrite — otherwise the mode survived by not being touched.
       expect(settingsAt(home, '.claude-lab-dev0')['env'])
@@ -2377,7 +2386,8 @@ describe('ccrc account: _acct_settings_env keeps what it did not come to change'
     mkdirSync(dir, { recursive: true });
     for (const body of ['{ this is not json', '', '{"env":["a"]}', '{"env":"x"}', '[1,2]', 'null']) {
       writeFileSync(join(dir, 'settings.json'), body);
-      const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+      const r = sourceCall(home,
+        `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" '{}'`);
       expect(r.code, `body ${JSON.stringify(body)}: ${r.stderr}`).toBe(1);
       expect(oneObject(r)['error'], `body ${JSON.stringify(body)}`).toBe('settings-invalid');
       expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(body);
@@ -2397,9 +2407,119 @@ describe('ccrc account: _acct_settings_env keeps what it did not come to change'
     mkdirSync(dir, { recursive: true });
     const before = '{"env":{"MY_OWN_KEY":"kept"}}';
     writeFileSync(join(dir, 'settings.json'), before);
-    const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" 'not-json'`);
+    const r = sourceCall(home,
+      `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" 'not-json'`);
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('settings-merge');
     expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(before);
+  });
+});
+
+// ── D-2126: WHAT A MERGE REFUSAL SAYS ABOUT THE REST OF THE RUN ───────────
+// `_acct_settings_env` runs LAST — after the secret, the roster entry,
+// accounts.sh and the wrapper. Its refusals said only "that file is exactly as
+// it was": true about that file, silent about all four, and read as "nothing
+// was written" it sent the operator back into `ccrc account add`, which refuses
+// `duplicate-id`. A dead end built out of a locally true sentence.
+//
+// DRIVEN THROUGH THE REAL VERB, not through `sourceCall`: a unit call on the
+// function alone can never leave a roster entry standing, so it could not fail
+// the way the operator did. The clause is the CALLER's ($3), so what the first
+// two cases pin is `_acct_provision`'s own sentence; the third pins the shared
+// function's half, that whatever a caller passes is what comes back.
+describe('ccrc account add: a merge refusal names what still stands (D-2126)', () => {
+  /** The one condition that refuses AFTER every other write has landed: a new
+   *  home whose settings.json is a shape the merge cannot use. */
+  const plantBadSettings = (home: string): void => {
+    mkdirSync(join(home, '.claude-lab-dev0'), { recursive: true });
+    writeFileSync(join(home, '.claude-lab-dev0', 'settings.json'), '{"env":["a"]}');
+  };
+
+  it('names the roster entry, the credential file and the converge that fixes it', () => {
+    const home = box('ccrc-account-stands-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    plantBadSettings(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('settings-invalid');
+    const detail = j['detail'] as string;
+
+    // 1. THE SENTENCE, still locally true and now globally true as well.
+    expect(detail).toContain('that file is exactly as it was');
+    expect(detail).toContain('The roster entry was written and nothing rolls back');
+    expect(detail).toContain("run 'ccrc install'");
+    expect(detail).toContain("'ccrc account add' refuses this id as a duplicate now");
+    // The credential half is MEASURED and not merely passed: `ACCT_SECRET_WRITTEN`
+    // holds this path only because the `mv` that landed the file set it.
+    expect(detail).toContain(join(home, '.cc-secrets', 'lab-dev0-compatible.env'));
+
+    // 2. AND ALL FOUR REALLY DO STAND — the half no wording assertion carries.
+    //    A sentence naming four things that were not there would be the same
+    //    defect pointing the other way, and this is what tells them apart.
+    const roster = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    expect(roster.accounts.map((a: { id: string }) => a.id)).toContain('lab-dev0');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8')).toContain('lab-dev0');
+    expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(true);
+    expect(lstatSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env')).mode & 0o777)
+      .toBe(0o600);
+
+    // 3. THE DEAD END ITSELF, RUN rather than described. `ccrc account add` is
+    //    still a refusal — the fix is a signpost, not a new door — and that is
+    //    precisely why the sentence has to name `ccrc install` instead.
+    const again = run(home, addArgs(), `${CANARY}\n`);
+    expect(again.code).toBe(1);
+    expect(oneObject(again)['error']).toBe('duplicate-id');
+  });
+
+  it('a login lane, which writes no credential file, claims none', () => {
+    // What makes the credential half a MEASUREMENT rather than a constant: this
+    // arm's sentence differs from the one above by a fact about the run.
+    const home = box('ccrc-account-stands-login-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    plantBadSettings(home);
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber']);
+    expect(r.code, r.stderr).toBe(1);
+    const detail = oneObject(r)['detail'] as string;
+    expect(detail).toContain('The roster entry was written and nothing rolls back');
+    expect(detail).toContain("run 'ccrc install'");
+    // NOT the path and NOT the words: measured at review round 2, an assertion
+    // on the path alone stayed green when the `${ACCT_SECRET_WRITTEN:+…}` guard
+    // was deleted, because an EMPTY variable takes the path out of the sentence
+    // and leaves the claim — "and so was the 0600 credential file  that it
+    // names" — standing about a lane that has none. The phrase is what the
+    // login lane must not say.
+    expect(detail).not.toContain('credential file');
+    expect(detail).not.toContain('.cc-secrets');
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
+  it('every refusal the function can reach ends in the clause its caller passed', () => {
+    // The shared function's half: $3 arrives verbatim at the END of both refusal
+    // classes, so a site that dropped `$stands` reds here instead of shipping one
+    // sentence that is silent again. Two classes, two doors, one rule —
+    // `settings-invalid` is the operator's file, `settings-merge` is ccrc's bug.
+    const home = box('ccrc-account-stands-verbatim-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    const rows: [string, string, string][] = [
+      ['{"env":["a"]}', "'{}'", 'settings-invalid'],
+      ['{"env":{"MY_OWN_KEY":"kept"}}', "'not-json'", 'settings-merge'],
+    ];
+    for (const [body, models, err] of rows) {
+      writeFileSync(join(dir, 'settings.json'), body);
+      const r = sourceCall(home,
+        `_acct_settings_env "${dir}" set "${STANDS}" "https://orchard-api/v1" ${models}`);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe(err);
+      expect((j['detail'] as string).endsWith(STANDS),
+        `${err} did not end in the caller's clause:\n    ${j['detail'] as string}`).toBe(true);
+    }
   });
 });
