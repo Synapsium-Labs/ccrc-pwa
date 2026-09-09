@@ -817,6 +817,10 @@ button.metachip:active {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+/* D-2228 — the harness's resume pair: the prompt line is neutral, the padding
+   line is a stall and wears the warning ink so an idle landing is visible. */
+.sys-divider--restart { color: var(--ink-secondary); }
+.sys-divider--stalled { color: var(--ink-warning, var(--ink-primary)); border-color: var(--edge-warning, var(--edge-subtle)); }
 
 /* ------------------------------------------------------------------ *
  *  User turns — input: right-aligned raised bubbles + mono receipts.  *
