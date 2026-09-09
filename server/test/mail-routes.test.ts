@@ -389,6 +389,81 @@ describe('POST /api/mail — the rejection table', () => {
   });
 });
 
+describe("POST /api/mail — the 'worker' role", () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** One dispatched run with a bound worker, the shape a wave brief answers into. */
+  const withRun = (coord: CoordStore, sessionId: string | null): number => {
+    const r = coord.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if ('refused' in r) throw new Error('open refused');
+    if (sessionId !== null) coord.setSession(r.id, sessionId);
+    return r.id;
+  };
+
+  it("resolves 'worker' to the run's own session and delivers there", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-worker']);
+    // Resolution happens at SEND time and is stored on the delivery; the
+    // envelope names the resolved session, exactly as the coordinator role's
+    // own envelope does.
+    expect(due[0]!.envelope).toContain('to: demo-worker');
+  });
+
+  it("refuses 'worker' with no runId — a worker is per run and there is nothing to fall back to", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app, { ...GOOD, toId: 'worker', runId: null });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+  });
+
+  it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, null);
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain(`run ${runId} has no worker`);
+    // Recorded, like every refusal on this route.
+    expect(w.coord.rejections().map((r) => r.code)).toContain('unknown-recipient');
+  });
+
+  it("leaves 'coordinator''s single-active-programme fallback exactly as it was", async () => {
+    // THE PIN. `worker` requires a runId; `coordinator` does not, and its
+    // no-runId arm is the documented recovery for an already-retired programme.
+    // A "tidy" change that required a runId for both roles would break that and
+    // nothing else in this file would notice.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'coordinator', runId: null });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-coordinator']);
+  });
+
+  it('still refuses a toId that is neither role nor a registry row', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app, { ...GOOD, toId: 'demo-nobody' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+  });
+});
+
 describe('the rejection table is total, in both directions', () => {
   // The linkage discipline `wsaudit.test.ts:52-100` established: the union and
   // the emitters are one set, and neither may grow alone. A code nobody emits

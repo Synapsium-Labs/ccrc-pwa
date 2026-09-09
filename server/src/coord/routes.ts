@@ -696,12 +696,15 @@ export function registerCoordRoutes(
         'fromUuid does not match the registry — stale sender');
     }
 
-    // 7: recipient shape — the literal role 'coordinator', or an existing
-    // registry row. Resolving the ROLE to a concrete session id happens below,
-    // after runId (check 8) is known to be real. Same transient-vs-terminal
-    // split as check 5, reusing the same `names`/`registry` reads rather than
-    // a second round trip.
-    if (toId !== 'coordinator' && !registry.some((r) => r.id === toId)) {
+    // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
+    // existing registry row. Resolving a role to a concrete session id happens
+    // below, after runId (check 8) is known to be real. Same
+    // transient-vs-terminal split as check 5, reusing the same
+    // `names`/`registry` reads rather than a second round trip.
+    //
+    // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
+    // follows the chair, a session id names a session.
+    if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
@@ -719,15 +722,30 @@ export function registerCoordRoutes(
         `no run ${runId}`);
     }
 
-    // Resolving 'coordinator'. It is a ROLE, not a session id: the store
-    // resolves it to the claimedBy of the run named in runId; with no runId,
-    // to the claimedBy of the single active program. Ambiguous or absent →
-    // unknown-recipient, recorded — no guessing: an agent-to-agent message
-    // delivered to the wrong session is worse than one refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId) : toId;
+    // Resolving a ROLE. Neither literal is a session id: 'coordinator' resolves
+    // to the claimedBy of the run named in runId — with no runId, to the
+    // claimedBy of the single active program, UNCHANGED and deliberately so,
+    // because that arm is the documented recovery for an already-retired
+    // programme. 'worker' resolves to that run's own `sessionId` and REQUIRES a
+    // runId: a worker is per run and there is nothing to fall back to.
+    // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
+    // agent-to-agent message delivered to the wrong session is worse than one
+    // refused with a reason.
+    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId)
+      : toId === 'worker' ? (runId === null ? null : coord.resolveWorker(runId))
+      : toId;
     if (resolvedToId === null) {
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
-        "the 'coordinator' role has no single claimed active program to resolve to");
+      // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
+      // role's exactly — from the server's side an unresolvable role is an
+      // unresolvable role — but the detail names which condition, because the
+      // sender's remedy differs: send the runId, versus wait for the wave to be
+      // dispatched.
+      const why = toId !== 'worker'
+        ? "the 'coordinator' role has no single claimed active program to resolve to"
+        : runId === null
+          ? "the 'worker' role needs a runId — a worker is per run, and there is nothing to fall back to"
+          : `run ${runId} has no worker`;
+      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole

@@ -2220,6 +2220,26 @@ export class CoordStore {
     return row?.claimedBy ?? null;
   }
 
+  /**
+   * `'worker'` is the second ROLE recipient (design 2026-09-08 §4), and it is
+   * simpler than `'coordinator'` in exactly one way that matters: it is ALWAYS
+   * per run. A worker is the session a run dispatched into — `runs.sessionId` —
+   * so there is no single-active-programme arm here and there must not be one.
+   * `resolveCoordinator(null)` can fall back because a coordinator owns a
+   * PROGRAMME; nothing owns "the worker" of a fleet.
+   *
+   * NULL FOR TWO CONDITIONS THAT ARE ONE FACT AT THIS SEAM: the run does not
+   * exist, or it has not been dispatched yet. The caller refuses both with
+   * `unknown-recipient` and could not act differently on them — and the route
+   * has already refused a runId naming no run at all (check 8) before it gets
+   * here, so the reachable condition is the second alone.
+   */
+  resolveWorker(runId: number): string | null {
+    const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
+      .get(runId) as { sessionId: string | null } | undefined;
+    return row?.sessionId ?? null;
+  }
+
   /** One delivery row by id, for the ack route: it must know who a delivery
    *  is ADDRESSED TO before deciding whether the acking session may touch it
    *  — `dueDeliveries` cannot answer that, it is scoped to what a SWEEP should
