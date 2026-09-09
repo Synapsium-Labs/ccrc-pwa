@@ -16863,3 +16863,103 @@ forms and assumed one cited file.
 Added to `D-2053`'s deferred list as four new sites — **twenty-four sites plus six displaced pointers**
 — with the standing instruction unchanged and now doubly earned: re-measure every entry before repairing
 it, and enumerate both halves of the pair before trusting the census.
+
+### D-2147 — an interrupted mutation harness leaves a tree indistinguishable from a red-phase TDD state
+
+The session died mid-round. I read the working tree — 801 uncommitted lines, both syntax checks clean,
+suite at 156 passed / 1 failed — measured that `_acct_declarable` carried the `launcher-dangling` gate
+and no `[ -s ]` gate, and concluded: *"the test is written and the guard is not; the agent was stopped
+between writing a case and wiring it."*
+
+**Wrong.** The agent was SIGKILLed **inside mutation M6**, after the mutator deleted the `[ -s ]` gate
+and before its restore ran. The gate was in the commit-ready source all along. What I diagnosed as an
+unfinished implementation was a *mutation left on disk*.
+
+The two states are **observationally identical**: a test present, its guard absent, everything else
+green. Nothing in the tree distinguishes "guard not yet written" from "guard deleted a moment ago by a
+harness that died". And the evidence I needed was not in the tree at all — it was in the brief, which
+had instructed a mutation table, making "the agent is mid-mutation" the *prior* I should have weighed
+before the tidier story.
+
+**The remedy is not care, it is ordering.** A mutation harness cannot restore after a SIGKILL, because
+SIGKILL runs no trap. So the restore must happen **before**: a golden-copy preflight that restores all
+files and verifies md5 *at the start of every run*, so a killed run poisons nothing and the next run
+begins from known-good bytes regardless of how the last one ended. That is now the harness's shape.
+
+Two standing consequences:
+
+1. **When resuming an interrupted agent, ask what phase it was in before reading its tree as a state.**
+   A tree is evidence of a moment, not of an intention, and a mutation harness makes the most alarming
+   reading the most likely wrong one.
+2. **Any restore-after discipline is defeated by a kill.** This wave already ruled that mutation
+   restores come from a file backup rather than `git checkout` (a previous round reverted its own
+   unstaged work). That rule protected against the wrong *tool*; this one protects against the wrong
+   *time*. Both are needed, and the second is the stronger.
+
+### D-2148 — the empty-flag defect D-2144 attributed to `declare` alone is live in `add`, and worse one layer down
+
+D-2144's third shape said `--provider ''` is silently dropped by `declare` while *"`add` refuses the
+same input with `missing-value` at exit 2."* Measured on the shipped tree, that holds **only** for
+`--provider`:
+
+- `add --provider anthropic --base-url ''` → **exit 0, lane created**, the empty flag dropped by
+  `${ACCT_BASE_URL:+…}`. (On `compatible` it hits `base-url-required` at 2, for an unrelated reason —
+  which is exactly the kind of accidental coverage that hides a defect.)
+- `add --suffix ''` → **exit 0**, silently defaulted to `.claude-<id>`.
+
+So the entry generalised from one flag to a verb. **RULING: close it in `add` too** — one `[ -n "$v" ]`
+in `_acct_add_parse`'s flag loop, the same shape `declare` now carries. Flag-absent and
+flag-present-but-empty are two conditions a caller handles differently, and that does not become
+acceptable because the verb is older.
+
+**And a worse relative, found while sharing the gates.** `check-add --suffix ''` accepts the empty
+string and emits `"configDirSuffix":""` into the plan — `??` catches only `undefined`. `add-entry` then
+hands it to `rosterFromJson`, which refuses, so the run answers `roster-invalid` at exit 1 **after the
+0600 secret and the kill-switch marker are on disk.**
+
+That is **D-2004's class, still open**, on precisely the hand-caller path `check-add`'s own comment
+documents as reachable. It is the invariant this whole cluster is named for — every identity refusal
+before the first byte — defeated by an empty string. **RULING: close it.** `check-add` must treat an
+empty `--suffix` as absent-or-invalid before it returns a plan, not leave it for the writer.
+
+### D-2149 — the empty-file gate is placed before the executable gate, deliberately
+
+`_acct_declarable`'s order is `-L && ! -e` → `-e` → `-f` → **`-s`** → `-x`. My mid-flight note asked
+for `[ -s ]` *after* `-x`; the implementation placed it before, and argued it. **RULING: the shipped
+order stands.**
+
+Measured, the order decides one case: an **empty 0644** file answers `launcher-empty` under the shipped
+order and `launcher-not-executable` under mine. `chmod +x` is the wrong next act for a file with no
+content — it produces an executable that still cannot launch anything — so the shipped order gives the
+operator the remedy that helps. `launcher-not-executable` stays reachable and measured on a **non-empty**
+file, which is the only file for which its remedy is real.
+
+That is D-2144's own dangling-symlink argument applied to the pair beside it: **a refusal's position in
+a chain is chosen by which remedy is true, not by which predicate is cheaper.** The directory case is
+unaffected either way, because `-f` still precedes both.
+
+Recorded because a later reader will see `-s` before `-x` and be tempted to "fix" the order back; the
+test row pins it in either direction, and this entry says why the pin exists.
+
+### D-2150 — `boot.test.ts` is a sixth load flake, and the base-url residual on `declare` is accepted
+
+**The flake.** The full package answered `254 files, 6878 passed, 2 failed` — both in `test/boot.test.ts`,
+both wall-clock ceilings (`expected 3976 to be less than 3000`). Isolated: **3/3 in 6.1s.** Re-run of the
+whole package: **6880 passed, 0 failed.** `CLAUDE.md`'s documented flake list is `ccd-ws-gc`, `pr-sweep`,
+`session-hook`, `typecheck-tests`, `ccd-session-state` — **`boot` is not on it**, and now should be. It
+is a different shape from the other five: not a race, a *deadline* — a suite that asserts a wall-clock
+ceiling will fail under any sufficiently loaded run, and this box has been running 254-file packages
+back to back for hours. Worth saying because the standing rule ("re-run in isolation before calling it a
+break") happens to be right here for a reason it does not state.
+
+**The residual.** On `declare`, the base-URL family still answers `roster-invalid` at exit 1 where `add`
+names a specific code at exit 2. **Nothing is written on those paths now**, so D-2143's actual complaint
+— a field fault leaving a marker on disk — is closed, and this is a class-naming difference rather than
+a safety one.
+
+Closing it fully needs one of two things, both outside the three files this round could touch: a fifth
+column in `account-op.mjs`'s deploy mirror (`baseUrlRequired`), or an export of the rule from
+`shared/roster-json.mjs`. **RULING: accept for wave 1, and the shape of the eventual fix is the export**
+— the mirror already exists and already imports from that module, so a sixth hand-kept column would be
+D-2022's defect again (a value re-typed into the one file that imports its home). Recorded here so wave
+2 does not rediscover the choice from scratch.
