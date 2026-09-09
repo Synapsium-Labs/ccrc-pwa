@@ -191,7 +191,12 @@ PY
 # `parseRegistry` already refuses a non-loopback http:// baseUrl at write time
 # (§ the registry gate this file cannot import), but this file reads the
 # baseUrl straight off disk with no re-validation of its own, so it re-derives
-# the same loopback set rather than trusting a hand-edited file. Bracket-aware:
+# a loopback check of its own rather than trusting a hand-edited file — a
+# STRICT SUBSET of parseRegistry's: this is a raw text compare against
+# 127.0.0.1 / localhost / [::1], so the spellings Node canonicalises
+# (127.1, 2130706433, 0177.0.0.1, LOCALHOST) read as non-loopback here and
+# keep `--proto '=https'` — the divergence fails safe (measured 2026-09-09,
+# server/test/models-probe.test.ts's loopback describe). Bracket-aware:
 # `http://[::1]:8080/…` carries the bracketed host, not the bare address.
 _models_probe_base_is_loopback() {   # <baseUrl> -> 0 iff its host is loopback
   local rest="${1#*://}"
