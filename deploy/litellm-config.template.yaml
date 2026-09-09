@@ -1,0 +1,35 @@
+# LiteLLM proxy config — the GENERATED half is the model list; everything else
+# here is carried verbatim into ~/.handoff/litellm-config.yaml by
+# `ccrc models litellm <id>` (spec §6.3).
+#
+# DO NOT EDIT THE DEPLOYED COPY. Edit this file and re-run the verb; the
+# generator overwrites ~/.handoff/litellm-config.yaml and keeps the previous
+# bytes beside it as .prev.
+#
+# THERE ARE NO `reasoning` KEYS IN THIS FILE, and that is the whole point of
+# regenerating it. Effort has exactly one owner — `ccgpt-proxy`, which sets
+# `reasoning.effort` per request from the client's own `output_config.effort`
+# or from the lane default in ~/.ccrc/models/<id>.effort.json (§6.4). A static
+# `reasoning` here would put a second owner in the path and make
+# config-versus-request precedence inside LiteLLM decide the answer, which is
+# exactly why `/effort` in a gpt session changed nothing before this design.
+#
+# `mode: responses` is required by this provider, and it only parses STREAMED
+# responses — a non-streaming probe fails with "Unknown items".
+#
+# THERE ARE NO `[1m]` ALIASES IN THIS FILE, on purpose (amended 2026-09-08,
+# Task 16c): the suffix names a 1M belief that measured false on this surface
+# — the largest prompt ever accepted on gpt-5.6-sol was 196,341 tokens over
+# 2,339 transcripts, with 30 refusals past that wall. A `/model <id>[1m]`
+# must fail loudly at LiteLLM instead of routing a request Claude Code
+# believes has room it does not.
+model_list:
+# ccrc:model-list
+litellm_settings:
+  # The ChatGPT backend rejects max_tokens/metadata; drop unsupported params
+  # instead of erroring, because Claude Code always sends max_tokens.
+  drop_params: true
+
+general_settings:
+  # Local-only proxy on 127.0.0.1; the master key comes from the env at start.
+  master_key: os.environ/LITELLM_MASTER_KEY
