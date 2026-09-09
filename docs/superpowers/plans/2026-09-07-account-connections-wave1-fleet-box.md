@@ -17404,3 +17404,87 @@ One genuinely good outcome for that task: the seven sites landing inside the **r
 *historical quotes* — five in a graphify plan plus two that say in their own words *"Cited BY NAME, not
 by line (D-1343)"*. So this round adds **no new live in-band citation**; it adds `+76` to sixty-one
 existing ones. The rewritten band needs re-expression, and nothing live points into it.
+
+### D-2209 — a scan whose own argument satisfies it, and the class it opens
+
+Task 29's Step 1 pins the new knob's presence in both runners' deletion arrays with
+`expect(src).toContain('CCRC_ACCOUNT_AUTH_TIMEOUT')`, where `src` is the test file's own text.
+
+**The assertion's argument spells the token, so the file contains it whether or not anything deletes
+the knob.** Measured: with the snippet's form restored *and* the name removed from `env()`'s deletion
+array, the case stayed **GREEN**. It is a test that cannot fail while it exists.
+
+This is a new class in this wave and it is worth naming precisely, because it is invisible to every
+check we have built: **a self-satisfying assertion — one whose own source text is inside the corpus it
+searches.** The mutation discipline cannot catch it, because deleting the *mechanism* leaves it green
+and deleting the *assertion* leaves nothing to red. D-2145's "which line, on which input" does not
+reach it either: the input is the file, and the file always contains the argument.
+
+The shipped form matches the deletion **array**, not the name, and reds on either runner's array — both
+directions measured. The general remedy: **when a test greps its own file, the pattern must be
+structurally different from anything the assertion itself can write** — match the construct, not the
+token.
+
+Fourteenth unmeasured mechanism of the wave, and the first that could never have been measured rather
+than merely happening not to be.
+
+### D-2210 — three snippet deviations, covering all three surfaces D-2139 names for this task
+
+D-2139 says the plan's remaining snippets are drafts written against a tree that no longer exists, and
+lists the surfaces to check each against. Task 29's snippets hit **three of three**:
+
+1. **A bare `_acct_node health … || exit $?`** — D-2051's shape. Measured on a half-updated box: **exit
+   2, stdout empty**, the callee's usage line on stderr, from a verb whose contract is exactly one JSON
+   object. Shipped through `_acct_answer`, which is right *here* for the reason it was wrong at
+   `added`'s address: it hard-codes "Nothing was written.", and that clause is **true** of `check`.
+   **Task 30 must re-check that clause when the probe grows a scratch cwd** — the sentence stops being
+   true the moment the verb writes anything.
+2. **No empty-flag guard** — D-2148/D-2151/D-2154's shape, in the fourth verb to need it. Measured
+   without: `--id ''` answers *"an account id is required: pass --id"*, telling somebody who typed an
+   empty value that they typed no flag.
+3. **The vacuous scan** — D-2209.
+
+Three surfaces named, three defects found, in one snippet set. That retires any doubt about D-2139's
+standing instruction: **the check is not optional and it is not per-task judgement.**
+
+**And one prediction was never run.** Step 2 predicts the knob case fails on
+*`ccrc-cli.test.ts` does not delete …*; it **passes**, because Step 1 itself makes both harness edits, so
+the array already carries the name by the time the describe runs. The plan's Step 1 and Step 2
+contradict each other — fifth instance of the D-2003/D-2018/D-2129/D-2165 family, and the second where
+the contradiction proves the prediction was written rather than measured.
+
+### D-2211 — the cost claim this task exists for is dormant until Task 30, plus three carries
+
+**The dormancy, stated rather than assumed.** Task 29's whole argument is that the short-circuit stops a
+dead lane costing a billed round trip. Its `-p` assertion is **dormant**: the probe is a stub that runs
+no subprocess, so the captured argv can never contain `-p`. The case ships as the plan writes it and
+says so in its own body. **Task 30 owns the first real measurement of the property Task 29 was built
+for** — that is the single most important thing to carry into its brief, because a claim that has been
+"tested" for a whole task without ever being exercised is exactly the shape twelve unmeasured
+mechanisms took.
+
+**Three carries for Task 30.**
+
+Its `plantProbe` answers `auth` with `loggedIn:true` at exit 0, which agrees with the one-sided reading —
+but all four of its call sites plant it as an **openrouter** lane, where the provider gate means
+`auth status` is never asked at all, so that arm is currently belt-and-braces. **If Task 30 drives an
+anthropic lane through `plantProbe`, the answer carries the signed-in note and any
+`expect(notes).toEqual([])` will red.** Better to know that before it is a mystery.
+
+`_acct_answer`'s "Nothing was written." clause (above) must be re-checked when the probe gains a scratch
+cwd.
+
+And `ccrc-api.test.ts` is an **eighth** load flake — an `EPIPE` thrown out of the harness's own
+`child.stdin.end()`, isolated 67/67, and the full package green on re-run. `CLAUDE.md`'s list of five now
+understates the set by three (`boot`, `providers`, `ccrc-api`).
+
+**Citation defects, for the D-2186 sweep.** `CCRC_HEALTH_TIMEOUT` `:1024`→**`:1062`**; `cmd_doctor`
+`:1955`→**`:1999`** with its gate at **`:2000`**; **`spec:680-682`→`684-686`** for the one-sided
+sentence — and the plan **cites 684-686 correctly elsewhere in the same task**, so it disagrees with
+itself; `spec:688-689`→**`:692-693`** for `HealthRow`, same shape; `single-definition.test.ts`
+`:53`→**`:54`** and `:32-37`→**`:34-37`**. I verified the two spec ranges myself.
+
+One is not a line number at all: `OPENROUTER_LANE`'s docstring said *"its base URL is a bare hostname on
+purpose"* — **the fixture has no `exec.baseUrl` at all**, and validates because openrouter is
+`baseUrlRequired: false`. A docstring describing a field the fixture does not have is the same defect as
+a citation pointing at prose that says something else.
