@@ -16864,6 +16864,18 @@ Added to `D-2053`'s deferred list as four new sites — **twenty-four sites plus
 — with the standing instruction unchanged and now doubly earned: re-measure every entry before repairing
 it, and enumerate both halves of the pair before trusting the census.
 
+**Grown again at Task 27's round 3, and this time the OTHER half of the pair moved.** That commit
+inserted `+20` at `ccd/ccrc:4302`, displacing roughly **fifty** live pointers that name a line below it:
+36 self-citations inside `ccd/ccrc`, 10 cross-file `ccd/ccrc:NNNN` from the other two files, and 3 bare
+`(:NNNN)` forms in the test file. None was repaired — the sweep is ruled to stand for wave 1 — but note
+which half grew: D-2146 was about an unmodelled **cited** file, and this is an unmodelled **citer**
+file. Both halves of the pair have now produced a defect, which retires any remaining doubt that the
+unit is the pair.
+
+The deferred list is therefore not a list of sites at all; it is a list of *claims*, and its site
+numbers are stale by construction the moment any of the three files moves. **Whoever runs this sweep
+must re-derive the sites from the claims, not read them off this entry.**
+
 ### D-2147 — an interrupted mutation harness leaves a tree indistinguishable from a red-phase TDD state
 
 The session died mid-round. I read the working tree — 801 uncommitted lines, both syntax checks clean,
@@ -16963,3 +16975,71 @@ column in `account-op.mjs`'s deploy mirror (`baseUrlRequired`), or an export of 
 — the mirror already exists and already imports from that module, so a sixth hand-kept column would be
 D-2022's defect again (a value re-typed into the one file that imports its home). Recorded here so wave
 2 does not rediscover the choice from scratch.
+
+### D-2151 — five of nine flags were open, two hid behind accidental cover, and the seventh unmeasured mechanism sharpens D-2145 again
+
+D-2148 named two open flags on `add`. Measured, **five of nine** were open:
+
+| flag | `--flag ''` before the fix |
+|---|---|
+| `--id`, `--provider`, `--label`, `--hue` | `missing-value` at 2 — already refused |
+| `--suffix` | **exit 0, lane created**, silently defaulted |
+| `--models`, `--method` | **exit 0, lane created**, dropped by `${VAR:+…}` |
+| `--base-url` | **exit 0** on `anthropic`; `base-url-required` at 2 on `compatible` |
+| `--credential` | **exit 0** on a login lane; `credential-required` at 2 on a token lane |
+
+**The last two are the finding.** Each was covered on exactly one provider or lane kind and open on the
+other — by a refusal firing for an *unrelated* reason on the fixture the table happened to use. That is
+why the new table drives a **login** lane rather than `addArgs()`'s compatible base: a table written on
+the compatible base alone goes green on `--base-url` and `--credential` **without the gate present**.
+
+This sharpens D-2145 past "the line beside it". Here the **same line** was measured on one input and
+unmeasured on another, and the fixture chose which. The rule becomes: **a guard is measured only for the
+inputs your fixture actually reaches — and a neighbouring refusal that happens to fire for a different
+reason reads exactly like coverage.** When one fixture shape is the only shape a table drives, the table
+is measuring the fixture as much as the guard.
+
+**The seventh unmeasured mechanism, found by the same check.** Deleting the `--label` required-flag gate
+outright left the file GREEN at 161/161. Two causes compounded: the row's argv omitted `--hue` as well,
+so the *hue* gate answered with the same `missing-value` code, and the row asserted only
+`toMatch(/--[a-z]/)` — which that answer satisfies. The hue and provider gates were both measured; the
+label gate, sitting between them, was not. Fixed by giving the table a third column naming the flag each
+answer must mention, so an answer from the wrong gate can no longer pass for the right one.
+
+**A loose assertion and an over-broad fixture produce a green that looks identical to a measured one.**
+Both halves were needed to hide it, and either alone would have been enough to expose it.
+
+### D-2152 — `check-add` is the only pre-pass that does not validate the entry it proposes
+
+`check-declare` runs `rosterFromJson` on the entry it assembles, so it has **no empty-value holes at
+all**: `check-declare --suffix ''` answers before any write. `check-add` returns a plan it never
+validates, so the same class needed **three hand-placed gates** (`--id`, `--label`, `--suffix`) to reach
+where `check-declare` already stood — and two of those three were not the one D-2148 named.
+
+That is a structural difference, not an oversight, and it will keep producing this defect: every field a
+later task adds to the plan is another value `check-add` passes through unjudged, reaching
+`rosterFromJson` inside `add-entry` **after the 0600 secret and the kill-switch marker are on disk**.
+Three tasks in this cluster still add fields.
+
+**RULING: give `check-add` the same pre-pass, and build it the way `check-declare`'s was built.** The
+pattern is already shipped twenty lines away and proven by this task: `declaredEntry(a)`
+(`deploy/account-op.mjs:362`) is called by **both** `check-declare` (`:1151`) and `declare-entry`
+(`:1220`), so the pre-pass judges the *same object* the writer writes. `check-add` and `add-entry` get
+the same treatment — one builder, two callers, one validator.
+
+**This reverses the reasoning I gave at D-2021, and the reversal is earned.** There I rejected exactly
+this because it would give `roster-invalid` two exit codes depending on which op raised it. The shipped
+`declare` path answers that objection with evidence rather than argument: specific field faults get
+their own codes at exit 2 from the shared class helpers (`hueAndLabelClass`, `providerKnownClass`,
+`suffixFreeClass`), and only what no helper names falls through to `roster-invalid` — which is then
+raised *before any write*, so the exit code that worried me is no longer attached to a half-written box.
+The ambiguity I was avoiding was a consequence of validating late, not of validating twice.
+
+Keep `add-entry`'s own `rosterFromJson` call. It is the writer's last gate and `add-entry` is callable
+by hand with a hand-written plan — two gates, two callers, one validator is not two spellings of a rule.
+
+**The six covered keys stay as they are, deliberately.** `--provider`, `--hue`, `--method`, `--models`,
+`--base-url` and `--file` each answer today with a specific code and a specific remedy; folding them
+into a generic validator sentence would replace six answers with one, which is an adapter narrowing a
+distinction it received. The new pre-pass catches what no helper names — it does not supersede the
+helpers.
