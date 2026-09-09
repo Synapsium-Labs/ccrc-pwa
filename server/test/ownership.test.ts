@@ -145,6 +145,41 @@ describe('the committed ccd carries a marker that matches its own bytes', () => 
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);
   });
 
+  // A MARKER CHECK THAT PASSES IS NOT A CHECK THAT THE FILE HAS ONE MARKER
+  // (D-2216, and this case is the mechanism that entry shipped without). The
+  // case above reads line 2; the one below re-hashes the body. Neither can see
+  // a SECOND marker line further down, because that line IS part of the body
+  // both of them hash. This PR's own history is the proof rather than the
+  // worry: two of its commits shipped `ccd/ccd` with a stray
+  // `# ccrc:generated 1 sha256=PLACEHOLDER` as line 3, and `verifyMarker`
+  // answered `ccrc-unmodified` at both — `stripMarkerLine` removes only the
+  // line at `markerLineIndex`, so the placeholder was hashed IN and the digest
+  // covering it was correct.
+  //
+  // COUNT ON THE PREFIX, NOT ON `MARKER_RE`. The line that actually shipped
+  // carries `PLACEHOLDER` where the digest goes, so it does not match the
+  // 64-hex marker regex at all: a count of WELL-FORMED markers would have
+  // found exactly one and passed, on the very file that carried the defect.
+  // What is wrong is a second line CLAIMING provenance, whatever it claims.
+  //
+  // WHY THIS FILE AND NO OTHER, measured rather than assumed. The recurrence
+  // mechanism is a merge conflict on the marker line — every edit to `ccd`
+  // changes line 2, so every merge of a ccd-touching branch conflicts exactly
+  // there — which needs a generated file that is COMMITTED. `grep -rn
+  // '^# ccrc:generated' .`, outside `node_modules/`, `graphify-out/` and the
+  // two `docs/` lines that quote the format, returns line 2 of `ccd/ccd` and
+  // nothing else. `~/.ccrc/accounts.sh` and the wrappers are generated at
+  // deploy time from bodies that never contain the prefix and are never
+  // merged, so they cannot take this shape and are not scanned here.
+  it('carries exactly ONE line claiming provenance — a second one is hashed in and verifies clean', () => {
+    const claiming = ccd.split('\n').filter((l) => l.startsWith('# ccrc:generated'));
+    expect(claiming,
+      'ccd/ccd carries more than one provenance line. A merge that keeps both sides of the '
+      + 'line-2 conflict, or that re-stamps over a placeholder, leaves the extra one INSIDE the '
+      + 'hashed body — where verifyMarker cannot see it and every suite stays green.')
+      .toHaveLength(1);
+  });
+
   it('verifies as ccrc-unmodified — re-stamp ccd/ccd after editing it (see the note above)', () => {
     expect(verifyMarker(ccd),
       'ccd/ccd was edited without re-stamping its provenance marker; run the re-stamp '

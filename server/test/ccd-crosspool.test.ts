@@ -1279,7 +1279,7 @@ describe('R1 — an unmeasurable input costs the CROSSING, never the rescue', ()
     tick(BLOCKED);
     expect(String(h.reg(ID, 'stranded')),
       'the row carries a strand the server can put on the phone')
-      .toMatch(/^\d{10} wrapper could not be measured/);
+      .toMatch(/^\d{10} the row's own account field could not be read/);
     expect(noticeLines().join('\n'), 'and a banner fires').toContain('STRANDED');
     expect(swapLog(), 'and the swap.log line is still there for the box')
       .toContain('tick-undecidable');
@@ -1520,7 +1520,7 @@ describe('S2 — the marker follows the truth, from BOTH of the tick’s exits',
     unreadable('wrapper');
     tick(BLOCKED);
     expect(String(h.reg(ID, 'stranded')), 'precondition: it stranded')
-      .toMatch(/^\d{10} wrapper could not be measured/);
+      .toMatch(/^\d{10} the row's own account field could not be read/);
     tick(QUIET, 5);
     expect(h.reg(ID, 'stranded'), 'a recovered pane must not still claim STRANDED').toBeNull();
     expect(logLines('unstranded'), 'and it is said ONCE, not once per tick').toHaveLength(1);
@@ -1555,7 +1555,7 @@ describe('S2 — the marker follows the truth, from BOTH of the tick’s exits',
     tick(BLOCKED);
     expect(logLines('stranded'), 'two episodes, two lines').toHaveLength(2);
     expect(String(h.reg(ID, 'stranded')), 'and the marker names the CURRENT cause')
-      .not.toContain('wrapper could not be measured');
+      .not.toContain('account field could not be read');
   });
 });
 
@@ -1875,9 +1875,24 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     const skip = (): string => String(h.reg(ID, 'compactskip') ?? '');
     const lastSkipLine = (): string => logLines('compact-skip').slice(-1)[0] ?? '';
 
+    // A TEST FOR A HANG MUST NOT BE ABLE TO HANG (#69 review round 4 gate).
+    // The sibling case 50 lines up says exactly that and bounds its FIFO drive
+    // in `timeout 5`; this one planted the same FIFO with a bare `h.sh`, so a
+    // regression in the guard wedged the vitest worker instead of failing the
+    // case. Measured: deleting the guard produced no summary line after 600 s
+    // and two live `_auto_compact_check` processes, and the run had to be
+    // SIGKILLed. The stubs go to a FILE rather than into the nested `bash -c`
+    // string — they carry both quote characters, and a `timeout 5 bash -c '…'`
+    // wrapper around them would have to reason about which quote closes what.
+    const stubFile = path.join(h.home, 'compact-stubs.sh');
+    fs.writeFileSync(stubFile, stubs);
+    const drive = (): string => h.sh(
+      `timeout 5 bash -c 'source "${CCD}"; source "${stubFile}"; _auto_compact_check ${ID}'`
+      + `; echo "rc=$?"`);
+
     // ABSENT — byte-identical to what the lane says with no guard at all.
     fs.rmSync(sf, { force: true });
-    h.sh(`${stubs} _auto_compact_check ${ID}`);
+    expect(drive(), 'absent: the lane returns rather than hanging').toContain('rc=0');
     expect(skip(), 'absent: the field is status-unreadable, never not-idle')
       .toContain('status-unreadable');
     expect(lastSkipLine(), 'and the sentence says there is no status there')
@@ -1886,7 +1901,8 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     // NON-REGULAR — the same field, a different sentence.
     fs.rmSync(reg(`${ID}.compactnote`), { force: true });
     execFileSync('mkfifo', [sf]);
-    h.sh(`${stubs} _auto_compact_check ${ID}`);
+    expect(drive(), 'a FIFO: rc 124 here would mean the guard let it block')
+      .toContain('rc=0');
     expect(skip(), 'a FIFO: still status-unreadable, never not-idle')
       .toContain('status-unreadable');
     expect(lastSkipLine(), 'and the sentence names what was actually measured')
@@ -1988,11 +2004,27 @@ describe('B4 — the guards this round shipped that nothing could red', () => {
     const regPath = reg('');
     const stash = `${h.home}/reg-stash`;
     fs.renameSync(regPath, stash);
-    fs.writeFileSync(regPath, 'not a directory');
+    // MODE 0755, AND THE MODE IS THE MEASUREMENT (#69 review round 4 gate).
+    // A 0644 file fails `-x` as well as `-d`, so with `-d` deleted the guard
+    // still refused and this fixture could not say WHICH half caught it —
+    // measured: dropping `-d` left the whole set green. An EXECUTABLE regular
+    // file passes `-x` at every uid, so only `-d` can refuse it.
+    fs.writeFileSync(regPath, 'not a directory', { mode: 0o755 });
     expect(h.sh('_pool_untaggable; echo "rc=$?"'),
       'an unmeasurable registry refuses — it does not answer "untaggable"').toBe('rc=1');
     fs.rmSync(regPath); fs.renameSync(stash, regPath);
-    void runOn;
+    // TWO CONDITIONS IN ONE GUARD, AND THE FILE SHAPE ONLY MEASURES ONE (#69
+    // review round 4 gate). `[[ -d "$REG" && -x "$REG" ]]` fails for a
+    // non-directory AND for a directory nobody may enter; the fixture above
+    // kills `-d` only, and `runOn` was BUILT for the `-x` half and then never
+    // called — `void runOn` acknowledged the dead code instead of removing the
+    // gap. It is called now. The condition is D-1997's: `chmod 000` is a no-op
+    // for root, so the only uid-independent shape is the one above, and this
+    // half is measured wherever the suite is not root (CI and every dev box).
+    if (process.getuid?.() !== 0) {
+      expect(runOn(0o000), 'an UNSEARCHABLE registry refuses too — the `-x` half')
+        .toBe('rc=1');
+    }
   });
 });
 
@@ -2090,9 +2122,12 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
       + `_auto_swap_check ${ID}`);
     expect(fs.existsSync(reg(`${ID}.crosspool`)),
       'the fixture has no crossing record at all — naming it would be fabricated').toBe(false);
-    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the project').toContain('project');
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1], 'the stamp names the project')
+      .toBe('project');
     expect(String(h.reg(ID, 'stranded')), 'and so does the operator sentence')
       .toContain('project\'s own registry field could not be read');
+    expect(String(h.reg(ID, 'stranded')), 'naming the ROW\'s own field — `$2` at the call site')
+      .toContain(reg(`${ID}.project`));
     expect(String(h.reg(ID, 'stranded')), 'never the crossing record')
       .not.toContain('crossing record');
   });
@@ -2102,7 +2137,12 @@ describe('B5 — `_swap_target` SAYS which condition it could not decide', () =>
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
     h.sh(`${BLOCKED} ${raceWrapper(`rm -rf "$REG/pools/demo"; mkdir -p "$REG/pools/demo"`)} `
       + `_auto_swap_check ${ID}`);
-    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the pool').toContain('pool');
+    // THE WORD, NOT A SUBSTRING OF IT (#69 review round 4 gate). `.toContain('pool')`
+    // is satisfied by `crosspool`, which is the exact confusion this case exists
+    // to refuse — the assertion passed under the collapse it names. The field is
+    // `<epoch> <word>`, so the word is what gets compared.
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1], 'the stamp names the pool')
+      .toBe('pool');
     expect(String(h.reg(ID, 'stranded')), 'and the sentence names the tag file')
       .toContain("pool tag could not be read");
     expect(String(h.reg(ID, 'stranded'))).not.toContain('crossing record');
@@ -2209,9 +2249,9 @@ describe('R3 — an unreadable `.project` stops the tick, but ONLY where a pool 
     tick(BLOCKED);
     expect(calls(), 'no relocation off a tag nobody measured').not.toContain('dispatch');
     expect(logLines('tick-undecidable')[0], 'and the standing still is SAID')
-      .toContain('project could not be measured');
+      .toContain('project');
     expect(String(h.reg(ID, 'stranded')), 'the strand names the condition, not a pool census')
-      .toContain('project could not be measured');
+      .toContain("the project's own registry field could not be read");
     expect(notices(), 'and the banner names the account that WAS measured')
       .toContain('blocked on claude');
     expect(notices(), 'never the placeholder for one that was not')
@@ -2305,5 +2345,181 @@ describe('R6 — the stderr group round 2 shipped unpinned', () => {
     const errs = fs.readFileSync(path.join(h.home, 'tick-err'), 'utf8').split('\n').filter(Boolean);
     expect(errs, 'the group silences the failed append inside `_strand_mark`').toEqual([]);
     fs.rmSync(reg('swap.log'), { recursive: true });
+  });
+});
+
+describe('B6 — the round-4 guards nothing could red, and the sentences nothing could read', () => {
+  // MEASURED BY THE COORDINATOR AND RE-MEASURED HERE BEFORE ANY OF IT WAS
+  // WRITTEN, because a green mutation is ambiguous on its own — an unpinned
+  // guard, an unreachable line and a mutation that never applied all look
+  // alike. Every case below carries the mutation that reds it and, where the
+  // same guard exists twice, the sibling that already redded.
+
+  it('the SWAPBLOCKED cooldown gate clears a stale stamp too — the half "Pinned in both directions" claimed', () => {
+    // ROUND 4 SHIPPED TWO CLEARS AND ONE MEASUREMENT. `_swap_refuse` DELETES
+    // `.lastswap` and stamps `.swapblocked`, so after a refusal the swapblocked
+    // gate is the ONLY gate holding for the whole `SWAPBLOCK_COOLDOWN` — the
+    // unpinned half was the one carrying the refusal case, which is the case
+    // the pair exists for. Mutation: replace the clear on that arm with `:`;
+    // before this case the whole ccd+pools set stayed green (11 files / 354).
+    //
+    // THE LASTSWAP GATE MUST NOT BE THE ONE THAT FIRES, or this measures the
+    // half that was already measured — the trap three of round 4's own pins
+    // fell into (D-2260). `seedRow` writes no `.lastswap`, and the assertion
+    // below says so rather than trusting it.
+    seedRow(); plantNotify();
+    h.sh(`_reg_set ${ID} tickstuck "1700000000 project"`);
+    h.sh(`_reg_set ${ID} swapblocked "$(date +%s) rate-limited"`);
+    expect(fs.existsSync(reg(`${ID}.lastswap`)),
+      'no lastswap: the gate above this one cannot be the one that clears').toBe(false);
+    expect(h.reg(ID, 'tickstuck'), 'the stale stamp is standing before the tick')
+      .toContain('project');
+    tick(QUIET);
+    expect(h.reg(ID, 'tickstuck'),
+      'a refused swap is a decision too: the stamp is retracted at the swapblocked gate')
+      .toBe(null);
+  });
+
+  it('and an UNTAGGABLE box still PREFERS — `cmd_prefer` carries the gate `cmd_swap` was measured on', () => {
+    // THE CONTROL IS WHAT MAKES THIS A FINDING. Four sites carry
+    // ` && ! _pool_untaggable`; dropping it at `cmd_prefer` left the whole
+    // ccd+pools set green, and dropping the byte-identical text at `cmd_swap`
+    // redded `but an UNTAGGABLE box still swaps` immediately. Same guard, same
+    // line, one verb measured and one not — and the case that DOES name
+    // `cmd_prefer` two describes up tags the pool, so `_pool_untaggable` is
+    // false there and the gate cannot change its verdict.
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
+    expect(fs.existsSync(reg('pools')), 'this case is about a box with no pools').toBe(false);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = shFail(`${SWAP_STUBS} cmd_prefer ${ID} claude-b`, { TMUX: '' });
+    expect(r.code, 'the prefer still happens — nothing could have been out of pool').toBe(0);
+    expect(h.reg(ID, 'home'), 'and the home is re-pinned as asked').toBe('claude-b');
+    fs.rmSync(p, { recursive: true });
+  });
+
+  it('`cmd_start` on the id form SAYS the project field could not be read', () => {
+    // B3'S THIRD VERB READER. `_reg_get` folded the unreadable field to `""`,
+    // `_project_pool_state ""` answers `untagged`, and `untagged` permits every
+    // account — so the pool block decided "in pool" and printed nothing. What
+    // it silences here is the WARNING and not the die: the die is creation-only
+    // (`-z "$regw"`), and this read runs only on the id form, where an empty
+    // `regw` has already died at `no wrapper recorded`. `run` rather than
+    // `shFail` because the warning rides a ZERO exit.
+    seedRow(); tagPool('demo', 'pool-a');
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = run(`${START_STUBS} cmd_start ${ID}`);
+    expect(r.stderr, 'the operator is told the field could not be read')
+      .toContain(`the project field for ${ID} could not be read`);
+    expect(r.stderr, 'and it names the file to fix').toContain(`${ID}.project`);
+    fs.rmSync(p, { recursive: true });
+  });
+
+  it('an untaggable box says NOTHING there — the guard is a report, not a new refusal', () => {
+    // The other direction, and the reason the warning carries `! _pool_untaggable`
+    // exactly as the two dies do: with no `pools/` at all no project can be in a
+    // pool, so an unreadable tag field could not have changed any verdict and a
+    // warning would be noise on every box that never tagged anything.
+    seedRow();
+    expect(fs.existsSync(reg('pools')), 'no pools on this box').toBe(false);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    const r = run(`${START_STUBS} cmd_start ${ID}`);
+    expect(r.stderr, 'nothing to say: nothing could have been out of pool')
+      .not.toContain('could not be read');
+    fs.rmSync(p, { recursive: true });
+  });
+
+  it('the EARLY returns say what the LATE one says — one condition, one sentence', () => {
+    // `_tick_strand_undecidable` built its own string while the late path
+    // rendered the same condition through `_undecidable_cause`, so an
+    // unreadable `.project` wrote two different `.stranded` sentences depending
+    // on which guard caught it — and these two call sites are the EARLY
+    // returns, so the common case was the one that named no file. The header
+    // claiming both surfaces "cannot drift apart" was written above the drift.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    tick(BLOCKED);
+    const early = String(h.reg(ID, 'stranded'));
+    fs.rmSync(p, { recursive: true });
+    expect(early, 'the early return renders through `_undecidable_cause`')
+      .toContain("the project's own registry field could not be read");
+    expect(early, 'and it names the file, which the hand-built sentence never did')
+      .toContain(`${ID}.project`);
+    expect(early, 'the hand-built sentence is gone')
+      .not.toContain('project could not be measured');
+    expect(early, 'and it is byte-identical to what the LATE path renders')
+      .toContain(h.sh(`_undecidable_cause project ${ID} demo`));
+  });
+
+  it('and the WRAPPER word has an arm of its own, so the fold did not send it to `*`', () => {
+    // The word only the early return passes. Without an arm it would have
+    // landed in the `*` case and told the operator this build does not name a
+    // condition it names — a fold that makes the sentence worse is not a fold.
+    seedRow(); plantNotify();
+    const w = reg(`${ID}.wrapper`);
+    fs.rmSync(w, { force: true }); fs.mkdirSync(w);
+    tick(BLOCKED);
+    const said = String(h.reg(ID, 'stranded'));
+    fs.rmSync(w, { recursive: true });
+    expect(said, 'the account field is named').toContain('account field could not be read');
+    expect(said, 'and so is its path').toContain(`${ID}.wrapper`);
+    expect(said, 'never the unknown-condition arm').not.toContain('does not name');
+  });
+
+  it('`_undecidable_cause` reads its arguments in the order its header states', () => {
+    // POSITIONAL ARGUMENTS, PINNED AT THE CALL SITE — which is the altitude the
+    // finding is about, and the one a unit drive cannot reach. `word id project`:
+    // the `project` arm interpolates `$REG/$2.project` and the `pool` arm
+    // `$POOLS_DIR/$3`, so swapping `$2` and `$3` where the tick passes them
+    // renders a file that does not exist, on the exact surface this round added
+    // to stop that happening. 213 tests passed under that swap — and so did an
+    // earlier cut of THIS case, which drove the function with literal arguments
+    // and so measured the arms while claiming to measure the caller.
+    seedRow(); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    undecidablePoolTag();
+    tick(BLOCKED);
+    const said = String(h.reg(ID, 'stranded'));
+    expect(said, 'the pool arm names the PROJECT, which is `$3`')
+      .toContain(`${reg('pools')}/demo`);
+    expect(said, 'never the row id, which is what a swapped pair renders')
+      .not.toContain(`${reg('pools')}/${ID}`);
+
+    // The arms themselves, driven directly — the other half of the pair, and
+    // the one that catches a swap made INSIDE the `case` rather than at its caller.
+    expect(h.sh(`_undecidable_cause project ${ID} demo`), 'the project arm names the ROW')
+      .toContain(reg(`${ID}.project`));
+    expect(h.sh(`_undecidable_cause pool ${ID} demo`), 'the pool arm names the PROJECT')
+      .toContain(`${reg('pools')}/demo`);
+    expect(h.sh(`_undecidable_cause zebra ${ID} demo`), 'and an unknown word is said, not invented')
+      .toContain('does not name (zebra)');
+  });
+
+  it('the `home` arm is reachable, and it is the one the precedence picks', () => {
+    // Reachable through `stuck=home`, never through `$strc` — `_swap_target`
+    // has no home rc of its own — so removing the `hrc` arm from the caller's
+    // `case` was right and the sentence still had no test. The double fault is
+    // what reaches it: `.home` unreadable sets `stuck=home`, and an unreadable
+    // crossing record makes `_swap_target` refuse, which is what carries the
+    // tick into the arm that writes the sentence at all.
+    seedRow(); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    crossed('pool-a', 'claude-b');
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);
+    const home = reg(`${ID}.home`);
+    fs.rmSync(home, { force: true }); fs.mkdirSync(home);
+    tick(BLOCKED);
+    const said = String(h.reg(ID, 'stranded'));
+    const word = String(h.reg(ID, 'tickstuck')).split(' ')[1];
+    fs.rmSync(marker, { recursive: true }); fs.rmSync(home, { recursive: true });
+    expect(word, 'precedence: the deepest read that failed is home').toBe('home');
+    expect(said, 'and the sentence is the home one, not the crossing record')
+      .toContain('the home account could not be measured');
+    expect(said, 'the two surfaces still name one condition').not.toContain('crossing record');
   });
 });
