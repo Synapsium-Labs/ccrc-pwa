@@ -17043,3 +17043,71 @@ by hand with a hand-written plan — two gates, two callers, one validator is no
 into a generic validator sentence would replace six answers with one, which is an adapter narrowing a
 distinction it received. The new pre-pass catches what no helper names — it does not supersede the
 helpers.
+
+### D-2153 — the `check-add` hole was LIVE, and the gate the ruling relies on was itself unmeasured
+
+D-2152 argued the missing pre-pass as a *prospective* hazard: "every field a later task adds is another
+value passing through unjudged." Measured at HEAD, four requests were already doing it — answering
+`ok:true` from `check-add` and `roster-invalid` at exit 1 one step later, **after the 0600 credential
+and the kill-switch marker were on disk**:
+
+`--id 'lab dev0'` · `--id 'Lab.Dev'` · `--suffix claude-x` · `--suffix ../evil`
+
+Neither field had **any** shape gate in that arm. Bash gates both (`_acct_id_or_refuse`,
+`_acct_suffix_or_refuse`), and `check-add` was leaning on a caller it does not have — its own comment
+documents the hand-call path as reachable. So the entry understated its own case: this was not a hazard
+the next field would create, it was a hole four inputs already fell through, including a traversing
+suffix.
+
+**And the eighth unmeasured mechanism is the gate D-2152 explicitly says to keep.** `add-entry`'s own
+`rosterFromJson` — the writer's last gate, argued in that ruling as not redundant — could be deleted at
+HEAD with the file green at 161/161. Same neighbour pattern as the other seven: `readRoster`'s validator
+is measured, `check-declare`'s is measured, and the writer's sitting between them was not. It now has
+its own case.
+
+That is the sharpest form this pattern has taken. **A ruling can name a mechanism as load-bearing while
+that mechanism is measuring nothing** — the argument for keeping it and the evidence that it works are
+different claims, and writing the first does not produce the second.
+
+**D-2021's objection is now answered by measurement rather than by argument.** Every `roster-invalid` in
+`account-op.mjs` is exit 1 — `readRoster` ×2, `add-entry`, `check-declare`, `declare-entry`, and now
+`check-add`. The code keeps ONE class; only *when* it fires changed. The two-exit-code ambiguity I
+feared for four tasks never existed in the shape actually built.
+
+**One correction to my own brief, from the round's own measurement.** I required the acceptance table to
+drive both lane shapes on D-2151's reasoning. That premise is true of the `check-add` half — on a login
+lane `--base-url` and `--models` are refused as flags that cannot mean anything there, so the *value*
+gates are unmeasured on that shape — and **false of the `add` half**, where the login lane alone already
+reds all five open rows. Both lanes are driven either way, and the rule stands, but it earns its place
+in one table and not the other. A rule applied where it does not bite costs fixture time and buys
+nothing.
+
+### D-2154 — `check-declare` carries the mirror of the gap just closed, and one refusal sentence is spelled five times
+
+Two follow-ons the round measured and correctly did not act on unasked.
+
+**1. `check-declare --id '' / --label '' / --suffix ''` answers `roster-invalid` at exit 1** with exactly
+the three sentences round 4 rejected for `check-add`: they name a roster **field** (`configDirSuffix`,
+which nobody typed), an entry **index**, and prescribe editing an account that does not exist — at class
+1 ("legal on its face, the box said no") for a request that is not legal on its face. Bash refuses first,
+so it is reachable only by hand — which is the path this cluster has now closed three times.
+
+**RULING: `declare` gets the same three-key loop.** D-2142 and D-2150 ruled that `declare`'s *field
+vocabulary* is the validator's, and that stands — it is about `baseUrl` and the roster's own shape rules.
+An **empty flag** is not a field-validity question at all; it is an argv question, and answering it with
+a sentence about `accounts[3]` is the overloaded seam under a different name. The two rulings do not
+conflict; the earlier one simply did not reach this case, and I am saying so rather than letting a
+reader infer it.
+
+**2. The `RosterInvalid` formatting block is now spelled FIVE times** in `deploy/account-op.mjs` —
+`readRoster`, `check-add`, `add-entry`, `check-declare`, `declare-entry` (measured: five
+`instanceof RosterInvalid` sites).
+
+**RULING: extract it**, as `rosterAdmits(next, subject, file)` or equivalent, with each verb keeping its
+own sentence. The deciding reason is D-1860: `single-definition.test.ts` filters `/\.tsx?$/`, so a `.mjs`
+file is **structurally invisible** to the scanner that would otherwise catch a fivefold hand copy. This
+is precisely the drift nothing in the tree can see, in the one file where nothing can see it — and the
+round was right that no distinction is narrowed, because the per-verb sentence survives the extraction.
+
+Both are small, both are the last of Task 27, and neither is a defect the round introduced — they are
+the two things it found while doing what it was told and correctly left for a ruling.
