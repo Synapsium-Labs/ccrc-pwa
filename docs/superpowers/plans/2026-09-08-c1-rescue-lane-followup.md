@@ -37,7 +37,7 @@ THROUGH rather than rests in: a row mid-creation before `.wrapper` lands, a `.wr
 band, one tick of permission trouble. A five-second tick lives in the transient.
 
 **Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
-2) and D-2194–D-2207 (round 3). Every number is defined here and nowhere else. **CORRECTED twice:** this
+2), D-2194–D-2207 (round 3) and D-2212–D-2219 (round 3's #70 merge pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
 sentence claimed only the first band for two rounds while the file went on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
@@ -293,30 +293,48 @@ had their remedies corrected.** Deviations D-2155–D-2162.
   | `.wrapper` absent / zero-byte / mode 000 / dangling / a directory / a FIFO, stamps stale or absent | 1 | 2 |
   | **the same six shapes, with either stamp younger than `COMPACT_COOLDOWN` (1800 s)** | **0** | **1** |
 
-  **THE PREMISE IS TRUE OF THE REGISTRY-LEVEL SHAPES AND FALSE OF THE SIX `.wrapper`-ONLY ONES.** A
-  tripped row never reaches `_auto_swap_check`'s own capture — it returns at the `wrapper` guard — so
-  its whole pre-lane cost is the compact lane's, and that lane reads its gates with `_reg_get`, which
-  needs only `$REG` to be enterable. The gates read empty precisely when `$REG` itself is the broken
-  thing, and not otherwise. On D-2026's own "removed out of band" and "row mid-creation" shapes the
-  stamps read fine, `COMPACT_COOLDOWN` returns the compact lane with no capture, and this lane's
-  capture is the tick's ONLY one: **0 → 1**.
+  **THE PREMISE IS TRUE OF THE REGISTRY-LEVEL SHAPES AND FALSE OF THE SIX `.wrapper`-ONLY ONES** — on
+  the tree it was measured on. A tripped row never reaches `_auto_swap_check`'s own capture, so its
+  whole pre-lane cost is the compact lane's, and that lane reads its gates with `_reg_get`, which needs
+  only `$REG` to be enterable. The gates read empty precisely when `$REG` itself is the broken thing.
 
-  **AND THE 0 → 1 CLASS IS NOT CORRELATED WITH A SWAP** — the first re-measurement claimed it was, and
-  that was a NEW false mechanism in the entry written to convict one. `_reg_set` writes printf → tmp →
-  atomic rename, and `ccd-reg-set-atomic.test.ts` pins both halves that kill it ("REPLACES the inode
-  rather than truncating it" and "never unlinks its destination"), so the swap window produces neither
-  an absent nor a zero-byte `.wrapper`; a concurrent reader sees whole old bytes or whole new bytes.
-  The only writers of `lastswap` are ccd's three swap paths and of `lastcompact` its one auto-compact
-  path, so the ordinary absent-`.wrapper` transient carries NEITHER stamp and lands in the 1 → 2 class.
-  Reaching 0 → 1 needs a `.wrapper` fault inside the ≤1800 s shadow of an unrelated swap or compact:
-  two independent events. That does not change the ruling; it changes how loudly it may be stated.
+  **RE-MEASURED AGAIN ON THE #70 MERGE (D-2212, D-2213), WHICH MOVED IT.** #70 changed
+  `_auto_compact_check`'s `lastswap` arm from `… && return 0` to `… && fromswap=1`: the lane no longer
+  ends there, it falls through to its own `capture-pane`. So the compact lane now captures on exactly
+  the ticks it used to skip. Measured on the merged tree, every trip shape crossed with 3 `lastcompact`
+  values x 4 `lastswap` values x 6 pane states, lane against lane-neutralised:
 
-  **WHAT SURVIVES IS THE CEILING, AND IT IS A DIFFERENT ARGUMENT.** The delta is a strict **+1 capture
-  per tick per affected row** — never a doubling as such — and the affected ceiling is **2 per tick**,
-  which is exactly what a HEALTHY row costs in its ordinary steady state. No affected row rises above
-  the ordinary per-row cost. That closes the finding far more cleanly than the doubling claim, and it
-  is the sentence the next reviewer needs: measuring the ordinary shape against the old entry gives
-  0 → 10 and either refiles the finding or trusts a false number.
+  | quantity | pre-merge | merged |
+  |---|---|---|
+  | lane delta, every affected cell | +1 | +1 |
+  | lane delta, healthy control | 0 | 0 |
+  | healthy ceiling / ordinary steady state | 3 / 2 | 3 / 2 |
+  | states where this capture is the tick's ONLY one (0 → 1) | 30 of 36 | **18 of 36** |
+  | gate producing 0 → 1 | `lastcompact` fresh **or** `lastswap` fresh | `lastcompact` fresh **only** |
+  | remedy 3 removes | (claimed: all) | **6 of 18 — 12 survive** |
+
+  **AND THE CEILING CLAIM WAS SCOPED TO ONE OF TWO CALL SITES.** This is the third time this entry has
+  restated a conclusion its own numbers no longer covered, and the cause this time is *our own round-3
+  change*: R3 added a SECOND `_tick_strand_undecidable` call at the project guard. The re-measurement
+  swept only the wrapper guard — every one of its 3,008 ticks returned there — and then stated the
+  ceiling as a universal over "affected rows".
+
+  On the seven WRAPPER-guard shapes the ceiling is **2**, and the mechanism is real: an unreadable
+  `.wrapper` empties `_cfg_dir`, so `$sf` fails its `-e`/`-L` pair and the compact lane returns at
+  `status-unreadable` two gates before its second capture. **On the PROJECT-guard class every premise
+  of that sentence fails** — that row's `.wrapper` reads fine — so `$sf` resolves, the quiet gate
+  passes, and the lane reaches the second capture: measured **3 captures per tick in 7 of the 36
+  gate/pane states**, equal to the healthy ceiling, on ticks that compact for real. That class is also
+  the one place the trip table's two independence claims break: it is neither pane-independent (`over`
+  3, `under` 2) nor `lastswap`-independent (pane `mid`: 2 below `COMPACT_COOLDOWN`, 3 above).
+
+  **WHAT SURVIVES IS THE DELTA, SAID WITH ITS CALL SITE.** +1 per affected row per tick, unmoved by the
+  merge; wrapper-guard ceiling 2, below the healthy ceiling of 3; project-guard ceiling 3, equal to it.
+  **The finding still does not need re-opening, and the reason is reachability rather than a ceiling:**
+  `$POOLS_DIR` has exactly one `mkdir` in the tree (`cmd_project_pool`), the project guard is gated on
+  `_pool_untaggable`, and the live fleet has no `pools/` directory — so that class cannot trip on any
+  box today. It is one `ccd project-pool` away, which account-pools wave 3 will make ordinary. When it
+  does, the number to quote is 3, not 2.
 
   **THREE remedies measured, all three defects** — correcting "both", which undercounted. (1) Gating on
   the `tickstuck` stamp shuts from tick 2 and reproduces `main`'s silence for the
@@ -548,3 +566,105 @@ what the caller let through and then names the wrong condition (`crosspool`, sin
 relocation, and only both produce a true sentence about why. A one-site mutation here would have
 measured green on the harm and red on the wording, which is the "red naming the wrong case" trap this
 table exists to catch — found by running it rather than by reading it.
+
+---
+
+## Round 3, the #70 merge pass (2026-09-09)
+
+`origin/main` moved to `2b278a05` (#70, the compactor) while round 3 was being cut, and the coordinator
+stopped the round to say so. It was right to: **#70 did not merely date the prose, it broke one of this
+round's fixes and moved three separate measurements.** Everything below was found after the merge, and
+two of the four code findings were found by a TEST rather than by anyone reading the diff.
+
+The mechanism behind almost all of it is one line. #70 changed `_auto_compact_check`'s `lastswap` arm
+from `… && return 0` to `… && fromswap=1`: the compact lane no longer ends there, it falls through to
+its own `capture-pane` and, below that, to a `_compact_note` writer that did not exist before. A guard
+that was behaviour-identical against a line which only returned is not behaviour-identical against a
+line that records something — and that sentence is the whole of D-2214.
+
+### Deviations found
+
+- **D-2212 (2026-09-09)** — **D-2162's table, re-measured a third time, because the merge moved it.**
+  With the `lastswap` arm no longer returning, the states in which this lane's capture is the tick's
+  ONLY one shrank from 30 of 36 to **18 of 36**, and the gate for them is now `lastcompact` fresh ALONE
+  rather than either cooldown. The delta is unmoved at **+1 per affected row per tick**, and the healthy
+  control is unmoved at ceiling 3 / steady state 2. **Remedy 3 no longer even removes the class it was
+  rejected for removing badly**: replicating the swap cooldowns inside the lane now clears 6 of those 18
+  cells and 12 survive. Every per-tick cost figure taken before this merge understates the in-cooldown
+  compact tick — measured with strace, 2 → 23 process spawns and 0 → 2 write paths on a declining tick.
+- **D-2213 (2026-09-09)** — **the ceiling was measured on one of two call sites and stated as a
+  universal, and the second call site is ours.** Round 3's own R3 fix added a `_tick_strand_undecidable`
+  call at the project guard. The re-measurement swept only the wrapper guard — all 3,008 of its ticks
+  returned there — and concluded "no affected row rises above the ordinary per-row cost". On the
+  project-guard class every premise of that fails: the row's `.wrapper` reads FINE, so `_cfg_dir`
+  resolves, `$sf` exists, the quiet gate passes, and the compact lane reaches its second capture.
+  Measured **3 captures per tick in 7 of 36 gate/pane states**, equal to the healthy ceiling, on ticks
+  that compact for real; and that class is neither pane-independent nor `lastswap`-independent, both of
+  which the table asserted. **This is the third time this entry has restated a conclusion its own
+  numbers no longer covered** — and it would have frozen a fabricated universal into a source comment.
+  The finding still does not need re-opening, but on REACHABILITY, not on a ceiling: `$POOLS_DIR` has one
+  `mkdir` in the tree, the guard is gated on `_pool_untaggable`, and the live fleet has no `pools/`
+  directory. When wave 3 makes tagging ordinary, the number to quote is 3.
+- **D-2214 (2026-09-09)** — **the merge turned one of this round's own guards into an adapter that
+  narrows a distinction it received.** R2 put `[[ -f "$sf" ]] || return 0` before the session-status
+  grep, and measured it behaviour-identical: absent, a directory, a `chmod 000` file and `/dev/null` all
+  made `grep` produce nothing, `st` stayed empty, and the line below already returned 0. #70 turned that
+  line into `_compact_note "$id" status-unreadable`, deliberately distinct from `not-idle`. So the guard
+  silently swallowed the new distinction for exactly the inputs it newly admits, in the lane whose whole
+  point is telling "I could not read the status" from "the status said busy". Caught by
+  `ccd-auto-compact.test.ts`'s D-2013 case on the merge, not by reading it. The guard now feeds #70's own
+  vocabulary and tells ABSENT from NON-REGULAR — the first repair said "not a regular file" about a file
+  that was simply absent, which the same case caught one iteration later. `_auto_swap_check`'s copy keeps
+  the bare `|| return 0`, correctly: that lane has two answers and no note vocabulary to narrow.
+- **D-2215 (2026-09-09)** — **the thirteenth read, in a function an earlier census had already
+  cleared.** `_lc_err` bumps the counter that exists to report that the lifecycle journal could not be
+  written — and it opened `$_LC_DIR/errors` with a bare `cat` and no type test of any kind. It is on the
+  5-second tick: `_auto_swap_check`'s `_lc_done rehome` → `_lc_emit` → five arms that call `_lc_err`, one
+  of them the failure arm of the journal append itself. **Measured rc 124** under `timeout` both directly
+  and through `_lc_emit` with the journal directory unwritable. The sweep that cleared `_lc_emit` did so
+  on `_lc_live`'s guard over the journal GLOB and never looked at the failure arm of the append it was
+  clearing — a census that named the chain, listed two of its three hazards, and dropped the third. The
+  fold is the one this function already wants: `errors` is documented as a FLOOR, and the regex below the
+  read restarts the count on anything that is not digits, so a non-regular file lands where a garbage one
+  already did.
+- **D-2216 (2026-09-09)** — **the merge resolution left a second, malformed provenance marker in the
+  shipped file, and `verifyMarker` said `ccrc-unmodified`.** Resolving the line-2 conflict wrote a
+  `# ccrc:generated 1 sha256=PLACEHOLDER` line and then re-stamped; `markGenerated` strips the marker it
+  finds and inserts a fresh one, so the placeholder survived as line 3 — inside the hashed body, which is
+  why the digest verified and every suite stayed green. A marker check that passes is not a check that
+  the file has one marker. Deleted.
+- **D-2217 (2026-09-09)** — **two counts this branch had just corrected were moved again by the same
+  merge.** `_compact_note` reads `compactskip` and `compactnote` on every declining tick, so the
+  `_reg_get` census went 133 → **135** and the tick's hang-surface enumeration gained two fields. The
+  merge reconciled `_reg_purge`'s cardinal in the same commit (34 + 2 = 36) and left these standing —
+  which is exactly what that comment's own "re-measure it" exists to catch, and the reason a count is
+  written next to the command that produces it.
+- **D-2218 (2026-09-09)** — **a citation falsified in the OPPOSITE direction: #70 cited us, and we
+  changed underneath it.** `_compact_note`'s comment said its epoch is "when this reason became current
+  (`stranded`'s own meaning)". That was true when written — on `origin/main` `_strand_mark` wrote its
+  marker only when ABSENT, so "when the episode began" and "when this reason became current" were one
+  sentence. R4 then added the rewrite arm that replaces a CHANGED cause while PRESERVING the original
+  epoch, because `stranded.at` is shipped as "since when". `compactskip` has no such reader and wants the
+  opposite. Two markers, one shape, two epoch contracts — and no test can see this one, which is why it
+  is booked rather than left.
+- **D-2219 (2026-09-09)** — **the reads are closed; the WRITES are the open class, and the merge put one
+  on the ordinary tick.** Eleven tick-reachable `>> "$REG/swap.log"` appends, the `notify.sh` exec and
+  the auto-rescue limits stamp each measure **rc 124** against a FIFO. #70 added the twentieth-to-
+  twenty-first append (`_compact_note`), and it is the first that fires when nothing is wrong — the
+  compactor merely declining is the steady state of a healthy busy session, so the tick's operator-facing
+  write is no longer conditional on a fault. **Disclosed, not taken:** a bare `-f` rung here would
+  silently DROP an operator-facing line, which collides head-on with D-1995 ("standing still is only
+  acceptable if the standing still is SAID"). The right shape is one `_swaplog` writer with one guard and
+  a fallback channel, across all twenty-one sites — its own finding, its own number, and not a reflex.
+
+### Mutation table — the merge pass
+
+| # | mutation | predicted red | measured |
+|---|---|---|---|
+| M12 | collapse the status-file ladder to `[[ -f "$sf" ]] \|\| return 0` | no note at all, and #70's own case | RED ×2 — `expected '' to contain 'status-unreadable'` and `expected null to be 'status-unreadable'` |
+| M13 | remove `_lc_err`'s `-f` rung | rc 124 | RED — `expected 'rc=124' to be 'rc=0'` |
+
+**What the merge pass did NOT break, measured rather than read:** R1 is clean — #70 added no `return`
+between the tick's reads and its verdict, the verdict still sees all four answers, and `tickstuck` has
+three code sites, none of them #70's. R3's `.project` / `_pool_untaggable` path is untouched. R2's
+`_authdead` half is safe: both callers consume it as a bare boolean, with no vocabulary to narrow.
