@@ -140,12 +140,17 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     });
   }
 
-  // The reader can only strip what it is given. Both call sites must capture
+  // The reader can only strip what it is given. Every call site must capture
   // with `-e`; a plain `-p` read is the regression measured above.
   it('every call site hands it an ANSI capture', () => {
     const src = readFileSync(CCD, 'utf8');
     const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane[^)]*\)"/g) ?? [];
-    expect(calls, 'the two injector call sites').toHaveLength(2);
+    // Three sites: the two injectors (`_auto_compact_check`'s drafting guard,
+    // `_inject_spawn_effort`'s empty-box guard) plus `_redrive_after_spawn`'s
+    // input-box-not-empty stand-down (D-2264) — the re-drive's own box-draft
+    // check is the one place inside that function NOT narrowed to `tail -8`
+    // (see the comment above `_redrive_after_spawn` in ccd/ccd).
+    expect(calls, 'the two injector call sites plus the redrive stand-down').toHaveLength(3);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
 });
