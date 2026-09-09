@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a4beace67d6bf1a148c409130185fd6017d4ff1729e9ba367d78f1e88b9165ac
+# ccrc:generated 1 sha256=c6a5e9b166beb4e50b33455085696462c8745e471739ced9514dba43102a3890
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -953,8 +953,55 @@ SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session 
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts
-COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also skipped right after a swap)
+COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
+COMPACT_LANDING_WALL=80         # D-2014 — the ctx % at/above which the post-swap suppression stops
+                                # earning its veto.
+                                #
+                                # WHAT 80%+ IS NOT: proof that no landing compaction happened. An
+                                # earlier draft of this comment said exactly that, and the plan that
+                                # issued D-2014 falsifies it — its own incident table measures a
+                                # session climbing 45% -> 91.5% in NINE minutes, far inside this
+                                # gate's COMPACT_COOLDOWN window, so a session compacted on landing
+                                # to ~12% (measured 2026-09-08: 200,130 -> 25,164 tokens) can be
+                                # sitting at 80%+ here with the landing compaction having happened
+                                # exactly as the old premise assumed. Both worlds reach this line.
+                                #
+                                # WHAT IT IS: the reading that makes the veto not worth taking in
+                                # EITHER world. At 80%+ this session is near its wall NOW, and a
+                                # redundant compaction costs ~500s on the gpt lane against a wedge
+                                # measured at 80.7 minutes. On 2026-09-08 nine sessions landed on the
+                                # gpt lane at 12:12:59 and `calm-river` sat at 98% for thirty minutes
+                                # with no landing compaction in its transcript at all — that is the
+                                # case this exists for, and the gate does not need to know which case
+                                # it is in to decide correctly.
+                                #
+                                # BELOW this the conservative half survives untouched: a
+                                # freshly-landed session at a modest context is still left alone,
+                                # because the double-compaction the gate exists to prevent is the
+                                # likelier reading there and nothing is at risk while it is wrong.
+                                # NOT a second threshold on the compact decision — every gate below
+                                # COMPACT_THRESHOLD is unchanged; this only decides whether the
+                                # post-swap SUPPRESSION still applies.
+COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines about ONE session's
+                                # compact REFUSALS. THE NUMBER IS A JUDGEMENT; THE LOAD IT BOUNDS IS
+                                # THE MEASUREMENT. Measured: the supervisor ticks every 5s across ~20
+                                # sessions, so an unfloored note is 12 lines a minute per session and
+                                # ~240 across the fleet, into `$REG/swap.log` — a ~4,700-line file
+                                # humans read. 1800 is then chosen to match COMPACT_COOLDOWN, so a
+                                # refusal is said about as often as a compaction could be; no
+                                # experiment ranked it against 300 or 3600, and none is claimed.
+                                # See `_compact_note`, which separates the marker from this floor's
+                                # anchor the way `_strand_mark`/`_strand_clear` already do — without
+                                # that split a reason that FLAPS defeats the floor entirely (measured:
+                                # 10 alternating ticks wrote 10 lines, not 1).
+                                #
+                                # WHO READS `$REG/<id>.compactskip`: a human, off the registry, after
+                                # the fact. NOTHING in this tree reads it — not `server/src`,
+                                # `agent/src`, `shared` or `pwa/src` (measured 2026-09-08) — and it is
+                                # on no wire. It is a post-mortem breadcrumb standing beside
+                                # swap.log's floored line, nothing more. If it is ever promoted to a
+                                # wire field it needs a reader and the additive-only contract first.
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -1623,7 +1670,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   #
   # The dot-free claim, measured against every registry file a session has
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `swapblocked`, `uuid`,
@@ -12360,39 +12407,165 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
   printf '%s\n' "$1" | grep -aoiE 'ctx[^0-9]*[0-9]+%' | grep -oE '[0-9]+' | head -1
 }
 
+# D-2013 — WHY THE COMPACTOR DECLINED, said once rather than never or 240 times a minute.
+#
+# TWO REGISTRY FIELDS, and they are `_strand_mark`/`_strand_clear`'s shape for `_strand_mark`'s
+# reason — there the MARKER is `$REG/<id>.stranded` and the floor's anchor is
+# `$REG/<id>.strandnotify`, and `_strand_clear` removes the first while leaving the second:
+#
+#   • THE MARKER FOLLOWS THE TRUTH. `$REG/<id>.compactskip` is `<epoch> <reason>`, rewritten the
+#     moment the reason CHANGES so the registry always names the CURRENT refusal, and REMOVED by
+#     `_compact_note_clear` the moment the compactor stops declining. It is a fixed-size file
+#     that is overwritten, never appended, so following the truth costs nothing that grows.
+#     Its `<epoch>` is WHEN THIS REASON BECAME CURRENT (`stranded`'s own meaning) — not when it
+#     was last logged, which is what swap.log's line carries its own timestamp for.
+#   • THE ANCHOR OUTLIVES THE MARKER. `$REG/<id>.compactnote` is a bare epoch: WHEN WE LAST SAID
+#     IT OUT LOUD in `$REG/swap.log`, and nothing else. `_compact_note_clear` must not touch it.
+#
+# THE SPLIT IS THE MECHANISM, NOT THE TIDINESS, and it was measured. While the epoch lived in
+# `compactskip`'s first token, `_compact_note_clear` erased the floor's only anchor along with
+# the marker — so a reason that FLAPS defeated the floor completely: 10 alternating ticks of
+# `▓ ctx █░░░░░░░░░ 12%` (below threshold -> clear) and `? for shortcuts` (no ctx segment ->
+# note) wrote 10 swap.log lines, not 1, i.e. 6 a minute per session at the 5s tick. That flap is
+# the LIKELY shape, not a contrived one: it is D-2012's overlay hiding the statusline for a tick,
+# and 3 of 19 live panes render no `ctx` segment at all (measured 2026-09-08).
+#
+# ONLY THE LOG WAITS. `$REG/swap.log` is an append-only ~4,700-line file a human reads, and the
+# supervisor ticks every 5s across ~20 sessions. One line per session per COMPACT_NOTE_FLOOR is
+# the whole budget, and it now holds whether the reason is steady or flapping.
+#
+# REASONS ARE STABLE SLUGS, and the measured numbers ride in `$3` instead, so that comparing
+# "same reason?" is a string compare that does not flip every time a context percentage moves by
+# one point. The slug is what a future reader greps for; the detail is what tells them how bad it
+# was. Where two conditions need different remedies they get different SLUGS, not one slug with
+# two details — the field is what a reader has once the log line is floored away.
+_compact_note() {   # id reason [detail] — record why the compactor declined this tick.
+  local id="$1" reason="$2" detail="${3:-}" rec prev nts now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" compactskip)
+  prev="${rec#* }"; [[ "$rec" == "$prev" ]] && prev=""   # one-token (or empty): no reason half
+  # The marker, unfloored: a CHANGED reason is written this tick even when the log stays quiet.
+  [[ "$prev" == "$reason" ]] || _reg_set "$id" compactskip "$now $reason"
+  # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]` so `&&` short-circuits before the
+  # arithmetic ever sees a torn or hand-edited field — D-299's class, the same shape as the
+  # `strandnotify` floor in `_strand_mark` and the two cooldowns in `_auto_compact_check`.
+  nts=$(_reg_get "$id" compactnote)
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" compactnote "$now"
+  echo "$(date '+%F %T') compact-skip $id: $reason${detail:+ ($detail)}" >> "$REG/swap.log"
+  return 0
+}
+
+_compact_note_clear() {   # id — the compactor is no longer declining, so the MARKER must not
+  # outlive the condition it describes. A stale `mid-turn` read as current is the same class of
+  # lie D-2012 names on the server side.
+  #
+  # `$REG/<id>.compactnote` — the log floor's anchor — IS DELIBERATELY LEFT STANDING, and that
+  # is the whole of the fix measured in the header above: clearing it here is what let an
+  # alternating reason write a line every tick. It costs one stale epoch per session, which the
+  # floor reads as "we spoke recently" and nothing else reads at all.
+  #
+  # Silent by construction (the `-e` test, `_strand_clear`'s own reason): ~20 sessions x 12
+  # ticks a minute is the real load, and a clear that logged would be the spam the floor exists
+  # to prevent.
+  [[ -e "$REG/$1.compactskip" ]] && rm -f -- "$REG/$1.compactskip"
+  return 0
+}
+
 _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
   # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
   # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  #
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
+  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
+  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
+  # this session at all" or "this session is over its threshold and we are declining anyway" —
+  # the two shapes that were silent, and the second is the one that matters.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap pane pct wrapper spid sf st sua t cur
+  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t cur
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  lastswap=$(_reg_get "$id" lastswap)   # a swap landing already compacted from summary — don't double up
-  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
-  [[ -n "$pane" ]] || return 0
-  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || return 0
-  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || return 0
+  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
+  # outright on the premise that "a swap landing already compacted from summary". It records a
+  # FLAG instead, and the premise is tested against the pane's own context reading below, once
+  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
+  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
+  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
+  lastswap=$(_reg_get "$id" lastswap)
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
+  # D-2013/D-2014 — THREE CONDITIONS, THREE REASONS, AND THE FIRST TWO ARE MEASURED RATHER THAN
+  # NAMED. "tmux could not be asked" (dead pane, wedged server — the context is UNMEASURED and the
+  # remedy is to go look at the substrate) is a different fact from "tmux answered and the pane is
+  # blank" (it is there and empty — wait, or look at the session). `_auto_compact_check` runs ONLY
+  # under `PROBE_VERDICT == live` (see `_supervise_loop`), so the blank answer is the LIKELIER of
+  # the two, and one slug naming a wedged tmux server would send the operator after a fault that is
+  # not there. The old code recorded neither: it tested `-n "$pane"` alone and returned silently.
+  #
+  # THE PIPELINE ALREADY CARRIES TMUX'S STATUS — line 9 sets `pipefail`, so `$?` after
+  # `tmux … | tail -8` is tmux's rc, not tail's. MEASURED: `set -uo pipefail; f(){ return 3; };
+  # x=$(f | tail -8); echo $?` prints 3. An earlier cut of this fix split the capture across two
+  # statements to "recover" a status the pipeline had never lost — and that reshaping silently
+  # WIDENED the window every gate below reads. `$( )` strips trailing newlines, so capturing first
+  # and piping second makes `tail -8` take 8 lines of CONTENT where it used to take the last 8 pane
+  # ROWS: with 12 content rows and 4 trailing blank rows, 4 lines before, 8 after. That is not
+  # cosmetic. `grep -q "esc to interrupt"` then matches a stale banner further up (a false mid-turn
+  # refusal — the session never compacts), and `grep -q "❯"` matches an older prompt line while a
+  # dialog is up, which is how `/compact` gets typed into a menu. KEEP THE PIPELINE ON ONE LINE;
+  # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
+  #
+  # The third is `no-ctx-segment`: the pane was read fine and its statusline does not publish the
+  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
+  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
+  [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
+  [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
+  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
+  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
+  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
+  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
+  # constant, which says exactly what 80%+ does and does not establish about the landing.
+  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
+    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
-  echo "$pane" | grep -q "esc to interrupt" && return 0     # mid-turn
-  echo "$pane" | grep -q "❯" || return 0                     # not at a prompt yet
+  echo "$pane" | grep -q "esc to interrupt" && { _compact_note "$id" mid-turn "ctx ${pct}%"; return 0; }
+  echo "$pane" | grep -q "❯" || { _compact_note "$id" no-prompt "ctx ${pct}%"; return 0; }
   wrapper=$(_reg_get "$id" wrapper)
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
+  # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
+  # which is the same collapse one seam over — the detail is floored out of swap.log after the
+  # first line, and the FIELD is then all a reader has. An empty `$st` is not a status: tmux may
+  # have answered no pane pid, `$spid` may name another process, `_cfg_dir "$wrapper"` may be the
+  # wrong config directory, and the file may be absent or carry no `status` token. Every one of
+  # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
+  # detail carries the path/status that says which flavour it is.
+  [[ -n "$spid" ]] || { _compact_note "$id" no-pane-pid "tmux list-panes named no pane pid, ctx ${pct}%"; return 0; }
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ "$st" == "idle" ]] || return 0
+  [[ -n "$st" ]] || { _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0; }
+  [[ "$st" == "idle" ]] || { _compact_note "$id" not-idle "status=$st ctx ${pct}%"; return 0; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
-  # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition).
+  # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
+  # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
+  # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] || return 0
+  [[ "$sua" =~ ^[0-9]+$ ]] || { _compact_note "$id" quiet-unmeasured "no statusUpdatedAt in $sf, ctx ${pct}%"; return 0; }
+  [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
+    || { _compact_note "$id" not-quiet "ctx ${pct}%"; return 0; }
   # Don't clobber a half-typed message in the input box. `-e`: the reader needs
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
   cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && return 0
+  [[ -n "$cur" ]] && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+  # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
+  # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
+  # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
+  # the registry says must not depend on whether tmux answered.
+  _compact_note_clear "$id"
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter

@@ -18,7 +18,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
@@ -133,6 +133,138 @@ describe('state', () => {
     render(<SessionLine session={s({ limits: { five: 10, seven: 82 } })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByLabelText('account limit near')).toBeInTheDocument();
+  });
+});
+
+describe('context pressure chip (D-2011) and the wedge signature (D-2016)', () => {
+  const chip = (): Element | null => document.querySelector('.sess-ctxpressure');
+
+  it('renders nothing when ctxPct is null', () => {
+    render(<SessionLine session={s({ ctxPct: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders nothing below the 80% floor', () => {
+    render(<SessionLine session={s({ ctxPct: 79 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders the quiet reading at or above 80%, with no wedge attribute', () => {
+    render(<SessionLine session={s({ ctxPct: 82, status: 'idle' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el).not.toBeNull();
+    expect(el?.textContent).toBe('ctx 82%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('never renders on a dead row, even at 99% — the same exemption the limits warning takes', () => {
+    render(<SessionLine session={s({ ctxPct: 99, status: 'dead', bucket: 'dead' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('escalates to the wedge reading: high ctx AND busy AND no turn boundary for a long time', () => {
+    // `useNow`'s initial value is a real `Date.now()` read at mount — same
+    // idiom `subagentElapsed`'s own tests use — so a `statusUpdatedAt` this
+    // far in the past is already stalled the instant this renders, no fake
+    // timers needed.
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'busy', statusUpdatedAt: Date.now() - 95 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.getAttribute('data-wedge')).toBe('true');
+    expect(el?.textContent).toMatch(/^ctx 91% · stalled /);
+  });
+
+  it('does NOT escalate when the turn is recent — high ctx and busy alone are not the wedge', () => {
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'busy', statusUpdatedAt: Date.now() - 5 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('does NOT escalate once the row goes idle, however old statusUpdatedAt reads — the turn already ended', () => {
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'idle', statusUpdatedAt: Date.now() - 200 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('reads both fields defensively — an older server frame lacking ctxPct entirely must not throw', () => {
+    // Same contract `spawnState`/`started` are already tested against above:
+    // the live `fleet` frame is CAST, not revived, so a server predating this
+    // field omits the key at runtime even though `FleetSession` types it as
+    // always present.
+    const legacy = { ...s({ status: 'busy' }) } as Record<string, unknown>;
+    delete legacy['ctxPct'];
+    expect(() =>
+      render(<SessionLine session={legacy as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />)).not.toThrow();
+    expect(chip()).toBeNull();
+  });
+
+  // Finding 2 (fix round): the test above proves the row does not THROW and
+  // does not misrender on an older-server frame, but that held true even
+  // before `ctxPressure` existed — `undefined >= 80` happens to read
+  // `false`. This test pins the READER ITSELF: `ctxPressure`, not
+  // `session.ctxPct` raw, same idiom the D-1251 tests below use for
+  // `graphReadCount`. It is a positive control that the whole render path
+  // goes through the tolerant reader, not just an absence of a crash.
+  it('renders NO chip when the server omits the ctxPct key entirely — an older server (D-2011 reader)', () => {
+    const raw = s({ ctxPct: 91, status: 'busy' }) as unknown as Record<string, unknown>;
+    delete raw['ctxPct'];
+    render(<SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders NO chip when ctxPct arrives as a non-number an older peer never promised (D-2011 reader)', () => {
+    // `ctxPressure`'s other degrade, via the same `tolerantCount` ladder
+    // `graphReadCount`/`graphGateCount` use: a string/NaN/Infinity is a
+    // shape the wire type forbids and only a broken or hostile peer sends.
+    for (const bad of ['91' as unknown as number, NaN, Infinity]) {
+      cleanup();
+      render(<SessionLine session={{ ...s({ status: 'busy' }), ctxPct: bad } as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />);
+      expect(chip(), `ctxPct: ${bad}`).toBeNull();
+    }
+  });
+
+  // Finding 5 (fix round): `liveSessionStatus` collapses Claude Code's
+  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:316-317)
+  // while the SAME read sets `dialogPending` true (fleet.ts:419) — so a row
+  // blocked on a human permission prompt for hours, at high context, is
+  // `status: 'busy'` with no other signal distinguishing it from a real
+  // wedge unless this row itself checks `dialogPending`. D-2016's own text:
+  // "attention means a human answer unblocks the session, which is false
+  // here" — the ONE shape the wedge was defined to exclude.
+  it('does NOT escalate to the wedge when the session is waiting on a human, even at high ctx and a long stall (Finding 5)', () => {
+    render(<SessionLine
+      session={s({
+        ctxPct: 91, status: 'busy', dialogPending: true,
+        statusUpdatedAt: Date.now() - 95 * 60_000,
+      })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el, 'the quiet ctx reading must still render').not.toBeNull();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge'), 'a human-blocked row must not read as wedged').toBe(false);
+  });
+
+  it('still escalates to the wedge under the identical stall when the session is NOT waiting on a human (Finding 5, other direction)', () => {
+    render(<SessionLine
+      session={s({
+        ctxPct: 91, status: 'busy', dialogPending: false,
+        statusUpdatedAt: Date.now() - 95 * 60_000,
+      })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.getAttribute('data-wedge')).toBe('true');
+    expect(el?.textContent).toMatch(/^ctx 91% · stalled /);
   });
 });
 

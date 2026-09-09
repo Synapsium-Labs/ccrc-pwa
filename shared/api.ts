@@ -46,6 +46,28 @@ export interface FleetSession {
   effort: string | null;                     // effort level, e.g. "xhigh"
   ultracode: boolean;                        // ultracode super-mode active
   branch: string | null;                     // current git branch
+  /** Context-window pressure Claude Code itself reports, straight off the
+   *  pane's `▓ ctx <bar> NN%` segment (`Statusline.ctxPct`, D-2011).
+   *  ADDITIVE: no `FLEET_PROTO` bump, and an older peer that omits the key
+   *  reads as `undefined` on the live frame / revives as `null` below —
+   *  NEVER `0`. A session Claude Code reports at 0% and a session this
+   *  build never measured are two different claims, and collapsing them
+   *  would be the overloaded-null this project's CLAUDE.md forbids: the
+   *  fleet card would either paint a false "just compacted" badge on every
+   *  session an older peer, a dead pane, or a hidden overlay left unread,
+   *  or (the direction actually shipped) it would hide a real, reported
+   *  0% behind the same null a genuine non-reading uses.
+   *
+   *  READ THIS BEFORE "CORRECTING" THE NUMBER — same note as `Statusline`'s
+   *  own field: it is a percentage of what Claude Code BELIEVES its window
+   *  is, not of any account's real usable wall (the gpt lane's belief is
+   *  200,000 against a measured usable ceiling of ~196,000). It is honest
+   *  as a PRESSURE signal for exactly that reason — it is the same number
+   *  the pane's own compact/hard-block thresholds are computed against —
+   *  and converting it to an absolute token count here would need a
+   *  per-lane window table this project's account-name enumeration ban
+   *  forbids. */
+  ctxPct: number | null;
   tasks: TaskProgress | null;                // plan progress; null = this session has no task list
   /** This workspace's pull request, or null for a main checkout — which is the
    *  ONLY thing that suppresses the header control. */
@@ -344,6 +366,33 @@ function tolerantCount(raw: number | null | undefined): number | null {
  */
 export function graphGateCount(s: { graphGateDenials?: number | null }): number | null {
   return tolerantCount(s.graphGateDenials);
+}
+
+/**
+ * Tolerant read of `FleetSession.ctxPct` (D-2011/D-2016) for a value that has
+ * NOT been through `reviveFleetSession` — the live `fleet` WS frame, cast on
+ * arrival by `pwa/src/stores/fleet.ts`'s `asFleetMsg` (`unmeasuredFields`
+ * above records the whole argument). Same contract, and the same
+ * `tolerantCount` ladder, as `graphReadCount`/`graphGateCount` above — this
+ * was the one additive field on `SessionLine.tsx`'s row still read straight
+ * off the cast frame (`session.ctxPct`) rather than through a named reader,
+ * which CLAUDE.md's "single tolerant reader per wire field" rule forbids
+ * regardless of whether the raw read happens to render safely today. It did,
+ * by luck of the comparison operator rather than by contract: an older
+ * server omitting the key leaves `session.ctxPct` `undefined` at runtime,
+ * and `undefined >= 80` is `false`, so the pressure chip simply does not
+ * render — a coincidence this reader turns into a guarantee.
+ *
+ * ABSENT, EXPLICITLY NULL, OR PRESENT-BUT-UNUSABLE (a string, `NaN`,
+ * `Infinity` — shapes the wire type forbids and only a broken or hostile
+ * peer sends) all read as `null`, "nothing measured". A finite number reads
+ * as itself, `0` included — `FleetSession.ctxPct`'s own docstring: a session
+ * Claude Code reports freshly compacted at 0% is a real, distinct reading
+ * from one this build never measured, and folding the two to one value is
+ * the overloaded-null this project's CLAUDE.md forbids.
+ */
+export function ctxPressure(s: { ctxPct?: number | null }): number | null {
+  return tolerantCount(s.ctxPct);
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1157,6 +1206,55 @@ export function sessionBucket(
     return { bucket: 'done', bucketSince: hookUpdatedAt ?? s.statusUpdatedAt };
   }
   return { bucket: 'idle', bucketSince: s.statusUpdatedAt };
+}
+
+/** The fields `turnStall` reads. A `Pick`, same reasoning as `BucketInput`
+ *  above: it accepts an assembled `FleetSession`, a revived one, or a bare
+ *  test literal without needing the rest of the shape. */
+export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
+
+/**
+ * D-2016 — the wedge's other half, WITH NO NEW WIRE FIELD. `statusUpdatedAt`
+ * already ticks only on a busy↔idle transition (`ccd/ccd:12386-12388`), so
+ * `now - statusUpdatedAt` on a `busy` row IS the current turn's age; this is
+ * that subtraction plus a threshold, nothing more.
+ *
+ * Deliberately NOT a new `sessionBucket` rung, and not even a call this
+ * function makes itself: "attention" means a human answer unblocks the
+ * session, which is false for a turn that has simply run long, and a new
+ * rung would move rows out of `working`, disturbing `pwa/src/lib/seen.ts`'s
+ * unseen ledger and the pinned bucket ladder for a fact that is a QUALIFIER,
+ * not a different state (M10 — see `SessionLifecycle`'s own docstring above
+ * for the pattern this follows). Callers combine this with `ctxPct` instead:
+ * the wedge signature is high context pressure AND busy AND no boundary for
+ * a long time reading louder than either fact alone, and `turnStall` is only
+ * the third leg.
+ *
+ * THE THRESHOLD, MEASURED, NOT GUESSED FROM THE ONE INCIDENT (its own
+ * deviation text is explicit about this): `turn_duration` system events
+ * streamed from every `*.jsonl` transcript under the fleet's five wrapper
+ * HOMEs (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
+ * `~/.claude-dev0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
+ *
+ *   p50 ~101s · p90 ~23.2m · p95 ~50.4m · p96 ~62.5m · p97 ~85.5m ·
+ *   p97.5 ~102.2m · p99 ~271.1m · max ~104.8h
+ *
+ * Long turns really are ordinary here — over 5% of every turn this fleet has
+ * ever run exceeds 50 minutes, 4.2% exceeds an hour — which is exactly the
+ * noise the deviation warns a low threshold would flag. `TURN_STALL_MS`
+ * (90 minutes) sits at ~p97.1 (2.9% of all turns, 832/28,519, run this long
+ * or longer): comfortably past ordinary long subagent fan-outs, and only
+ * modestly above the wedge incident's own measured 80.7-minute span (itself
+ * ~p96.8 — independently in the top 3% of turns this fleet has ever run, the
+ * sanity check that the incident WAS anomalous even against a fleet where
+ * long turns are the norm).
+ */
+export const TURN_STALL_MS = 90 * 60_000;
+
+export function turnStall(s: TurnStallInput, now: number): boolean {
+  if (s.status !== 'busy') return false;
+  if (s.statusUpdatedAt === null) return false;
+  return now - s.statusUpdatedAt >= TURN_STALL_MS;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2167,6 +2265,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       effort: optStr(o, 'effort'),
       ultracode: reqBool(o, 'ultracode'),
       branch: optStr(o, 'branch'),
+      // Absent → null (an older snapshot predates the field), a measured 0 →
+      // 0 (`optNum`'s own rule — never `optNum(...) || null`, which is
+      // exactly the D-2011 collapse this field's own docstring warns
+      // against). Present-but-not-a-finite-number throws inside `optNum`,
+      // which this function's catch turns into "reject the whole session".
+      ctxPct: optNum(o, 'ctxPct'),
       tasks,
       pr,
       archivedAt: optNum(o, 'archivedAt'),
