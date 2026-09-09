@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, eighteen rows, and nothing else.
+#   * The route comes from ROUTES below, nineteen rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,7 +73,7 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Eighteen rows, and that word is SCANNED: `server/test/ccrc-api.test.ts` derives
+# Nineteen rows, and that word is SCANNED: `server/test/ccrc-api.test.ts` derives
 # the count from the table below and reds if this line or the bullet at the top
 # of this file states a different one. The rows were CHOSEN on 2026-08-26 by
 # `grep -rhoE '(GET|POST) /api/[A-Za-z0-9/:_-]+' ccd/coordinator-skill ccd/worker-skill`,
@@ -97,7 +97,12 @@ declare -A ROUTES=(
   # coordinator reached the settle call with four titles and no ids, guessed 1,
   # and was refused `unknown-item`.
   [runs.items-list]='GET|/api/runs/{id}/items|yes|-'
-  [mail.list]='GET|/api/mail|no|to'
+  # `--program` joins through `runs.program`; `to` becomes optional once it is
+  # given (routes.ts's own `(to === null) === (program === null)` guard, not
+  # this client's). `--all` has no bare-flag form on this client — the generic
+  # `--*` arm always consumes a value — so it rides as `--all 1`, exactly as
+  # `GET /api/mail?to=`'s existing `all` key always has.
+  [mail.list]='GET|/api/mail|no|to,program,all,limit'
   [mail.send]='POST|/api/mail|no|-'
   # `fetch` and `ack` take the DELIVERY id, never the mail row's own id — two
   # separate autoincrement sequences that agree only for a mail sent to one
@@ -112,6 +117,10 @@ declare -A ROUTES=(
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+  # The durable feed. `--program` filters through `feed_events.runId` and answers
+  # one programme's events; without it the read is the whole box's, oldest-first.
+  # An event that names no run is programless and appears only unfiltered.
+  [feed.list]='GET|/api/feed|no|program,limit'
 )
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
