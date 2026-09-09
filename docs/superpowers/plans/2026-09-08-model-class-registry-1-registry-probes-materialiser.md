@@ -1779,7 +1779,7 @@ MSG
   export function effortFile(registry, catalogue)                    // → { byModel: { [modelId]: level } }
   export function classesTsv(registry, catalogue)                    // → 'haiku\t<id>\tassigned\n' × 4
   ```
-  Tasks 6–10 call `modelEnvBlock`, `effortFile` and `classesTsv`; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output. `clearSettingsEnv` is `ccrc models <id> rm`'s whole settings step (Task 6): called with `MODEL_ENV_KEYS` so the eight names are spelled once, at their point of origin, rather than a second time at every call site (spec §4.1 Lifecycle, §10, §11). `modelEnvBlock`'s eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended 2026-09-08), is written only when `catalogue` is non-null, not stale, and lists the model `ANTHROPIC_MODEL` resolves to with a numeric `context`; every other case OMITS the key — there is no "unavailable" reading for a context window, only "unknown", and Claude Code's own 200k default already means "unknown" to the client. Because the key can disappear on a re-materialise (a catalogue going stale, or the default model changing to one with no measured context), Task 6's `materialise` step also clears it when absent from the freshly computed block — see Task 6's Interfaces for which function does that.
+  Tasks 6–10 call `modelEnvBlock`, `effortFile` and `classesTsv`; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output. `clearSettingsEnv` is `ccrc models <id> rm`'s whole settings step (Task 6): called with `MODEL_ENV_KEYS` so the eight names are spelled once, at their point of origin, rather than a second time at every call site (spec §4.1 Lifecycle, §10, §11). `modelEnvBlock`'s eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended 2026-09-08, Task 16c), is written as `min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS)` — `CLIENT_DEFAULT_CONTEXT_TOKENS = 200000`, the module's own named export — only when `catalogue` is non-null, not stale, and lists the model `ANTHROPIC_MODEL` resolves to with a `context` that is a POSITIVE INTEGER (`typeof row.context === 'number' && Number.isInteger(row.context) && row.context > 0`; a fleet-host measurement found the catalogue's advertised number is not the usable one, and a zero, negative or fractional context is not a measurement at all); every other case OMITS the key — there is no "unavailable" reading for a context window, only "unknown", and Claude Code's own 200k default already means "unknown" to the client. Because the key can disappear on a re-materialise (a catalogue going stale, or the default model changing to one with no measured context), Task 6's `materialise` step also clears it when absent from the freshly computed block — see Task 6's Interfaces for which function does that.
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -1882,14 +1882,27 @@ describe('modelEnvBlock', () => {
     expect(() => modelEnvBlock(UNSEEDED, null)).toThrow(/a lane needs at least one class/);
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is ANTHROPIC_MODEL\'s context, as a STRING (§6.1, amended 2026-09-08)', () => {
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(ANTHROPIC_MODEL\'s context, 200000), as a STRING '
+    + '(§6.1, amended 2026-09-08, Task 16c)', () => {
     // ANTHROPIC_MODEL resolves opus ?? sonnet ?? haiku — SEEDED's opus slot is
-    // gpt-5.6-sol, and CODEX lists it with context 272000. Env values are
-    // strings everywhere else in this block; a bare number here would be the
-    // one key that reads differently from the other seven.
+    // gpt-5.6-sol, and CODEX lists it with context 272000 — advertised, not
+    // usable: fleet-host measurement 2026-09-08 found the largest prompt EVER
+    // ACCEPTED on gpt-5.6-sol, over 2,339 transcripts, was 196,341 tokens, with
+    // 30 refusals past that wall. The key never raises the client's own 200k
+    // default on an advertised number alone. Env values are strings everywhere
+    // else in this block; a bare number here would be the one key that reads
+    // differently from the other seven.
     const b = modelEnvBlock(SEEDED, CODEX);
-    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     expect(Object.keys(b)).toHaveLength(8);
+  });
+
+  it('is the row\'s OWN context when it is below the client default — a 128k model must compact '
+    + 'at 128k, not 200k (§6.1, amended 2026-09-08, Task 16c)', () => {
+    const narrow = reg({ classes: { haiku: null, sonnet: null, opus: 'gpt-5.3-codex-spark', fable: null },
+      subagent: 'opus', discovery: ['gpt-5.3-codex-spark'], effort: {} });
+    const b = modelEnvBlock(narrow, CODEX);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
   it('is ABSENT when the catalogue is stale — a stale window is not a measured one', () => {
@@ -1908,6 +1921,15 @@ describe('modelEnvBlock', () => {
     const noContext = { ...CODEX,
       models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: null } : m)) };
     const b = modelEnvBlock(SEEDED, noContext);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(Object.keys(b)).toHaveLength(7);
+  });
+
+  it.each([0, -1, 131072.5])('is ABSENT when the catalogue\'s context is %s — a non-positive or '
+    + 'fractional number is not a measurement (Task 16c fix round, M2)', (bad) => {
+    const badContext = { ...CODEX,
+      models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: bad } : m)) };
+    const b = modelEnvBlock(SEEDED, badContext);
     expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
     expect(Object.keys(b)).toHaveLength(7);
   });
@@ -1952,7 +1974,7 @@ describe('mergeSettingsEnv', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, CODEX));
     expect(JSON.parse(fs.readFileSync(settings(), 'utf8')).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
-      .toBe('272000');
+      .toBe('200000');
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(Object.keys(j.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
@@ -2182,10 +2204,15 @@ Expected: FAIL with `Failed to resolve import "../../shared/modelenv.mjs"`.
 // AND THE SENTINEL GOES NOWHERE ELSE. `classesTsv` never emits it; its third
 // column is the positive availability marker every bash reader branches on.
 // The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended
-// 2026-09-08), gets neither treatment: it is OMITTED, never sentinelled, when
-// no measured window exists — there is no "unavailable" reading for a context
-// size, only "unknown", and Claude Code's own 200k default already means
-// "unknown" to the client. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_
+// 2026-09-08, Task 16c), gets neither treatment: it is OMITTED, never
+// sentinelled, when no measured window exists — there is no "unavailable"
+// reading for a context size, only "unknown", and Claude Code's own 200k
+// default already means "unknown" to the client. When it IS written, it is
+// `min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS)`, never the row's own
+// number: a fleet-host measurement found the catalogue's advertised context
+// is not the usable one, so the key may LOWER the client's default but never
+// RAISES it above 200000 on an advertised number alone.
+// `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_
 // ENFORCEMENT` is never set by this file or by anything this design writes:
 // that proactive compaction is what keeps an unexpectedly large lane from
 // hitting the provider's 400 ("input exceeds the context window").
@@ -2201,6 +2228,11 @@ const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
 }
+
+/** The client's default window for a model id it does not know (spec §6.1).
+ *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` never exceeds this (§6.1, amended
+ *  2026-09-08, Task 16c). */
+export const CLIENT_DEFAULT_CONTEXT_TOKENS = 200000;
 
 /** The eight keys `modelEnvBlock` can write, frozen so a caller iterates them
  *  rather than spelling them a second time. `clearSettingsEnv(path,
@@ -2252,19 +2284,29 @@ const slot = (registry, cls) => {
  *
  * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
  * a 200k window for any model id it does not know, and compacts proactively at
- * that window; the catalogue knows the real one. It is written ONLY when
- * `catalogue` is non-null, NOT stale (§11: a stale catalogue is the previous
- * one kept after a failed probe, and a stale window is not a measured one),
- * lists the model `ANTHROPIC_MODEL` resolved to above, and that row's
- * `context` is a number — every other case OMITS the key (never a sentinel:
- * there is no "unavailable" reading for a context window, only "unknown", and
- * the client's own 200k default already means "unknown"). The value is
- * written as a STRING: every other value in this block is one, env vars are
- * always strings on the wire, and a bare number here would be the one key
- * that differs. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is
- * never written by this function, or anywhere else in this design (§6.1): the
- * proactive compaction it would disable is what keeps a lane whose default
- * model has no measured window from hitting the provider's own 400 instead.
+ * that window. It is written as `min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS)`,
+ * NOT the row's own number (§6.1, amended 2026-09-08, Task 16c): a fleet-host
+ * measurement found the catalogue's advertised context (272000 for the
+ * GPT-5.6/6 tiers) is not the usable one — over 2,339 transcripts the largest
+ * prompt ever accepted on gpt-5.6-sol was 196,341 tokens, with 30 refusals
+ * past that wall — so the key may LOWER the client's default (a 128k model
+ * like gpt-5.3-codex-spark must compact at 128k) but never RAISES it above
+ * the default on an advertised number alone; raising above it needs a
+ * MEASURED ceiling, a future registry field, not this one. It is written
+ * ONLY when `catalogue` is non-null, NOT stale (§11: a stale catalogue is the
+ * previous one kept after a failed probe, and a stale window is not a
+ * measured one), lists the model `ANTHROPIC_MODEL` resolved to above, and
+ * that row's `context` is a POSITIVE INTEGER (fix round 1, M2: zero, a
+ * negative or a fractional value is not a measured window either) — every
+ * other case OMITS the key (never a sentinel: there is no "unavailable"
+ * reading for a context window, only "unknown", and the client's own default
+ * already means "unknown"). The value is written as a STRING: every other
+ * value in this block is one, env vars are always strings on the wire, and a
+ * bare number here would be the one key that differs.
+ * `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never written by
+ * this function, or anywhere else in this design (§6.1): the proactive
+ * compaction it would disable is what keeps a lane whose default model has no
+ * measured window from hitting the provider's own 400 instead.
  *
  * @throws {ModelEnvInvalid} when no class among opus/sonnet/haiku is set, or
  *   when the subagent class's slot is null.
@@ -2304,8 +2346,22 @@ export function modelEnvBlock(registry, catalogue) {
   };
   if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
     const row = catalogue.models.find((m) => m.id === primary);
-    if (row !== undefined && typeof row.context === 'number') {
-      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(row.context);
+    // A POSITIVE INTEGER only (fix round 1, M2): zero, a negative or a
+    // fractional value is not a measured window — writing one of them
+    // verbatim ("0", "-1", "131072.5") would put a number on disk with no
+    // window it describes. The omit rule's existing reason applies
+    // unchanged: there is no "unavailable" reading for a context window,
+    // only "unknown", and the client's own default already means "unknown".
+    if (row !== undefined && typeof row.context === 'number'
+      && Number.isInteger(row.context) && row.context > 0) {
+      // min(), not the row's own number (§6.1, amended 2026-09-08, Task 16c):
+      // fleet-host measurement found the Codex catalogue's advertised
+      // context_window (272000 for the GPT-5.6/6 tiers) is not the usable
+      // one — over 2,339 transcripts the largest prompt ever ACCEPTED on
+      // gpt-5.6-sol was 196,341 tokens, with 30 refusals past that wall — so
+      // this key may LOWER the client's default (a 128k model still compacts
+      // at 128k) but never RAISES it on an advertised number alone.
+      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS));
     }
   }
   return block;
@@ -2824,7 +2880,7 @@ Expected: three cases red — `is the seven variables, byte for byte …`, `writ
 - [ ] **Step 12b: Measured mutation check — the eighth key respects staleness (§6.1 amendment)**
 
 In `modelEnvBlock`'s eighth-key block, change `if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {` to `if (catalogue !== null && catalogue !== undefined) {` (dropping the staleness check). Run `cd server && npx vitest run test/modelenv.test.ts`.
-Expected: one case red — `is ABSENT when the catalogue is stale — a stale window is not a measured one`, now returning `CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000'` instead of `undefined`. Restore and re-run; expected PASS.
+Expected: one case red — `is ABSENT when the catalogue is stale — a stale window is not a measured one`, now returning `CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000'` instead of `undefined`. Restore and re-run; expected PASS.
 
 - [ ] **Step 13: Measured mutation check — the subagent is read from the registry, not derived**
 
@@ -4629,13 +4685,18 @@ describe('set-class', () => {
     expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS tracks the default model\'s catalogue context, and drops out when it cannot (§6.1, amended 2026-09-08)', () => {
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(the default model\'s catalogue context, 200000), and drops '
+    + 'out when it cannot (§6.1, amended 2026-09-08, Task 16c)', () => {
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-sol');
     expect(r.code).toBe(0);
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // gpt-5.6-sol's catalogue context is 272000 — advertised, not usable
+    // (fleet-host measurement: 196,341 the largest prompt ever accepted, 30
+    // refusals past that wall) — so the key never exceeds the client's own
+    // 200000 default.
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     // Switching the default to a model no catalogue can vouch for — the same
     // "accepts a model no catalogue can vouch for" situation as above — leaves
-    // nothing to measure a window from, and the STALE '272000' must not
+    // nothing to measure a window from, and the STALE '200000' must not
     // survive the re-materialise: the eighth key carries no sentinel, so a
     // left-behind number would misstate the window rather than merely miss.
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
@@ -4840,6 +4901,17 @@ describe('materialise', () => {
   it('rewrites the three generated files from the registry and the catalogue', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'));
+    // Fix round 1 (review): the seeded opus, gpt-5.6-sol, has catalogue
+    // context 272000 — clamped TO the 200000 ceiling — so a mutant that
+    // hardcoded the key to the literal '200000' (ignoring the catalogue
+    // entirely) could not be told apart from a real clamp on that subject.
+    // Point opus BELOW the ceiling instead, directly on disk (same pattern as
+    // `writeCatalogue` below): only a model whose OWN context survives
+    // unclamped proves the number came from the catalogue this run just
+    // wrote, not a literal.
+    const reg = registryOf('gpt');
+    (reg['classes'] as Record<string, unknown>)['opus'] = 'gpt-5.3-codex-spark';
+    fs.writeFileSync(regPath('gpt'), JSON.stringify(reg));
     writeCatalogue('gpt');
     const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
@@ -4852,8 +4924,11 @@ describe('materialise', () => {
     // The catalogue this run just wrote (init ran before it existed, so init's
     // own materialise could not have) — proves `materialise` reads the SAME
     // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
-    // amendment).
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // amendment). gpt-5.3-codex-spark's catalogue context is 128000, BELOW
+    // the 200000 ceiling, so this value can only have come from the fresh
+    // catalogue — a mutant that hardcoded '200000' reds here (§6.1, amended
+    // 2026-09-08, Task 16c fix round 1).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
   it('on a lane with NO registry writes nothing and says so', () => {
