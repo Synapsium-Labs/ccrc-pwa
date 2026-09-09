@@ -45,7 +45,7 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
-import { toRunSummary, type CoordStore } from './coord/store.js';
+import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -1692,10 +1692,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
     const coord = deps.coord;
     if (coord === undefined) return pressPlain();
-    const held = coord.heldAskFor(id);
+
+    // GUARDED, BOTH OF THEM (whole-branch review F3). `heldAskFor` is an
+    // ordinary read and `takeAskForAnswer` runs `tx()` -> `BEGIN IMMEDIATE`,
+    // and `node:sqlite` throws SYNCHRONOUSLY — a closed handle, a lock race,
+    // a corrupt file. Both sit BEFORE `answerAsk`, so an unguarded throw
+    // turns THE OPERATOR'S OWN LOCK-SCREEN ANSWER into a 500 with no
+    // keystroke — the one path the design doc promises is untouched (§2.7)
+    // and whose degradation is supposed to be free (D-2169: "its loss is
+    // free: every held ask degrades to an immediate push"). Every other new
+    // coord touchpoint on this branch already fails this way on purpose
+    // (`sweepAsks`, both `detectDialogs` writes, `settleAsk` on both routes,
+    // `recordFeedEvent`, `fleet.ts`'s `readCurrentAsks`); these two did not,
+    // and they are the pair carrying a shipped promise.
+    //
+    // The degrade is `pressPlain()` — the byte-identical pre-Task-12 path,
+    // the same call the "no coord configured" and "nothing held" arms take.
+    // What is lost is the RECORD (the row is not taken, not settled, and no
+    // second feed event is written); what is NOT lost is the digit. That is
+    // exactly the trade D-2169 rules on, applied to a database that is
+    // present but broken rather than absent.
+    let held: AskRow | null;
+    try {
+      held = coord.heldAskFor(id);
+    } catch (err) {
+      console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
     if (held === null) return pressPlain();
 
-    const taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
+    let taken: AskTakeResult;
+    try {
+      // `freshAskAt` is inside the guard too: it is registry+hookstate IO,
+      // not `node:sqlite`, but a throw from it would refuse the operator for
+      // exactly the same non-reason.
+      taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
+    } catch (err) {
+      console.warn(`ccrc-server: takeAskForAnswer(${held.id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
     const res = await answerAsk(askDeps, id, key, optionIndexes);
 
     if (!taken.ok) {

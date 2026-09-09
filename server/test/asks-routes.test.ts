@@ -806,6 +806,37 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
   });
 
+  // WHOLE-BRANCH REVIEW, F3 — the operator's LOCK-SCREEN answer must survive
+  // a broken coord.db. `node:sqlite` throws SYNCHRONOUSLY on a closed handle
+  // or a lock race, and both of this route's coord touchpoints sit BEFORE
+  // `answerAsk`: `heldAskFor` is an ordinary read, `takeAskForAnswer` runs
+  // `tx()` -> `BEGIN IMMEDIATE`. Unguarded, either turns the one path the
+  // spec promises is untouched (§2.7 — "nothing on the answering side") into
+  // a 500 with NO keystroke. Every other new coord touchpoint on this branch
+  // is guarded; these two carried a shipped promise and were not. The
+  // degrade is `pressPlain()`, the byte-identical pre-Task-12 path: the
+  // RECORD is lost (its loss is free by design, D-2169) and the digit is not.
+  for (const [what, method] of [
+    ['heldAskFor', 'heldAskFor'],
+    ['takeAskForAnswer', 'takeAskForAnswer'],
+  ] as const) {
+    it(`presses the digit anyway when coord.${what} throws — the operator's answer survives a broken db (F3)`, async () => {
+      const { coord, id, calls } = await setup(Date.now(), true);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      (coord as unknown as Record<string, unknown>)[method] = () => {
+        throw new Error('boom — simulated coord.db failure');
+      };
+
+      const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+      expect(warn).toHaveBeenCalled();
+      expect(id).not.toBeNull();
+    });
+  }
+
   it('a stale/mismatched askKey with a held row still refuses ask-mismatch, and the row stays held', async () => {
     const { coord, id, calls } = await setup(Date.now(), true);
     const res = await post(CHILD, { askKey: 'deadbeefdeadbeef', optionIndexes: [0] });

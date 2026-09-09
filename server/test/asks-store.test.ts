@@ -142,6 +142,48 @@ describe('ask store methods', () => {
     expect(row.answeredBy).toBeNull();
   });
 
+  // WHOLE-BRANCH REVIEW, F2(a) — the RULING: `staleAsk`'s CAS source was
+  // `'held'` ALONE, so a dialog that vanished while a row sat `'answering'`
+  // changed zero rows and the row was stranded in that state FOREVER. No
+  // restart needed to reach it: `detectDialogs`'s clear branch deletes the
+  // `heldAsks` entry unconditionally, so the sweep can never see the row
+  // again either, and `fleet.ts`'s `fleetAsk` folds `answering` onto `held`
+  // — a permanent "held — <parent> may answer" chip on a question that no
+  // longer exists. A vanished dialog is stale WHICHEVER principal was
+  // mid-answer, so the CAS names both live states.
+  it('marks an ANSWERING row stale when its dialog vanishes — the stranding F2(a) closes', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+    expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);      // held -> answering
+    expect(s.askById(id)!.state).toBe('answering');
+    expect(s.staleAsk('d', 'c', 4000)).toBe(true);
+    const row = s.askById(id)!;
+    expect(row.state).toBe('stale');
+    expect(row.releasedAt).toBe(4000);
+  });
+
+  // THE CONTROL for the widen above (a green mutation needs one): the CAS
+  // names exactly two states, not "any state". A row that has already
+  // SETTLED is a decision that was really made, and a late clear tick must
+  // never rewrite it — `answered`, `released` and `stale` are all terminal
+  // to this call.
+  it('leaves an already-settled row alone — the widened CAS names two states, not all six', () => {
+    const s = mk();
+    for (const settle of [
+      (id: number) => { s.takeAskForAnswer(id, 1000); s.settleAsk(id, 'p', 'a', 3000); },
+      (id: number) => { s.releaseAsk(id, 3000); },
+      (id: number) => { s.staleAsk('d', 'c', 3000); },
+    ]) {
+      const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+      settle(id);
+      const before = s.askById(id)!.state;
+      expect(s.staleAsk('d', 'c', 9000)).toBe(false);
+      expect(s.askById(id)!.state).toBe(before);
+    }
+  });
+
   // Task 19: `currentAskFor`, the fleet chip's read — unlike `heldAskFor`
   // above, NOT filtered to `'held'`. Every state the row can be in.
   describe('currentAskFor — the newest row for a child, in ANY state', () => {

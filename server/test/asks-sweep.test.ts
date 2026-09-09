@@ -509,6 +509,35 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
     expect(f.coord.askById(staleId)!.state).toBe('stale');  // the old row, untouched since
   });
 
+  // WHOLE-BRANCH REVIEW, F2(a) — the same stranding, END TO END rather than
+  // at the store. A principal takes the row (`held -> answering`) and never
+  // comes back within this tick; the dialog then vanishes off the pane. The
+  // clear branch drops the `heldAsks` entry UNCONDITIONALLY, so `sweepAsks`
+  // — the map's only collector — can never see this row again; if the CAS
+  // does not reach an `answering` row here, nothing ever will, and
+  // `fleetAsk` folds `answering` onto `held`, so the child wears
+  // "held — <parent> may answer" for a question that is gone. No restart
+  // required.
+  it('marks a row stale even when a principal was mid-answer as the dialog cleared (F2(a))', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    const askAt = f.coord.askById(askId)!.askAt;
+    expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
+    expect(heldMap(f.w).has('cc-a')).toBe(true);
+
+    f.showMenu('cc-a', BARE_PROMPT);                       // the pane is gone
+    await f.tick();
+
+    expect(f.coord.askById(askId)!.state).toBe('stale');
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
+    // Still nothing to notify about: a cleared dialog is a question that no
+    // longer exists, whoever was mid-answer when it went.
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+  });
+
   // Mutation-table guard: the `staleAsk` call on this path is a synchronous
   // `node:sqlite` write sitting directly on the 2 s poll, and `detectDialogs`
   // is awaited by `tick()`, which has no catch of its own (`void this.tick()`

@@ -3984,15 +3984,37 @@ export class CoordStore {
     return Number(res.changes) > 0;
   }
 
-  /** held -> stale, CAS, keyed by the pane's own identity (`dialogId`) and
-   *  the child that painted it — the dialog vanishing off the pane is the
-   *  only signal `detectDialogs`' clear branch acts on. Same CAS shape as
-   *  `releaseAsk`: the return says whether this call is the one that ended
-   *  the hold. */
+  /** held OR answering -> stale, CAS, keyed by the pane's own identity
+   *  (`dialogId`) and the child that painted it — the dialog vanishing off
+   *  the pane is the only signal `detectDialogs`' clear branch acts on. Same
+   *  CAS shape as `releaseAsk`: the return says whether this call is the one
+   *  that ended the hold.
+   *
+   *  BOTH LIVE STATES, not `'held'` alone (whole-branch review F2(a), a
+   *  RULING). The narrow form stranded a row FOREVER whenever the dialog
+   *  cleared while a principal sat mid-answer: the clear branch deletes its
+   *  `heldAsks` entry unconditionally (so `sweepAsks`, the map's only
+   *  collector, can never see the row again) while this CAS changed zero
+   *  rows — and `fleet.ts`'s `fleetAsk` folds `answering` onto `held`, so the
+   *  child wore a permanent "held — <parent> may answer" chip for a question
+   *  that no longer exists. No restart is needed to reach it. A vanished
+   *  dialog is stale whichever principal was mid-answer, so the source names
+   *  both.
+   *
+   *  TWO STATES, NEVER ALL SIX. `answered`, `released` and `stale` are
+   *  decisions that were really taken, and a late clear tick must not rewrite
+   *  one — the same reasoning `settleAsk`'s own `WHERE` carries. The residual
+   *  the widened arm buys, stated rather than discovered: a digit that lands
+   *  and a clear tick that arrives in the microseconds BEFORE the route's
+   *  `settleAsk` runs will leave that settle a no-op against a now-`stale`
+   *  row, so the answer is not named on the row. That is precisely why both
+   *  answer routes write their `feed_events` record BEFORE `settleAsk` and
+   *  say so in their own comments: the feed entry, not this column, is the
+   *  trace that survives a failure in this window. */
   staleAsk(dialogId: string, childId: string, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE asks SET state = 'stale', releasedAt = ? " +
-      "WHERE dialogId = ? AND childId = ? AND state = 'held'",
+      "WHERE dialogId = ? AND childId = ? AND state IN ('held','answering')",
     ).run(now, dialogId, childId);
     return Number(res.changes) > 0;
   }
