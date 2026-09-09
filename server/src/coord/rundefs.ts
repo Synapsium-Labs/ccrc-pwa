@@ -119,10 +119,19 @@ export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
  * false statement on the face of its own envelope, and, worse, would send
  * `tellSender` through `resolveCoordinator(null)`, whose answer is whichever
  * program happens to be the single active one.
+ *
+ * WIDENED BY THE ASK LANE (whole-branch review M4). `'operator'`'s gloss below
+ * said "through a PWA-surface route", which was every one of its senders until
+ * this branch: the ask nudge is the first `'operator'` mail THE WATCHER ITSELF
+ * raises, off a pane scrape, with no request and nobody at the phone. The
+ * sender is still right — the question is the operator's to answer, and the
+ * mail exists to let a parent answer it first — but "a route" is no longer how
+ * it gets sent, so the gloss says both.
  */
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
-  operator: 'the operator, through a PWA-surface route — no session sent it',
+  operator: 'the operator — either through a PWA-surface route or raised by the ' +
+    'watcher on their behalf (the ask nudge); never a session speaking for itself',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;

@@ -11,9 +11,22 @@ today; the server notices, tells that child's parent, and **holds the operator's
 window — if the parent rules first, the operator never sees the question, and if it does not, the
 push fires unchanged with its lock-screen buttons.
 
-**What this is not:** a new message channel. The child does nothing new, `answerAsk` is not modified,
-and `README.md:52`'s lock-screen answer keeps working byte-for-byte for every ask the parent does not
-pre-empt. The only session that learns a new protocol is the parent.
+**What this is not:** a new message channel. The child does nothing new, and `README.md:52`'s
+lock-screen answer keeps working byte-for-byte for every ask the parent does not pre-empt. The only
+session that learns a new protocol is the parent.
+
+**Corrected — `answerAsk` WAS modified (Task 20, D-2177).** This sentence said it was not, and the
+implementation deliberately changed it: `answerAsk` now checks `sendKey`'s boolean and refuses
+`not-alive` where it used to return `{ok: true}` for a keystroke that never arrived. That was right,
+and it is this design's doing: `cmd_swap` destroys a live pane and was the one such operation not
+serialized against `answerAsk`'s capture-then-send window, so a swap landing mid-answer produced a
+`{ok: true}` naming a digit nobody received. Pre-existing — but the lane makes a SECOND principal
+press keys into a pane the operator may be swapping at the same moment, which is what turned a latent
+lie into one the ask row would have recorded as an answer. §8.8 already asked for both halves; the
+sentence above simply predated it. What the sentence was protecting is still true: the change is
+strictly a refusal where there used to be a false success, so no ask that would have been answered
+before is refused now, and the operator's lane is byte-identical on every path that actually pressed
+a key.
 
 ---
 
@@ -165,6 +178,20 @@ shut, it lives only in the new route so `answerAsk`'s operator-lane semantics st
 it gives the row a real `held → stale` transition that does not depend on `dialog_cleared` — which
 matters, because this is the one case `dialog_cleared` structurally cannot see.
 
+**Say plainly which principal is guarded: only the parent.** The argument above is "a grace window is
+a delay inserted where question substitution can happen", and the operator's push is delayed by *that
+same window* — yet `POST /api/sessions/:id/ask` carries no instance guard, and this design does not
+give it one. That is defensible, and it is defensible for a reason that has nothing to do with the
+window: the operator's own latency was ALREADY unbounded. A push sits on a lock screen until somebody
+picks the phone up, so the gap between the menu `askKey` identified and the digit landing has always
+been minutes-to-hours, bounded by nothing, and `answerAsk`'s content key is the only thing that has
+ever stood between it and a substituted instance. The grace window widens that pre-existing exposure
+by at most GRACE — a few percent of a realistic tap latency — and closing it would mean changing
+`answerAsk`'s operator-lane semantics, which §2.7's whole promise is that this design does not do. So
+the honest statement is: the parent, a new principal answering a question it did not read, is guarded;
+the operator, an old principal whose exposure this design only widens slightly, is not. A reader must
+not infer from §2.5 that both are.
+
 ### 2.6 The row is the mutex
 
 `answerAsk`'s own loser-refusal (`not-waiting`, `no-menu`) requires the child's world to have visibly
@@ -186,6 +213,10 @@ Nothing on the answering side: for every ask that lapses or is declined, the pus
 `push-sw.js → POST /api/sessions/:id/ask → answerAsk` chain are untouched. Spec §5's "the ordinary
 ability to just talk to any session" is likewise untouched — this design changes who *initiates*
 upward, never the operator's reach downward.
+
+("Untouched" reads with §2's own correction above: `answerAsk` gained one post-send check, D-2177,
+which turns a `{ok: true}` for a keystroke that never landed into a refusal. Every path that actually
+pressed a key behaves exactly as it did.)
 
 What the operator loses is **immediacy on questions the parent answers**: up to GRACE seconds of not
 being buzzed, and — when the parent rules — never being buzzed at all. §2.4's record is what makes
@@ -217,6 +248,18 @@ PWA gains is small and additive:
 - **the feed already carries the record**, because §2.4 mints it with `recordAlways`/`recordOnly` at
   hold time and again on a parent answer. `/mail`'s existing `NotifyEvent` rendering shows both without
   a new component; the second event is what answers "what was decided in my name, and by whom".
+
+  **Scope that claim to the PRE-EMPTED path, which is the only place it holds.** "The row and the feed
+  both record who ruled" is true when a parent answers, and true when the operator answers *while the
+  row is still held* — `POST /api/sessions/:id/ask` takes the row and settles it as `operator` (Task
+  12). It is NOT true after a lapse. The release sweep settles the row `released` with `answeredBy`
+  permanently `null`, the push fires, and the operator answers it from the lock screen minutes later —
+  at which point `heldAskFor` finds nothing, because it is scoped to `state = 'held'`. So that answer
+  records NOTHING on the row: no `answeredBy`, no `answer`, no second feed event. This is not a defect
+  to fix here — a lapsed ask is an ordinary ask, answered exactly as every ask was answered before this
+  lane existed, and the ordinary path never recorded an answerer either. But the sentence above should
+  not be read as a claim about every ask. What the lane records is what it *changed*: a decision made
+  in the operator's name that never reached their phone.
 
 `GET /api/asks` serves the parent's cross-sibling read (§6.1). **Corrected by D-2310 (Task 19, fix
 round 1):** the PWA's chip is NOT served from this route — it is computed server-side in `fleet.ts`'s
