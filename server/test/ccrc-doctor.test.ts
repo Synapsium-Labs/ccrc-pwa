@@ -6357,6 +6357,18 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // narrow a distinction it received") applied to this check's own settings
   // .json read. An unreadable file must WARN as unmeasured, never silently
   // promote to the FAIL a confirmed-absent hook gets.
+  //
+  // THE STDERR ASSERTION IS THE OTHER HALF OF R23, and it is the half no
+  // stdout assertion in this file can see. The pre-fix code attempted the
+  // open and hung a `2>/dev/null` off the `done <` line to quieten it, which
+  // does NOT work: redirections are set up left to right, so the trailing
+  // `2>` is not yet in force when the `<` that precedes it fails, and bash's
+  // own `Permission denied` diagnostic reaches the REAL stderr. Measured
+  // standalone (fix round 1): `while … done < <mode-000 file> 2>/dev/null`
+  // still prints `bash: line 1: …: Permission denied`. `[ -r … ]` refusing to
+  // attempt the open at all is what makes the WARN path clean, so this test
+  // pins the silence as well as the classification — without this line,
+  // deleting `-r` reds only on the WARN and the leak rides along unmeasured.
   it('WARNs, not FAILs, when settings.json exists but cannot be read (R23)', () => {
     const home = healthy('ccrc-doctor-mem-unreadable-');
     const h = join(home, '.claude-corp');
@@ -6366,6 +6378,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     chmodSync(settings, 0o000);
     try {
       const r = runDoctor(home);
+      expect(r.stderr).not.toMatch(/Permission denied/);
       expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches.*\.claude-corp/m);
       expect(r.stdout).not.toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-corp/m);
     } finally {
