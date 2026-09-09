@@ -32,6 +32,11 @@ describe('_pane_auto_continue_armed', () => {
     ['continuing automatically at 11:50am', true],
     ['Usage limit reached · continuing shortly · esc to cancel', true],
     ['Usage limit reached · continuing automatically when it resets · esc to cancel', true],
+    // _pane_hard_blocked greps -qiE; this predicate used to grep -qE (case
+    // sensitive) — a capitalised banner would silently un-arm the gate at
+    // all three call sites (_auto_swap_check, _auto_compact_check, the
+    // fallback re-drive). Now -qiE too.
+    ['Usage limit reached · Continuing automatically at 11:50am', true],
     ["You've hit your session limit · resets 11:50am (UTC)", false],
     ['? for shortcuts', false],
   ])('%s -> %s', (pane, armed) => {
@@ -86,6 +91,12 @@ const swapLog = (): string => {
 };
 const redrive = (env: Record<string, string> = {}): string[] => {
   h.sh(`${STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: READY, ...env });
+  return sendKeys();
+};
+/** Same call, but on a SWAP landing (the 3rd positional, `fromswap`) — the only
+ *  case the early-standdown log lines below fire in. */
+const redriveFromswap = (env: Record<string, string> = {}): string[] => {
+  h.sh(`${STUBS} _redrive_after_spawn ${ID} cc-test 1`, { PANE_TEXT: READY, ...env });
   return sendKeys();
 };
 const typedPrompt = (keys: string[]): boolean =>
@@ -171,6 +182,49 @@ describe('_redrive_after_spawn', () => {
   it('types nothing when there is no transcript', () => {
     expect(redrive()).toEqual([]);
     expect(swapLog()).toBe('');
+  });
+  // A stale hard-block banner OUTSIDE the last 8 rows must never stand the
+  // re-drive down (finding: every other consumer of these three predicates
+  // narrows to `tail -8` — `_auto_swap_check`, `_auto_compact_check` — and a
+  // `--resume` landing replays the interrupted turn's own API-error row into
+  // the pane, which can sit well above the last 8 lines. Mutate the `| tail
+  // -8` back out of the three capture-pane calls in `_redrive_after_spawn`
+  // to see this red.
+  it('a hard-block banner well above the last 8 rows does not stand the re-drive down (D-2264)', () => {
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    const stalePane = [
+      '5-hour limit reached · resets 3pm',
+      ...Array.from({ length: 11 }, (_, i) => `scrollback filler line ${i}`),
+      '❯ ',
+    ].join('\n');
+    expect(typedPrompt(redrive({ PANE_TEXT: stalePane }))).toBe(true);
+    expect(swapLog()).toMatch(/ redrive myid: /);
+  });
+  // The wait loop's own stand-down (rc 1 "not stalled", rc 2 "unreadable")
+  // wrote nothing to swap.log — the one lane meant to catch the flag failing
+  // had zero observability when IT failed. Logged only on a swap landing:
+  // every ordinary new spawn also carries CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1
+  // but writes no pair (nothing to resume), so rc 1 there is the routine case,
+  // not news.
+  describe('the early stand-down is silent on an ordinary spawn, logged on a swap landing (D-2265)', () => {
+    it('rc 1 (not-stalled): silent when fromswap is unset', () => {
+      writeTranscript([L.banner(), L.realAssistant()]); // no META/synthetic pair ever written
+      expect(redrive()).toEqual([]);
+      expect(swapLog()).toBe('');
+    });
+    it('rc 1 (not-stalled): logged on a swap landing', () => {
+      writeTranscript([L.banner(), L.realAssistant()]);
+      expect(redriveFromswap()).toEqual([]);
+      expect(swapLog()).toMatch(/ redrive-skip myid: not-stalled/);
+    });
+    it('rc 2 (unreadable transcript): silent when fromswap is unset', () => {
+      expect(redrive()).toEqual([]); // no transcript written at all
+      expect(swapLog()).toBe('');
+    });
+    it('rc 2 (unreadable transcript): logged, with the path, on a swap landing', () => {
+      expect(redriveFromswap()).toEqual([]);
+      expect(swapLog()).toMatch(/ redrive-skip myid: no transcript at .*deadbeef-0000-4000-8000-000000000000\.jsonl/);
+    });
   });
 });
 

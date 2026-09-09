@@ -969,7 +969,7 @@ RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this sessio
 # milliseconds to make Claude Code suppress the re-drive of a turn older than that.
 RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
-REDRIVE_TAIL_LINES=60           # transcript lines the stall detector reads; attachments and system rows between the pair and the tail are skipped, not counted
+REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -12572,7 +12572,7 @@ _pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waitin
   # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
   # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
   # injection, and the fallback re-drive — must not.
-  grep -qE "continuing automatically|continuing shortly" <<<"$1"
+  grep -qiE "continuing automatically|continuing shortly" <<<"$1"
 }
 
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
@@ -13430,6 +13430,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
   _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
+  # non-home-able lane the vars `_resume_env` composes are simply inert (the
+  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
+  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
+  # which only ever names a Claude Code JSONL) fails closed there regardless —
+  # so gating this line would buy nothing and cost a second home-ability check.
   resenv=$(_resume_env)
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
@@ -13573,7 +13579,13 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # D-2231 — after the effort injection, so its local-command chatter is already
   # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
   # (a keystroke there is the swap's job), rc 2 is a login screen.
-  [[ "$prompt_rc" == 0 ]] && _redrive_after_spawn "$id" "$tname"
+  #
+  # UNGATED on home-ability, unlike `_inject_spawn_effort` above — deliberately:
+  # a non-home-able lane never has `_resume_env`'s flag set, so its transcript
+  # never carries the resume pair `_transcript_stalled_pair` looks for, and the
+  # measurement fails closed (rc 1, not-stalled) rather than needing a second
+  # home-ability check here to reach the same silence.
+  [[ "$prompt_rc" == 0 ]] && _redrive_after_spawn "$id" "$tname" "$fromswap"
   return "$prompt_rc"
 }
 
@@ -13642,27 +13654,53 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_redrive_after_spawn() {   # id tmuxname — D-2231: type the resume prompt when the flag wrote the pair and drove nothing.
+_redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
+  # catch the redrive flag itself failing (rc 1 the pair is not on disk, rc 2 the transcript is
+  # unreadable) used to stand `_redrive_after_spawn` down with zero swap.log evidence. Logged ONLY
+  # on a swap landing (`fromswap`, threaded from `_spawn_settle`'s own positional) — an ordinary
+  # new spawn also carries CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 but writes no pair, so rc 1 there
+  # is the routine case, not news.
+  local id="$1" fromswap="$2" rc="$3" f="$4"
+  [[ "$fromswap" == 1 ]] || return 0
+  case "$rc" in
+    1) echo "$(date '+%F %T') redrive-skip $id: not-stalled" >> "$REG/swap.log" ;;
+    2) echo "$(date '+%F %T') redrive-skip $id: no transcript at $f" >> "$REG/swap.log" ;;
+  esac
+}
+
+_redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume prompt when the flag wrote the pair and drove nothing.
   # Measured on the TRANSCRIPT, not on hookstate (D-2237): `working` proves tool
   # calls, not that the re-drive took. Gives Claude Code REDRIVE_WAIT_S seconds
   # first — a running turn ("esc to interrupt") or a real row after the pair ends
   # the wait — then stands down on an armed auto-continue, a hard-blocked pane
   # or a draft in the box, each with its own swap.log line.
-  local id="$1" t="$2" f i rc pane cur
+  #
+  # PANE WINDOW IS `tail -8`, EVERYWHERE BELOW BUT `_pane_box_draft` (D-2264).
+  # Every other established consumer of `esc to interrupt`/`_pane_auto_continue_armed`/
+  # `_pane_hard_blocked` narrows first — `_auto_swap_check` (ccd:12715) and `_auto_compact_check`
+  # (ccd:12929) both `| tail -8` — and ccd:12915-12924 already documents why: a full ~50-row
+  # capture lets `grep -q "esc to interrupt"` match a STALE banner further up the scrollback, and
+  # `_pane_hard_blocked`'s `limit reached|API Error: 429|rate limit` alternation is exactly what a
+  # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
+  # outside the last 8 lines while still being well inside a full capture, so widening this
+  # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_draft` alone keeps the
+  # full `-e` capture: it already reads only the LAST `❯` line, so a wider window costs it nothing.
+  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane cur
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
-    [[ "$rc" -eq 0 ]] || return 0
-    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
     echo "$pane" | grep -q "esc to interrupt" && return 0
     sleep 1
   done
   # Re-measure both loop conditions once more: the loop's own last check was one
   # second ago, and Claude Code's own re-drive (or the operator) can start a turn
   # in that gap. Typing into a turn that started here would be exactly the
-  # spurious keystroke the header comment promises never happens (D-TBD-redrive-race).
-  _transcript_stalled_pair "$f"; [[ $? -eq 0 ]] || return 0
-  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+  # spurious keystroke the header comment promises never happens (D-2263).
+  _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
   _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
