@@ -133,15 +133,14 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
   'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four',
   'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty'];
-const SCAN_RE = new RegExp(`\\b(${WORDS.slice(2).join('|')})\\b`, 'gi');
-
-// A LIMIT OF THAT REGEX, recorded because it is silent and dated. Leftmost-first
-// alternation plus `\b` means a hyphenated word matches only its first half:
-// `twenty-one` scans as `twenty`, `twenty-five` as `{twenty, five}`. Harmless
-// while the surface is nineteen lanes — no scanned passage can legitimately hold
-// a number above twenty today — but the day the count passes twenty this scanner
-// reds on CORRECT prose, and the fix is to match the hyphenated forms first
-// rather than to widen `word()`.
+// D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
+// so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
+// the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
+// as two tokens. Sorting by descending length makes every hyphenated form try
+// before the bare word it starts with. `word()` is untouched, deliberately:
+// widening it would change what a count MEANS rather than how it is read.
+const SCAN_RE = new RegExp(
+  `\\b(${[...WORDS.slice(2)].sort((a, b) => b.length - a.length).join('|')})\\b`, 'gi');
 
 // A CONSTRAINT ON PROSE INSIDE THE SCANNED PASSAGES, stated because it is easy
 // to trip and the failure reads like a false alarm until you know: within a
@@ -200,6 +199,17 @@ const word = (n: number): string => {
  *  correct. */
 const numeralsIn = (text: string): string[] =>
   [...text.matchAll(SCAN_RE)].map((m) => m[0]!.toLowerCase());
+
+  // D-2168: leftmost-first alternation in ascending order made `twenty-one`
+  // scan as `twenty`, so a correct sentence about a 21-lane surface read as a
+  // sentence about a 20-lane one. Landed while the surface was still 18/19,
+  // where it is provably a no-op — this test is the whole evidence of the fix.
+  it('reads a hyphenated number word as one token', () => {
+    expect(numeralsIn('the twenty-one box-token machine lanes')).toEqual(['twenty-one']);
+    expect(numeralsIn('all twenty-two of them')).toEqual(['twenty-two']);
+    expect(numeralsIn('the nineteen lanes')).toEqual(['nineteen']);
+    expect(numeralsIn('twenty lanes, then twenty-five')).toEqual(['twenty', 'twenty-five']);
+  });
 
 /** Assert a passage's counts, in two steps with two different repairs (D-1233).
  *  WHICH numbers first, then in WHAT ORDER — a passage that has the right counts
