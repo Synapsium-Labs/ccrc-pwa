@@ -54,7 +54,7 @@ const ROSTER = {
     // Final wave round 3, M1: a CODEX-shaped lane that also carries
     // `exec.secretsFile` — every other codex-shaped lane (`gpt`) has none, so
     // no fixture reached `_models_run_probe`'s secrets-file branch (the `if`
-    // at ccd/ccrc:3893) with a CHATGPT_TOKEN_DIR to scrub. The secrets file
+    // at `_models_run_probe`'s secrets-file branch) with a CHATGPT_TOKEN_DIR to scrub. The secrets file
     // this lane sources sets only ANTHROPIC_AUTH_TOKEN, the normal case: no
     // fleet secrets file sets CHATGPT_TOKEN_DIR.
     { id: 'gpt2', label: 'gpt2', configDirSuffix: '.claude-gpt2',
@@ -891,7 +891,7 @@ describe('ccrc models <id> discovery', () => {
   // Round 3 re-review, M1: the test above only ever reaches the `else`
   // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt2`
   // carries `exec.secretsFile`, sourcing a file that sets ONLY
-  // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (ccd/ccrc:3893-3896)
+  // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (`_models_run_probe`'s `if [ -n "$secrets" ]` branch)
   // instead: the secrets file it sources never mentions CHATGPT_TOKEN_DIR, so
   // the only thing that can keep an ambient one out is that branch's own
   // `unset`. MEASURED: deleting that `unset` (leaving the `[ -r ]`-and-source

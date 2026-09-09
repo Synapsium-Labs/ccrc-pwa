@@ -29,8 +29,8 @@ const MODELENV_MJS_URL = pathToFileURL(
  *  tmp name), so the CLI does not hide the bug, it just surfaces it less
  *  often. Even through THIS harness the collision stays a race, not a sure
  *  thing: reverting a tmp name to a fixed path below and re-running the
- *  concurrency test it drives (15 rounds x 8 processes) failed only 2 of 12
- *  separate runs on this box, measured for round 3 of the re-review — most
+ *  concurrency test it drives (15 rounds x 8 processes) failed 2 of 12
+ *  runs in one measurement on the implementer's box (a reviewer saw 0 of 6 on a loaded box) — a race, not a guard, measured for round 3 of the re-review — most
  *  runs land green on the exact regression it exists to catch. That test
  *  stays below as a smoke test (real processes, real disk, genuinely
  *  concurrent writes), but the deterministic guard is the static source pin
