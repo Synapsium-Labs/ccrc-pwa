@@ -17656,3 +17656,229 @@ is measured for the first time (eleven references, where D-2223 F7 found none in
 D-2223 F9's swallowed defer is closed with the right reasoning — a defer on the probe is a **refusal**,
 because the probe is the last question about a lane and has nothing below it to fall through to, which
 is exactly the asymmetry with `auth status` that Task 29 was built on.
+
+### D-2266 — D-2222's class reopened at the row factory, five slots wide, with the asymmetry inside one function
+
+Task 30's review reproduced D-2222's defect at a new address, and the sharpest form of it is not the
+one three of the five reviewers reported. `deploy/account-op.mjs:649` is
+`const row = (verdict, detail) => ({ verdict, measuredAt: at, detail, source });` — unbounded — and
+launcher-controlled text reaches `detail` through **five** slots, not three: `:727`, `:729`, `:731`
+(which interpolates `status`, itself any JSON value because the `=== 401` and `=== null` arms fall
+through), and `:733`, the residual, which is the widest because it needs no `api_error` block at all —
+any non-zero exit carrying any JSON object reaches it.
+
+Measured by the orchestrator, not repeated from the report: a 200 000-character `result` yields a
+200 089-byte row, a 200 000-character `terminal_reason` yields 200 111, and passing either as one argv
+word answers **exit 126, `/usr/bin/node: Argument list too long`**. The verb then throws away a clean
+`auth-dead` row for a `no-answer` shrug — the launcher had already run, so the billed request is spent
+and its answer is discarded.
+
+**The statement that makes it undeniable is row-versus-row inside one function, not row-versus-note
+across files.** `_acct_note_cap` IS applied to `$ACCT_HEALTH` at `ccd/ccrc:6067`, the deferred-classifier
+refusal, and to every note at `:6178`. It is NOT applied at `:6176`, the success path's `--row`. Same
+variable, same function, two call sites, one capped and one not. And `_acct_probe`'s own banner at
+`:6090-6094` says today nothing unbounded is left, which is false in the commit that wrote it.
+
+### D-2267 — cap at the source, never at the argv boundary: a truncated row is unparseable
+
+The obvious fix — cap `--row` in bash beside the note cap — is **wrong, and strictly worse than the
+bug**. The row is JSON that the `health` op parses at `deploy/account-op.mjs:1782`
+(`JSON.parse(a['row'] ?? '')`); truncating it makes that parse fall to its `catch` and hand the op a
+null row, converting a loud E2BIG into a silent wrong answer. The cap belongs in the `row` factory at
+`:649`, where one edit closes all five slots and a future arm cannot miss it. This is the doctrine
+`shapeOf`'s own header already states at `:636-639` — closed at the source rather than only at the cap
+that bounds it downstream.
+
+### D-2268 — D-2220 reopened on the probe path, and the note reaches only the lanes that need it least
+
+Four box conditions become a verdict **about the lane**: 127 (no launcher), 126 (not executable), 137
+(killed), and 125 (the deadline shim refusing its own arguments). Each is reported as
+`the probe printed no JSON object (exit N)` with `notes: []` — a health verdict for a question nobody
+asked. Reproduced end-to-end on an openrouter lane for all three of 127/126/137.
+
+The correct sentence and its remedy already exist and already reach the **anthropic** path, through
+`_acct_auth_why` (`ccd/ccrc:5904-5917`): on an anthropic lane with the same missing launcher the answer
+carries *"auth status was never asked: there is no launcher … Run 'ccrc wrappers' …"*. The provider gate
+at `:6163` is what keeps it from the other lanes. So the defect is precisely scoped to the lanes with no
+sibling question to inherit the triage from.
+
+The remedy is the file's own stated convention (`:5892-5898`, *the triage is one function, not two*):
+give `_acct_auth_why` a third parameter naming the question and call it from `_acct_probe`, rather than
+writing a second triage.
+
+**Narrower than D-2220 in one respect, and the entry should say so:** here the exit code IS carried into
+the sentence, where in D-2220 `--exit` was read by nothing at all. What survives is still real —
+`unknown` is a verdict about a lane, returned for four conditions in which nothing about the lane was
+measured, with no remedy attached.
+
+### D-2269 — the one conjunct between a dead lane and a false `ok` is unmeasured
+
+`deploy/account-op.mjs:723` is `if (exit === 0 && j.is_error !== true) return row('ok', …)`. Deleting
+the second conjunct leaves **240/240 green** — measured on an isolated copy with the golden md5
+(`12d474b4fec3b08ad679d1150e775bf1`) restored and verified before every run, and a repo-wide grep
+confirming `ccrc-account.test.ts` is the whole behavioural surface.
+
+The fixture table at `server/test/ccrc-account.test.ts:6329-6334` pairs **every** failure body with rc 1,
+so no case ever presents a failure envelope at exit 0 — the one input the conjunct exists to judge.
+
+This is the wave's rule again, and this time with the input constructed rather than asserted: the review
+drove `probeFixture(home, PROBE_401, 0)` through the whole verb and measured the shipped file answering
+`auth-dead` and the mutant answering `ok`. **A green mutation is ambiguous on its own** — unpinned guard,
+unreachable code, or a mutation that never applied — and what disambiguates it here is not a control but
+a demonstration: the proposed assertion goes red on the mutant and green on the shipped file.
+
+### D-2270 — RULING: `=== false`, recorded as a deliberate deviation from §8:656
+
+`!== true` collapses three conditions into `ok`: the body said `false`, the body said nothing, and the
+body named `is_error` in a shape this build cannot read. A health verb must not read **silence as
+health** — that is this repo's overloaded-null rule at a seam whose two sides handle the cases
+differently. Ship `exit === 0 && j.is_error === false`; everything else falls to the existing residual at
+`:733`, which already names the shape it saw.
+
+§8:656 literally says `is_error !== true`, so this is a deviation from the spec sentence and is recorded
+as one — the same treatment D-2223 F5 gave `loggedIn` in this wave.
+
+### D-2271 — DEFERRED to an operator ruling: `type === 'result'` and the `external` lane class
+
+A reviewer proposed additionally requiring `j.type === 'result'`, on the argument that the `ok` arm
+carries no positive evidence the body is a Claude Code envelope at all. The rescoped hazard is real and
+is about a lane class §8 routes **straight to the probe while measuring none of its shapes**: an
+`external`-kind launcher, which does not speak that envelope, would have any JSON object at exit 0 read
+as `ok`.
+
+**Not taken in this wave.** Its cost is that every `external` lane reads `unknown` until it emits a
+Claude-shaped envelope — honest, but a behaviour change §8 did not rule on, and one that silently
+tightens a verdict for a whole provider class. It wants the operator, not a fix round.
+
+### D-2272 — `_plat_timeout`'s bash fallback orphans a `sleep` that holds the caller's pipe, in two files
+
+On a box with no coreutils, `_plat_timeout`'s fallback backgrounds a watcher subshell. Called inside
+`$( )` — which Task 30's probe is the tree's **first** such caller of — the orphaned `sleep` inherits the
+command-substitution pipe and holds it open, so the substitution blocks for the full deadline even after
+the child has answered. `ccd/ccrc:431` and its identical copy at `ccd/ccd:371`.
+
+**The existing no-coreutils test cannot reach it, and that is the interesting half.** `ccrc-doctor.test.ts`
+replaces PATH with `stub-bin`; `healthy()` links only stat/date/timeout, and `linkReal(home,'sleep')`
+appears once in the file, in an unrelated tmux test. So in that test `sleep` is *absent*, the `|| exit 0`
+fires, the watcher exits instantly and no orphan is ever created — the case passes in 3.66s and proves
+nothing about the arm. The sleep-**present** shape, which is the only shape a real BSD or macOS box has
+(`sleep` is base-system there and the GNU deadline binary is not), has zero coverage in the tree.
+
+Fix both copies — redirect the watcher subshell's own stdio, both streams, because
+`ccd/ccrc-doctor-checks:517` captures the call with fd 2 joined to the same pipe. Touching `ccd/ccd`
+makes this AGENT-FIRST.
+
+### D-2273 — `limitsTouched` is ASSERTED on one path and MEASURED on the other, and the wire cannot tell
+
+`_acct_auth_status` (`ccd/ccrc:5923`) runs the lane's own launcher with the lane's own config dir — the
+identical mechanism `_acct_probe` brackets at `:6034`/`:6043` — and nothing stamps around it. So the
+`false` reported at `:6176` is a **measurement** when the probe ran and an **assertion** when the
+auth-status arm answered, and both reach the operator as the same wire value. Bracket the cheap question
+the way the expensive one is; both helpers and the file-scope flag already exist.
+
+### D-2274 — `limitsTouched: true` misattributes any session's write inside the window
+
+The mirror of D-2273, on the same line, and the direction the finder did not report.
+`~/.cc-limits` is **shared, account-scoped state** — `statusline-command.sh:226-228`'s own banner says
+*"Limits are account-scoped, so any session's report is valid for the whole account; last writer wins"*.
+Any live session on the same account rendering its status line inside the probe's default 60-second
+window moves the stamp, and the flag reads that as the probe's own side effect. Reproduced with a
+launcher that answers correctly and writes nothing, plus an unrelated writer firing one second in.
+
+This cannot be fixed by measuring harder; on a box with ~20 live sessions it is the expected case, not
+the corner. The honest form is that `limitsTouched` means **the file changed during the probe**, never
+**the probe changed it** — and the prose and the wire must both say the weaker thing.
+
+### D-2275 — `_acct_probe_stands` contradicts a measurement its own function performed
+
+The refusal clause tells the operator the launcher's writes are confined to the lane's config directory
+while `ACCT_LIMITS_TOUCHED` — set before that clause is built, readable from it — may already say
+otherwise. It is one conditional inside `_acct_probe_stands` (`ccd/ccrc:6020-6022`); all three refusal
+sites inherit it with no caller change. Same family as D-2135: the situational clause must be true at the
+line that says it.
+
+### D-2276 — the stamp banner gives a false reason for its own blind spot
+
+`ccd/ccrc:5999-6001` explains that the second-granular blind spot is harmless because the statusline
+writes a fresh `ts` every time. That is not the mechanism: `ts` has the same whole-second resolution and
+**does not enter the stamp** (the stamp is mtime plus size). The bound is the write cadence alone — a
+rewrite is invisible only when it lands in the same whole second as the previous one *and* leaves the
+byte count unchanged. Delete the causal clause and state the real bound. Nit in severity, D-2163's class
+in kind: a comment that explains a guard with a mechanism the guard does not use.
+
+### D-2277 — the test-hole census for Task 30, four holes with measured neighbours
+
+Every one of these sits beside something well tested, which is the wave's standing pattern:
+`probe-cwd` (the guard that turns a box failure into a false verdict about a lane) has **zero** coverage;
+three of `_acct_deadline`'s five arguments are unmeasured at the probe call site, including the
+caller-specific sentence the five-argument shape exists to force; **two of the three `unreachable` regex
+alternatives are held by nothing** — `getaddrinfo` appears in no test, and deleting both the
+`getaddrinfo` and 5xx alternatives leaves 240/240 green — and the `api_error_status === null` conjunct
+has no negative control; and `_acct_limits_stamp`'s **size** half is unmeasured because no fixture has
+the limits file present before a probe.
+
+The `status === null` control earns its place specifically: it goes red the moment anyone "fixes" the
+arm by dropping that conjunct, which is the change a reader of the regex alone would make.
+
+### D-2278 — `ccd/ccrc:5879`'s `60` is a second prose copy of `:1082`'s default
+
+The default is `: "${CCRC_ACCOUNT_PROBE_TIMEOUT:=60}"` at `:1082`. The `60` in the refusal sentence at
+`:5879` is a hand-written second copy of that number with nothing keeping the two in agreement — the
+single-definition class, in prose, below the scanners' reach. Asserting the sentence in the knob table
+(D-2277) is what pins it.
+
+### D-2279 — Task 31's rename snippet would REVERSE the ruling it exists to honour
+
+The plan's `_acct_mark_off` snippet (plan:11038-11049) is written against a **one-argument** function and
+converts both call sites to match. The shipped `_acct_disable_new` (`ccd/ccrc:4744`) takes **two**:
+`local id="$1" stands="$2"`, bound eagerly so `set -u` reds a caller that forgot it *even on the success
+path*. That second parameter is **D-2135 in mechanism form** — the situational clause belongs to the
+caller, not baked into the helper.
+
+Task 31's entire *One marker writer, three callers* argument is that the refusal text is `add`-specific
+and must lose its roster clause. **That problem is already solved, by the ruling the snippet would
+reverse.** `disable` becomes the third caller by passing its own clause. The rename stays safe — Task 26's
+row survives it either way (D-2280) — but its stated justification is void, and the snippet must not be
+transcribed.
+
+### D-2280 — Task 31 contradicts itself about the plan document, and the Files section is the right half
+
+Its Files section says **NOT modified: the plan document**; its prose at plan:10784 says row 3 "names the
+function outright … and must be reworded … in THIS commit, not a follow-up." Measured at plan:8226: the
+row's title is written against the **call**, it names **both** spellings, and it states in-line that it
+was written that way *"so that Task 31 renames a function and touches nothing else."*
+
+The Files section is correct. Rewording that row would **break** it for an executor replaying Task 26 at
+Task 26's own commit, where the function is still `_acct_disable_new`. It is a dual-spelling row on
+purpose, and a later task editing it would destroy the property it was built to have.
+
+### D-2281 — two displaced citations in Task 31, and the two-tier filter that is the real warrant
+
+`ccd/ccd:3584-3591` is cited for the placer's filter but holds a **comment about a previous change** to
+it, which reads as though placement had gained a fourth condition; the loop is at `:3640-3657`. And
+`:3708-3714`, cited for `cmd_ws_add`'s refusal enumerating the triple, is argv parsing in another
+function.
+
+Reading the loop settles the task's central claim and **strengthens** it. The filter is two-tier:
+`_account_ok "$w" || continue` is **hard** — nothing past it can be returned — while `_account_measured`
+and `_limit_score` only *rank*, because `best="${firstm:-$first}"` falls back to the first `_account_ok`
+lane when nothing is measured or scorable. So the set a session can land on **is** exactly
+`_account_ok`'s triple: home-able, no marker, executable. `_acct_placeable` must ship that predicate and
+must **not** add a measurement condition, which would over-refuse. Right answer, wrong citation.
+
+### D-2282 — "is it tested" answered from grep hits, by the session enforcing the rule against it
+
+Writing D-2279 I first recorded that dropping the caller clause would go unnoticed. Wrong:
+`ccrc-account.test.ts:3500` calls the helper directly and asserts the detail **ends in** the caller's
+clause, so the break is loud. I had grepped `disable-marker`, read the three error-code assertions it
+returned, and inferred the detail was unheld — the clause assertion sits one line past where the grep
+anchored. **D-2145's exact failure, committed by the entry enforcing it.** Severity fell from silent
+regression to build break.
+
+The same discipline applied to the review itself, whose 0-refuted-of-19 invites suspicion. It resolves:
+three findings were RESCOPED — an unanchored-regex claim narrowed to a measurement claim once no
+wrong-verdict input could be constructed, an `ok`-arm claim narrowed to a spec gap about `external`
+lanes, and a `limitsTouched` claim widened to both exit paths — and the rest carry reproductions with
+command output, golden-md5 mutation runs, and an independent re-measurement of the full suite (254 files,
+6963 passed, 354s) that matches the commit's own claim. Adversarial verification that rescopes three
+claims in five is working, not rubber-stamping.
