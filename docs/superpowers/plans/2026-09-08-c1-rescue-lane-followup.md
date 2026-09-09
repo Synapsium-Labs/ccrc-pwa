@@ -171,8 +171,116 @@ the check that caught mutation 4 of Task 3 landing on the wrong function earlier
 
 - The two the review knocked down (`rm -f` at `:14850` reachable through `pps`; the ABSENT/EMPTY
   carry) are NOT chased, per its instruction, and its reasoning was read at the cited lines.
-- The `.project` fold (defined in the C1 plan as D-2000, widened there as D-2009 — referenced here,
-  defined nowhere but there) is now a wave-3 DEPLOY PREREQUISITE by the coordinator's re-ruling, to be
-  taken as its own small `ccd` PR.
+- The `.project` fold (D-2000, defined in the C1 plan; widened as D-2009, whose entry is in
+  `docs/superpowers/plans/2026-09-05-account-pools-wave3-server.md`, not in the C1 plan) is a wave-3
+  DEPLOY PREREQUISITE by the coordinator's re-ruling, to be taken as its own small `ccd` PR.
+  Spelled that way on the #69 review's advice so it needs no second correction: it names the wrong
+  home it is retracting, and it is true before and after wave 3 merges.
+- The verb-gate scanner counts `CCD_ARGV.projectPoolClear('')[0]` — a NAME READ that is never run —
+  as an ungated call site. That is wave-3 fallout, so the scanner fix travels with wave 3 and NOT with
+  this PR, which stays the smallest `ccd` change that closes the regression.
+  **CORRECTED (#69 review):** this said the site's file `server/src/pools.ts` "does not exist on
+  `main`". It does — wave 2a landed it carrying `POOLS_DIR_NAME`, and `git show
+  origin/main:server/src/pools.ts` prints it. What is not on `main` is the `PROJECT_POOL_VERB` line
+  INSIDE it, which is the thing the scanner trips on. A file and a line in it are two claims.
 - The `it.skipIf` suite still degrades silently under root. Taken as a mechanism in its own change,
   not folded here: it touches every skipped case in the file and this one must stay small.
+
+---
+
+## Round 2 — the #69 review (2026-09-09)
+
+Five lenses on this PR, every finding then handed to a separate refute pass: **38 passes, 29
+CONFIRMED, 9 PARTLY, zero refuted.** I re-verified all twelve independently before changing anything —
+twelve reproduce-or-refute agents, each followed by a skeptic told to kill it and told specifically to
+look for a proposed fix that would itself introduce a defect. **One finding died in that pass, and two
+had their remedies corrected.** Deviations D-2155–D-2162.
+
+- **D-2155 (2026-09-09)** — **the fold I removed for the crossing record was still there three lines
+  below, on the condition that is actually live.** `_swap_target` answered rc 2 for an unreadable
+  crossing marker and `return 0` for an unreadable POOL TAG, and the caller turned that empty answer
+  into `cc swap STRANDED: <id> is blocked on <w> and no account in pool (untagged) can take it` with
+  an in-pool account sitting free. **Both halves of that sentence are false**: the project IS tagged
+  (`(untagged)` is `_strand_mark`'s `pdesc` default folding `unreadable` into untagged), and nobody
+  found any account unable to take it, because nobody decided. It is the exact sentence the `strc == 2`
+  arm was written to forbid for the sibling condition, and the PR's own R2 case asserts
+  `.not.toContain('no account in pool')` for it.
+  **The asymmetry that made it first:** the crossing record is inert on the box, and the pool tag is
+  live — `ccd project-pool` writes it today and wave 3's Task 9 puts it a tap away. I fixed the
+  dormant fold and left the live one.
+  **TWO CORRECTIONS TO THE FINDING, from my own reproduction, and the first one matters more than the
+  fix.** (1) The remedy is the SENTENCE, not the rescue. The finding's headline — "the rescue is
+  skipped even when a healthy in-pool candidate exists" — is true but reads as if restoring the rescue
+  were the answer. It is not: standing still on an undecidable tag is the ruled-correct safe side, and
+  "fixing" the candidate loop to treat rc 2 as a pass is the constraint-lifting defect this tree
+  names. The fix still strands; it strands honestly. (2) It is PRE-EXISTING —
+  `origin/main:ccd/ccd` has the same `return 0`. What this PR added is the contract line declaring
+  rc 0/2 and the caller's rc-2 arm, which is what turns an old rough edge into a contradiction of the
+  function's own stated contract. In scope by argument, not by regression.
+- **D-2156 (2026-09-09)** — **the strand this PR added could be set by the tick and never cleared by
+  it.** `_tick_strand_undecidable` marks `.stranded` and the caller `return 0`s at the `wrapper` guard,
+  ABOVE the tick's only automatic healthy-pane clear. Measured over five recovered ticks: marker
+  byte-identical, zero `unstranded` lines. **And it is worse than the report said**: with a stale
+  marker standing, `_strand_mark`'s own `[[ ! -e … ]]` debounce swallows every LATER genuine strand on
+  that row — the commit whose thesis is that standing still must be SAID had made a class of
+  standing-still permanently unsayable. The fix is one line at the second exit, gated on the SAME
+  classifier the first exit uses; the line above it stays a bare return, because clearing on an
+  unmeasurable pane is the fabricated clear C1 exists to prevent. Both halves pinned separately.
+- **D-2157 (2026-09-09)** — **I closed the supervisor hang for `_reg_read` and opened it again through
+  `_reg_get` in the same commit.** `_tick_strand_undecidable` reads `.project` through the
+  un-type-checked `cat`, and the tick reaches `_reg_get` for `lastswap` and `swapblocked` too — so
+  D-2030 closed two of five blocking reads and the comment read as though the class was shut.
+  Fixed at `_reg_get` itself. **That is NOT the widening its own comment warns about**, and the
+  distinction is the whole argument: the warning is about a THREE-ANSWER read, which would force 135
+  callers to handle rc 2. A type check adds no distinction and narrows none — every input that answers
+  today answers byte-identically — and the only inputs whose behaviour changes are the ones that today
+  return no answer at all, none of which any ccd writer can produce.
+- **D-2158 (2026-09-09)** — **`SessionRecord.stranded` does not exist on the tree this PR merges into.**
+  Four of five lenses found it independently. Two comments justified the whole new lane with "the
+  server reads it onto the phone (`SessionRecord.stranded`, wave 3)" — true only on `ws/clear-meadow`,
+  my own unmerged branch. The PR REJECTS `swap.log` for having no reader and ADOPTS `.stranded` for
+  having one, and on `main` they are in the same position. Corrected to say what is true on both sides:
+  `notify.sh` fires today, the server reader lands with wave 3.
+- **D-2159 (2026-09-09)** — **two guards on real conditions shipped unpinned, in the wave about unpinned
+  guards.** Deleting `[[ -n "$hard_blocked" ]]` from the `strc == 2` arm strands a healthy idle session
+  with all 1662 ccd cases green; mutating the `ctrc=2` initialiser to 1 destroys the once-per-episode
+  debounce (five swap.log lines over five ticks) with the full sweep green. Both now have a case, and
+  the `ctrc` one needed a TICK-level case because the helper-level R4 case calls
+  `_tick_undecidable`/`_tick_decided` by hand and so pins the stamp but not who calls which.
+- **D-2160 (2026-09-09)** — **four conditionals were no-ops, and they needed four different answers,
+  not one.** The `hrc` wrapper around the second `_crosspool_valid` call is DELETED — it claimed to
+  prevent a fold and prevented nothing (`cross_home` is read only inside the home-recovered arm, which
+  carries its own gate), while suppressing an rc 2 arising between the two reads, which is a moment
+  worth reporting. The `hrc` half of the `cur == home` test is KEPT with a sentence saying it decides
+  nothing on its own and naming the gate that does. `[[ -n "$pane" ]] || return 0` is KEPT BARE and is
+  now load-bearing under D-2156. A no-op is fine; a no-op presented as a guard is the defect.
+- **D-2161 (2026-09-09)** — **journal noise went UP in the exact condition R4 protects.** The
+  `{ …; } 2>/dev/null` fix reached `_tick_undecidable` and not `_strand_mark`, whose two `_reg_set`
+  writes and own swap.log append are unwrapped — and the new path routes through both. Measured with
+  `$REG` at mode 000: 5 unsilenced lines per row per tick against `origin/main`'s 3. Fixed at the one
+  caller that runs every five seconds; `cmd_swap`'s `_strand_mark` stays loud, because an operator
+  running a verb by hand should see a failed registry write.
+- **D-2162 (2026-09-09)** — **one finding killed by reproducing it, and this is the entry that earns
+  the round.** The report said `_tick_strand_undecidable`'s unconditional `tmux capture-pane` sits
+  above both cooldown gates and adds an un-debounced fork every five seconds. Every mechanical claim is
+  TRUE and the severity claim is FALSE, because both the reviewer and my first verifier measured
+  `_auto_swap_check` in isolation while the supervise loop drives four things per tick:
+  `_auto_compact_check` ALREADY captures the pane unconditionally on exactly such a row, since its
+  `lastcompact`/`lastswap` gates read empty precisely because that row's registry is the unreadable
+  thing. So the lane does not add a capture to a row that had none — it doubles one already there,
+  10 → 20 per ten ticks, not 0 → 10. **And both proposed remedies measured as defects**: gating on
+  `.tickstuck` shuts the gate from tick 2 and reproduces `main`'s silence exactly for the
+  undecidable-then-blocked case the function exists to catch; hoisting the call below the cooldown
+  gates is unreachable from the branch it serves. NO FIX. Recorded because a finding that survives 38
+  refute passes and dies on the 39th is the argument for the 39th.
+
+### Corrections carried in the same round, without their own numbers
+
+The `_reg_get` census said 134 and its own command now yields **135** — the 135th is the call C1's
+`_tick_strand_undecidable` added, in the paragraph rewritten to correct a count. `svcfailed` is a 34th
+registry field and joins the inventory. The `_pool_ok` header moves 18/11 → 19/11 (prose only; the
+call-site half has never moved). The navigation note saying "do not go looking for a literal `-eq 2`
+branch inside `_auto_swap_check`; there is none" was falsified by C1 in the commit that left it
+standing, and by this round again. `_swap_target`'s contract line declared two exit codes for a
+function that returns three. And this plan's own claim that `server/src/pools.ts` "does not exist on
+`main`" is false — the FILE is on main; the LINE the scanner trips on is not.

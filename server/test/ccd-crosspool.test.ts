@@ -1355,3 +1355,218 @@ describe('the SECOND crossing read in `_swap_target` is guarded too', () => {
       .toBe('rc=2');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The #69 review's round. Five lenses on the C1 follow-up, every finding then
+// handed to a separate refute pass; twelve reproduced here before anything was
+// changed, and one — the per-tick `tmux capture-pane` cost — killed by that
+// reproduction (`_auto_compact_check` already captures unconditionally on the
+// same row, so the lane doubles a cost it does not introduce; and both proposed
+// remedies measured as defects). Every case below is one that went RED against
+// PR #69 exactly as shipped.
+const NOPANE = `
+  tmux() { case "\${1:-}" in
+             capture-pane) : ;;
+             list-panes)   echo ${PANE_PID} ;;
+           esac; return 0; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
+`;
+
+describe('S1 — the pool tag gets the third answer too, and the strand says which', () => {
+  const undecidableTag = (): void => {
+    // A DIRECTORY at the tag path: `cat` refuses with EISDIR at every uid, so
+    // no `skipIf`, and `_project_pool_state` answers `unreadable`.
+    const p = reg(`pools/demo`);
+    fs.rmSync(p, { force: true });
+    fs.mkdirSync(p, { recursive: true });
+  };
+
+  it('CONTROL — a readable tag rescues onto the in-pool account', () => {
+    // The control is what proves the fixture is CAPABLE of a rescue, so a red
+    // below is the fold and not the setup. Without it the two cases that follow
+    // would pass over a fixture that could never have dispatched anything.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    writeLimits('claude', 99, 99);
+    writeLimits('claude-a', 1, 1);
+    tick(BLOCKED);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude-a`);
+    expect(noticeLines(), 'and nothing is announced').toHaveLength(0);
+  });
+
+  it('an UNREADABLE tag stands still — and never claims nobody could take it', () => {
+    // THE FABRICATED SENTENCE. Before this round the caller wrote
+    //   "…is blocked on claude and no account in pool (untagged) can take it"
+    // with `claude-a` sitting free at 1/1. BOTH halves are false: the project
+    // IS tagged `pool-a` — `(untagged)` is `_strand_mark`'s `pdesc` default
+    // folding `unreadable` into untagged — and nobody found any account unable
+    // to take it, because nobody decided.
+    //
+    // STANDING STILL IS STILL RIGHT. This case does NOT assert a rescue: on an
+    // undecidable tag, refusing to place is the ruled-correct safe side, and
+    // "fixing" the candidate loop to treat rc 2 as a pass would silently lift
+    // the constraint. Only the sentence changes.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    writeLimits('claude', 99, 99);
+    writeLimits('claude-a', 1, 1);
+    undecidableTag();
+    tick(BLOCKED);
+    const notice = noticeLines().join('\n');
+    expect(notice, 'it must not claim a census it never took').not.toContain('no account in pool');
+    expect(notice, 'and it must not call a tagged project untagged').not.toContain('(untagged)');
+    expect(notice, 'it names the condition and the file').toContain('pool tag could not be read');
+    expect(swapLog(), 'and the stand-still is said on the box too')
+      .toContain(`tick-undecidable ${ID}: pool`);
+    expect(h.calls().join('\n'), 'nothing is placed on an unread constraint').not.toContain('dispatch');
+  });
+
+  it('a MALFORMED tag is the same answer — and needs no directory trick', () => {
+    // An ORDINARY file whose bytes are not a legal token: reachable by a 2am
+    // `echo` and by no privilege at all, which is why it is worth its own case
+    // beside the EISDIR one.
+    seedRow(); tagPool('demo', 'Pool Orate'); plantNotify();
+    writeLimits('claude', 99, 99);
+    writeLimits('claude-a', 1, 1);
+    tick(BLOCKED);
+    expect(noticeLines().join('\n')).not.toContain('no account in pool');
+    expect(noticeLines().join('\n')).toContain('pool tag could not be read');
+  });
+});
+
+describe('S2 — the marker follows the truth, from BOTH of the tick’s exits', () => {
+  const unreadable = (field: string): string => {
+    const p = reg(`${ID}.${field}`);
+    fs.rmSync(p, { force: true });
+    fs.mkdirSync(p);
+    return p;
+  };
+
+  it('a strand set on the wrapper path CLEARS when the pane recovers', () => {
+    // The coordinator proved this one before the review returned. The caller
+    // returns at the `wrapper` guard ABOVE the tick's only automatic
+    // healthy-pane clear, so the marker could be set from that path and never
+    // retracted by it — a durable positive claim that only a human verb could
+    // take back.
+    seedRow(); plantNotify();
+    writeLimits('claude', 99, 99);
+    unreadable('wrapper');
+    tick(BLOCKED);
+    expect(String(h.reg(ID, 'stranded')), 'precondition: it stranded')
+      .toMatch(/^\d{10} wrapper could not be measured/);
+    tick(QUIET, 5);
+    expect(h.reg(ID, 'stranded'), 'a recovered pane must not still claim STRANDED').toBeNull();
+    expect(logLines('unstranded'), 'and it is said ONCE, not once per tick').toHaveLength(1);
+  });
+
+  it('an UNMEASURABLE pane clears nothing — the clear must not move one line up', () => {
+    // The other half, and the reason the clear sits on the classifier rather
+    // than on the capture. An empty capture is a pane nobody could read;
+    // clearing there would be the fabricated clear C1 exists to prevent.
+    seedRow(); plantNotify();
+    writeLimits('claude', 99, 99);
+    unreadable('wrapper');
+    tick(BLOCKED);
+    const first = String(h.reg(ID, 'stranded'));
+    tick(NOPANE, 3);
+    expect(String(h.reg(ID, 'stranded')), 'an unread pane retracts nothing').toBe(first);
+  });
+
+  it('and a LATER genuine strand is sayable again — the debounce no longer swallows it', () => {
+    // THE CONSEQUENCE AN OPERATOR FEELS, and the half the original finding
+    // understated. With a stale marker standing, `_strand_mark`'s
+    // `[[ ! -e … ]]` debounce swallowed every later real strand on that row:
+    // the commit whose thesis is that standing still must be SAID had made a
+    // class of standing-still permanently unsayable.
+    seedRow(); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    unreadable('wrapper');
+    tick(BLOCKED);
+    tick(QUIET);
+    fs.rmSync(reg(`${ID}.wrapper`), { recursive: true, force: true });
+    h.sh(`_reg_set ${ID} wrapper claude`);
+    tick(BLOCKED);
+    expect(logLines('stranded'), 'two episodes, two lines').toHaveLength(2);
+    expect(String(h.reg(ID, 'stranded')), 'and the marker names the CURRENT cause')
+      .not.toContain('wrapper could not be measured');
+  });
+});
+
+describe('S5 — the guards the last round shipped unpinned', () => {
+  it('…but NOT when the pane is merely quiet — an unread CROSSING is not a strand', () => {
+    // R2's arm shipped with `[[ -n "$hard_blocked" ]]` and nothing measuring
+    // it: delete that guard and a healthy idle session is stranded, with the
+    // whole 1662-case ccd sweep green. rc 2 says "nobody can say" about a
+    // DESTINATION; it says nothing at all about the session. This is R1's own
+    // quiet-pane discipline, applied to the sibling condition.
+    seedRow('claude-b'); tagPool('demo', 'pool-a'); plantNotify();
+    crossed('pool-a', 'claude-b');
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude', 1, 1);
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);
+    tick(QUIET);
+    expect(h.reg(ID, 'stranded'), 'a quiet pane is not stranded').toBeNull();
+    expect(noticeLines(), 'and nothing is announced').toHaveLength(0);
+  });
+
+  it('the debounce holds THROUGH THE TICK: an unmeasurable `.home` says it once', () => {
+    // WHAT THE HELPER-LEVEL CASE CANNOT SEE. The R4 case above calls
+    // `_tick_undecidable`/`_tick_decided` by hand, so it pins the stamp and
+    // nothing about WHO calls which. The row's verdict is decided in
+    // `_auto_swap_check`: `ctrc` is INITIALISED to 2 — `_crosspool_tick`'s own
+    // "nobody can say" — because on an unmeasurable `.home` the crossing tick
+    // is SKIPPED and no answer was produced. Initialise it to 1 instead and the
+    // row claims a MEASURED "no crossing stands": the verdict line takes its
+    // `else`, `_tick_decided` deletes the stamp the `home` arm wrote three
+    // lines earlier, and the next tick re-writes and re-logs — 720 lines an
+    // hour per stuck row, the exact storm D-1995 exists to prevent.
+    seedRow(); tagPool('demo', 'pool-a');
+    const p = reg(`${ID}.home`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    tick(QUIET, 5);
+    expect(logLines('tick-undecidable'), 'once per episode, not once per tick').toHaveLength(1);
+    expect(String(h.reg(ID, 'tickstuck')), 'and the stamp names the field').toContain('home');
+  });
+});
+
+describe('S3 — the type check reaches `_reg_get` too, not just its measured sibling', () => {
+  it('every non-regular field type answers instead of blocking, through BOTH readers', () => {
+    // C1 closed the hang for `_reg_read` and then added a new unguarded read to
+    // the supervise loop through `_reg_get` — so the class was half closed, and
+    // the half left open is the one with 135 call sites. `timeout` in a child
+    // shell is the assertion: a test for a hang must not be able to hang.
+    seedRow();
+    const cases: Array<[string, () => void]> = [
+      ['fifo', () => execFileSync('mkfifo', [reg(`${ID}.project`)])],
+      ['devzero-symlink', () => fs.symlinkSync('/dev/zero', reg(`${ID}.project`))],
+      ['directory', () => fs.mkdirSync(reg(`${ID}.project`))],
+    ];
+    for (const [name, make] of cases) {
+      fs.rmSync(reg(`${ID}.project`), { force: true, recursive: true });
+      make();
+      const out = h.sh(
+        `timeout 5 bash -c 'source "${CCD}"; _reg_get ${ID} project'; echo "rc=$?"`);
+      expect(out, `${name}: answered, and rc 124 would mean it hung`).toBe('rc=1');
+    }
+    fs.rmSync(reg(`${ID}.project`), { force: true, recursive: true });
+  });
+
+  it('and every input that answered before still answers the SAME', () => {
+    // The widening adds no distinction and narrows none — that is what makes it
+    // safe across 135 call sites, and it is the half worth pinning, because it
+    // is the half a future reader will doubt.
+    seedRow();
+    const f = reg(`${ID}.project`);
+    fs.writeFileSync(f, 'demo');
+    expect(h.sh(`_reg_get ${ID} project`), 'a regular file reads').toBe('demo');
+    fs.rmSync(f);
+    expect(h.sh(`_reg_get ${ID} project; echo "rc=$?"`), 'absent is empty, rc 1').toBe('rc=1');
+    fs.symlinkSync('/nonexistent/nowhere', f);
+    expect(h.sh(`_reg_get ${ID} project; echo "rc=$?"`), 'a dangling symlink is empty').toBe('rc=1');
+    fs.rmSync(f);
+    fs.symlinkSync('/dev/null', f);
+    expect(h.sh(`_reg_get ${ID} project; echo "rc=$?"`),
+      '/dev/null is a character device — refused on TYPE, as it was refused on content before')
+      .toBe('rc=1');
+    fs.rmSync(f);
+  });
+});

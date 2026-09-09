@@ -516,17 +516,26 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e dir',
   '_check_pools: -e f',
 ];
-// `cmd_ws_add`, `cmd_project_pool`, `cmd_start`, `_strand_why`, `cmd_swap` and
-// `cmd_prefer` are pools-relevant and contribute NO hits — the first never
-// tests a pools path, the second decides from `_project_pool_state` instead,
-// and the other four (all wave 2b) only interpolate `$POOLS_DIR` into an
-// undecidable-tag die message, with no `-e` test of their own to pair. Naming
-// them here is the difference between "the scan found two things" and "the
-// scan read these seven functions and six of them hold no existence test at
-// all".
+// `cmd_ws_add`, `cmd_project_pool`, `_auto_swap_check`, `cmd_start`,
+// `_strand_why`, `cmd_swap` and `cmd_prefer` are pools-relevant and contribute
+// NO hits — the first never tests a pools path, the second decides from
+// `_project_pool_state` instead, and the other five only interpolate
+// `$POOLS_DIR` into an undecidable-tag MESSAGE, with no `-e` test of their own
+// to pair. Naming them here is the difference between "the scan found two
+// things" and "the scan read these eight functions and seven of them hold no
+// existence test at all".
+//
+// `_auto_swap_check` JOINED THE LIST 2026-09-09 (#69 review, D-2155), and the
+// way it joined is the point of this pin. It gained `$POOLS_DIR/$project` in
+// the strand cause the tick now writes when the pool tag cannot be read — the
+// same shape wave 2b's four have, one lane over. The scan noticed on its own
+// and this assertion went red; nothing about the change needed the pairing
+// rule, and the `CCD_SITES` half above stayed byte-identical, which is the
+// measurement that says so. A function that gains a pools path and an
+// EXISTENCE TEST would move both lists, and only one of them moved.
 const CCD_BLOCKS: string[] = [
-  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', 'cmd_start', '_strand_why', 'cmd_swap',
-  'cmd_prefer',
+  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_auto_swap_check', 'cmd_start',
+  '_strand_why', 'cmd_swap', 'cmd_prefer',
 ];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`
 // is now blocked out too (the hyphen fix) but is not pools-relevant, so it
