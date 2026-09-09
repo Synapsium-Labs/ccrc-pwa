@@ -27,11 +27,11 @@ import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
-  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
+  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
-  type PeerSummary, type RunState, type RunSummary,
+  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
+  type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
 /**
@@ -2573,5 +2573,96 @@ export function registerCoordRoutes(
       watcher.releaseHeldAsk(ask.childId);
     }
     return { ok: true };
+  });
+
+  /**
+   * `GET /api/asks?parent=<id>&state=<AskState>` — Task 11, the READ side of
+   * the ask pre-emption lane. Two callers, two credentials: a fleet PARENT
+   * reading its own children's open asks (so it can see whether two children
+   * are asking contradictory things, before either grace window lapses), and
+   * the PWA reading the same record for the operator's chip (Task 19).
+   *
+   * D-149'S SHAPE, COPIED VERBATIM FROM `GET /api/claims` (five shipped GETs
+   * already do this; do not invent a third shape): a live session cookie OR
+   * the box token, never neither, and AUTHENTICATE BEFORE ANSWERING ANYTHING
+   * INCLUDING THE 501 below — `GET /api/runs`'s own docstring is the reason
+   * this order matters at all: a bare `501` would tell an anonymous tailnet
+   * caller whether this box runs coordination, which no other route leaks.
+   *
+   * CROSS-PARENT SCOPING — the crux of this task, and the one respect in
+   * which this route is NOT a copy of `GET /api/claims`. That route's data
+   * (project paths) is fleet-wide and meant to be read across sessions; an
+   * ask's `question` is not — CLAUDE.md's own framing is "whether two
+   * children are asking contradictory things", which presumes the reader is
+   * one specific parent, not every session on the box. The box token proves
+   * only "a process on this box" — ONE SHARED SECRET, identical for every
+   * session on the fleet host — so a bare token would let ANY session read
+   * ANY OTHER parent's open asks by changing `?parent=`. The PWA/cookie
+   * caller IS the operator and reads across parents by design (unchanged);
+   * a box-token caller may not, so it must additionally ATTRIBUTE itself as
+   * the very parent it names — `?fromUuid=` standing in for the mutation
+   * routes' body field of the same name, checked against `?parent=` through
+   * the SAME registry gate `POST /api/claims` and both ask-mutation routes
+   * already run (`requireAttribution`; no separate `fromId` — the `parent`
+   * being asked about IS the identity under proof). A missing or mismatched
+   * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
+   *
+   * This scoping sits ONLY inside the box-token branch of the `authEnabled`
+   * block, deliberately: on a DARK box (`CCRC_AUTH` off, the shipped
+   * default) this route stays unauthenticated end to end, byte-identical to
+   * every other dual-credential GET's DARK behaviour
+   * (`peers-route.test.ts`'s own DARK case) — a box with no session gate has
+   * no notion of "a box-token caller" distinct from "anyone touching this
+   * box" left to scope (CLAUDE.md: "Identity on the fleet is attribution,
+   * not authentication: single UNIX user, ccd has no caller auth").
+   */
+  app.get('/api/asks', async (req, reply) => {
+    let viaBoxToken = false;
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/asks takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); a fleet parent reads its own children's asks cookieless`,
+          });
+        }
+        viaBoxToken = true;
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const q = req.query as { parent?: unknown; state?: unknown; fromUuid?: unknown };
+    if (typeof q.parent !== 'string' || q.parent.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: '?parent= is required' });
+    }
+    const parent = q.parent.trim();
+    let state: AskState | undefined;
+    if (q.state !== undefined) {
+      if (!isAskState(q.state)) {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: '?state=, when given, must be a valid AskState' });
+      }
+      state = q.state;
+    }
+
+    if (viaBoxToken) {
+      // The box token alone cannot prove WHICH parent is asking — only that
+      // some process on this box did. `fromUuid` is the registry proof, the
+      // same shape `/answer` and `/release` already require of their
+      // callers, checked against `parent` rather than a separate `fromId`.
+      if (typeof q.fromUuid !== 'string') {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: 'a box-token caller must also prove its identity — pass ?fromUuid=' });
+      }
+      if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
+    }
+
+    return reply.code(200).send({ ok: true, asks: coord.asksForParent(parent, state) });
   });
 }

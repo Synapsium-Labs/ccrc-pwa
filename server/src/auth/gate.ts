@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 70 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 71 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,9 +72,9 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The twenty box-token machine lanes plus `/api/notify` — the fleet
+ *  2. The twenty-one box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-one
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-two
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
@@ -82,7 +82,7 @@ import type { SessionStore } from './sessions.js';
  *     as well as in number). Most of the coordination lanes refuse every
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
  *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/lifecycle`, `/api/peers`,
- *     `/api/claims`) do NOT: they take a live session cookie OR the token
+ *     `/api/claims`, `/api/asks`) do NOT: they take a live session cookie OR the token
  *     (D-149), which is why the coordinator can read its own wave ledger
  *     cookieless from the fleet host. And `/api/notify` still passes `'legacy'` (no token
  *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
@@ -239,6 +239,17 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern): the coordinator asks it cookieless before " +
     "splitting work (clause 10), and the PWA's HotFilesStrip reads it with a cookie. The " +
     'handler requires a live session OR a valid box token (coord/routes.ts)'],
+  ['GET /api/asks',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, Task 11 — the ask pre-emption lane's READ side): " +
+    "a fleet PARENT reads its own children's open asks cookieless, to see whether two are asking " +
+    "contradictory things before either grace window lapses; the PWA reads the same record with a " +
+    'cookie for the operator\'s chip (Task 19). Unlike the other four, a bare box token is NOT ' +
+    'enough here on its own: that token is one shared secret, identical for every session on the ' +
+    "box, so the handler additionally requires a box-token caller to ATTRIBUTE itself as the " +
+    "parent it names (`?fromUuid=` against `?parent=`, the same registry check `POST /api/claims` " +
+    "and both ask-mutation routes already run) — a cookie caller (the operator) reads across " +
+    'parents with no such check. The handler requires a live session OR a valid box token ' +
+    '(coord/routes.ts)'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
@@ -684,8 +695,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty box-token machine
- * lanes plus `/api/notify` — twenty-one in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-one box-token machine
+ * lanes plus `/api/notify` — twenty-two in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

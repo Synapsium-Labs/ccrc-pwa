@@ -29,9 +29,17 @@ import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { PushPayload } from '../src/push.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 
 const TOKEN = 'f'.repeat(64);
 const TOK = { 'x-ccrc-mail-token': TOKEN };
+
+// `GET /api/asks`'s own describe block (Task 11) arms `CCRC_AUTH` for real to
+// exercise the session-cookie half of D-149's either-credential shape — the
+// same fixture `peers-route.test.ts`'s ARMED case uses, at the same cheap
+// cost factor so the suite is not paying scrypt's real ~100ms per login.
+const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+const PASSPHRASE = 'correct horse battery staple';
 
 const CHILD = 'demo-quiet-mesa';
 const PARENT = 'demo-coordinator';
@@ -428,5 +436,174 @@ describe('POST /api/asks/:id/release', () => {
     expect(msg).toContain(String(id));
     expect(msg).toContain(CHILD);
     warn.mockRestore();
+  });
+});
+
+/**
+ * `GET /api/asks?parent=<id>&state=<AskState>` (Task 11) — the READ side of
+ * the lane, serving two callers with two different credentials: a fleet
+ * PARENT reading its own children's open asks cookieless, and the PWA's chip
+ * (Task 19) reading the same record with a cookie.
+ */
+describe('GET /api/asks', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const getAsks = (qs: string, headers: Record<string, string> = TOK) =>
+    app!.inject({ method: 'GET', url: `/api/asks${qs}`, headers });
+
+  /** `CCRC_AUTH` ARMED for real, the `peers-route.test.ts` ARMED fixture:
+   *  writes a real (cheap-cost) passphrase file so the session half of
+   *  D-149's either-credential shape has something to authenticate against. */
+  const openArmedApp = async (home: string) => {
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const base = testDeps(home, tmuxRunner([]).run);
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+    const built = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true },
+      mailToken: TOKEN, coord });
+    return { app: built, coord };
+  };
+
+  /** A live session cookie, minted through the real login route — the same
+   *  helper `auth-gate.test.ts`'s own `login` is. */
+  const login = async (a: FastifyInstance): Promise<string> => {
+    const res = await a.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE } });
+    expect(res.statusCode, res.body).toBe(204);
+    const set = res.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    return line.slice(0, line.indexOf(';'));
+  };
+
+  const seedOneHeldAsk = (coord: CoordStore, now: number): number =>
+    coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+
+  it('answers a fleet parent with the box token PLUS its own attribution, and the PWA with a cookie; neither 401s', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    seedOneHeldAsk(coord, Date.now());
+
+    // The box token alone proves only "a process on this box" — never WHICH
+    // parent — so the fleet caller also names itself via `?fromUuid=`,
+    // checked against `?parent=` through the same registry gate `/answer`
+    // and `/release` already run.
+    const boxToken = await getAsks(`?parent=${PARENT}&fromUuid=${PARENT_UUID}`, TOK);
+    expect(boxToken.statusCode).toBe(200);
+    expect((boxToken.json() as { ok: boolean; asks: unknown[] }).asks).toHaveLength(1);
+
+    const cookie = await login(app);
+    const cookied = await getAsks(`?parent=${PARENT}`, { cookie });
+    expect(cookied.statusCode).toBe(200);
+    expect((cookied.json() as { ok: boolean; asks: unknown[] }).asks).toHaveLength(1);
+
+    const neither = await getAsks(`?parent=${PARENT}`, {});
+    expect(neither.statusCode).toBe(401);
+    expect(neither.json()).toMatchObject({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+  });
+
+  it('a box-token caller with no ?fromUuid= is refused, not answered for every parent', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    seedOneHeldAsk(coord, Date.now());
+
+    const res = await getAsks(`?parent=${PARENT}`, TOK);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it("a box-token caller cannot name a parent it is not — OTHER's own live uuid does not attribute it as PARENT", async () => {
+    // THE SCOPING GUARD (this task's own critical constraint): the box token
+    // is ONE SHARED SECRET, identical for every session on the fleet host, so
+    // without this check ANY session holding it could read ANY parent's asks
+    // by changing `?parent=`. OTHER is a real, live, registered session — its
+    // OWN uuid is genuinely valid — but it is not PARENT's uuid, so
+    // `requireAttribution` must refuse it exactly as it would a forged one.
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    seed(home, OTHER, OTHER_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    seedOneHeldAsk(coord, Date.now());
+
+    const res = await getAsks(`?parent=${PARENT}&fromUuid=${OTHER_UUID}`, TOK);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-uuid' });
+  });
+
+  it('the PWA cookie caller reads across parents — no attribution required', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    seed(home, OTHER, OTHER_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    seedOneHeldAsk(coord, Date.now());
+
+    const cookie = await login(app);
+    // The operator asks about a parent that is not its own session at all —
+    // there is no "its own session" for a browser — and still gets the read.
+    const res = await getAsks(`?parent=${PARENT}`, { cookie });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { asks: unknown[] }).asks).toHaveLength(1);
+  });
+
+  it('?parent= is required regardless of credential', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, PARENT, PARENT_UUID);
+    const { app: built } = await openArmedApp(home);
+    app = built;
+    const cookie = await login(app);
+    const res = await getAsks('', { cookie });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('?state=, when given, filters — and an out-of-vocabulary value 400s rather than being silently ignored', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const { app: built, coord } = await openArmedApp(home);
+    app = built;
+    const id = seedOneHeldAsk(coord, Date.now());
+    coord.releaseAsk(id, Date.now());
+
+    const cookie = await login(app);
+    const held = await getAsks(`?parent=${PARENT}&state=held`, { cookie });
+    expect(held.statusCode).toBe(200);
+    expect((held.json() as { asks: unknown[] }).asks).toEqual([]);
+
+    const released = await getAsks(`?parent=${PARENT}&state=released`, { cookie });
+    expect(released.statusCode).toBe(200);
+    expect((released.json() as { asks: { id: number }[] }).asks.map((a) => a.id)).toEqual([id]);
+
+    const bad = await getAsks(`?parent=${PARENT}&state=not-a-real-state`, { cookie });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('DARK: a box with CCRC_AUTH off answers with no credential of any kind, byte-identical to every ' +
+     'other dual-credential GET', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const w = await openApp(home, tmuxRunner([]).run);
+    app = w.app;
+    seedOneHeldAsk(w.coord, Date.now());
+
+    const res = await getAsks(`?parent=${PARENT}`, {});
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { asks: unknown[] }).asks).toHaveLength(1);
   });
 });
