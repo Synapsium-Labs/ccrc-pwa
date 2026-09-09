@@ -153,9 +153,20 @@ describe('the `_reg_read "$id" project` census one function over stays honest to
     expect(bare,
       `the bare grep answers ${bare} now, but the sentence still claims ${statedBare}.`)
       .toBe(statedBare);
-    expect(bare - filtered,
-      'the sentence\'s whole point is that the bare spelling counts its own citation, '
-      + 'so the two numbers must differ by exactly the comment lines quoting the pattern')
-      .toBe(bare - filtered);
+    // AND THE TRAP THE SENTENCE DESCRIBES IS REAL. `bare - filtered` is the
+    // comment-line count BY CONSTRUCTION, so asserting it against itself — which
+    // is what the first cut of this line literally did, `.toBe(bare - filtered)`
+    // — cannot red on any tree, and asserting it against the two stated numbers
+    // is no better once the two above pin each of them to reality. What is NOT
+    // derivable is that anything quotes the pattern at all: strip the citation
+    // out of `cmd_prefer`'s comment and the two assertions above simply track
+    // the new pair while the prose goes on explaining a self-count that no
+    // longer happens. (#69 review round 5 merge gate — a tautology, in the
+    // commit whose subject is assertions that pass for the wrong reason.)
+    expect(bare,
+      'nothing quotes the pattern any more, so the sentence above is explaining a '
+      + 'self-counting trap that no longer exists — say the bare and filtered counts are equal, '
+      + 'or restore the citation')
+      .toBeGreaterThan(filtered);
   });
 });

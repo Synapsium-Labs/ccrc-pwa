@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=36738cbcd66b808a9110cfb34bf7296eab04868d706ba3ec88cf20f52761531b
+# ccrc:generated 1 sha256=f7a7964547cec578320f32866b5ee4afff33ca09883f2f558c98718e919484ed
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13002,9 +13002,15 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `$POOLS_DIR` is what stops the bare `mkdir -p --` spelling this comment
   # carried until round 5 from also matching the two `_LC_DIR` mkdirs, which are
   # not pools paths at all: four hits for a claim about one. Round 3's spelling
-  # before that — `mkdir -p "$POOLS_DIR"`, with no `--` — matched nothing at
-  # all, so this one anchor has now been wrong in three different ways: zero
-  # hits, four hits, and counting itself), inside `cmd_project_pool`, so
+  # before that matched ONLY ITS OWN CITATION — one hit, the comment quoting it,
+  # measured with GNU grep at round 3's own tree. Round 5 first wrote "matched
+  # nothing at all, zero hits" here, which is a prose REGRESSION over round 4's
+  # correct wording and self-refuting on this tree, because re-quoting the
+  # spelling is itself a match. The zero came from a review artifact rather than
+  # from a re-measurement, and that artifact's shell resolves `grep` to a shim
+  # that mishandles a literal `$` mid-pattern — so this anchor has been wrong in
+  # two ways, counting itself and over-matching, and the third way was an
+  # inherited measurement), inside `cmd_project_pool`, so
   # on every box that has never tagged a project the directory does not exist
   # and `_project_pool_state` answers `untagged` for EVERY project name — the
   # unmeasured field cannot change the answer, no constraint is being lifted,
