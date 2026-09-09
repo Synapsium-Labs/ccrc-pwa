@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
@@ -2386,7 +2386,22 @@ export function registerCoordRoutes(
 
     // D-2170: re-read the child's hookstate and prove the menu on screen is
     // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
-    const taken = coord.takeAskForAnswer(id, await freshAskAt(deps.io, deps.cfg, ask.childId));
+    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
+    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
+    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
+    // value can never equal a stored `askAt` — so handing it to the CAS
+    // below would answer `ask-moved`, a true statement about the CAS and a
+    // false one about the world. The two are not interchangeable to the
+    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
+    // "the child repainted — re-read the ask and answer the current one",
+    // and a coordinator told that when the truth is "this box could not read
+    // the child" re-reads, finds the row still `held`, and loops. Same
+    // fail-shut direction, before any keystroke; only the sentence changes.
+    if (fresh === UNMEASURED_ASK_AT) {
+      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
+        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
+    }
+    const taken = coord.takeAskForAnswer(id, fresh);
     if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
 
     const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);

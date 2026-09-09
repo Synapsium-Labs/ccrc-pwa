@@ -1552,18 +1552,30 @@ export function isAskState(v: unknown): v is AskState {
  */
 export const ASK_OPERATOR_PRINCIPAL = 'operator';
 
-/** `answerAsk`'s ten typed refusals, plus the four route-level refusals the
- *  ask pre-emption routes (server/src/coord, later tasks) emit as their own
- *  literals — `unknown-ask`, `not-held`, `ask-moved`, `not-parent`. Both
- *  groups are the same refusal family (reasons an ask answer was refused),
- *  so they share this one union rather than splitting into two (D-2174, the
- *  `ReadFailure` precedent of D-1438). Map idiom: a code that leaves
- *  `AskResult` and is not removed here is a compile error. */
+/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+ *  ask pre-emption routes (server/src/coord) emit as their own literals —
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  Both groups are the same refusal family (reasons an ask answer was
+ *  refused), so they share this one union rather than splitting into two
+ *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
+ *  leaves `AskResult` and is not removed here is a compile error.
+ *
+ *  `child-unmeasurable` is the whole-branch review's addition (M2), and it is
+ *  a DIFFERENT CONDITION from `ask-moved`, not a nicer word for it:
+ *  `freshAskAt` answers `UNMEASURED_ASK_AT` for three reads that failed (no
+ *  session record, no measured identity, no readable hookstate), and folding
+ *  those onto "the child repainted its question" narrowed a distinction the
+ *  route had received — the highest-yield rule in this tree. It mattered
+ *  because it reached a shipped contract: `wave-lifecycle.md` tells a
+ *  coordinator that `ask-moved` means re-read the ask and answer the current
+ *  one, and a coordinator told that when the truth is "this box could not
+ *  read the child" re-reads, finds the row still `held`, and loops. */
 export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
   'not-alive': true, 'not-waiting': true, 'stale-ask': true, 'ask-mismatch': true,
   'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
   'no-menu': true, 'menu-mismatch': true,
   'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
+  'child-unmeasurable': true,
 };
 
 export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
@@ -1572,7 +1584,7 @@ export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
 export type AskRefuseCode =
   | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
   | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
-  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent';
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
 
 export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);

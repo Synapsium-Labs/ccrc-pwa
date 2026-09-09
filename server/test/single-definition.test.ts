@@ -1889,7 +1889,11 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`,
       // emitted by later tasks' routes in server/src/coord) share this same
       // refusal family and so join this one union rather than a second.
-      expect(ASK_REFUSE_CODES.length).toBe(14);
+      // FIFTEEN since the whole-branch review (M2): `child-unmeasurable`
+      // split "this box could not read the child" back out of `ask-moved`,
+      // which had been carrying both — a narrowing that reached the shipped
+      // coordinator contract, not merely a taxonomy.
+      expect(ASK_REFUSE_CODES.length).toBe(15);
       for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
       expect(isAskRefuseCode('nope')).toBe(false);
       expect(isAskRefuseCode(null)).toBe(false);

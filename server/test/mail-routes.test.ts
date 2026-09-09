@@ -431,9 +431,9 @@ describe('the rejection table is total, in both directions', () => {
   it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
     // RULING F7: `AskRefuseCode` had no reverse scan — only two of the seven
     // vocabularies sharing the kebab scanner below get both directions —
-    // so nothing would red if a route forgot one of the four route-level
-    // codes (`unknown-ask`/`not-held`/`ask-moved`/`not-parent`, Task 9) or
-    // typo'd it. `answerAsk`'s own ten live in `server/src/inject/ask.ts`,
+    // so nothing would red if a route forgot one of the five route-level
+    // codes (`unknown-ask`/`not-held`/`ask-moved`/`not-parent`, Task 9, plus
+    // `child-unmeasurable`, whole-branch review M2) or typo'd it. `answerAsk`'s own ten live in `server/src/inject/ask.ts`,
     // OUTSIDE `server/src/coord` entirely, so a coord-only scan (the
     // `RunRefuseCode` shape just above) could never cover them — this reads
     // BOTH directories, unlike every other reverse scan in this file.
@@ -579,11 +579,11 @@ describe('the rejection table is total, in both directions', () => {
         || isReclaimRefuseCode(tok)
         // TASK 3 (D-2174) — the SEVENTH union, checked together and never
         // merged, on the standing rule `enter-ignored` states above. The ask
-        // pre-emption routes (later tasks) spell four route-level refusals
-        // (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`) as literals
-        // in server/src/coord, alongside `answerAsk`'s own ten — same
-        // refusal family, one union, admitted through its own exported guard
-        // rather than NOT_CODES.
+        // pre-emption routes spell five route-level refusals (`unknown-ask`,
+        // `not-held`, `ask-moved`, `not-parent`, and `child-unmeasurable`
+        // from the whole-branch review) as literals in server/src/coord,
+        // alongside `answerAsk`'s own ten — same refusal family, one union,
+        // admitted through its own exported guard rather than NOT_CODES.
         || isAskRefuseCode(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
     }

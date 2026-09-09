@@ -177,38 +177,54 @@ describe('POST /api/asks/:id/answer', () => {
   });
 
   /**
-   * `freshAskAt`'s fail-shut arm (fix round 1, item 2): an UNREADABLE
-   * hookstate — no `.hookstate.json` at all, distinct from the "moved" case
-   * above, which has a real, fresher one — must refuse rather than proceed.
-   * `freshAskAt` returns `-1` for this arm, which can never equal a stored
-   * `askAt`, so it rides the SAME `ask-moved` mismatch `takeAskForAnswer`
-   * already has — no new error code, just the fail-shut direction proven for
-   * "unmeasurable", not only "measured and different".
+   * `freshAskAt`'s fail-shut arm — its OWN code since the whole-branch
+   * review (M2), no longer folded onto `ask-moved`.
+   *
+   * `freshAskAt` answers `UNMEASURED_ASK_AT` for THREE conditions that have
+   * nothing to do with the question moving: no session record, no measured
+   * identity, no readable hookstate. Reporting all of them as `ask-moved`
+   * collapsed "the child repainted its question" with "this box could not
+   * read the child" — and it reached a SHIPPED CONTRACT, which is what makes
+   * it more than a taxonomy quibble: `wave-lifecycle.md` tells coordinators
+   * `ask-moved` means "the child repainted — re-read and answer the current
+   * one". A coordinator told that when the truth is "unmeasurable" re-reads,
+   * finds the row still `held`, answers again, and loops.
+   *
+   * Both arms below are the same fact from the parent's side — the box could
+   * not measure this child — and neither is a reason to re-read the row.
    */
-  it('409s ask-moved when the child\'s hookstate is unreadable (freshAskAt fail-shut)', async () => {
-    const now = Date.now();
-    const home = mkTmp('ccrc-asks-');
-    seed(home, CHILD, CHILD_UUID);
-    seed(home, PARENT, PARENT_UUID);
-    // Deliberately NOT seeding a hookstate file for the child — `readHookState`
-    // reads a proven-absent file as `null`, `freshAskAt`'s third fail-shut arm.
-    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
-    await notifyLog.load();
-    const { run, calls } = tmuxRunner([ASK_PANE]);
-    const w = await openApp(home, run, { notifyLog });
-    app = w.app;
-    const id = w.coord.insertAsk({
-      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
-      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
-      options: QUESTION.options.map((o) => o.label), now,
-    });
+  for (const [arm, seedChild] of [
+    ['no hookstate file at all', () => { /* the file is simply not written */ }],
+    ['a hookstate whose identity gate rejects it', (home: string, now: number) => {
+      seedHookstate(home, CHILD, 'x'.repeat(36), now);
+    }],
+  ] as const) {
+    it(`409s child-unmeasurable, not ask-moved, when the child cannot be read — ${arm} (M2)`, async () => {
+      const now = Date.now();
+      const home = mkTmp('ccrc-asks-');
+      seed(home, CHILD, CHILD_UUID);
+      seed(home, PARENT, PARENT_UUID);
+      seedChild(home, now);
+      const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+      await notifyLog.load();
+      const { run, calls } = tmuxRunner([ASK_PANE]);
+      const w = await openApp(home, run, { notifyLog });
+      app = w.app;
+      const id = w.coord.insertAsk({
+        childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+        askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+        options: QUESTION.options.map((o) => o.label), now,
+      });
 
-    const res = await answer(app, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, error: 'ask-moved' });
-    expect(sendKeysCalls(calls)).toEqual([]);
-    expect(w.coord.askById(id)!.state).toBe('held');
-  });
+      const res = await answer(app, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'child-unmeasurable' });
+      // Still FAIL-SHUT, and still before the keystroke: the only thing that
+      // changed is which true sentence the parent is told.
+      expect(sendKeysCalls(calls)).toEqual([]);
+      expect(w.coord.askById(id)!.state).toBe('held');
+    });
+  }
 
   it('409s not-held when a second principal is already answering (D-2171)', async () => {
     const { coord, id, now } = await setup(Date.now());

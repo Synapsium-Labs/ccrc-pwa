@@ -185,10 +185,22 @@ export interface AskRow {
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
- *  differently (D-2170/D-2171): `not-held` is a lost race against another
- *  principal that already took this row; `ask-moved` is the child repainting
- *  an identical question, so the menu on screen may be a different instance.
- *  Collapsing them would be an overloaded value at a seam. */
+ *  differently (D-2170/D-2171): `not-held` means THE ROW IS NO LONGER
+ *  PRE-EMPTIBLE; `ask-moved` is the child repainting an identical question,
+ *  so the menu on screen may be a different instance. Collapsing them would
+ *  be an overloaded value at a seam.
+ *
+ *  `not-held` is NOT "another principal already took this row" — this
+ *  docstring said exactly that for a wave, and the gloss SPREAD from here
+ *  into the shipped coordinator contract (whole-branch review M3, corrected
+ *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). The CAS
+ *  source is the single state `'held'`, so every other state answers it:
+ *  `answering` (the lost race the old sentence described), and equally
+ *  `released` (the grace window lapsed and the operator's push has already
+ *  fired), `stale` (the dialog is gone) and `answered` (someone already
+ *  ruled). Only the first of those four is a race, and only the first is
+ *  worth a retry — which is precisely why the false gloss mattered on a
+ *  surface a coordinator reads. */
 export type AskTakeResult =
   | { ok: true; row: AskRow }
   | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' };
@@ -3903,11 +3915,19 @@ export class CoordStore {
 
   /** THE GUARD IS IN THE `WHERE` (the `endClaim` shape). Two predicates, and
    *  they are DIFFERENT refusals a caller acts on differently: `not-held`
-   *  means another principal already took this row (D-2171); `ask-moved`
-   *  means the child has written its hookstate again since the mint, so the
-   *  menu on screen may be a DIFFERENT INSTANCE of an identical question
-   *  (D-2170). Collapsing them would be an overloaded value at a seam — one
-   *  is a lost race, the other is a near-miss wrong answer. */
+   *  means the row has LEFT `'held'` and is no longer pre-emptible (D-2171);
+   *  `ask-moved` means the child has written its hookstate again since the
+   *  mint, so the menu on screen may be a DIFFERENT INSTANCE of an identical
+   *  question (D-2170). Collapsing them would be an overloaded value at a
+   *  seam — one is about the row, the other is a near-miss wrong answer.
+   *
+   *  CORRECTED (whole-branch review M3): this said `not-held` means "another
+   *  principal already took this row", naming ONE of the four states that
+   *  answer it. The CAS source is `'held'` alone, so `answering` (the take
+   *  it described), `released`, `stale` and `answered` all land here — and
+   *  only the first is a lost race a retry could win. See `AskTakeResult`'s
+   *  own docstring above for the full list; the same false gloss had reached
+   *  `wave-lifecycle.md`, where a coordinator reads it. */
   takeAskForAnswer(id: number, askAt: number): AskTakeResult {
     return tx(this.db, () => {
       const row = this.readAsk(id);

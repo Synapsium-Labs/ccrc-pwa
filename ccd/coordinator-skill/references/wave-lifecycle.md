@@ -547,13 +547,25 @@ lane are named here — a coordinator IS a parent and calls all three, so this i
 entry, not an invitation like the operator-only doors above.
 
 - `POST /api/asks/:id/answer` — press an answer in. Body `{"fromId":"<your id>","fromUuid":"<your
-  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of two DIFFERENT
-  conditions, and they are not interchangeable: `not-held` is a lost race against another
-  principal that already took the row, while `ask-moved` means the CHILD REPAINTED AN IDENTICAL
-  QUESTION since this row was minted — the menu on its screen right now may be a different
-  instance of what looks like the same question. `ask-moved` is a reason to re-read the ask
-  (`GET /api/asks`, below) and answer the CURRENT one, never a reason to retry the same call —
-  a blind retry risks pressing a digit into a menu that has since moved on.
+  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of THREE different
+  conditions, and none of them is interchangeable with another. Nothing was pressed in any of
+  the three — every gate on this route runs before the keystroke.
+  - `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
+    endings, not one: another principal is mid-answer, the grace window lapsed and the operator
+    was notified after all, the child's dialog went away, or someone already ruled. Only the
+    first is a race a retry could win, and you cannot tell which from this code alone — read the
+    row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
+    against another principal that already took the row" for one wave, naming one of the four:
+    the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+  - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
+    on its screen right now may be a different instance of what looks like the same question.
+    This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
+    same call — a blind retry risks pressing a digit into a menu that has since moved on.
+  - `child-unmeasurable` — the server could not read the child's live state at all (no session
+    record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
+    wrong with your call: re-reading the ask will show you the same `held` row it showed before,
+    so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
+    the operator's own notification on schedule regardless.
 - `POST /api/asks/:id/release` — decline to rule on it. Body `{"fromId":"<your
   id>","fromUuid":"<your uuid>"}`. A decline is not a failure: it is what turns the grace window
   into a CEILING rather than a flat tax on every question you cannot answer — the operator's
