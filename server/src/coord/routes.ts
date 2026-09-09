@@ -923,7 +923,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/mail?to=<id>` (fix, review findings 1/15: this route fell in
+   * `GET /api/mail?to=<id>` OR `GET /api/mail?program=<slug>` (cross-repo
+   * programmes wave 1, Task 7) — EXACTLY ONE of `to`/`program` is required;
+   * both or neither is a 400 (D-2057). `to` is a MAILBOX (what one session
+   * was actually sent); `program` is a THREAD (what one programme has said,
+   * joined on `mail.runId` → `runs.program` — a mail with no `runId` matches
+   * neither and appears only under `to`). `all`/`limit` apply to either arm
+   * identically, below.
+   *
+   * (fix, review findings 1/15: this route fell in
    * the seam between the two Build 7 plans, each naming the other as its
    * author — PR I's own D-9 pointed at PR J for `POST /api/runs/:id/advance`
    * and PR J's own "Interfaces assumed from PR I" contract item 6 pointed

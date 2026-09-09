@@ -2498,6 +2498,19 @@ describe('the programme filters on the two GET routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('GET /api/mail with BOTH `to` and `program` is also a bad request (D-2057)', async () => {
+    // The other half of "exactly one": the `(to === null) === (program ===
+    // null)` guard is symmetric, and the "neither" case above cannot prove
+    // the "both" arm — a guard degraded to `to === null && program === null`
+    // passes "neither" and silently accepts "both".
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail?to=demo-coordinator&program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('GET /api/feed?program= answers that programme, and the unfiltered read is unchanged', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);

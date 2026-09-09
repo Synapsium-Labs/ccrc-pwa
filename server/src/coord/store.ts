@@ -1023,7 +1023,7 @@ export class CoordStore {
    * the narrow side (`dueDeliveries`) that does not use the constant at all, and
    * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
    *
-   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — three readers:
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — four readers:
    *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
    *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
    *     it with no wire change.
@@ -1037,6 +1037,11 @@ export class CoordStore {
    *     `m.runId IS NULL`-scoped, and every row this method inserts belongs to a
    *     mail that survived an INNER join on `m.runId`. (The hand-typed version
    *     put this query in `healthFor`, which only CALLS `runHealth`.)
+   *   `mailForProgram(<program>)` (cross-repo programmes wave 1, Task 7) — a
+   *     NEW holder, joining `m.runId` to `runs rr` INNER rather than LEFT, so
+   *     `OUTSTANDING_OR_ABANDONED_SQL`'s `COALESCE(rr.state, '')` reads a
+   *     non-NULL state on every row it can select. It is `GET
+   *     /api/mail?program=`'s default, non-`all`, arm.
    *
    * On the narrower `OUTSTANDING_STATES_SQL` — ten holders, in file order:
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
@@ -2491,7 +2496,7 @@ export class CoordStore {
    * `all` mirrors `GET /api/mail?to=`'s own flag exactly, so one word means one
    * thing on both filters: default is "still needs a human's attention"
    * (`OUTSTANDING_OR_ABANDONED_SQL`), `all` is the unfiltered history. The
-   * `LEFT JOIN runs rr` the predicate needs is the SAME join the filter uses —
+   * `JOIN runs rr` the predicate needs is the SAME join the filter uses —
    * `ABANDONED_PARK_SQL` reads `COALESCE(rr.state, '')` precisely so it is
    * indifferent to the join kind its caller brings — so this query needs one
    * join, not two.
@@ -3132,7 +3137,8 @@ export class CoordStore {
    * oldest-first and clamped exactly as `feedEvents` clamps its own, through
    * the `feed_events.runId` migration 9 added.
    *
-   * The INNER join to `runs` is the filter, and it is why a programless event —
+   * The subquery against `runs` — `runId IN (SELECT id FROM runs WHERE program
+   * = ?)` — is the filter, and it is why a programless event —
    * an `ask`, a `done`, a `merged`, a `coord`, every kind that is about a
    * SESSION rather than a run — never appears here. That is not a gap: those
    * events belong to no programme, and the unfiltered `feedEvents` above is
