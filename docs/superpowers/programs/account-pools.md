@@ -1710,3 +1710,27 @@ renderer that names an unknown word rather than inventing a sentence for it.
 **Asked for before I clear the merge:** pin `13123` or delete the "Pinned in both directions" sentence;
 pin `16203` against `15941`'s template. Items 3-6 (close or number `14421`, fix the ONE MAPPING comment,
 the five-item misattribution cluster, book `[pool=-]`) are wanted but not gating.
+
+**Correction to "INERT today" above (peer mail 361 → my 364).** I sent the `_mem_index_line` silent-drop
+as a finding and wrote here that it fires on nothing today — *"0 of 62 files hit it"*. **It is not
+inert, and it was ruled into their fix wave, not left as their call.** Fleet-wide there are 6 hits
+across 808 memory files. I measured the corpus I HAD, not the corpus the function HAS: that function
+serves every project on the box, and I reported a shared utility's blast radius from my own project's
+slice. Same error as the `capture-pane` severity two days earlier, one boundary out — recorded by
+rewriting `measure-the-loop-not-the-function` to carry both instances rather than filing a near-duplicate.
+
+**Their wider number is wrong the other way, and I proved it by inode.** The 6 are TWO distinct files
+seen three times: dev 2064 inode 12484572 at three paths, because `.claude-corp` and `.claude-personal`
+reach that project's `memory/` through two of the eight symlinks I catalogued for them. After `--apply`
+converges, two index lines are lost, not six. The general property is worth more than the number:
+**a census that walks containers and dereferences links counts one item once per container that can see
+it — its rows are right individually and MUST NOT BE SUMMED.** Both their "6 of 790" and my "0 of 62"
+performed exactly that summation. Neither of us was right about scope, in opposite directions, and the
+true number needed both corrections — a better argument for two independent measurements than either of
+us reporting cleanly would have been.
+
+One thing of theirs worth recording against my own analysis: I checked whether the eight symlinks were
+SAFE under `--apply` and stopped there. **Safe is not converged.** Their review found that a link
+resolving correctly but naming another home would have read `converged` for ever, with doctor printing
+PASS over one account being master for six projects; they added a NORMALISE arm. My "both orders are
+safe" conclusion would have shipped that, because I only asked one of the two questions.
