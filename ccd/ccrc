@@ -1073,6 +1073,34 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # KNOB" paragraph states from the other side.
 : "${CCRC_ACCOUNT_AUTH_TIMEOUT:=15}"
 
+# ── ccrc account check: the probe's deadline, its cwd, and the telemetry it can move ──
+# 60s is spec §8's bound (:645). Overridable for the reason above, and validated
+# by the same guard the cheap question's knob is: this one bounds a BILLED
+# request rather than a local read, so the two sentences that differ — what zero
+# would have to mean, and what the ceiling is bounding — are the caller's. It
+# joins BOTH test runners' deletion arrays in this commit, beside its sibling.
+: "${CCRC_ACCOUNT_PROBE_TIMEOUT:=60}"
+
+# A DEDICATED SCRATCH CWD, and the only directory `ccrc account check` creates.
+# `-p` writes a transcript under the lane's `projects/<cwd>/`, so the cwd is what
+# decides where that transcript lands (spec:645-648); with no cwd of its own the
+# probe would write it into whatever project the operator happened to be standing
+# in. Measured ABSENT on the live box, so the probe creates it — and `$HOME/.ccrc`
+# with it, which is not guaranteed either and which every other writer in this
+# file makes itself (:3506, :6406, both `mkdir -p "$HOME/.ccrc" || _ccrc_die`).
+CCRC_PROBE_DIR="$HOME/.ccrc/probe"
+
+# THE SECOND SPELLING OF `ccd`'s LIMITS_DIR (ccd/ccd:802), and the only one in
+# this file — `ccrc` has never named this directory. The probe has to, because
+# the lane's own statusline can write into it while the probe runs
+# (statusline-command.sh:238-252) and `check` is a verb shaped like a READ: an
+# invisible refresh of what `_ws_least_loaded` (ccd/ccd:3552) and
+# `server/src/limits.ts` score placement from, triggered by a button labelled
+# Check, is the kind of undeclared mutation this repo treats as a defect. So the
+# probe stamps it either side and REPORTS. `ccrc-account.test.ts` compares the
+# two literals — the mechanism `_check_path` uses for `WRAPPER_BIN_DIR`.
+CCRC_LIMITS_DIR="$HOME/.cc-limits"
+
 # Out-parameters for the two readers below. `set -u` makes an unset array fatal
 # on read, so they are declared here rather than at first assignment. `BOX_*`
 # and `_box_*` are a THIRD namespace, deliberately kept clear of the two already
@@ -5789,11 +5817,10 @@ ACCT_NOTES=()
 # `0` IS REFUSED RATHER THAN GIVEN A MEANING. The two candidate meanings are the
 # two the platforms already disagree about, so ANY ruling here makes one box's
 # behaviour the standard and the other box's a bug to emulate in shell. And
-# neither meaning is wanted: "unbounded" defeats the knob's entire purpose (its
-# own header calls it "a deadline against a hung binary"), while "skip the cheap
-# question" is a different request that would deserve a different spelling than
-# a duration of zero. An operator who wants no auth-status call has one: a lane
-# whose provider is not `anthropic` is never asked at all.
+# neither meaning is wanted: "unbounded" defeats the knob's entire purpose, while
+# "skip this question" is a different request that would deserve a different
+# spelling than a duration of zero. WHY it is not wanted differs by knob, so that
+# half of the sentence is the caller's.
 #
 # THE CAP IS 3600 AND IT IS NOT DECORATION. Above it the knob stops bounding
 # anything a human waits for, and the values that GNU accepts and clamps are
@@ -5808,25 +5835,50 @@ ACCT_NOTES=()
 # and `exit 2` would leave only the SUBSHELL. The operator would see nothing.
 # This file's `ACCT_*`/`BOX_*` out-parameter idiom is what a refusing helper has
 # to use, and it is declared at file scope for `set -u` like its siblings.
-ACCT_AUTH_DEADLINE=""
-_acct_auth_deadline() {   # -> ACCT_AUTH_DEADLINE (whole seconds), or refuses at 2
-  local v="$CCRC_ACCOUNT_AUTH_TIMEOUT" n=""
+#
+# ONE VALIDATOR, TWO KNOBS (Task 30). The probe's deadline is the same family and
+# every argument above is true of it word for word; what differs is not the RULE
+# but two SENTENCES — what a zero would have to mean for THIS call, and what the
+# ceiling is bounding — so those two are the caller's and everything else is
+# shared. `_acct_run_op`'s "$1 IS THE CALLER'S CLAUSE" (:4991-4995) at a
+# validator's address: one helper ending both paths with one sentence would say
+# "a lane whose provider is not anthropic is never asked at all" about the probe,
+# which is asked of every lane there is.
+ACCT_DEADLINE=""
+_acct_deadline() {   # <env-name> <value> <default> <zero-clause> <ceiling-clause> -> ACCT_DEADLINE, or refuses at 2
+  local name="$1" v="$2" def="$3" zero="$4" cap="$5" n=""
   # EXIT 2, the USAGE class (:29-33). An env knob is part of how the verb was
   # invoked and the mistake is the caller's, decidable before anything runs —
   # the same class `--id ''` is refused in, one function down.
   case "$v" in
     ''|*[!0-9]*)
-      _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", which is not a whole number of seconds. This verb passes it to timeout(1), which refuses a value like this by exiting 125 without ever running the launcher - and a box with no coreutils would instead run the launcher with no deadline at all. Give it a positive whole number of seconds, or leave it unset for the default of 15. Nothing was written." ;;
+      _acct_refuse 2 bad-timeout "$name is \"$v\", which is not a whole number of seconds. This verb passes it to timeout(1), which refuses a value like this by exiting 125 without ever running the launcher - and a box with no coreutils would instead run the launcher with no deadline at all. Give it a positive whole number of seconds, or leave it unset for the default of $def. Nothing was written." ;;
   esac
   # Leading zeros stripped by pattern rather than by `$(( 10#$v ))`, which
   # OVERFLOWS SILENTLY on a 20-digit value and would hand the comparisons below
   # a wrapped negative number.
   n="${v#"${v%%[!0]*}"}"; [ -n "$n" ] || n=0
   [ "$n" = 0 ] \
-    && _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", and zero is refused rather than given a meaning: GNU timeout(1) reads a duration of zero as NO deadline at all - measured on this fleet, a zero-second call sat through a two-second sleep in full - while a box with no coreutils falls back to a shell sleep that returns at once and reports the deadline as already expired. One value cannot mean both. If you want to bound this call, give it a positive whole number of seconds; if you want it not to run at all, that is a property of the lane's provider, not a duration. Nothing was written."
+    && _acct_refuse 2 bad-timeout "$name is \"$v\", and zero is refused rather than given a meaning: GNU timeout(1) reads a duration of zero as NO deadline at all - measured on this fleet, a zero-second call sat through a two-second sleep in full - while a box with no coreutils falls back to a shell sleep that returns at once and reports the deadline as already expired. One value cannot mean both. If you want to bound this call, give it a positive whole number of seconds. $zero Nothing was written."
   { [ "${#n}" -gt 4 ] || [ "$n" -gt 3600 ]; } \
-    && _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", which is above the 3600-second ceiling this verb will honour. 'claude auth status' is a local credential read, so this is a deadline against a hung binary rather than a budget, and a value this large does not bound one: timeout(1) accepts it and clamps it, which is the same unbounded call zero asks for. Give it a positive whole number of seconds up to 3600. Nothing was written."
-  ACCT_AUTH_DEADLINE="$n"
+    && _acct_refuse 2 bad-timeout "$name is \"$v\", which is above the 3600-second ceiling this verb will honour. $cap A value this large does not bound one: timeout(1) accepts it and clamps it, which is the same unbounded call zero asks for. Give it a positive whole number of seconds up to 3600. Nothing was written."
+  ACCT_DEADLINE="$n"
+}
+
+_acct_auth_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
+  _acct_deadline CCRC_ACCOUNT_AUTH_TIMEOUT "$CCRC_ACCOUNT_AUTH_TIMEOUT" 15 \
+    "If you want it not to run at all, that is a property of the lane's provider rather than a duration: a lane whose provider is not anthropic is never asked for its credential." \
+    "'claude auth status' is a local credential read, so this is a deadline against a hung binary rather than a budget."
+}
+
+# THE SECOND KNOB OF THE FAMILY, AND A DEVIATION FROM TASK 30'S PLAN SNIPPET,
+# which passed `$CCRC_ACCOUNT_PROBE_TIMEOUT` straight to the shim. D-2221's whole
+# argument is truer here than where it was ruled: at the cheap question a `0`
+# buys an unbounded LOCAL read, and here it buys an unbounded BILLED one.
+_acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
+  _acct_deadline CCRC_ACCOUNT_PROBE_TIMEOUT "$CCRC_ACCOUNT_PROBE_TIMEOUT" 60 \
+    "There is no spelling that means 'do not probe': the probe is the only question that can tell you whether this lane can do work at all, and the cheap credential read in front of it is what already skips it for a lane that is known dead." \
+    "The probe is one BILLED request through the lane's own launcher, so this is the budget for an answer a human is waiting on."
 }
 
 # ── one sentence per reason the cheap question produced no verdict (D-2220) ──
@@ -5868,13 +5920,13 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
   local id="$1" out="" rc=0 row="" crc=0
   ACCT_HEALTH=""
   _acct_auth_deadline
-  out="$(_plat_timeout "$ACCT_AUTH_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
+  out="$(_plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
     # THIRD thing again: neither an answer nor a parse failure. The body is
     # whatever the killed launcher had flushed, so it is not offered at all.
     row="$(printf '' | _acct_node classify --source auth-status --exit 124 \
-      --timed-out true --deadline "$ACCT_AUTH_DEADLINE")" || crc=$?
+      --timed-out true --deadline "$ACCT_DEADLINE")" || crc=$?
   else
     row="$(printf '%s' "$out" | _acct_node classify --source auth-status --exit "$rc")" || crc=$?
   fi
@@ -5904,18 +5956,124 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
 }
 
 # ── check, half two: the question that costs a request ────────────────────
-# STUB. Task 30 replaces this body whole and adds the deadline, the scratch cwd
-# and the `~/.cc-limits` measurement. It answers `unknown` rather than `ok`
-# because §8's table ends "anything else — never reported as ok", and a build
-# that cannot run the probe has measured exactly nothing. The failure arm is not
-# decoration: without it a classifier that could not run would leave
-# `ACCT_HEALTH` empty and the `health` op would refuse an empty `--row`, which
-# is a worse sentence than this one.
+# THE ONE PLACE IN THIS TREE THAT RUNS `claude -p`, and there is no precedent to
+# follow: every other invocation of a wrapper binary anywhere is inside a tmux
+# command string or an `-x` test. Four properties are therefore stated here.
+#
+# ONE: `CLAUDE_CODE_MAX_RETRIES=0` IS LOAD-BEARING AND MEASURED. Without it
+# Claude Code retries a 401 on an exponential backoff — `attempt N/11`, eight
+# requests in 40s against a loopback stub — and the probe cannot answer inside
+# its bound at all; with it a 401 answers in 136ms and a refused connection in
+# 167ms, both at `total_cost_usd: 0` (spec:649-652). A variable assignment in
+# FRONT of a function call reaches that function's children — measured, not
+# assumed: `FOO=0 f env` with `f() { "$@"; }` prints `FOO=0`, and so does an
+# `sh -c` two levels down — which is what lets `_plat_timeout` stay a shim
+# rather than grow an `env` argument, and it does NOT persist afterwards.
+#
+# TWO: THE DEADLINE IS `_plat_timeout` AND rc 124 IS A VERDICT (D-1858). The
+# spec writes this call with the bare GNU spelling, and shipping that literally
+# would be red on arrival and wrong on a Mac: that binary is coreutils and is
+# not in the BSD userland, decision 9 (spec:1566-1576) WITHDRAWS the Linux-only
+# ruling, and `macos-platform.test.ts:113` refuses the bare form outright over a
+# corpus it derives from `ccd/` itself. The shim prefers the GNU name, then
+# `gtimeout`, then a bash fallback that reports GNU's own 124 on expiry
+# ":because that is the code the call sites branch on" — this is a call site
+# that branches on it, in the shape `_check_tmux_skew` already uses
+# (`ccrc-doctor-checks:443-452`).
+#
+# THREE: THE CWD IS OURS, AND SO IS CREATING IT — see `CCRC_PROBE_DIR`'s banner.
+#
+# FOUR: THE PROBE CAN MOVE TELEMETRY, AND THE ANSWER SAYS SO INSTEAD OF HIDING
+# IT. `statusline-command.sh:244-252` writes `~/.cc-limits/<id>.json` as a side
+# effect of a session rendering its status line, and the probe runs with the
+# lane's own config dir and therefore the lane's own `settings.json`, statusline
+# and all. Whether `-p` renders one at all is UNMEASURED in this tree, and the
+# honest answer to an unmeasured side effect is to measure it. (`session-hook.sh`
+# needs no such care: `:247` is `[[ -n "${TMUX_PANE:-}" ]] || exit 0` and the
+# probe has no pane.)
+
+# SECOND-GRANULAR, AND SAID SO. `_plat_mtime` is whole seconds on both platforms
+# (:146-148), so this pairs it with the size (:149-151) and STILL cannot see a
+# same-second rewrite of an identical file. That is why `limitsTouched` is a
+# REPORT and never a guard: `false` means "nothing this could see changed", not
+# "the placer's input is untouched". The condition it exists to catch is
+# second-granular in practice anyway, because the statusline writes a fresh `ts`
+# every time (statusline-command.sh:250-252).
+#
+# It answers on stdout and never refuses, which is what makes it safe inside
+# `$( )` — the rule the rest of this section keeps by answering in globals.
+_acct_limits_stamp() {   # <id> -> "<mtime>:<size>", or "absent"
+  local f="$CCRC_LIMITS_DIR/$1.json" m s
+  m="$(_plat_mtime "$f" 2>/dev/null)" || { printf 'absent'; return 0; }
+  s="$(_plat_size "$f" 2>/dev/null)" || s="?"
+  printf '%s:%s' "$m" "$s"
+}
+
+# ONE CLAUSE, THREE READERS. `_acct_no_answer`'s third argument and every
+# refusal below have to agree about what a run that reached the probe left on
+# the box, and `_acct_answer`'s hard-coded "Nothing was written." is false the
+# moment this verb creates a directory and runs a launcher inside it. Spelled
+# once here rather than three times: the drift it prevents is the one
+# `_acct_run_op`'s header names, two true statements flattened into one false
+# one — except in the direction nobody guards, one sentence going stale in two
+# places out of three.
+_acct_probe_stands() {   # -> what still stands after a run that reached the probe
+  printf '%s' "No account state was written: no roster entry, no credential file and no kill-switch marker was touched. The probe HAD already run, so $CCRC_PROBE_DIR exists - this verb creates it to run in - and anything the lane's own launcher wrote while answering is still under that lane's config dir."
+}
+
 ACCT_LIMITS_TOUCHED=false
 _acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
+  local id="$1" out rc=0 before after crc=0
   ACCT_LIMITS_TOUCHED=false
-  ACCT_HEALTH="$(printf '%s' '{}' | _acct_node classify --source probe --exit 0)" \
-    || _acct_refuse 1 classify-failed "the health classifier could not run, so this box measured nothing about account $1 - read the account-op: line above. Nothing was written."
+  _acct_probe_deadline
+  # `~/.ccrc` FIRST AND IN THE SAME CALL: it is not guaranteed to exist either.
+  # The refusal names the CONSEQUENCE rather than the syscall, because what an
+  # operator needs to hear is where the transcript would otherwise land.
+  mkdir -p "$CCRC_PROBE_DIR" \
+    || _acct_refuse 1 probe-cwd "cannot create $CCRC_PROBE_DIR, and the probe must not run in a real project's directory - the transcript it writes would land in that project's history. Nothing was written."
+  before="$(_acct_limits_stamp "$id")"
+
+  # `--bare` and CLAUDE_CODE_SIMPLE are never passed: bare mode reads neither the
+  # settings env block nor the OAuth token, so a bare probe would measure nothing
+  # the lane actually uses (spec:662-664).
+  out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CODE_MAX_RETRIES=0 \
+    _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$id" \
+      -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+
+  after="$(_acct_limits_stamp "$id")"
+  [ "$before" = "$after" ] || ACCT_LIMITS_TOUCHED=true
+
+  if [ "$rc" -eq 124 ]; then
+    ACCT_HEALTH="$(printf '' | _acct_node classify --source probe --exit 124 \
+      --timed-out true --deadline "$ACCT_DEADLINE")" || crc=$?
+  else
+    ACCT_HEALTH="$(printf '%s' "$out" | _acct_node classify --source probe --exit "$rc")" || crc=$?
+  fi
+  [ "$crc" -eq 0 ] && return 0
+
+  # THE THREE FAILURE CONDITIONS, KEPT APART (D-2223 F9). The stub folded every
+  # non-zero into "the health classifier could not run" — D-2220's defect at the
+  # sibling address, and this is the same triage `_acct_auth_status` does one
+  # function up rather than a second one.
+  #
+  # 3 and 4 are `classify`'s DEFERRAL vocabulary: "no verdict, nothing to say"
+  # and "no verdict, but carry this line". Both exist for `--source auth-status`,
+  # whose caller has a probe to fall through TO; this is the last question about
+  # the lane and has nowhere to send one. The shipped classifier never answers
+  # either on this source — pinned in `ccrc-account.test.ts`, not asserted here —
+  # so what this arm stands for is a build skew, and the line the classifier did
+  # write is carried into the sentence instead of being dropped on the floor.
+  if [ "$crc" -eq 3 ] || [ "$crc" -eq 4 ]; then
+    _acct_refuse 1 classify-failed "the health classifier deferred (exit $crc) on the probe, which is the LAST question about account $id and has nothing to fall through to, so this box has no verdict for it${ACCT_HEALTH:+ - the classifier said: $(_acct_note_cap "$ACCT_HEALTH")}. $(_acct_probe_stands)"
+  fi
+  # AND AN EXIT THAT CARRIED AN ENVELOPE IS RE-EMITTED, NOT REPLACED. "The box
+  # said no, here is why" and "this build cannot answer you at all" are two
+  # conditions an operator acts on differently; the stub answered both with its
+  # own sentence and threw node's body away.
+  [ -n "$ACCT_HEALTH" ] \
+    || _acct_refuse 1 classify-failed "the health classifier exited $crc without printing anything, so this box measured nothing about account $id - read the account-op: line above. $(_acct_probe_stands)"
+  printf '%s\n' "$ACCT_HEALTH"
+  exit "$crc"
 }
 
 # ── a note is bounded before it reaches argv (D-2222) ─────────────────────
@@ -6005,21 +6163,32 @@ _acct_check() {
   if [ "$ACCT_PROVIDER" = anthropic ]; then
     _acct_auth_status "$id"
   fi
-  [ -n "$ACCT_HEALTH" ] || _acct_probe "$id"
+  # WHICH PATH RAN IS WHAT THE FINAL CLAUSE TURNS ON, so it is decided here and
+  # not inferred later. A verdict from the cheap question means this run read a
+  # credential store and a roster and wrote nothing at all; a run that reached
+  # the probe created a directory and ran a launcher inside it.
+  local stands="Nothing was written."
+  if [ -z "$ACCT_HEALTH" ]; then
+    _acct_probe "$id"
+    stands="$(_acct_probe_stands)"
+  fi
 
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
   local n=""
   for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$(_acct_note_cap "$n")"); done
-  # `_acct_answer`, NOT BARE `_acct_node` — a DEVIATION from this task's plan
-  # snippet, and D-2051's defect at a new address. `_acct_add`'s own tail states
-  # the general case (:4917-4919): a half-updated box, one whose
-  # `account-op.mjs` has no `health` op, answers exit 2 with an EMPTY body, and
-  # a verb whose whole contract is one JSON object would hand its caller an exit
-  # code and nothing to parse. `_acct_answer` is right HERE and was wrong at
-  # `added`'s address for one reason: it hard-codes "Nothing was written." as
-  # its no-answer clause, and that clause is TRUE of `check`, which reads a
-  # credential store and a roster and writes nothing at all.
-  _acct_answer health "${args[@]}" || exit $?
+  # `_acct_read_op`, NOT `_acct_answer` AND NOT BARE `_acct_node` (D-2210,
+  # re-ruled at Task 30). D-2051's defect is the reason it is not the bare call:
+  # a half-updated box whose `account-op.mjs` has no `health` op answers exit 2
+  # with an EMPTY body, and a verb whose whole contract is one JSON object would
+  # hand its caller an exit code and nothing to parse. `_acct_answer` was the
+  # right re-emit while `check` wrote nothing, and it stopped being right the
+  # moment the probe gained a cwd it creates: that helper HARD-CODES "Nothing was
+  # written." and cannot be told otherwise. Its sibling takes the clause as `$1`
+  # for exactly this reason (:4991-4995), so the clause the caller can prove is
+  # the one that ships, and the answer is printed here because a read op leaves
+  # the body in `ACCT_OUT` rather than on stdout.
+  _acct_read_op "$stands" health "${args[@]}"
+  printf '%s\n' "$ACCT_OUT"
 }
 
 cmd_account() {

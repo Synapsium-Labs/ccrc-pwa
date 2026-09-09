@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync,
-  rmSync, symlinkSync, writeFileSync,
+  realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,7 +104,8 @@ function env(home: string): NodeJS.ProcessEnv {
   // conditions apart, which is the whole claim of the no-rows case.
   poison('tmux', 'ccrc account tests must never reach this box\'s real tmux', true);
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
-    'CCRC_ACCOUNT_AUTH_TIMEOUT']) delete e[k];
+    'CCRC_ACCOUNT_AUTH_TIMEOUT',
+    'CCRC_ACCOUNT_PROBE_TIMEOUT']) delete e[k];
   return e;
 }
 
@@ -5769,7 +5770,21 @@ describe('ccrc account check: auth status', () => {
     const j = oneObject(run(home, ['account', 'check', '--id', 'gpt']));
     expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
     expect(j['notes']).toEqual([]);
-    expect(claudeArgv(home), 'somebody else\'s launcher was run').toEqual([]);
+    // THIS ASSERTION CHANGED AT TASK 30, AND THE OLD ONE WAS TRUE ONLY BECAUSE
+    // THE PROBE WAS A STUB. It read `toEqual([])` under the label "somebody
+    // else's launcher was run", which is a claim §8 contradicts outright: the
+    // probe is *one probe for every provider*, the lane's own wrapper answering
+    // `-p`, and the spec says so about this exact lane kind — "the `openai`
+    // lane's credential is the launcher's … goes straight to the probe", and
+    // "for `openai` the probe goes through the launcher exactly the same way
+    // (it lazily starts the stack)" (spec:420, :687-689). So an external
+    // launcher IS run here, deliberately and by ruling; what the fixture keeps
+    // proving is the half this case is named for — `auth status` was never
+    // asked of a lane whose credential Claude Code's own store cannot see.
+    expect(claudeArgv(home)).toEqual(
+      ['-p Reply with the single word ok. --output-format json --max-turns 1']);
+    expect(claudeArgv(home).some((a) => a.startsWith('auth status')),
+      'auth status ran on a lane whose credential store ccrc cannot read').toBe(false);
   });
 
   it('parseable JSON that names no loggedIn field IS a verdict, and stops there', () => {
@@ -5803,8 +5818,14 @@ describe('ccrc account check: auth status', () => {
     seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
     plantClaude(home, 'claude');
     authFixture(home, SIGNED_OUT, 1);
+    // THE TWO SENTENCES CONVERGED AT TASK 30, and that is the fix rather than a
+    // regression: the probe's arm used to fold every non-zero into "the health
+    // classifier could not run" (D-2223 F9), so it said the same thing about a
+    // classifier that exited 2 and one that exited 126. Both halves now name the
+    // code, and they are still told apart — by the account id each carries, and
+    // by the clause about what the run left behind, which only the probe's has.
     for (const [id, half] of [['claude', 'exited 2 without printing anything'],
-      ['orchard-api', 'could not run']] as const) {
+      ['orchard-api', 'exited 2 without printing anything']] as const) {
       const r = run(home, ['account', 'check', '--id', id]);
       expect(r.code, `${id}: ${r.stderr}`).toBe(1);
       const j = oneObject(r);
@@ -5826,13 +5847,21 @@ describe('ccrc account check: auth status', () => {
     // or not anything deletes it, and the half of the claim that matters here
     // went unmeasured. Measured with the name removed from `env()`'s array
     // only: the snippet's form stayed GREEN.
-    const DELETES = /for \(const k of \[[^\]]*'CCRC_ACCOUNT_AUTH_TIMEOUT'[^\]]*\]\)\s*delete/;
+    //
+    // BOTH KNOBS, ONE SCAN. Task 30 adds `CCRC_ACCOUNT_PROBE_TIMEOUT`, whose
+    // default is a SIXTY-SECOND bound on a billed request: an exported copy of
+    // it in a developer's shell would not merely change an answer here, it
+    // would decide how long this suite waits for one.
+    const deletes = (k: string) =>
+      new RegExp(`for \\(const k of \\[[^\\]]*'${k}'[^\\]]*\\]\\)\\s*delete`);
     const cli = readFileSync(join(REPO, 'server', 'test', 'ccrc-cli.test.ts'), 'utf8');
     const self = readFileSync(join(REPO, 'server', 'test', 'ccrc-account.test.ts'), 'utf8');
     for (const [name, src] of [['ccrc-cli.test.ts', cli], ['ccrc-account.test.ts', self]] as const) {
-      expect(DELETES.test(src), `${name} has no deletion array carrying `
-        + 'CCRC_ACCOUNT_AUTH_TIMEOUT, so this suite\'s answer depends on the '
-        + 'developer\'s exported shell').toBe(true);
+      for (const k of ['CCRC_ACCOUNT_AUTH_TIMEOUT', 'CCRC_ACCOUNT_PROBE_TIMEOUT']) {
+        expect(deletes(k).test(src), `${name} has no deletion array carrying `
+          + `${k}, so this suite's answer depends on the `
+          + 'developer\'s exported shell').toBe(true);
+      }
     }
   });
 });
@@ -6000,7 +6029,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     // Measured through the sourced file because that is the only way to read
     // the resolved deadline without waiting one out.
     const empty = sourceRun(home,
-      '_acct_auth_deadline\nprintf %s "$ACCT_AUTH_DEADLINE"',
+      '_acct_auth_deadline\nprintf %s "$ACCT_DEADLINE"',
       { CCRC_ACCOUNT_AUTH_TIMEOUT: '' });
     expect(empty.code, empty.stderr).toBe(0);
     expect(empty.stdout, 'an empty knob did not fall back to the default').toBe('15');
@@ -6193,5 +6222,358 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     const p = sourceRun(home, 'ACCT_LIMITS_TOUCHED=true\n_acct_probe claude\n'
       + 'printf %s "$ACCT_LIMITS_TOUCHED"');
     expect(p.stdout.endsWith('false'), p.stderr).toBe(true);
+  });
+});
+
+// ── `check`, HALF TWO: THE QUESTION THAT COSTS A REQUEST ───────────────────
+// NOTHING IN THIS TREE HAD EVER RUN `claude -p` BEFORE THIS COMMIT, so every
+// case below states its shape rather than inheriting one. Four properties are
+// measured here and nowhere else: the retry knob is off, the deadline goes
+// through `_plat_timeout` (never the bare GNU spelling, which is not in the BSD
+// userland and which `macos-platform.test.ts` refuses outright), the cwd is a
+// dedicated scratch directory so `-p`'s transcript never lands in a real
+// project's history, and `~/.cc-limits` is STAMPED across the call because the
+// lane's own statusline can write into the placer's input while the probe runs.
+
+/** A `claude` that answers `-p` from fixture files: stdout from
+ *  `<home>/fixture-probe-out`, exit code from `<home>/fixture-probe-rc`, and —
+ *  when `<home>/fixture-probe-writes-limits` exists — the statusline's own side
+ *  effect, so the stamp measurement has something to see.
+ *
+ *  `auth` IS ANSWERED `loggedIn:true`, AND ON EVERY CALL SITE HERE THAT ARM IS
+ *  BELT AND BRACES (D-2211): all of them plant this on `orchard-api`, an
+ *  openrouter lane, where `_acct_check`'s provider gate means `auth status` is
+ *  never asked at all. It is kept because the arm is what would let this helper
+ *  be planted on an ANTHROPIC lane, and a launcher that answered `-p` to an
+ *  `auth status` argv would make that lane's fixture silently wrong — but note
+ *  that such a call site also gains a NOTE, so any `expect(notes).toEqual([])`
+ *  beside it is already false.
+ *
+ *  `exec sleep`, NOT `sleep`, in the slow arm — a DEVIATION from this task's
+ *  plan snippet, and measured rather than stylistic. `timeout` signals the
+ *  child it started and nothing else, so a `sleep` running as a GRANDCHILD
+ *  survives the kill still holding the pipe that `$( )` reads: the shell blocks
+ *  for the full 30s waiting for EOF and the deadline test measures 30 seconds
+ *  instead of one. `exec` makes the sleeper the process the deadline kills. */
+function plantProbe(home: string, id: string): void {
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', id), [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/claude-argv"',
+    'printf \'%s\\n\' "retries=${CLAUDE_CODE_MAX_RETRIES-unset} cwd=$PWD" >> "$HOME/claude-env"',
+    'if [ "$1" = auth ]; then echo \'{"loggedIn":true,"authMethod":"claudeai"}\'; exit 0; fi',
+    'if [ -f "$HOME/fixture-probe-writes-limits" ]; then',
+    '  mkdir -p "$HOME/.cc-limits"',
+    `  printf '{"five":7,"seven":0,"ts":1}' > "$HOME/.cc-limits/${id}.json"`,
+    'fi',
+    'if [ -f "$HOME/fixture-probe-sleep" ]; then exec sleep 30; fi',
+    '[ -f "$HOME/fixture-probe-out" ] && cat "$HOME/fixture-probe-out"',
+    'if [ -f "$HOME/fixture-probe-rc" ]; then IFS= read -r rc < "$HOME/fixture-probe-rc"; exit "$rc"; fi',
+    'exit 0',
+  ].join('\n') + '\n', { mode: 0o755 });
+}
+
+const probeFixture = (home: string, body: unknown, rc: number): void => {
+  writeFileSync(join(home, 'fixture-probe-out'),
+    typeof body === 'string' ? body : `${JSON.stringify(body)}\n`);
+  writeFileSync(join(home, 'fixture-probe-rc'), `${rc}\n`);
+};
+
+/** The four recorded shapes of §8's table (measured on 2.1.261, spec:654-660).
+ *  `subtype` is `'success'` on every failure and is deliberately present in
+ *  each fixture: a classifier that read it would agree with the wrong one. */
+const PROBE_OK = { type: 'result', subtype: 'success', is_error: false,
+  result: 'ok', total_cost_usd: 0.0004 };
+const PROBE_401 = { type: 'result', subtype: 'success', is_error: true,
+  terminal_reason: 'api_error', api_error_status: 401,
+  result: 'Not logged in · Please run /login', total_cost_usd: 0 };
+const PROBE_REFUSED = { type: 'result', subtype: 'success', is_error: true,
+  terminal_reason: 'api_error', api_error_status: null,
+  result: 'API Error: Connection refused', total_cost_usd: 0 };
+const PROBE_WEIRD = { type: 'result', subtype: 'success', is_error: true,
+  terminal_reason: 'max_turns', api_error_status: null, result: 'gave up', total_cost_usd: 0 };
+
+/** A box whose `account-op.mjs` answers `classify --source probe` however a case
+ *  needs and delegates every other op to the real file — `staleAtBox`'s shape
+ *  (:2377) for a different skew. It exists because `_acct_probe`'s classifier
+ *  arms branch on codes bash itself can never produce: it builds a fixed argv,
+ *  so `classify` cannot be spelled wrong from there, and the SHIPPED classifier
+ *  never defers on `--source probe` (pinned below). The condition these stand
+ *  for is the one this file guards everywhere else — an `account-op.mjs` that is
+ *  not the same build as the `ccrc` calling it. */
+function classifierBox(prefix: string, probeArm: string): string {
+  const home = box(prefix);
+  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  for (const f of readdirSync(join(REPO, 'deploy'))) {
+    if (f === 'account-op.mjs') continue;
+    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
+  }
+  const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
+  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
+    'const a = process.argv;',
+    'if (a[2] === "classify" && a.includes("probe")) {',
+    probeArm,
+    '} else {',
+    `  await import(${real});`,
+    '}',
+    '',
+  ].join('\n'));
+  return home;
+}
+
+describe('ccrc account check: the probe', () => {
+  const probe = (home: string, extraEnv: NodeJS.ProcessEnv = {}) =>
+    oneObject(run(home, ['account', 'check', '--id', 'orchard-api'], '', extraEnv));
+
+  it.each([
+    ['ok', PROBE_OK, 0],
+    ['auth-dead', PROBE_401, 1],
+    ['unreachable', PROBE_REFUSED, 1],
+    ['unknown', PROBE_WEIRD, 1],
+  ] as const)('classifies %s', (verdict, body, rc) => {
+    const home = box(`ccrc-account-probe-${verdict}-`);
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, body, rc);
+    const h = probe(home)['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe(verdict);
+    expect(h['source']).toBe('probe');
+  });
+
+  it('never reads a subtype property', () => {
+    // Every fixture above carries `subtype: 'success'`, including the failures,
+    // so the four cases are the BEHAVIOURAL half of this claim. This is the
+    // structural half, and it scans for a property ACCESS rather than for the
+    // word — the word appears in this file's own prose, which is exactly why a
+    // word scan would have to be argued away with a lookahead nobody maintains.
+    const src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    expect(src, 'deploy/account-op.mjs reads a subtype property')
+      .not.toMatch(/(?:\.|\[['"])subtype/);
+  });
+
+  it('runs bounded, with retries off, from ~/.ccrc/probe', () => {
+    const home = box('ccrc-account-probe-argv-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    probe(home);
+    expect(claudeArgv(home)).toContain(
+      '-p Reply with the single word ok. --output-format json --max-turns 1');
+    const env = readFileSync(join(home, 'claude-env'), 'utf8');
+    expect(env).toContain('retries=0');
+    // `realpathSync` IS A DEFENSIVE NO-OP, and the comment says so because a
+    // false reason is a fact the next reader builds on. `mkTmp`
+    // (tmpHelpers.ts:38-52) already resolves the HOME when it hands it out, and
+    // bash sets `PWD` LOGICALLY — after `cd "$dir"` it is the spelling that was
+    // passed, symlinks and all. So both sides are already resolved; this keeps
+    // the assertion true if `mkTmp` ever stops resolving.
+    expect(env).toContain(`cwd=${realpathSync(join(home, '.ccrc', 'probe'))}`);
+    // --bare and CLAUDE_CODE_SIMPLE are never passed: bare mode reads neither
+    // the settings env block nor the OAuth token (spec:662-664).
+    expect(claudeArgv(home).join(' ')).not.toContain('--bare');
+  });
+
+  it('answers timeout on the bound, through _plat_timeout rather than bare timeout', () => {
+    const home = box('ccrc-account-probe-timeout-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    writeFileSync(join(home, 'fixture-probe-sleep'), '');
+    const h = probe(home, { CCRC_ACCOUNT_PROBE_TIMEOUT: '1' })['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe('timeout');
+    expect(String(h['detail'])).toContain('1s');
+  });
+
+  it('reports that the probe moved ~/.cc-limits, instead of moving it silently', () => {
+    const home = box('ccrc-account-probe-limits-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    expect(probe(home)['limitsTouched']).toBe(false);
+    writeFileSync(join(home, 'fixture-probe-writes-limits'), '');
+    expect(probe(home)['limitsTouched']).toBe(true);
+  });
+
+  it('names ~/.cc-limits the way ccd does — one directory, two files', () => {
+    // THROUGH THE SHARED CONSTANT, not a second spelling of the path.
+    // `single-definition.test.ts:296`'s NAMES_CCD scan pins that path to
+    // `ccdWsHelpers.ts` alone; building it here from REPO and two segments reds
+    // it — measured, D-2132's defect in the task that cites it. And the scan
+    // reads comments too, so this sentence must not spell the shape either.
+    const ccd = readFileSync(CCD, 'utf8');
+    const ccrc = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const a = /^LIMITS_DIR="([^"]+)"/m.exec(ccd)?.[1];
+    const b = /^CCRC_LIMITS_DIR="([^"]+)"/m.exec(ccrc)?.[1];
+    expect(a, 'ccd no longer declares LIMITS_DIR').toBeTruthy();
+    expect(b, 'ccrc no longer declares CCRC_LIMITS_DIR').toBeTruthy();
+    expect(b).toBe(a);
+  });
+
+  it('refuses a probe deadline it cannot honour, at the SECOND knob of the family (D-2221)', () => {
+    // A DEVIATION FROM THIS TASK'S PLAN SNIPPET, which passed
+    // `$CCRC_ACCOUNT_PROBE_TIMEOUT` straight to the deadline shim. D-2221 ruled
+    // on exactly this for the cheap question one task ago, and every word of it
+    // is truer here: `0` reads as NO deadline on a box with coreutils, so the
+    // one value an operator types to mean "do not wait" would run an UNBOUNDED
+    // BILLED request; `abc` makes GNU exit 125 without running the launcher at
+    // all, which this file would then report as `unknown` — a fact about the
+    // lane invented from a typo in the operator's shell.
+    const home = box('ccrc-account-probe-knob-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    const REFUSED: Array<[string, string]> = [
+      ['0', 'zero is refused rather than given a meaning'],
+      ['00', 'zero is refused rather than given a meaning'],
+      ['-1', 'not a whole number of seconds'],
+      ['abc', 'not a whole number of seconds'],
+      ['0.5', 'not a whole number of seconds'],
+      ['3601', 'above the 3600-second ceiling'],
+      ['99999999999999999999', 'above the 3600-second ceiling'],
+    ];
+    for (const [v, says] of REFUSED) {
+      const r = run(home, ['account', 'check', '--id', 'orchard-api'], '',
+        { CCRC_ACCOUNT_PROBE_TIMEOUT: v });
+      expect(r.code, `${JSON.stringify(v)}: ${r.stderr}`).toBe(2);
+      const j = oneObject(r);
+      expect(j['error'], JSON.stringify(v)).toBe('bad-timeout');
+      expect(String(j['detail']), JSON.stringify(v)).toContain(says);
+      expect(String(j['detail']), JSON.stringify(v)).toContain('CCRC_ACCOUNT_PROBE_TIMEOUT');
+      // AND IT REFUSED BEFORE SPENDING THE REQUEST. That is the whole point at
+      // this knob: the launcher is what bills, so a value that cannot be
+      // honoured must stop the run before the launcher is reached.
+      expect(claudeArgv(home), `${v} ran the launcher anyway`).toEqual([]);
+    }
+    // …and every honourable spelling still answers, leading zeros included.
+    for (const v of ['1', '60', '0060', '3600']) {
+      const r = run(home, ['account', 'check', '--id', 'orchard-api'], '',
+        { CCRC_ACCOUNT_PROBE_TIMEOUT: v });
+      expect(r.code, `${v}: ${r.stderr}`).toBe(0);
+      expect((oneObject(r)['health'] as Record<string, unknown>)['verdict'], v).toBe('ok');
+    }
+    // THE EMPTY KNOB IS THE DEFAULT, NOT A REFUSAL — `: "${…:=60}"` substitutes
+    // when the variable is unset OR NULL, so an exported empty string is 60 by
+    // the time the validator can look at it. Read through the sourced file,
+    // which is the only way to see the resolved value without waiting one out.
+    const empty = sourceRun(home, '_acct_probe_deadline\nprintf %s "$ACCT_DEADLINE"',
+      { CCRC_ACCOUNT_PROBE_TIMEOUT: '' });
+    expect(empty.code, empty.stderr).toBe(0);
+    expect(empty.stdout, 'an empty knob did not fall back to the default').toBe('60');
+    // …and the NORMALISED value is what the operator is shown on expiry, so
+    // `0001` never reaches a sentence as "within 0001s".
+    writeFileSync(join(home, 'fixture-probe-sleep'), '');
+    const h = probe(home, { CCRC_ACCOUNT_PROBE_TIMEOUT: '0001' })['health'] as
+      Record<string, unknown>;
+    expect(h['verdict']).toBe('timeout');
+    expect(String(h['detail'])).toContain('within 1s');
+  });
+
+  it('the SHIPPED classifier never defers on the probe, which is why there is nowhere to fall through to', () => {
+    // `_acct_probe` has no probe to fall through to — it IS the last question —
+    // so `classify` must answer every `--source probe` call with a ROW. That is
+    // a property of the classifier, and it is pinned at the classifier rather
+    // than asserted in a bash comment: the bodies below are every shape this
+    // reader can be handed, including the ones that are not objects at all.
+    for (const body of ['', 'not json at all\n', '[]', 'null', '{}', '{"is_error":true}',
+      `${JSON.stringify(PROBE_OK)}\n`, `${JSON.stringify(PROBE_401)}\n`,
+      `${JSON.stringify(PROBE_REFUSED)}\n`, `${JSON.stringify(PROBE_WEIRD)}\n`]) {
+      const r = opRun(['classify', '--source', 'probe', '--exit', '1'], body);
+      expect(r.code, `${JSON.stringify(body)}: ${r.stderr}`).toBe(0);
+      const row = JSON.parse(r.stdout) as Record<string, unknown>;
+      expect(typeof row['verdict'], JSON.stringify(body)).toBe('string');
+      expect(row['verdict'], JSON.stringify(body)).not.toBe('ok');
+    }
+    // …and `ok` is reachable, so the line above is a discrimination and not a
+    // constant: the same body at exit 0 IS the one verdict §8 guards.
+    const ok = opRun(['classify', '--source', 'probe', '--exit', '0'],
+      `${JSON.stringify(PROBE_OK)}\n`);
+    expect(JSON.parse(ok.stdout)['verdict']).toBe('ok');
+  });
+
+  it('names the classifier\'s own exit code, and carries a deferred line instead of swallowing it', () => {
+    // D-2223 F9: the stub's `||` folded every non-zero into "the health
+    // classifier could not run", which is D-2220's defect at the sibling
+    // address. Three codes, three sentences, driven through a planted
+    // `account-op.mjs` because bash builds this argv itself and cannot spell it
+    // wrong — the skew this file guards everywhere else.
+    for (const [arm, code, says] of [
+      ['  process.exitCode = 3;', 3, 'deferred (exit 3)'],
+      ['  process.stdout.write("the lane said something\\n"); process.exitCode = 4;',
+        4, 'the lane said something'],
+    ] as const) {
+      const home = classifierBox(`ccrc-account-probe-defer-${code}-`, arm);
+      seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+      plantProbe(home, 'orchard-api');
+      probeFixture(home, PROBE_OK, 0);
+      const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+      expect(r.code, `${code}: ${r.stderr}`).toBe(1);
+      const j = oneObject(r);
+      expect(j['error'], String(code)).toBe('classify-failed');
+      expect(String(j['detail']), String(code)).toContain(says);
+      expect(String(j['detail']), String(code)).toContain('orchard-api');
+    }
+    // THE OTHER HALF, AND THE ONE THE STUB LOST OUTRIGHT: node refused with a
+    // BODY. `_acct_auth_status` re-emits that envelope verbatim and leaves with
+    // node's own class; the probe threw it away and printed its own sentence,
+    // so "the box said no, here is why" arrived as "this build cannot answer".
+    const wedged = classifierBox('ccrc-account-probe-envelope-',
+      '  process.stdout.write(JSON.stringify({ ok: false, error: "wedged", '
+      + 'detail: "the classifier wedged" }) + "\\n"); process.exitCode = 7;');
+    seedRosterJson(wedged, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(wedged, 'orchard-api');
+    probeFixture(wedged, PROBE_OK, 0);
+    const r = run(wedged, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(7);
+    expect(oneObject(r)['error']).toBe('wedged');
+  });
+
+  it('says what the probe left behind, instead of the short-circuit\'s "Nothing was written."', () => {
+    // D-2210, RE-RULED. `_acct_answer` hard-codes that clause and `_acct_check`
+    // used it, which was true while `check` only ever read a credential store
+    // and a roster. This commit gives the verb a cwd it CREATES and a launcher
+    // that writes a transcript into the lane's config dir, so on the probe path
+    // the clause is false — and the file's own doctrine (`_acct_run_op`'s "$1 IS
+    // THE CALLER'S CLAUSE … one helper ending every path with one sentence would
+    // flatten two true statements into one false one") is what it is replaced
+    // with, rather than a new helper.
+    const home = staleAtBox('ccrc-account-probe-stale-health-', 'health');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(1);
+    const d = String(oneObject(r)['detail']);
+    expect(d).toContain('answer to \'health\'');
+    expect(d, 'the probe path still claims nothing was written').not.toMatch(/Nothing was written\./);
+    expect(d).toContain('.ccrc/probe');
+    // …and the SHORT-CIRCUIT path still says the simple true thing, from the
+    // same call site — which is what makes this a distinction and not a rename.
+    const quick = staleAtBox('ccrc-account-probe-stale-quick-', 'health');
+    seedRosterJson(quick, [UPSTREAM]);
+    plantClaude(quick, 'claude');
+    authFixture(quick, SIGNED_OUT, 1);
+    expect(String(oneObject(run(quick, ['account', 'check', '--id', 'claude']))['detail']))
+      .toMatch(/Nothing was written\.$/);
+  });
+
+  it('creates the scratch cwd and nothing else on the box (D-2223 F6, at the probe)', () => {
+    // The bracket that case runs on the SHORT-CIRCUIT path, where no probe runs
+    // at all; this is the other path, and equality is impossible here by
+    // construction — the whole point of the probe is that it runs a launcher.
+    // So the claim is the DIFF: everything this path adds to the box is the one
+    // directory `ccrc` creates plus the two logs the FIXTURE launcher keeps. A
+    // real `-p` also writes a transcript under the lane's own config dir, which
+    // this fixture cannot show and which the refusal clause therefore names in
+    // words rather than pretending to have measured.
+    const home = box('ccrc-account-probe-writes-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    const before = new Set(snapshotHome(home));
+    const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(0);
+    const added = snapshotHome(home).filter((l) => !before.has(l))
+      .map((l) => l.split(' ').slice(0, 2).join(' ')).sort();
+    expect(added).toEqual(['D .ccrc/probe', 'F claude-argv', 'F claude-env']);
   });
 });

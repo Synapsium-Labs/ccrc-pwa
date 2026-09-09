@@ -697,13 +697,40 @@ function classify(source, body, exit, timedOut, deadline) {
   return classifyProbe(row, j, exit);
 }
 
-/** STUB, replaced whole by Task 30. It exists in THIS commit because
- *  `classify` calls it on every `--source probe` and an undefined function is a
- *  ReferenceError, not a verdict: node would exit non-zero, the bash half would
- *  refuse `classify-failed`, and this task's own fall-through and
- *  non-anthropic cases could not pass. */
-function classifyProbe(row, _j, _exit) {
-  return row('unknown', 'this build does not run the probe yet');
+/** §8's table (spec:654-660), in order, and it is exhaustive by construction:
+ *  anything the first four arms do not claim is `unknown`, which §8 ends with —
+ *  "never reported as ok".
+ *
+ *  IT NEVER READS A `subtype` PROPERTY. That field is `'success'` on every one
+ *  of these failures (spec:662), so a classifier keyed on it would call a 401
+ *  healthy. The evidence is `is_error`, `terminal_reason`, `api_error_status`
+ *  and the result text, and nothing else — pinned by a scan for the property
+ *  access, not for the word.
+ *
+ *  IT ALWAYS RETURNS A ROW, NEVER A DEFERRAL, and that is a contract rather
+ *  than an accident: `defer` means "no verdict, ask the next question", and the
+ *  probe IS the next question. `_acct_probe` has an arm for a classifier that
+ *  broke that rule anyway, because the two halves of this pair ship as separate
+ *  files and can be different builds; this side is where the rule lives.
+ *
+ *  §8's `auth-dead` row has a SECOND evidence clause this does not implement —
+ *  "or the launcher's own `not logged in` on stderr" — because the caller sends
+ *  the launcher's stderr to /dev/null: reading it would mean capturing a second
+ *  stream and matching launcher-controlled prose, and the only lanes that reach
+ *  the probe with a dead credential and NO JSON are the non-anthropic ones,
+ *  which today answer `unknown` (never `ok`). Recorded, not silently dropped. */
+function classifyProbe(row, j, exit) {
+  if (exit === 0 && j.is_error !== true) return row('ok', 'the lane answered one turn');
+  if (j.is_error === true && j.terminal_reason === 'api_error') {
+    const status = j.api_error_status ?? null;
+    const text = typeof j.result === 'string' ? j.result : '';
+    if (status === 401) return row('auth-dead', text || 'the endpoint refused the credential (401)');
+    if (status === null && /^API Error: (Connection refused|getaddrinfo|.*\b5\d\d\b)/.test(text)) {
+      return row('unreachable', text);
+    }
+    return row('unknown', `api_error with status ${status === null ? 'null' : status}: ${text}`);
+  }
+  return row('unknown', `exit ${exit}, terminal_reason ${j.terminal_reason ?? 'absent'}`);
 }
 
 function out(o) {

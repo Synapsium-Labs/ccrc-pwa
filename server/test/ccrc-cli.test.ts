@@ -96,7 +96,8 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   // below red — a flake that depends on who ran the suite. Every CCRC_* input
   // this CLI reads is removed by name, so the fixture decides, never the shell.
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
-    'CCRC_ACCOUNT_AUTH_TIMEOUT']) delete env[k];
+    'CCRC_ACCOUNT_AUTH_TIMEOUT',
+    'CCRC_ACCOUNT_PROBE_TIMEOUT']) delete env[k];
   return env;
 }
 
