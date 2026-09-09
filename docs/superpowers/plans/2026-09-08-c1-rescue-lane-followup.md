@@ -1117,3 +1117,41 @@ Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six 
   `pools-existence-pairing.test.ts`'s corrected paragraph wrote "all but two", a restated cardinal two
   lines after the sentence forbidding one. (c) `ccd/ccd` cited `server/src/server.ts:1305` for a regex
   that is at 1306 on both refs — replaced with the anchor this file's own convention requires.
+
+---
+
+## Deviations found — round 5's merge gate (the last two, and the ruling that stops the loop)
+
+- **D-2339 (2026-09-09)** — **a tautological assertion, in the commit whose subject is assertions that
+  pass for the wrong reason.** `ccd-reg-get-census.test.ts` closed with
+  `expect(bare - filtered, '<message>').toBe(bare - filtered)` — a value compared to itself. It cannot
+  red on any tree, and its message named a check it did not perform. Proved both ways by the gate: `+ 1`
+  on the right-hand side reds, so the line executes; a content mutation moving the real delta 1 → 2
+  leaves it green. The property it named is not independently checkable either — `bare - filtered` IS
+  the comment-line count by construction, and the two assertions above already pin each stated number to
+  reality, so their difference follows. What is NOT derivable is that anything quotes the pattern at
+  all: strip the citation out of `cmd_prefer`'s comment and both assertions track the new pair while the
+  prose goes on explaining a self-count that no longer happens. That is what the line asserts now.
+- **D-2340 (2026-09-09)** — **a prose regression built on an inherited measurement.** Round 5 rewrote
+  the `mkdir` anchor's history to say round 3's `mkdir -p "$POOLS_DIR"` spelling "matched nothing at
+  all … zero hits". Round 4's wording — "matched only its own citation" — was correct: measured with
+  GNU grep at `391b3e1f` and at `be16dbf3`, that spelling returns **1**, the comment quoting it. The
+  zero came from a round-4 review artifact rather than from a re-measurement, and that artifact's shell
+  resolves `grep` to a shim that mishandles a literal `$` mid-pattern. The sentence also self-refuted on
+  the shipped tree, because re-quoting the spelling is itself a match. Two lessons, and the second is
+  the one worth carrying: **a measurement quoted from a review is a claim, not a fact** — the same rule
+  this plan applies to every other number, applied to the numbers that arrive in findings.
+- **D-2341 (2026-09-09)** — **the citation sweep is its own PR, against a frozen tree, with nothing else
+  in the commit.** The gate's ruling and its measurement: round 4 found 6 defects, round 5 closed them
+  and its own refute pass found 7 inside the commit that closed them, and the merge gate found ~12
+  inside the commit that closed those 7 — zero behavioural, zero touching a guard, eleven of them
+  citations, most introduced or left standing by the commit whose purpose was sweeping that class.
+  **Each round fixes citations at about the rate it creates them.** The delta's own proportions say why:
+  272 lines of `ccd/ccd` against 340 of plan, so the prose is now larger and more fragile than the code,
+  and every count in it is a claim about a tree the next commit moves. **A citation swept in the same
+  commit as other work is stale before the commit lands.** Known open and deliberately NOT fixed here:
+  "four sites carry the gate" where the same commit made it five; "133 at C1" left in the new suite's
+  header after the delta corrected it to 134 in `ccd/ccd`; "17 on `ws/clear-meadow`" corrected at one of
+  two sites; the M13/M4/M5 rows falsified by this commit's own changes; `cmd_start`'s "the paragraph
+  below calls it" where that paragraph was corrected in the SAME commit to say the opposite; "ONE of its
+  five sentences" now six; and "creation-only" left standing at one site after D-2317 retracts it.
