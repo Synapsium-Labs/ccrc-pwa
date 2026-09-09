@@ -85,10 +85,10 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     expect(from, 'the hang-surface header could not be found').toBeGreaterThan(-1);
     expect(to, 'the end of the census block could not be found').toBeGreaterThan(from);
     const block = src.slice(from, to);
-    const history = block.indexOf('It has moved four times in five rounds');
+    const history = block.indexOf('It has moved five times now');
     expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1);
     const outsideHistory = block.slice(0, history)
-      + block.slice(block.indexOf('\n', block.indexOf('converted the three verb readers')));
+      + block.slice(block.indexOf('\n', block.indexOf('Every earlier move left a stale cardinal')));
     // WHAT THIS REFUSES, STATED NARROWLY ENOUGH TO BE TRUE. An earlier cut
     // matched `/\b1[0-9]{2}\b/` and its failure message claimed to refuse "any
     // new three-digit cardinal" — measured, a restated 98 or 260 sailed
