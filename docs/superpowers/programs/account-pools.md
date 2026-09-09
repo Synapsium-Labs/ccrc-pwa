@@ -1846,3 +1846,56 @@ it writes strand markers and stamps only. R1's carve-out and #69's changes do no
 Still outstanding at `6f27554b`: the two one-liners from mail 377 (the tautology, and `13005`'s "matched
 nothing at all" where round 4 had it correct). Order given to the worker: the two one-liners, then the
 merge, then push once — CI can only run after the conflict is gone.
+
+---
+
+## 2026-09-09 23:1x — the false zero was MINE, and its cause is the environment (worker mail 382 → my 386)
+
+Worker pushed **`86260cc5`** at 22:55 with both merge-gate fixes. Their 382 crossed with my 385: #73 had
+already landed at ~22:0x, so **#69 was CONFLICTING before their push and their "ready to merge" was
+measured against a main that had moved.** `gh pr view 69` now lists **no checks at all** at that head —
+the clearest demonstration yet that a conflicting PR runs nothing.
+
+**THE ROUND-4 ZERO WAS MINE, AND THE CAUSE IS WORSE THAN "I QUOTED A REVIEW".** The worker booked D-2340
+saying they shipped a number out of my gate artifact without re-measuring. True — and I measured why it
+was wrong: **`/usr/bin/grep` on this box is `ugrep 7.8.4`, while GNU grep sits at `/bin/grep` (3.11).**
+PATH order decides which one a session runs, and they disagree: ugrep reads a `$` MID-PATTERN as an
+end-of-line anchor even in a BRE, so
+
+    grep  -c 'mkdir -p "$POOLS_DIR"' <round-3 tree>  -> 0   (ugrep, rc=1)
+    grep -cF 'mkdir -p "$POOLS_DIR"' <round-3 tree>  -> 1
+
+**My round-4 artifact ran the unfiltered form, reported zero, the worker shipped it into `ccd/ccd`, and I
+then flagged the result as a prose regression in round 5.** A closed loop of my own making — and the
+"shell-quoting will betray you, use `-F` for `$` patterns" line was in the preamble *I wrote for my own
+review subagents*. I put the rule in the instructions and not in my hands.
+
+So D-2340 is stronger than the worker wrote it. Under "a measurement quoted from a review is a claim, not
+a fact" sits: **a measurement is only a fact together with the tool that produced it.** `grep` is not the
+name of one program. Recorded as memory `a-measurement-is-only-a-fact-with-its-tool`.
+
+**Blast radius audited against GNU grep -F, not assumed:** `_swap_target "` = 1 occurrence (my "exactly
+ONE call site" holds); `! _pool_untaggable` = 5 (holds); `_project_pool_state` = 12 non-comment lines =
+1 definition + **11 consumers**, on both the round-4 and round-5 trees (holds, and D-2304's premise with
+it). None of those patterns carried a `$`. **The blast radius is the one mkdir negative.**
+
+**I withdrew my own fix proposal.** I had proposed asserting `statedBare - statedFiltered` against the
+comment-line count. The worker is right that `bare - filtered` IS that count by construction, so any
+assertion on the difference is derivable from the two above it — my "checkable form" was a second
+tautology wearing arithmetic. Their `bare > filtered` is the non-derivable claim (that anything quotes
+the pattern at all), measured RED in isolation with the two neighbours held green. Better than mine.
+
+**The glob non-finding resolves in their favour and mine.** `ls test/ | grep -E '^(ccd|pools).*\.test\.ts$'`
+picks up the two `ccdargv-*` suites — 65 — plus ownership, deviation-refs and single-definition = **68**.
+My 63 + those five is exactly it, which is why **the skip count matched at 12**. Declining to report it
+in rounds 4 and 5 was right both times; the skip-count match was the signal.
+
+**Merge re-measured at the new head, handed over as a patch, not pushed:** conflict is still exactly one
+marker; drop both marker lines, apply the census fix **132/108 → 133/109**, re-mark. Verified: server
+279/280 files (the one failure `session-hook`'s 4x timing assertion, **green in isolation**, as was
+`pr-sweep` — the same two the worker saw, both on the known-load-flake list, neither in the delta), agent
+18, pwa 80 + typecheck clean, one marker verifying, platform block `e7f0696d` unchanged.
+
+**Verdict unchanged: merge once the conflict is gone.** Nothing in the merge touches the round-5
+clearance, and the census suite caught the one thing that did need changing, by itself, the instant main
+moved.
