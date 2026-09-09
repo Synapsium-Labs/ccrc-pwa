@@ -141,4 +141,56 @@ describe('ask store methods', () => {
     expect(row.state).toBe('released');
     expect(row.answeredBy).toBeNull();
   });
+
+  // Task 19: `currentAskFor`, the fleet chip's read — unlike `heldAskFor`
+  // above, NOT filtered to `'held'`. Every state the row can be in.
+  describe('currentAskFor — the newest row for a child, in ANY state', () => {
+    it('is null when the child has never had an ask row', () => {
+      const s = mk();
+      expect(s.currentAskFor('nobody')).toBeNull();
+    });
+
+    it('answers the live held row', () => {
+      const s = mk();
+      const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+      expect(s.currentAskFor('c')).toEqual(s.askById(id));
+      expect(s.currentAskFor('c')!.state).toBe('held');
+    });
+
+    it('answers a row that has moved past held — answering, answered, released, stale', () => {
+      const s = mk();
+      const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+      s.takeAskForAnswer(id, 1000);
+      expect(s.currentAskFor('c')!.state).toBe('answering'); // heldAskFor would answer null here
+      s.settleAsk(id, 'p', 'a', 2000);
+      expect(s.currentAskFor('c')!.state).toBe('answered');
+    });
+
+    it('answers the NEWEST row once a second ask is minted for the same child', () => {
+      // The precedence a fresh mint relies on (`currentAskFor`'s own
+      // docstring): a new insert only ever happens once the previous row has
+      // left `held`, so ordering by id DESC always names the CURRENT
+      // question, not a stale ruling from an earlier one.
+      const s = mk();
+      const first = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k1',
+        askAt: 1000, dialogId: 'd1', question: 'first?', options: ['a'], now: 1 });
+      s.takeAskForAnswer(first, 1000);
+      s.settleAsk(first, 'p', 'a', 2000);
+      const second = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k2',
+        askAt: 3000, dialogId: 'd2', question: 'second?', options: ['a'], now: 3 });
+      const current = s.currentAskFor('c')!;
+      expect(current.id).toBe(second);
+      expect(current.state).toBe('held');
+      expect(current.question).toBe('second?');
+    });
+
+    it('scopes to the named child — a sibling\'s ask never leaks through', () => {
+      const s = mk();
+      s.insertAsk({ childId: 'sibling', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+      expect(s.currentAskFor('c')).toBeNull();
+    });
+  });
 });

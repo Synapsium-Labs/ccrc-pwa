@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -9,6 +9,8 @@ import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
 import type { PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
@@ -721,6 +723,159 @@ describe('hook state on the wire', () => {
     expect(before.hookState).toBeNull();
     expect(after.hookState).toBe('done');
     expect(afterWaiting.hookState).toBe('waiting');
+  });
+});
+
+// Task 19: `FleetSession.ask`, computed server-side in `assembleFleet` off a
+// real `CoordStore` — ruling F5, NOT a consumer of `GET /api/asks`. The
+// `coord/store.ts` fixture idiom copied verbatim from `asks-store.test.ts`'s
+// own `mk()`.
+describe('the ask chip (Task 19)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+
+  it('reads a HELD ask row as the "held" chip, parentId carried verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+  });
+
+  it('folds ANSWERING onto "held" — a digit has not landed, so a parent may still (attempt to) answer', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true); // held -> answering
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+  });
+
+  it('reads a settled ask row as the "answered" chip, once a parent has ruled', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.settleAsk(id, 'coord-1', 'a', 2000); // answering -> answered
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1' });
+  });
+
+  it('folds RELEASED to no chip — the operator\'s own ordinary push already fired', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    expect(coord.releaseAsk(id, 2000)).toBe(true); // held -> released
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('folds STALE to no chip — the dialog itself is gone, nothing left to explain', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    expect(coord.staleAsk('d', 'claude-demo', 2000)).toBe(true); // held -> stale
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('is null for a session CoordStore holds no ask row for at all', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('is null with no `coord` passed at all — a dark box, or a caller that predates the lane', async () => {
+    // Same registry row, and a coord store that genuinely HOLDS a live held
+    // ask for it — proving the null comes from the missing 11th argument,
+    // not from an empty store.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000);
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  // Fix round 1: `assembleFleet` is called UNWRAPPED from `FleetWatcher.tick()`
+  // and the `/ws/fleet` connect handler — neither wraps the call in its own
+  // try/catch, so a synchronous `node:sqlite` throw off a broken coord.db
+  // must degrade INSIDE this function, never escape it. Closing the
+  // connection reproduces the same class of throw a full disk or a lock race
+  // would (`push-copy.test.ts`/`fleetws.test.ts`'s own idiom for this).
+  it('degrades to a null ask, and warns, rather than throwing when coord.db is broken', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    coord.db.close();
+    await expect(assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    )).resolves.toBeTruthy();
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+    expect(warnSpy.mock.calls.some(([line]) => String(line).includes('currentAskFor'))).toBe(true);
+    warnSpy.mockRestore();
   });
 });
 

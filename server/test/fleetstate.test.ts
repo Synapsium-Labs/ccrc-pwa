@@ -17,7 +17,7 @@ const session = (id: string): FleetSession => ({
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
-  started: true, spawnState: null,
+  started: true, spawnState: null, ask: null,
 });
 
 describe('fleetstate', () => {

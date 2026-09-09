@@ -20,7 +20,7 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  graphGateCount, graphReadCount, substrateFault, unmeasuredFields,
+  graphGateCount, graphReadCount, sessionAsk, substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -129,6 +129,14 @@ export function SessionLine({
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
+
+  // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
+  // `session.ask` directly — the live `fleet` frame is cast, not revived
+  // (see `sessionAsk`'s own docstring), so a server predating this field
+  // can omit the key at runtime despite the type calling it required. Only
+  // `held`/`answered` ever come back — the two states the design doc gives
+  // words to — so no further filtering is needed here.
+  const ask = sessionAsk(session);
 
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
@@ -406,6 +414,29 @@ export function SessionLine({
                 {session.held}
               </button>
             )
+          )}
+
+          {/* Task 19: the ask pre-emption lane's chip (design doc §2.8).
+              Informational only — no action, no navigation, the operator's
+              existing answer path is untouched. Same quiet register as
+              .sess-held next door (mono, truncating, ink-tertiary — joins
+              its shared rule in fleet.css rather than minting a new pair),
+              because it is the same KIND of cell: a short, verbatim fact
+              about who else is involved with this session right now. The
+              full sentence lives in `title`, past the cell's own ellipsis,
+              same contract as .sess-held. */}
+          {ask !== null && (
+            <span
+              className="sess-ask-state"
+              data-ask-state={ask.state}
+              title={
+                ask.state === 'held'
+                  ? `${ask.parentId} may answer this question before the operator is notified`
+                  : `${ask.parentId} answered this question before the operator was notified`
+              }
+            >
+              {ask.state === 'held' ? `held — ${ask.parentId} may answer` : `ruled by ${ask.parentId}`}
+            </span>
           )}
 
           {/* WHICH KIND of dead, as a cell rather than a bucket (spec §4.4,

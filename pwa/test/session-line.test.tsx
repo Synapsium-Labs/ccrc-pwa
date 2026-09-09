@@ -21,7 +21,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 describe('label', () => {
@@ -546,6 +546,54 @@ describe('held chip', () => {
     const chip = document.querySelector('[data-held]');
     expect(chip).not.toBeNull();
     expect(chip).toHaveAttribute('title', 'program:x wave:2/4');
+  });
+});
+
+// The ask pre-emption lane's chip (design doc §2.8, Task 19). Same
+// `data-*`/`title` pattern as the held chip above, and deliberately the same
+// KIND of cell — a short, verbatim fact, informational only.
+describe('ask chip', () => {
+  it('shows "held — <parent> may answer" while a parent may still pre-empt', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('held — coord-1 may answer')).toBeInTheDocument();
+  });
+
+  it('shows "ruled by <parent>" once a parent has answered', () => {
+    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-1')).toBeInTheDocument();
+  });
+
+  it('renders neither chip when the session carries no ask — byte-identical to today', () => {
+    const { container } = render(<SessionLine session={s({ ask: null })}
+                                                onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+    expect(screen.queryByText(/may answer/)).toBeNull();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+  });
+
+  it('marks the chip data-ask-state for tests, and carries the full sentence as a title', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('[data-ask-state]');
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveAttribute('data-ask-state', 'held');
+    expect(chip).toHaveAttribute('title', 'coord-1 may answer this question before the operator is notified');
+  });
+
+  it('does not collide with .sess-ask (the hookState askSummary line) — different cell, different class', () => {
+    // The name collision this task was warned off is `AskState` (ToolCard.tsx's
+    // own local, unrelated three-member type) — this is a DIFFERENT, adjacent
+    // collision risk: `.sess-ask` already exists as the askSummary third line
+    // (`describe('ask summary')` above). Both can render on the same row at
+    // once, and neither may shadow the other's class or text.
+    render(<SessionLine session={s({
+      hookState: 'waiting', askSummary: 'Deploy now?',
+      ask: { state: 'held', parentId: 'coord-1' },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
+    expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
   });
 });
 

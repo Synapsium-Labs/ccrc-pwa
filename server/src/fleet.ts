@@ -12,6 +12,9 @@ import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress
 // producer and the two must not be able to disagree — see its own docstring.
 import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
+// Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
+// from this file, the same pairing `watch.ts` already has with both.
+import type { AskRow, CoordStore } from './coord/store.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -58,6 +61,52 @@ function hookAskText(hs: HookState | null): string | null {
   }
   const { tool, summary } = hs.ask.approval;
   return tool === '' && summary === '' ? null : `${tool}: ${summary}`;
+}
+
+/**
+ * `FleetSession.ask`'s server-side fold (Task 19, ruling F5) — the ONE place
+ * an `asks` table row becomes the wire's two-state chip. See
+ * `FleetSession.ask`'s own docstring (shared/api.ts) for the full reasoning;
+ * restated briefly here because this is where the mapping actually happens:
+ * `held`/`answering` both fold onto `held` (a digit has not landed, so the
+ * design doc's "while a parent may still pre-empt" still holds), `answered`
+ * passes through, and `released`/`stale`/`unknown` fold to no chip at all —
+ * the operator's ordinary push already fired or the dialog is gone, so
+ * there is nothing left for this chip to explain.
+ */
+function fleetAsk(row: AskRow | null): FleetSession['ask'] {
+  if (row === null) return null;
+  if (row.state === 'held' || row.state === 'answering') return { state: 'held', parentId: row.parentId };
+  if (row.state === 'answered') return { state: 'answered', parentId: row.parentId };
+  return null;
+}
+
+/**
+ * `coord.currentAskFor`'s guarded read (fix round 1, found by the full suite
+ * rather than by any Task 19 test: `push-copy.test.ts`'s "a broken coord.db
+ * degrades, never crashes the poll" and `fleetws.test.ts`'s matching
+ * cold-start case). `assembleFleet` is called UNWRAPPED from both
+ * `FleetWatcher.tick()` and the `/ws/fleet` connect handler — neither site
+ * wraps the call in a `try`/`catch` of its own, because every OTHER read
+ * inside this function already degrades internally (tolerant `io` reads
+ * return null, never throw). `node:sqlite` does not: a closed connection or
+ * a lock race throws SYNCHRONOUSLY on the next statement, and `tick()`'s own
+ * docstring rule is that one bad lane must not kill the others — every
+ * neighbouring `CoordStore` call in `watch.ts` already earns that
+ * non-throwing property with its own try/catch, and this one was the
+ * exception. Warns once PER SESSION on a broken box (this runs inside
+ * `recs.map`), which is noisier than the once-per-tick warns elsewhere, but
+ * matches every other lane's "one bad read degrades, does not silently
+ * vanish" contract.
+ */
+function readCurrentAsk(coord: CoordStore | undefined, childId: string): AskRow | null {
+  if (!coord) return null;
+  try {
+    return coord.currentAskFor(childId);
+  } catch (err) {
+    console.warn(`ccrc-server: currentAskFor(${childId}) failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+    return null;
+  }
 }
 
 /**
@@ -258,6 +307,17 @@ export async function assembleFleet(
    * read with `sweepHookStates`/`detectDialogs` in the first place.
    */
   records?: SessionRecord[],
+  /**
+   * Task 19: the ask pre-emption lane's own store, when this box runs
+   * coordination at all — `undefined` on every caller that predates the
+   * lane's threading here, on a dark box, and in every existing test, which
+   * is exactly why `session.ask` below defaults to `null` rather than
+   * throwing on a missing store. One synchronous, indexed SQLite read per
+   * session (`currentAskFor`, keyed on `asks_by_child`) — cheap beside the
+   * registry/live-state reads this assembly already does per row, and paid
+   * only when a `coord` is actually passed.
+   */
+  coord?: CoordStore,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
@@ -428,6 +488,13 @@ export async function assembleFleet(
       held: r.held,
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs, liveWaitingFor),
+      // Task 19's chip. No `coord` at all (a dark box, or a caller that
+      // predates the lane) reads exactly like "no ask row for this child" —
+      // see `fleetAsk`/`FleetSession.ask`'s own docstrings for the state
+      // fold. `readCurrentAsk` (fix round 1) is the guarded read: a broken
+      // coord.db degrades to null here rather than throwing out of
+      // `assembleFleet`, which neither caller wraps.
+      ask: fleetAsk(readCurrentAsk(coord, r.id)),
       subagents: hs?.subagents ?? null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them

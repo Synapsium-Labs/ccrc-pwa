@@ -3846,6 +3846,26 @@ export class CoordStore {
     return row === undefined ? null : this.hydrateAsk(row);
   }
 
+  /** Task 19's fleet-chip lookup: the newest ask row for this child, in ANY
+   *  state — unlike `heldAskFor` above, which is scoped to `'held'` for Task
+   *  12's operator-answer lookup and would answer `null` through
+   *  `answering`/`answered`/`released`/`stale` alike. This method makes no
+   *  judgement about which states are worth showing; `fleet.ts`'s `fleetAsk`
+   *  does that folding on the row this returns, the same "hydrate raw, let
+   *  the caller fold" split `asksForParent` already keeps. Keyed on
+   *  `asks_by_child` (schema.ts) — an indexed read, not a scan. `ORDER BY id
+   *  DESC LIMIT 1` names the CURRENT question even once a second ask has
+   *  been minted for the same child, because a fresh insert only ever
+   *  happens once the previous row has left `held` (`insertAsk`'s own
+   *  docstring) — there is never more than one row in flight to disambiguate
+   *  by anything other than recency. */
+  currentAskFor(childId: string): AskRow | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE childId = ? ORDER BY id DESC LIMIT 1`,
+    ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
+    return row === undefined ? null : this.hydrateAsk(row);
+  }
+
   /** THE GUARD IS IN THE `WHERE` (the `endClaim` shape). Two predicates, and
    *  they are DIFFERENT refusals a caller acts on differently: `not-held`
    *  means another principal already took this row (D-2171); `ask-moved`

@@ -22,7 +22,7 @@ const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
-  started: true, spawnState: null, ...over,
+  started: true, spawnState: null, ask: null, ...over,
 });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
