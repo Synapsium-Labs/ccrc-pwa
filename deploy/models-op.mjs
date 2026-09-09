@@ -46,8 +46,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, availableFor, deriveModels,
-  parseCatalogue, parseRegistry,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, availableFor,
+  deriveModels, parseCatalogue, parseRegistry,
 } from '../shared/models.mjs';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
@@ -123,7 +123,13 @@ function refuse(code, error, detail, field) {
 /** A `RegistryInvalid` turned into a refusal, with the ONE verb-level remedy
  *  the validator cannot know: which subcommand fixes this field. */
 const FIELD_REMEDY = {
-  subagent: "Run 'ccrc models <id> set-subagent <class>' to point it at a class that has a model.",
+  // Fix round 2A (N1): this text fires only from `RegistryInvalid` — a value
+  // outside `CLASSES` entirely, or one whose slot is null — never for
+  // `opus`/`fable`, which `parseRegistry` no longer refuses (it READS a
+  // legacy value; only the renderer and this verb refuse to ACT on it). Its
+  // own remedy is therefore always runnable: `set-subagent` only ever
+  // writes `haiku` or `sonnet`.
+  subagent: "Run 'ccrc models <id> set-subagent <haiku|sonnet>' to point it at a class that has a model.",
   discovery: "Run 'ccrc models <id> discovery add <modelId>' or 'discovery catalogue'.",
 };
 function refuseRegistry(e, id) {
@@ -264,9 +270,29 @@ function materialise(account, registry, catalogue) {
     block = modelEnvBlock(registry, catalogue);
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
-    // An UNSEEDED lane routes nowhere and gets no env block. A lane that is
-    // seeded but unroutable is refused by the MUTATION path before it ever
-    // reaches here, so this branch only ever means "nothing assigned yet".
+    // Fix round 2A (N1): a registry reached here WITHOUT going through the
+    // MUTATION path's own pre-check (which already refuses an unroutable
+    // result before anything is written) whenever the `materialise` verb is
+    // run directly against a registry that was made invalid some other way
+    // — chiefly a `subagent: opus`/`fable` value left on disk from before
+    // the 2026-09-09 narrowing, which `parseRegistry` now reads rather than
+    // refuses (see its doc comment). Two shapes throw here, and they are NOT
+    // the same failure:
+    //  - the PRIMARY chain is unroutable (opus/sonnet/haiku all null, so
+    //    ANTHROPIC_MODEL has nothing to resolve): the lane truly routes
+    //    nowhere. An UNSEEDED lane (nothing assigned at all) is legal and
+    //    gets no env block silently; a lane seeded with fable alone is the
+    //    same failure and IS an error — `unroutable-lane`, as before.
+    //  - the primary chain resolves fine and only `CLAUDE_CODE_SUBAGENT_MODEL`
+    //    cannot be rendered (an invalid or null-slot `subagent`): the lane
+    //    still routes ordinary requests, it just cannot get a settings.json
+    //    written until the field is repaired — the same shape as the I/O
+    //    failure below, so it carries the same code, `settings-unwritable`.
+    const primaryRoutable = registry.classes.opus !== null || registry.classes.sonnet !== null
+      || registry.classes.haiku !== null;
+    if (primaryRoutable) {
+      return { err: ['settings-unwritable', e.message] };
+    }
     if (CLASSES.some((c) => registry.classes[c] !== null)) {
       return { err: ['unroutable-lane', e.message] };
     }
@@ -347,6 +373,30 @@ function settingsDrift(account, registry, catalogue) {
   return Object.keys(want).filter((k) => env[k] !== want[k]);
 }
 
+/** Fix round 2A (N1): the message `modelEnvBlock` would throw rendering this
+ *  registry's env block, or null when it would succeed. `settingsDrift`
+ *  above hits the same throw and silently reports `[]` — correct for a drift
+ *  LIST (there is nothing to compare against), wrong for `show`, which must
+ *  NAME the reason nothing can be materialised rather than answer as if the
+ *  lane were fine. A registry with NOTHING assigned across all four classes
+ *  is the legitimate unseeded state (deviation B-1) and reports null too —
+ *  there is nothing yet to render, not a refusal of something the operator
+ *  asked for. Any other throw (a fable-only lane with no primary class, or —
+ *  the case this round exists for — a legacy `subagent: opus`/`fable` left
+ *  on disk from before the 2026-09-09 narrowing, or one naming a null slot)
+ *  is a real, operator-actionable problem. */
+function renderRefusal(registry, catalogue) {
+  if (registry === null) return null;
+  if (!CLASSES.some((c) => registry.classes[c] !== null)) return null;
+  try {
+    modelEnvBlock(registry, catalogue);
+    return null;
+  } catch (e) {
+    if (!(e instanceof ModelEnvInvalid)) throw e;
+    return e.message;
+  }
+}
+
 /** The `show` answer, which every mutation also returns so a caller sees the
  *  state it produced without a second call. */
 function describe(account, registry, catalogue) {
@@ -361,6 +411,7 @@ function describe(account, registry, catalogue) {
       ? null
       : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
     settingsDrift: settingsDrift(account, registry, catalogue),
+    renderRefusal: renderRefusal(registry, catalogue),
   };
 }
 
@@ -742,7 +793,7 @@ function main(argv) {
     if (!CLASSES.includes(a.class)) {
       return refuse(1, 'unknown-class',
         `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}. "subagent" is not one of `
-        + `them — run 'ccrc models ${a.id} set-subagent <class>' to choose which class subagents `
+        + `them — run 'ccrc models ${a.id} set-subagent <haiku|sonnet>' to choose which class subagents `
         + 'run as.');
     }
     if (a.model === 'none') {
@@ -797,12 +848,23 @@ function main(argv) {
       return refuse(1, 'unknown-class',
         `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
     }
+    if (!SUBAGENT_CLASSES.includes(a.class)) {
+      // Measured 2026-09-09 on Claude Code 2.1.267: a subagent set to opus or
+      // fable runs on the sonnet slot's model regardless of either class's
+      // own slot, so writing either would be a choice the client silently
+      // overrides. Refused HERE, at configuration time, the same principle
+      // as the null-slot refusal below.
+      return refuse(1, 'subagent-class-unsupported',
+        `account "${a.id}": subagent must be haiku or sonnet, not ${a.class}. Measured 2026-09-09 on `
+        + `Claude Code 2.1.267, a subagent set to opus or fable runs on the sonnet slot's model `
+        + 'regardless, so it is refused rather than written. Nothing was written.', 'subagent');
+    }
     if (next.classes[a.class] === null) {
       // Refused HERE, with the remedy that names the class the caller asked
       // for — the validator's own sentence cannot know which class was meant.
       return refuse(1, 'class-unassigned',
         `account "${a.id}" routes ${a.class} to nothing, so subagents cannot run as it: `
-        + 'CLAUDE_CODE_SUBAGENT_MODEL would be a sentinel and every subagent on this lane would '
+        + 'CLAUDE_CODE_SUBAGENT_MODEL would resolve to a sentinel and every subagent on this lane would '
         + `fail. Run 'ccrc models ${a.id} set-class ${a.class} <modelId>' first.`, 'subagent');
     }
     next.subagent = a.class;

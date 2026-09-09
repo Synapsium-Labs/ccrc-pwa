@@ -1484,6 +1484,39 @@ describe('the model files, and who reads each one', () => {
     const src = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
     expect(src).toContain("export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;");
   });
+
+  it('ANTHROPIC_SMALL_FAST_MODEL never reaches `fable`, pinned in source (fix round 2A, N4)', () => {
+    // `modelenv.test.ts`'s own guard for this chain used to be a REGISTRY
+    // (haiku and sonnet both null, opus and fable both set) that reached this
+    // exact line, so a `?? fable` added to it would red. Fix round 1, v2
+    // (2026-09-09) narrowed `subagent` to haiku/sonnet, and the registry that
+    // test built also named `subagent: 'opus'` to stay otherwise legal — a
+    // shape `parseRegistry`'s own gate refused BEFORE `modelEnvBlock` ever
+    // reached this line, so the commit correctly retired that case rather
+    // than ship a registry `parseRegistry` would refuse. Nothing else took
+    // its place: measured 2026-09-10, mutating this line to
+    // `haiku ?? sonnet ?? fable ?? sentinel('haiku')` and running the four
+    // model test files (models, modelenv, models-op, ccrc-models) reds
+    // NOTHING — `Test Files 4 passed (4)`. A source pin is the only guard
+    // left, the same
+    // shape `modelenv.test.ts`'s own static pin further down that file uses
+    // for `ANTHROPIC_MODEL`'s chain.
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'modelenv.mjs'), 'utf8');
+    expect(src).toContain("ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),");
+  });
+
+  it('SUBAGENT_CLASSES is one list spelled in two languages — shared/models.mjs and ccd/ccrc\'s MODELS_SUBAGENT_CLASSES (round 3, NEW-4)', () => {
+    // `MODELS_CLASSES` (the four) is covered by the enumeration scan above.
+    // Nothing pinned its narrower sibling — the two classes `set-subagent`
+    // accepts — before this: a divergence between the node list and the bash
+    // copy is message-text only (it cannot misroute a write), but it can
+    // still promise a class the other half refuses, or refuse one the other
+    // half still offers.
+    const models = readFileSync(path.join(ccrcRoot, 'shared', 'models.mjs'), 'utf8');
+    expect(models).toContain("export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);");
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    expect(ccrc).toContain('MODELS_SUBAGENT_CLASSES="haiku sonnet"');
+  });
 });
 
 // — Stage 2e, Task 2: the per-box remote-control flag —

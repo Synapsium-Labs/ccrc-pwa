@@ -141,14 +141,24 @@ export const modelCases: readonly ModelCase[] = [
     expect: { classified: [], unclassified: [], retired: [], available: [] },
   },
   {
+    // Fix round 2A (N9): this case is FOR `deriveModels`, which never reads
+    // `subagent` — the point being tested is a hidden catalogue model
+    // explicitly discovered, not which class holds it. It used to name
+    // `fable`, with every other class null and `subagent: 'fable'` — a
+    // registry `parseRegistry` would have refused since the 2026-09-09
+    // narrowing (round 2A's own N1 fix reopened READING such a value, but a
+    // fixture corpus should describe a lane a normal write path can still
+    // PRODUCE, not lean on the legacy-read exception). `haiku`, with
+    // `subagent` pointing at it, is a lane every ordinary verb — `init`,
+    // `set-class`, `set-subagent` — can actually write.
     why: 'a hidden model that is EXPLICITLY discovered is offered, and is not retired',
     reg: {
       probe: 'codex',
-      classes: { haiku: null, sonnet: null, opus: null, fable: 'gpt-reserve' },
-      subagent: 'fable', discovery: ['gpt-reserve'],
+      classes: { haiku: 'gpt-reserve', sonnet: null, opus: null, fable: null },
+      subagent: 'haiku', discovery: ['gpt-reserve'],
     },
     catalogue: CODEX,
-    expect: { classified: ['gpt-reserve'], unclassified: [], retired: [], available: ['fable'] },
+    expect: { classified: ['gpt-reserve'], unclassified: [], retired: [], available: ['haiku'] },
   },
   {
     why: 'every class retired leaves available EMPTY without nulling a single slot',

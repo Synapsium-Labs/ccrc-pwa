@@ -1134,6 +1134,12 @@ MODELS_PROBES="codex openrouter compatible"
 # The four classes, in `shared/models.ts`'s CLASSES order.
 MODELS_CLASSES="haiku sonnet opus fable"
 
+# The two classes `set-subagent` accepts (`shared/models.mjs`'s
+# SUBAGENT_CLASSES): measured 2026-09-09 on Claude Code 2.1.267, a subagent
+# set to opus or fable runs on the sonnet slot's model regardless, so the
+# node op refuses those two — this is the usage-text spelling only.
+MODELS_SUBAGENT_CLASSES="haiku sonnet"
+
 usage() {
   cat <<EOF
 usage: $PROG {doctor|status|adopt|wrappers|models|install|update|uninstall|backup|logs|passwd|expose|version}
@@ -3813,7 +3819,14 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
        ("  probe: \(.registry.probe)"),
        (["haiku","sonnet","opus","fable"]
          | map("  \(.)\t\($reg.classes[.] // "—")") | .[]),
-       ("  subagents run as \(.registry.subagent) (\($reg.classes[.registry.subagent] // "—"))")
+       (if .renderRefusal == null then
+          "  subagents run as \(.registry.subagent) (\($reg.classes[.registry.subagent] // "—"))"
+        else
+          "  subagents run as \(.registry.subagent) — NOT in force; see below"
+        end),
+       (if .renderRefusal != null then
+          "  the env block cannot be materialised: \(.renderRefusal)"
+        else empty end)
      end),
     (if .catalogue == null then "  catalogue: never probed — run: ccrc models refresh \(.id)"
      else "  catalogue: \(.catalogue.count) models\(if .catalogue.stale then " (STALE)" else "" end)" end),
@@ -3838,7 +3851,7 @@ _models_class_ok() {   # <class>
   local c
   for c in $MODELS_CLASSES; do [ "$c" = "$1" ] && return 0; done
   [ "$1" != "subagent" ] \
-    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which of those four subagents run as — run 'ccrc models <id> set-subagent <class>' to change it."
+    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which class subagents run as — ${MODELS_SUBAGENT_CLASSES// / or }; run 'ccrc models <id> set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>' to change it."
   _models_refuse unknown-class 2 "\"$1\" is not a class: the four are ${MODELS_CLASSES// /, }."
 }
 
@@ -4001,7 +4014,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
     set-subagent)
       local cls="${1:-}"
       [ -n "$cls" ] \
-        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_CLASSES// /|}>"
+        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>"
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-subagent takes one class, and got \"$1\""
       _models_class_ok "$cls"
