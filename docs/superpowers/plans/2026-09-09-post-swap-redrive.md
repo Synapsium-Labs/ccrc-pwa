@@ -794,7 +794,7 @@ git commit -m "feat(pwa): an idle landing after a restart reads as a stall (D-22
 - Modify: `README.md` — new subsection after "### Login screens get no keystrokes, and lost auth joins the rescue lane" (~line 889)
 - Modify: this plan — tick the checkboxes; the `## Deviations found` section below is already complete.
 
-- [ ] **Step 1: Add the README subsection**
+- [x] **Step 1: Add the README subsection**
 
 Insert after the login-screens subsection:
 
@@ -827,7 +827,7 @@ message to resume"; the server parser maps them by `isMeta` and `message.model =
 never by their words.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-09-09-post-swap-redrive.md

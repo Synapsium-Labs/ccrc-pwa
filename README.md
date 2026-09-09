@@ -924,6 +924,33 @@ session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
 
+### A restart re-drives the turn it interrupted (D-2226)
+
+A usage-limit rescue is a `ccd swap`: the unit stops, the transcript is carried, the destination
+runs `<wrapper> --resume '<uuid>'`. Claude Code's own recovery for a limit — "Usage limit reached ·
+continuing automatically at HH:MM" — is an in-memory timer and dies with the old process. On the
+resume, Claude Code writes a META "Continue from where you left off." and a synthetic "No response
+requested." and submits the prompt **only** when `CLAUDE_CODE_RESUME_INTERRUPTED_TURN` is set.
+Before 2026-09-09 ccd never set it, so every rescue landed idle until a human typed (spec
+`docs/superpowers/specs/2026-09-09-post-swap-redrive-design.md`, four of four sessions measured).
+
+Now, on every spawn, `_spawn_start` exports that flag plus a ccd-authored `CLAUDE_CODE_RESUME_PROMPT`
+(`RESUME_PROMPT`, telling the model its previous process and every background task it owned are
+gone). Because the flag is a third-party default, `_spawn_settle` **measures** the landing:
+`_transcript_stalled_pair` reads the transcript tail, and if the newest real turn is still that
+unsubmitted pair after `REDRIVE_WAIT_S`, `_redrive_after_spawn` types the prompt itself and writes
+`redrive <id>: …` to `swap.log` (`redrive-skip` when the box holds a draft, the pane is
+hard-blocked, or an auto-continue is armed). Hookstate is not the measurement: `working` proves tool
+calls, not that the re-drive took.
+
+The one thing ccd must never do is cancel Claude Code's armed auto-continue with a keystroke.
+`_pane_auto_continue_armed` ("continuing automatically" / "continuing shortly") gates the compactor
+(`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
+arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
+pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
+message to resume"; the server parser maps them by `isMeta` and `message.model === '<synthetic>'`,
+never by their words.
+
 ## Attention, notifications and answering
 
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
