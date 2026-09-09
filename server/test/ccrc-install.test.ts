@@ -2161,6 +2161,14 @@ const UNIT_FILES: Array<[string, string]> = [
   // a `--role server` box. The default fixture install is role `both`.
   ['ccd-telemetry-keepalive.service', 'deploy/systemd/ccd-telemetry-keepalive.service'],
   ['ccd-telemetry-keepalive.timer', 'deploy/systemd/ccd-telemetry-keepalive.timer'],
+  // C5: ROLE-GATED on the same terms as the three pairs above — a server box
+  // holds no account lanes and no `~/.ccrc/models` registries to refresh.
+  // Before this fix `_inst_units` had never heard of this pair at all: the
+  // only installer was `deploy/deploy.sh`'s agent lane, so `ccrc install
+  // --role fleet` shipped the verbs and the probe but never armed the timer
+  // that is supposed to run them hourly.
+  ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
+  ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2289,6 +2297,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
       '--user enable --now ccd-telemetry-keepalive.timer',
+      // C5: a FIFTH enable, role-gated on the same terms and degrading the
+      // same way — a server box has no lanes for this timer to refresh.
+      '--user enable --now ccrc-models.timer',
       // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -3328,6 +3339,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // graphify Task 10 (O3/O6b): fleet is not server, so the sweep timer
     // enables here too.
     expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
+    // C5: fleet is not server, so the models timer enables here too.
+    expect(argv).toContain('--user enable --now ccrc-models.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3397,6 +3410,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
+      '--user enable --now ccrc-models.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3412,10 +3426,11 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
-    // before this task still lands unchanged.
+    // before this task still lands unchanged. C5: the models pair joins the
+    // same gate — a server box has no lanes to refresh.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
-        || dest.startsWith('ccd-telemetry-keepalive.')) continue;
+        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -3424,9 +3439,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-account-health.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

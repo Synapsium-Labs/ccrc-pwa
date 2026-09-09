@@ -870,6 +870,16 @@
    deeper. `[data-spawn]` (0,3,0) settles it by specificity rather than by
    source order, so moving either rule stays free. */
 .sess-line--active .sess-spawn[data-spawn],
+/* The context-pressure chip (D-2011) paints --status-attention-text of its
+   own, so it strands on the selected slab exactly like .sess-warn above
+   without this line. */
+.sess-line--active .sess-ctxpressure,
+/* …and its wedge VARIANT (D-2016), same shape as .sess-spawn's own variant
+   two lines up: `[data-wedge]` is (0,2,0), equal to the bare
+   `.sess-line--active .sess-ctxpressure` above and declared LATER in this
+   file (fleet.css's own `.sess-ctxpressure[data-wedge]` rule), so the tie
+   would go to source order without a higher-specificity member here too. */
+.sess-line--active .sess-ctxpressure[data-wedge],
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -1208,6 +1218,37 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
+}
+
+/* Context-window pressure (D-2011) — a live pane reading, quiet register
+   until D-2016's wedge signature escalates it. --status-attention-text is
+   already floored against --bg-surface (tokens.css: "8.52:1 on
+   attention-tint, 10.09:1 on surface") and is the same ink
+   .fleet-host-banner--warn/.substrate-banner already use for "worth
+   noticing, not yet an emergency" — no new contrast pair. `flex: none`,
+   same reasoning as .sess-warn/.sess-spawn: the only shrinkable cell in
+   .sess-meta is .sess-held. */
+.sess-ctxpressure {
+  font-family: var(--font-mono);
+  flex: none;
+  color: var(--status-attention-text);
+}
+/* The wedge escalation — high pressure AND busy AND no turn boundary for a
+   long time reads louder than the quiet reading above, so it borrows
+   .sess-warn's own --status-dead-text rather than minting a new ink. An
+   ATTRIBUTE variant, not a class, so `session-line.test.tsx`'s automated
+   "every coloured class is answered on the selected slab" census (which
+   scans literal `className` strings only) never has to know this state
+   exists — same idiom `.sess-spawn[data-spawn]`'s own variants already use,
+   and the same reason: this file states the achromatic answer for the BASE
+   class below, and this rule's own higher specificity — not source order —
+   is what keeps the selected+wedged row from losing that answer to this
+   variant (mirrors `.sess-line--active .sess-spawn[data-spawn]` a few
+   screens down; see fleet-css.test.ts's dedicated specificity proof on that
+   cell for the failure mode this avoids). */
+.sess-ctxpressure[data-wedge] {
+  color: var(--status-dead-text);
+  font-weight: var(--weight-medium);
 }
 
 .sess-warn { color: var(--status-dead-text); flex: none; }
