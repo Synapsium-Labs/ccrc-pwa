@@ -949,6 +949,25 @@ SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
+# D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
+# On `--resume`, Claude Code classifies a tail whose last turn died in an API
+# error (a limit banner) as an interrupted turn, writes a META user prompt
+# ("Continue from where you left off.") and a synthetic "No response requested."
+# — and submits that prompt ONLY when CLAUDE_CODE_RESUME_INTERRUPTED_TURN is set.
+# Measured 2026-09-09: four rescued sessions, four idle landings, four manual
+# "resume" messages (spec §2). The value is the string "1", which is what Claude
+# Code's own runner sets for a respawned worker. It is a third-party flag, so it
+# ships with a measurement and a fallback: `_redrive_after_spawn` (D-2231).
+RESUME_INTERRUPTED_TURN=1
+# The prompt Claude Code submits. It starts with the sentence Claude Code's own
+# default uses (the PWA parser matches that prefix, shared/api.ts
+# RESUME_PROMPT_PREFIX) and then says what only ccd knows: the previous process
+# is gone, and with it every background task it owned. NO SINGLE QUOTE: the
+# string is single-quoted into the tmux command line (ccd-resume-flag.test.ts).
+RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this session (an account swap or a supervisor revival) after its previous process was stopped mid-turn, and the operator has not sent a new message since. Any background task, Workflow or subagent of the previous process is gone: re-check their journals and outputs, and re-verify anything time-sensitive (branch state, running processes, prior partial work) before continuing."
+# D-2230 — empty = no age cap on the re-drive (ruling R5). Set to a number of
+# milliseconds to make Claude Code suppress the re-drive of a turn older than that.
+RESUME_REDRIVE_MAX_AGE_MS=""
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -13335,6 +13354,12 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
+_resume_env() {   # -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227)
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT'"
+  [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
+  printf '%s' "$out"
+}
+
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -13351,7 +13376,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -13393,6 +13418,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
   _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  resenv=$(_resume_env)
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -13400,7 +13426,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -13441,7 +13467,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
