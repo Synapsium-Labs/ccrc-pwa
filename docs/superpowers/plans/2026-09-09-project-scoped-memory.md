@@ -1003,9 +1003,19 @@ blocks say.
   RESOLVES to the store (`[ "$link" -ef "$store" ]`) AND the store is a DIRECTORY (`[ -d "$store" ]`)**,
   spelled identically in `_mem_state`, `_check_memory` and `_hook_memory_converge`, with `_mem_apply`
   inheriting it. `-ef` is necessary and `-d` is necessary: deleting either is an independently
-  measurable defect. **The accepted cost:** `--apply` skips what `_mem_state` calls converged, so a
-  relative-but-correct link is now left as written rather than normalised to the absolute form. Memory
-  is still shared into one store; only the link's spelling is left alone. Tasks 2, 3 and 4.
+  measurable defect. **What it costs, corrected:** the first ruling accepted that `--apply` would leave
+  a relative-but-correct link as written, since it skips whatever `_mem_state` calls converged. That was
+  wrong, and the same rule strands a worse shape — a link CHAIN (`.claude-corp` -> `.claude`'s link ->
+  store) also resolves, so `--apply` skipped it permanently and doctor printed PASS, leaving one
+  account's HOME load-bearing for every other. That is the second defect of the existing prior art this
+  design exists to remove, and `.claude` sorts first, so it is the ordering a real box produces.
+  `_mem_apply` therefore NORMALISES a converged pair whose link text is not the store, with a bare
+  `ln -sfn` and no `_mem_absorb` call, turning a chain into a star. `-n` is load-bearing: `ln -sf`
+  without it writes the new link INSIDE the store. **The reason there is no absorb is not the obvious
+  one** — absorbing a source that resolves to the store does NOT duplicate it into tagged slots, because
+  `cmp -s` dedupes a self-absorb; measured, and the mutation that adds the call leaves the suite green.
+  The real reason is that `_mem_absorb`'s leftover counter would count the STORE's own entries as
+  "not migrated", which is a false count. Tasks 2, 3 and 4.
 
 - **D-2239** — **`[ -e ]` DEREFERENCES, AND EVERY ENUMERATING SITE HAD IT.** This plan writes
   `[ -e "$link" ] || continue` in `cmd_memory`, `_mem_apply` and `_check_memory`. For a symlink whose
