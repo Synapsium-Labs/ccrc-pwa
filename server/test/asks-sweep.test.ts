@@ -40,8 +40,17 @@ afterEach(() => { vi.restoreAllMocks(); });
 const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 
 const T0 = 1_785_400_000_000;
-// Mirror `watch.ts`'s own (unexported, module-scope) constants rather than
-// importing them — see that file's `ASK_GRACE_MS`/`ASK_SWEEP_MS`/`ASK_ANSWERING_MAX_MS`.
+// `ASK_GRACE_MS` and `ASK_ANSWERING_MAX_MS` no longer live in `watch.ts` —
+// whole-branch review F2(b) moved them to the new `server/src/askwindow.ts`,
+// exported, so `fleet.ts`'s chip could read them too. `ASK_SWEEP_MS` did not
+// move: it is the sweep's own poll cadence, not a window, and `watch.ts` is
+// still its sole, unexported, module-scope owner. All three stay MIRRORED
+// here regardless — deliberately, not out of neglect: a hardcoded literal is
+// this repo's mutation-table control (`CLAUDE.md`'s "a comment is a request,
+// a red suite is a mechanism"), so a corrupted or accidentally-changed
+// production constant fails THIS test. Importing `ASK_GRACE_MS`/
+// `ASK_ANSWERING_MAX_MS` now that they are exported would make the test
+// track whatever `askwindow.ts` says rather than pin what it must say.
 const ASK_GRACE_MS = 120_000;
 const ASK_SWEEP_MS = 10_000;
 const ASK_ANSWERING_MAX_MS = 60_000;
