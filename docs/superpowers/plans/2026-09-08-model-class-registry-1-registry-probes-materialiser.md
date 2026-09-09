@@ -9275,6 +9275,17 @@ MSG
 ```
 
 ---
+
+## Task 16a: `ccgpt` carries the box's measured timeout fix, and the `[1m]` paragraph gets the measured wall (MONOREPO)
+
+**What.** Ported ONLY the TIMEOUTS hunk from the box's hand-edited `~/.local/bin/ccgpt` (Task 16's Step 1 drift) into `infra/handoff/ccgpt`: the comment, verbatim (including its ASCII `--` dash style, which differs from the rest of the file's em-dashes — kept as measured prose, not restyled), plus `export API_TIMEOUT_MS="${API_TIMEOUT_MS:-870000}"` and `export CLAUDE_CODE_MAX_RETRIES="${CLAUDE_CODE_MAX_RETRIES:-2}"`, pasted after `export DISABLE_TELEMETRY=1` and before the final `exec`. The box's OTHER two hunks — the `fable=`/`ANTHROPIC_DEFAULT_FABLE_MODEL` addition (superseded by the materialised env block; already gone via Task 14) and its wholesale catalogue-table rewrite — were explicitly NOT ported here. The file's `[1m]`-paragraph closing sentences were rewritten to the measured wall: gpt-6-astra's catalogue `context` 272000 against `maxContext` 872000 (`shared/models.mjs`'s field names, not the raw Codex API's `context_window`/`max_context_window` — M3), the fleet-host measurement that the largest prompt ever ACCEPTED on gpt-5.6-sol is 196,341 tokens with 30 refusals past that wall, the conclusion that the usable (~196k) and advertised (872k) numbers differ and Claude Code's 200,000 bare-name default is already ~2% optimistic against the usable wall, and the two prohibitions (never set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` above the usable wall on an advertised number alone; never re-add a `[1m]` alias without a fresh ceiling measurement) — citing "measured 2026-09-08 on the fleet host." The paragraph's stale path, `~/.ccrc/models/gpt.json` (a file that does not exist on this box), was corrected to `~/.ccrc/models/$CCGPT_ACCOUNT_ID.classes.json` in the same rewrite. `TestWrappersStoppedDecidingModels` gained `test_ccgpt_keeps_the_measured_timeouts`, asserting both exports appear exactly once as live code AND that neither name is in `shared/modelenv.mjs`'s `MODEL_ENV_KEYS` array (read from the sibling ccrc-pwa worktree, skipped only if that worktree is absent) — TDD red (`API_TIMEOUT_MS export not present exactly once`) confirmed before the port, green (37/37, was 36) after; a deletion mutation on `CLAUDE_CODE_MAX_RETRIES`'s export reproduced red and was reverted.
+
+**Why.** Task 16's own drift check found the box's `ccgpt` carries deliberate, dated (2026-09-08), reasoned operational hand-edits that predate the branch — Task 16 stops rather than silently clobbering them (spec: "somebody hand-edited a deployed copy"), and the RULING (measured, orchestrator) is that the timeout fix is real, needed, and belongs on the branch, while the `fable=` tier wiring is superseded and the catalogue-table rewrite is a separate, wholesale change out of scope here. Landing it as its own task — after Tasks 13–15's fix rounds, before Task 16 re-runs — lets Task 16's Step 1 expectation (item 7) state precisely which drift is ABSORBED (this task) and which stays live on the box until the runbook regenerates it.
+
+**Sha.** `e12db20` (mono-shim, `feat/ccgpt-effort-shim`), on top of `70f1cb4` (Tasks 14+15's fix round) on top of `5ece9b5` (Task 13's fix round, 13b).
+
+---
+
 ## Task 16: Stage the deployed copies, and measure exactly what will change (MONOREPO)
 
 **Files:**
