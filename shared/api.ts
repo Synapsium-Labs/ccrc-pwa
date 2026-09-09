@@ -2365,9 +2365,13 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       askSummary: optStr(o, 'askSummary'),
       // Absent → null (`reviveAsk`'s own rule): an older snapshot predates
       // the ask pre-emption lane entirely, the same degrade `held` takes
-      // for the same reason. Present-but-malformed throws inside
-      // `reviveAsk`, which this function's catch turns into "reject the
-      // whole session" — see `reviveAsk`'s own docstring for the split.
+      // for the same reason. Present-but-malformed ALSO degrades to null
+      // inside `reviveAsk` (D-2311) — deliberately NOT the `held`/`bucket`
+      // shape above, whose malformed values throw and this function's catch
+      // turns into "reject the whole session": a bad ask chip and no ask
+      // chip are the same outcome for the operator, so one bad chip must
+      // not discard the whole snapshot. See `reviveAsk`'s own docstring for
+      // the full argument.
       ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written

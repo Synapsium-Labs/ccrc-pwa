@@ -344,10 +344,13 @@ export async function assembleFleet(
    * coordination at all — `undefined` on every caller that predates the
    * lane's threading here, on a dark box, and in every existing test, which
    * is exactly why `session.ask` below defaults to `null` rather than
-   * throwing on a missing store. One synchronous, indexed SQLite read per
-   * session (`currentAskFor`, keyed on `asks_by_child`) — cheap beside the
-   * registry/live-state reads this assembly already does per row, and paid
-   * only when a `coord` is actually passed.
+   * throwing on a missing store. NOT one `currentAskFor` read per session
+   * (fix round 1, item 3, below): `readCurrentAsks` batches the WHOLE
+   * assembly's lookup into one indexed `currentAsksFor` call, keyed on
+   * `asks_by_child`, outside the per-session map — a single synchronous
+   * SQLite read regardless of fleet size, cheap beside the registry/live-
+   * state reads this assembly already does per row, and paid only when a
+   * `coord` is actually passed.
    */
   coord?: CoordStore,
 ): Promise<FleetSession[]> {
