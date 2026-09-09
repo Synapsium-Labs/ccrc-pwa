@@ -1250,3 +1250,61 @@ Not fixed unilaterally, deliberately: reconciling four divergent stores means wr
 this session does not own, and one of the memories under `~/.claude` is named
 `ccrc-never-writes-files-it-does-not-own.md` — which this coordinator cannot read from its own root,
 and whose filename alone settles the question. Flagged to the operator as an ops decision.
+
+## 2026-09-09 — PR #69 reviewed: 7 MAJOR, 10 MINOR, and the misattribution class finally CAUGHT
+
+Five lenses on opus over the C1 follow-up (`fix/c1-rescue-lane`, `8ea4d108`), each finding then handed
+to a separate sonnet refute pass whose only job was to kill it. **38 refute passes: 29 CONFIRMED, 9
+PARTLY, ZERO REFUTED.** Suites at the tip are green and ten mutations were measured red by the author,
+which is exactly why the review had to be adversarial rather than confirmatory to find anything.
+
+### The result that matters for how this program reviews ccd
+
+**Four of the five lenses independently found the same misattribution** — `ccd/ccd:12610-12611` claims
+`.stranded` "IS a surface — the server reads it onto the phone (`SessionRecord.stranded`)", and on both
+`origin/main` and the PR branch `SessionRecord` has 22 fields and no `stranded`, with no reader anywhere
+in `server/src`, `agent/src`, `shared/` or `pwa/src`. It exists only on the author's own unmerged
+branch.
+
+Set that against wave 2b: **fifty-four review agents found NONE of four instances.** The only
+difference is that this time one lens was told the class by name and given a single explicit job —
+open every document, line number and command a comment cites and check it says what the comment claims.
+That lens found seven citation defects; three other lenses tripped over the same big one on their way
+to something else.
+
+**Standing rule: every ccd review carries a prose-vs-code lens whose job is to open the citations.**
+Not "review carefully" — a named lens with a named class and an instruction to run the greps the
+comments quote. It is one agent out of five and it found the finding four ways.
+
+### The shape of what came back
+
+The headline is that **the PR's own thesis is unapplied three lines below its own fix.** It splits
+"stay put" from "cannot decide" for the crossing record and leaves the identical fold on the POOL TAG
+in the same function (`[[ "$prc" -eq 2 ]] && return 0`) — where a hard-blocked pane with an unreadable
+tag gets NO rescue even when a healthy in-pool candidate exists, and the caller then writes "no account
+in pool (untagged) can take it", the exact fabricated sentence the new arm one seam up exists to
+forbid. And the asymmetry that sets the priority: the crossing record is inert on the box, the pool tag
+is the live one.
+
+Two more are defects the fix INTRODUCED rather than inherited: a strand the tick can set but never
+clear (`_strand_clear` is unreachable from that branch — I proved this myself with a failing case before
+the review returned), and a new unguarded `_reg_get` inside the supervise loop — the precise hang class
+the same commit added `[[ -f "$f" ]]` to close. That last one is worth stating plainly: **a fix and its
+own regression shipped in one commit, in the same function, against the same class.**
+
+### Two operational lessons, both mine
+
+**Never point review subagents at the coordinator's own worktree.** I gave five agents this
+coordinator's own worktree path and told them "review only, do not modify". One
+checked out `pr69` in it, and the session resumed with the coordinator sitting on the wrong branch —
+`ws/amber-summit` was intact and pushed, so nothing was lost, but nothing about that was by design. A
+verifier's own notes recorded the tree "drifted mid-session from `pr69` to `ws/amber-summit` with stray
+untracked files I did not create", which is the same event seen from the other side. **Read-only is an
+instruction, not a mechanism.** Give reviewers their own detached worktree, or a `git archive` export;
+several agents did exactly that on their own initiative and their evidence is the evidence I trust
+most.
+
+**The mail BODY cap is 8192 bytes**, alongside the 200-byte subject cap already recorded. Learned by
+413 on a 10,549-byte review. The right shape is a tight ranked body plus the full detail as an ABSOLUTE
+-path artifact, which is what shipped — every verdict and its reproduction in the artifact, the ranking
+and the argument in the body.
