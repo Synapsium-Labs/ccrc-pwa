@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended)
 > or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Close two `ccd` defects reported from outside this program by `claude-OpenClawHetzner`, each
+**Goal:** Close three `ccd` defects reported from outside this program by `claude-OpenClawHetzner`, each
 small, each currently INERT, and each silent the moment it stops being inert: `_plat_mv_notdir`'s Darwin
 arm returns success while its own postcondition is false, and `ccrc-doctor-checks` never asks about a
 timer that is about to start shipping.
@@ -54,6 +54,41 @@ so the suites run against one tree.
       (D-2193). Do not implement the census route here — it belongs with the catalogue's own contract,
       which this repo does not own.
 - [ ] **B6.** Mutation table: remove `ccrc-models.timer` from `known`, measure B2 RED, restore.
+
+## Part C — the catalogue freshness check (contract supplied by the reporting session)
+
+`known` (Part B) answers "is the timer running". It cannot see a timer that fires and produces nothing,
+which for a catalogue is the failure that bites. The reporting session owns the catalogue's semantics
+and supplied the contract, measured on `origin/main` at `ee1d6228`; it is recorded here so the check is
+built against a stated contract rather than an inference.
+
+- [ ] **C1.** Add a `models` freshness check as its OWN function, not a stub. The reporting session's
+      Plan 2 adds a separate per-lane `models` arm (orphan registry, settings-block drift, LiteLLM
+      `.prev` mismatch); keeping them separate means the two PRs never touch the same lines.
+- [ ] **C2.** Loop population: every `~/.ccrc/models/<id>.classes.json` whose `<id>` is a roster row.
+      Only lanes WITH a registry are ever probed (`ccrc models refresh --all` filters on `hasRegistry`;
+      anthropic lanes have none by design). A registry with no `<id>.json` is "never probed" — WARN with
+      the remedy `ccrc models refresh <id>`, NOT a freshness failure. An ORPHAN registry (id in no roster
+      row) is Plan 2's item; skip it here.
+- [ ] **C3.** The predicate, verbatim from the contract:
+
+          fresh := stale == false AND (now - fetchedAt) <= 3*3600
+
+      `fetchedAt` is UNIX SECONDS (the probe writes `int(time.time())`) — compare with `date +%s`, never
+      with the millisecond stamps the server side uses elsewhere. Three periods, because the timer is
+      `OnUnitActiveSec=60min` with `TimeoutStartSec=300`: one missed hourly run must never warn.
+- [ ] **C4.** Two sentences, one WARN each, `stale` picking which — and WARN not FAIL in both arms,
+      because the lane keeps serving from its registry:
+      - `stale:false` and `fetchedAt` older than 3 h → nobody rewrote the file; the timer is not reaching
+        this lane. Remedy: `systemctl --user status ccrc-models.timer`, then `ccrc models refresh <id>`.
+        **This is the silent case Part B's `known` line cannot see.**
+      - `stale:true` → the timer runs and the provider did not answer. Quote `lastError` and the age of
+        `fetchedAt`. Warn regardless of age: the env block has already lost its window key.
+- [ ] **C5.** PASS text names the lanes and ages ("models: 1 lane, gpt catalogue 41 min old"), in the
+      same shape as the services PASS — so a box that answers PASS cannot be one whose loop ran over
+      nothing. The POPULATION is what that PASS is really asserting.
+- [ ] **C6.** Mutation table: stop the clock (age the fixture past 3 h with `stale:false`) and measure
+      C4's first arm RED; set `stale:true` on a fresh catalogue and measure the second arm RED.
 
 ---
 
@@ -117,3 +152,24 @@ A `known` entry cannot see a timer that fires and produces nothing, which for a 
 that bites — so `known` is the floor here, not the ceiling. The census route is the stronger mechanism
 and belongs with whoever owns the catalogue's freshness contract, which is not this repo. Recorded rather
 than built.
+
+### D-2224 — the catalogue's staleness is a FLAG nobody ages
+`parseCatalogue` reads `json.stale === true` and nothing else; no reader derives staleness from
+`fetchedAt`. The probe is the only writer of `stale`, and `_mark_stale` rewrites an existing catalogue
+with `stale:true` + `lastError` while KEEPING `models` and `fetchedAt` — deliberately, so a reader knows
+how old the data is. **So the one failure the flag cannot express is the one that matters: a timer that
+stops firing leaves `stale:false` beside an ever-older `fetchedAt`, and every reader goes on calling the
+catalogue current.** Two consequences on the lane, both degradation rather than outage: the materialiser
+omits `CLAUDE_CODE_MAX_CONTEXT_TOKENS` while a catalogue is stale, and `deriveModels` suspends the
+`retired` derivation ("absence from a catalogue nobody could refresh is not evidence"). Routing never
+reads the catalogue, so the lane keeps serving.
+
+The two timestamps mean different things and the check must not conflate them: the FILE's mtime is "the
+timer's last run reached this lane" (a FAILED run rewrites the file too); `fetchedAt` is "the last time
+the provider actually answered". A freshness check that read mtime would call a lane fresh for as long
+as the timer keeps failing at it.
+
+Contract supplied by `claude-OpenClawHetzner`, who owns the probe; measured by them on `origin/main`
+`ee1d6228`. Not a defect they introduced — the flag was always probe-written — and not one this repo
+can close from the `known` list alone, which is why Part C exists as its own arm rather than a widening
+of Part B.
