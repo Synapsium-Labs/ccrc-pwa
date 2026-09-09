@@ -282,9 +282,18 @@ describe('the reconstruction drill', () => {
       // behind this table, deliberately: the live pane carries the question
       // and the watcher's in-memory map carries the deferred push, so a
       // rebuilt db simply pushes every ask immediately — the behaviour that
-      // shipped before this lane existed. What is genuinely gone is the
-      // RECORD of which parent ruled what, and that is why that record is
-      // also written to the feed at hold time.
+      // shipped before this lane existed. What is genuinely gone is which
+      // PARENT ruled on which question — and the feed only ever half-covers
+      // that. The QUESTION is recorded at HOLD time (watch.ts's hold(), the
+      // mint-time push); who ANSWERED it and what they chose is a separate
+      // record written at ANSWER time (routes.ts's POST /api/asks/:id/answer,
+      // by its own comment: "the mint-time record is the question; this one
+      // is the answer, naming the parent and what it chose"). A DECLINE gets
+      // no attributed record at all — /release just re-pushes that same
+      // snapshotted question event, with no mention of which parent passed.
+      // The chain still holds, though: a decline notifies the operator at
+      // once, and it is THEIR ruling that then gets recorded, so what was
+      // actually decided is never lost — only which parent chose to pass.
       'asks',
     ] as const;
     // Compile-time half of the same claim: if PR I adds or removes a
