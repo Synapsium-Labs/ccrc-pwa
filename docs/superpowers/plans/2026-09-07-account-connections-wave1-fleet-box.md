@@ -16053,6 +16053,17 @@ One more, already repaired in source rather than deferred: the plan's `ccrc-inst
 for the 23-entry `_inst_*` spine understates it — the regex is at `:1966` and the array runs
 `:1971-2047`.
 
+**Two more from Task 25's review round, both inside `BOX_BACKUP_ROOT`'s own note** — the one comment in
+this tree whose whole job is to say that a backup's NAME is contractual, citing the contract's two
+halves at the wrong lines: `ccd/ccrc:1037` cites `deploy.sh:68-72` for `prune_backups`' glob
+(real: **`deploy/deploy.sh:224-228`**; `:68-72` is `TARGET`/`BOX` resolution), and `ccd/ccrc:1035`
+cites `deploy.sh:33-34` for "every backup this run takes lands under the same `~/ccrc-backups/<ts>/`"
+(real: **`:189-190`**; `:33-34` is the `CCRC_DEPLOY_ENV` source line).
+
+That brings the sweep to **thirteen sites plus six displaced pointers**, across four citation forms
+(`ccd/ccrc:N`, bare `ccrc:N-M`, `§N:NNN`, and `deploy.sh:N` from inside `ccd/`). The fourth form is new
+here and, like the third and the second, no earlier census looked for it.
+
 ### D-2120 — Task 25's step makes eight existing tests red, and the plan does not mention it
 
 `_acct_provision` refuses when `$HOME/.cc-sessions/<installer>` is missing or not executable. Every one
@@ -16073,11 +16084,23 @@ first and why "PASS, unchanged" is never assumed.
 ### D-2121 — the plan prescribes a backup name `prune_backups` can never reclaim
 
 Task 25's Step 4 spells the settings backup `date -u +%Y%m%dT%H%M%SZ`. Measured against the tree:
-`BOX_BACKUP_ROOT`'s own note makes the NAME part of a contract — *"`prune_backups`' glob
-(deploy.sh:68-72) — a backup named outside that shape is one nothing reclaims"* — and every existing
-writer under `$HOME/ccrc-backups` spells it `date +%Y%m%d-%H%M%S`: `_exp_caddyfile` (`ccd/ccrc:3591`),
-the two `cmd_backup` sites (`:6481`, `:6623`), `_upd_backup` (`:6878`), and
-**`install-session-hooks.sh:38` — the file this whole merge is copied from, clause for clause.**
+`BOX_BACKUP_ROOT`'s own note makes the NAME part of a contract — *"`prune_backups`' glob — a backup
+named outside that shape is one nothing reclaims"* — and every existing writer under
+`$HOME/ccrc-backups` spells it `date +%Y%m%d-%H%M%S`: `_exp_caddyfile` (`ccd/ccrc:3591`),
+`_inst_graph_always_on_off` (`:6481`), `_inst_graph_hooks_off` (`:6623`), `_upd_backup` (`:6878`), and
+the `TS=` line in all four standalone installers — including
+**`install-session-hooks.sh:38`, the file this whole merge is copied from, clause for clause.**
+
+**CORRECTED TWICE by review round 1, and both corrections are this entry's own subject matter.** It
+first said "the two `cmd_backup` sites" for `:6481`/`:6623`; those are the two graphify-off functions,
+and `cmd_backup` is at `:7147` and delegates to `_upd_backup`. And the commit under review shipped a
+comment saying "the **three** writers already under this root" when there are **eight**. An entry about
+a name whose shape must match a glob, carrying two wrong attributions of who writes that shape — the
+same self-application D-2023 recorded. The count is corrected in source, line-neutrally.
+
+The note's own citation is wrong too, and it is not this task's to fix: `ccd/ccrc:1037` cites
+`deploy.sh:68-72` for `prune_backups`' glob, which is `TARGET`/`BOX` resolution — the function is at
+**`deploy/deploy.sh:224-228`**. Filed to D-2053.
 
 So the prescribed name would have written a directory under the pruned root that the pruner's glob does
 not match: backups accumulating without bound on the fleet box, one per rewritten `settings.json`,
@@ -16135,3 +16158,107 @@ Face 1 is the same defect as D-2019 (Task 24's mutation 2 took `rm`'s status and
 demonstrate its property) — that is now twice in two tasks, so the standing instruction holds: **every
 prescribed mutation is a thing to VERIFY, and a mutation that cannot red on the assertion it names is a
 finding, not a nuisance.**
+
+### D-2124 — the merge's pre-validation admitted three shapes it cannot merge, and one of them mis-routed a lane in silence
+
+**This corrects D-2123 face 2, and the correction is the more serious finding of the two.** That entry
+concluded the `jq empty` pre-validation bought a DISTINCTION (`settings-invalid` versus
+`settings-merge`) rather than write-protection, and that the test measured the right thing. Review round
+1 measured the gate itself instead of the classes, and the conclusion does not survive it.
+
+`jq empty` asks only "is this parseable JSON". The merge needs more, and three shapes pass the first
+question and fail the second:
+
+1. `{"env":["a"]}` — parses; jq dies inside the merge; the operator's own bad file comes back as
+   **`settings-merge`**, whose sentence says *"this is a bug in ccrc, not a fact about your box"*. The
+   two classes were not merely un-pinned, they were **backwards** on real input.
+2. `{"env":"x"}` — the same.
+3. **An EMPTY `settings.json`.** It passes `jq empty`, `next` comes out empty too, the byte-level
+   converge check compares two empties, finds them equal, and the verb answers **exit 0 having written
+   no env block at all**. No refusal, no backup, no diagnostic — a lane whose roster entry names an
+   endpoint, running against `api.anthropic.com`.
+
+That third one is the worst defect this wave has produced, and it is a different kind from all the
+others: every previous finding was about the SHAPE of a refusal — an empty body, a wrong exit class, a
+sentence that lies. This is a **silent wrong answer**, reported as success, on the live routing of a
+lane. It is what §4.1's "the endpoint is shown, never hidden" exists to prevent, defeated by a
+zero-byte file.
+
+And the distinction really was unpinned: **relabelling all five `settings-merge` sites to
+`settings-invalid` left the suite 96/96 GREEN.** One direction was measured, the other was a comment.
+
+Fixed by asking the question the merge actually needs — `jq -e 'type == "object" and ((.env? // {}) |
+type == "object")'` — with a test per class and the relabel mutation now red. The general lesson is
+narrower than "validate harder": **a pre-validation must test the property its consumer depends on, not
+a weaker property that happens to be easy to spell.** `jq empty` is the weaker property, and it is
+exactly what `install-session-hooks.sh:109` uses — so the copied clause was faithful and the original is
+the thing that was thin.
+
+### D-2125 — the settings merge widened the file's mode: the same defect for the third time
+
+`_acct_settings_env` wrote its tmp and renamed without carrying the mode, so an operator's
+`chmod 600 settings.json` became 664. This is D-2052 again, which was itself D-1244 again — three
+instances in one wave, in three different writers, of one rule: **an adapter may not narrow a
+distinction it received, and a file's mode is a distinction received.**
+
+Fixed with `_plat_mode` (not a bare `stat -c %a`, which `macos-platform.test.ts` refuses outside the
+platform block) and a 644 fallback, matching D-1244's own remedy exactly. Mutation B reds with
+`mode lost for 0600: expected '664' to be '600'`.
+
+**Found while fixing it, and worth its own sentence:** `local … fmode` under `set -u` leaves the name
+UNSET, not empty, so `[ -n "$fmode" ]` aborts with `fmode: unbound variable` and every successful `add`
+dies. The shipped `local … f cur next prog tmp` has the same shape and is safe only because all five are
+unconditionally assigned. A `local` that a conditional path may read must be initialised at declaration.
+
+**The honest residual, which this task cannot close.** `install-session-hooks.sh:130-131` widens the
+mode too — measured, 0600 → 664 — and it runs immediately after `_acct_settings_env` inside
+`_acct_provision`. So a FIRST `add` onto a restricted pre-existing file still loses the mode, at the
+installer. What the fix does buy is that `_acct_settings_env`'s own contract is now right, which is what
+Task 32's `remove` and every converged re-run depend on. Closing it end to end needs a change to
+`install-session-hooks.sh`, which belongs with the D-2053 sweep or a task of its own — not inside a diff
+about `add`.
+
+### D-2126 — the merge's refusals do not say what still stands, and the operator is left at a dead end
+
+All three `_acct_provision` refusals end *"The roster entry was written; run 'ccrc install' once the
+cause is fixed"* — correct, and `ccrc install` really does converge the new home. **`_acct_settings_env`'s
+five refusals say only "that file is exactly as it was."**
+
+True about that file, and silent about everything else: by the time the merge runs, the secret, the
+roster entry, `accounts.sh` and the wrapper all stand. So the operator reads "nothing was written", runs
+`ccrc account add` again, and is refused with *"an id already in the roster"* — a dead end produced by a
+sentence that was locally true and globally misleading.
+
+**RULING: the clause is the caller's, exactly as D-2051 ruled for `_acct_no_answer`.** Review round 1
+was right not to bake `ccrc install` into the shared function — the right remedy genuinely differs
+between `set` (called from `add`, where a roster entry stands) and Task 32's `clear` (called from
+`remove`, where the entry is on its way out), and a shared sentence would be false for one of them.
+`_acct_settings_env` takes a "what still stands" clause from its caller and each caller supplies its own.
+
+**Third instance of one pattern in this wave**, which is why it gets a number rather than a fix note:
+D-2024 (the plan closed the empty-body seam everywhere it was thinking about refusals, not on the
+success path), D-2051 (the review closed the success path, not the two re-emit paths), and now this.
+Every time, a function's sentence was written for the caller its author had in mind, and every time the
+remedy was the same — **the shared part is the mechanism, the situational part belongs to the caller.**
+A fourth instance should be assumed rather than discovered.
+
+### D-2127 — `ACCT_PROVISIONED` lies in two ways, and Task 26 turns it into an answer key
+
+The array holds only steps that actually returned 0 — every append follows its step and `_acct_refuse`
+exits, so the ordering is honest. Two other things are not, and Task 26 is the commit where they stop
+being internal:
+
+1. **`settings-env` is appended even when the step wrote nothing.** A login lane has no endpoint and no
+   model map, so the merge correctly writes no file (that is the D-2123-face-1 guard) — and the array
+   still reports the step. As an answer key that reads "the env block was written" about a home where no
+   `settings.json` exists. Either the append moves inside the wrote-something branch, or the key's
+   vocabulary distinguishes "ran" from "wrote"; the second is better, because "ran and correctly did
+   nothing" is a real outcome the operator should be able to see.
+2. **The array is never reset.** Two `_acct_provision` calls in one sourced shell produce ten entries.
+   Nothing in wave 1 calls it twice — `add` runs once per process — so this is latent rather than live,
+   and it is exactly the kind of latency that becomes a defect the first time a caller loops. Reset at
+   entry.
+
+Neither is a defect at this commit, which is why they are recorded rather than fixed here: the array is
+read by nothing until Task 26. Task 26 must close both **before** it publishes the key, because after
+that they are API.
