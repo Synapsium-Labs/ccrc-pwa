@@ -2934,6 +2934,19 @@ export interface SlashCommand {
   kind: 'builtin' | 'skill';
 }
 
+/** D-2228 — WHO WROTE A `system` ROW. Claude Code's `--resume` writes a META
+ *  user "Continue from where you left off." and pads it with a synthetic
+ *  assistant "No response requested." (`message.model === '<synthetic>'`);
+ *  without CLAUDE_CODE_RESUME_INTERRUPTED_TURN it submits nothing. Rendered as
+ *  a user bubble and a reply, that stall read as "someone sent resume and it
+ *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
+ *  ignores it, an older writer omits it. */
+export type SystemOrigin = 'resume-prompt' | 'no-response';
+/** The sentence Claude Code's default resume prompt is, and every variant —
+ *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
+export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+export const NO_RESPONSE_TEXT = 'No response requested.';
+export const SYNTHETIC_MODEL = '<synthetic>';
 /**
  * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
  * is optional (Build 4, spec §2.2/§2.4):
@@ -2961,7 +2974,7 @@ export type ChatEvent =
   | { kind: 'assistant'; uuid: string; ts: string; text: string }
   | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
-  | { kind: 'system'; uuid: string; ts: string; text: string };
+  | { kind: 'system'; uuid: string; ts: string; text: string; origin?: SystemOrigin };
 
 export interface AskOption { label: string; description?: string; preview?: string }
 export interface AskQuestion {
