@@ -1,0 +1,320 @@
+// Task 7: the release sweep and the kill switch. A held ask (Task 6's mint)
+// either resolves before ASK_GRACE_MS lapses — an answer, an explicit
+// release, or an orphan-settle — or the window itself becomes the answer:
+// sweepAsks fires the SNAPSHOTTED push, verbatim, once `held.until` passes.
+//
+// RULING F9 (task-7-brief) governs what happens when `releaseAsk`'s CAS is
+// beaten: the row's actual state decides whether the map entry survives to
+// retry, or is dropped with or without a compensating push — never the
+// naive "delete first, consult second" order that drops a deferred push
+// forever whenever a parent is mid-answer. Three tests below (one per
+// branch) pin that decision tree directly, reading the private `heldAsks`
+// map the same way `hold-gate.test.ts`'s own `sweepSettled`/`forceDue`
+// helpers already do (`(w as unknown as { field: T }).field`) — the
+// codebase's established idiom for asserting on state a public method
+// deliberately does not expose.
+//
+// Clock: `watch.ts` reads `Date.now()` directly throughout, with no
+// injectable clock, so "advancing" the grace window means moving the mock
+// (`ledger-sweep.test.ts`'s own `at()` idiom), not sleeping.
+//
+// `sweepAsks` is void-dispatched from `tick()` (mirroring `sweepMail`), so a
+// test that only awaits `tick()` has not awaited it — every assertion below
+// calls `w.sweepAsks()` directly, the same reason it is PUBLIC.
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { Bus } from '../src/bus.js';
+import type { Runner } from '../src/exec.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+import type { PushPayload } from '../src/push.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { localIO, type FleetIO } from '../src/io.js';
+import { askKey } from '../src/askkey.js';
+
+afterEach(() => { vi.restoreAllMocks(); });
+
+const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
+
+const T0 = 1_785_400_000_000;
+// Mirror `watch.ts`'s own (unexported, module-scope) constants rather than
+// importing them — see that file's `ASK_GRACE_MS`/`ASK_SWEEP_MS`.
+const ASK_GRACE_MS = 120_000;
+const ASK_SWEEP_MS = 10_000;
+
+/** Per-session bookkeeping the registry + live-status files need — verbatim
+ *  idiom from `asks-mint.test.ts`'s own `Seeded`/`seedSessions` (itself
+ *  copied from `push-copy.test.ts`). */
+interface Seeded { pid: number; cfgDir: string }
+
+const liveStatusFile = (s: Seeded): string => path.join(s.cfgDir, 'sessions', `${s.pid}.json`);
+
+const writeLiveStatus = (s: Seeded, id: string, status: 'busy' | 'idle'): void => {
+  writeFileSync(liveStatusFile(s), JSON.stringify({
+    pid: s.pid, sessionId: `s-${id}`, cwd: '/d', status, statusUpdatedAt: Date.now(),
+  }));
+};
+
+function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const cfgDir = path.join(home, '.claude');
+  mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
+  const info = new Map<string, Seeded>();
+  let pid = 71000;
+  for (const spec of specs) {
+    const [project, id] = spec.split('/');
+    pid += 1;
+    const fields: Record<string, string> = {
+      wrapper: 'claude', project: project!, workdir: `/w/${id!}`, uuid: `u-${id!}`, started: '1',
+    };
+    for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id!}.${f}`), v);
+    const seeded: Seeded = { pid, cfgDir };
+    info.set(id!, seeded);
+    writeLiveStatus(seeded, id!, 'busy');
+  }
+  return info;
+}
+
+/** `~/.cc-sessions/<id>.hookstate.json`, the way `session-hook.sh` writes
+ *  it — verbatim from `asks-mint.test.ts`. */
+function writeHookState(home: string, id: string, ask: unknown, state = 'waiting'): void {
+  writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+    v: 1, state, sessionId: `u-${id}`, pid: 1, updatedAt: Date.now(), ask, subagents: [],
+  }));
+}
+
+const oneQuestion = { questions: [{ question: 'Which colour?', header: 'Colour', multiSelect: false,
+  options: [{ label: 'Red' }, { label: 'Blue' }] }] };
+
+const MENU_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+const BARE_PROMPT = 'ready\n❯ \n';
+
+/** Same shape as `asks-mint.test.ts`'s own `fixture()`, plus what THIS task's
+ *  tests need and the mint tests didn't: the raw `FleetWatcher` (so a test
+ *  can call `sweepAsks()` directly, off its own clock — `ledger-sweep.test.ts`'s
+ *  own `watcher` idiom), the registry directory (to write the kill-switch
+ *  marker), and an `overIo` hook (`ledger-sweep.test.ts`'s own idiom) so the
+ *  fail-shut test can swap in a `readdir` that answers `null` without
+ *  mutating the shared `localIO` singleton. */
+function fixture(opts: {
+  push: { notify: (p: PushPayload) => Promise<void> };
+  sessions: string[];
+  overIo?: (base: FleetIO) => FleetIO;
+}): {
+  coord: CoordStore; home: string; reg: string; w: FleetWatcher;
+  tick: () => Promise<void>;
+  showMenu: (id: string, text?: string) => void;
+  writeAsk: (id: string, ask: unknown, state?: string) => void;
+} {
+  const home = mkTmp('ccrc-');
+  const reg = path.join(home, '.cc-sessions');
+  const info = seedSessions(home, opts.sessions);
+  const panes = new Map<string, string>(opts.sessions.map((spec) => [spec.split('/')[1]!, BARE_PROMPT]));
+  const runner: Runner = async (_cmd, args) => {
+    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    const target = args[2] ?? '';
+    const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+    if (args[0] === 'list-panes') {
+      const pid = info.get(id)?.pid;
+      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+    }
+    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const io: FleetIO = opts.overIo ? opts.overIo(localIO) : localIO;
+  const deps = { ...testDeps(home, runner), push: opts.push as never, coord, io };
+  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  return {
+    coord, home, reg, w,
+    tick: () => w.tick(),
+    showMenu: (id: string, text: string = MENU_PANE) => { panes.set(id, text); },
+    writeAsk: (id: string, ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+  };
+}
+
+const askTag = (id: string): string => `ask-${id}`;
+
+/** Opens a run claimed by `parentId`, dispatches to `childId`, primes, then
+ *  shows an eligible single-question menu and ticks once more — the mint
+ *  edge (`detectDialogs`'s `last !== dialog.id` branch). Returns the minted,
+ *  held ask's id. Shared setup every test below needs. */
+async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId: string): Promise<number> {
+  const run = f.coord.openRun({
+    program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+    wave: 1, waveOf: null, claimedBy: parentId,
+  }) as { id: number };
+  f.coord.setSession(run.id, childId);
+  await f.tick();                                          // priming
+  f.writeAsk(childId, oneQuestion);
+  f.showMenu(childId);
+  await f.tick();                                           // mints, holds
+  const held = f.coord.asksForParent(parentId, 'held');
+  expect(held).toHaveLength(1);
+  return held[0]!.id;
+}
+
+describe('sweepAsks — the release sweep (Task 7)', () => {
+  it('fires the held payload verbatim once the window lapses', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);   // still deferred
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+
+    const fired = sent.filter((p) => p.tag === askTag('cc-a'));
+    expect(fired).toHaveLength(1);
+    // The exact `actions` `hold` snapshotted at mint time — proves the sweep
+    // pushes the SNAPSHOT, not a value re-derived from (possibly stale or
+    // gone) live hookstate at release time.
+    const key = askKey(oneQuestion);
+    expect(fired[0]!.actions).toEqual([
+      { action: `ask:${key}:0`, title: 'Red' },
+      { action: `ask:${key}:1`, title: 'Blue' },
+    ]);
+    expect(f.coord.askById(askId)!.state).toBe('released');
+  });
+
+  it('never holds while $REG/asks-disabled is present', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    // Armed BEFORE any sweep runs, so `tick()`'s own auto-dispatched
+    // `sweepAsks()` (fired during the priming tick below) already sees it —
+    // no window where the flag briefly disagrees with the marker on disk.
+    writeFileSync(path.join(f.reg, 'asks-disabled'), '');
+    await f.tick();                                          // priming
+    // Deterministic: guarantees `this.asksDisabled` is set before the mint
+    // attempt below, rather than trusting the priming tick's own
+    // void-dispatched sweep to have finished by the time `tick()` resolved.
+    at(T0 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+
+    f.writeAsk('cc-a', oneQuestion);
+    f.showMenu('cc-a');
+    await f.tick();                                          // eligible, has a parent — but disabled
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);   // pushed immediately
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+  });
+
+  // The fail-shut arm, isolated: rather than driving the whole mint pipeline
+  // a second time (which would race the priming tick's own auto-dispatched
+  // `sweepAsks()` against this test's explicit poisoning — the SAME registry
+  // directory serves both the fleet-wide listing `tick()` itself needs to
+  // even reach `detectDialogs` and this lane's kill-switch listing, so a
+  // blanket `readdir -> null` stub breaks tick() before it gets there), this
+  // reads the private flag directly — `hold-gate.test.ts`'s own
+  // `(w as unknown as {...})` idiom — immediately after the awaited call
+  // that set it, with no intervening `await` an unrelated in-flight sweep
+  // could race into.
+  it('reads an unlistable registry as disabled, not as enabled', async () => {
+    let poisoned = false;
+    const io: FleetIO = { ...localIO, readdir: async (p: string) => (poisoned ? null : localIO.readdir(p)) };
+    at(T0);
+    const f = fixture({ push: { notify: async () => {} }, sessions: ['ccrc-pwa/cc-a'], overIo: () => io });
+    await f.tick();                                          // priming, unpoisoned
+    poisoned = true;
+    at(T0 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+
+    expect((f.w as unknown as { asksDisabled: boolean }).asksDisabled).toBe(true);
+  });
+
+  // RULING F9, branch 1: a principal has TAKEN the row (`answering`) — the
+  // CAS is beaten, but not because anyone settled it. The hold survives to
+  // retry, and genuinely does once the principal abandons the attempt
+  // (`untakeAsk`, `answering -> held`).
+  it('keeps the hold, no push, while a principal is mid-answer — and retries once it resolves (F9)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    const askAt = f.coord.askById(askId)!.askAt;
+    expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(true);
+
+    // The principal gives up — `answering -> held` — and the VERY NEXT sweep
+    // (own clock, past ASK_SWEEP_MS) fires the still-live hold. This is only
+    // possible because the entry survived the sweep above.
+    f.coord.untakeAsk(askId);
+    at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(f.coord.askById(askId)!.state).toBe('released');
+  });
+
+  // RULING F9, branch 2: the row was settled by someone else — an explicit
+  // `POST /api/asks/:id/release` here (`answered`/`stale` are the other two
+  // members of this branch; all three read the same way). Dropped, no push,
+  // and the settled state is left untouched — the sweep never rewrites a row
+  // it lost the race on.
+  it('drops the hold with no push once the row is settled by someone else (F9)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    expect(f.coord.releaseAsk(askId, T0 + 1)).toBe(true);        // held -> released, by "someone else"
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(false);
+    expect(f.coord.askById(askId)!.state).toBe('released');      // untouched, not rewritten
+    // Silent: distinguishes this branch from the exhaustiveness fallback
+    // ('held'/'unknown'), which warns.
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // RULING F9, branch 3: the row itself is gone — a lost coord.db. Its loss
+  // is free BY DESIGN (`heldAsks`'s own docstring in watch.ts); the sweep
+  // degrades to exactly today's ordinary behaviour, an immediate push,
+  // rather than silently swallowing the question forever.
+  it('pushes and drops when the row itself is missing — a lost coord.db degrades to today\'s behaviour (F9)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    f.coord.db.prepare('DELETE FROM asks WHERE id = ?').run(askId);   // simulate a lost row
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(false);
+    expect(f.coord.askById(askId)).toBeNull();
+
+    // And it does not repeat — the entry is truly gone, not merely silent
+    // this one sweep.
+    at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+  });
+});

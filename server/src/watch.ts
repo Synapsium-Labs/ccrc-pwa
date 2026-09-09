@@ -43,7 +43,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
@@ -223,6 +223,13 @@ const MAIL_QUIET_MS = 60_000;
  *  that has genuinely gone quiet ever costs the full window. */
 const ASK_GRACE_MS = 120_000;
 
+/** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
+ *  fast a lapsed hold fires — that ceiling is `ASK_GRACE_MS` above, measured
+ *  in minutes — but how often the lane is allowed to ASK, the same relation
+ *  `MAIL_SWEEP_MS`'s own docstring states for the mail lane. Ten seconds
+ *  matches that cadence and is ample against a window sized in minutes. */
+const ASK_SWEEP_MS = 10_000;
+
 /** No session gets two injections inside this window, however much mail is
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety
  *  seconds is a denial of service dressed as coordination. */
@@ -327,6 +334,15 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
  *  this name cannot fabricate an account row there. */
 const MAIL_DISABLED_MARKER = 'mail-disabled';
 
+/** The hold's own kill switch, `$REG/asks-disabled` — same family, same read
+ *  discipline as `MAIL_DISABLED_MARKER` immediately above: LISTED, never
+ *  statted directly, and an unlistable registry (`listing === null`, "can't
+ *  tell") reads as disabled rather than as license to keep holding. Touch to
+ *  stop every FUTURE hold from deferring (an already-held ask still waits out
+ *  its own `until`, and `sweepAsks` still releases it on schedule); `rm` to
+ *  resume. */
+const ASKS_DISABLED_MARKER = 'asks-disabled';
+
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
 // `shared/api.ts`, which is the only module all three sides can import.
@@ -372,10 +388,11 @@ export class FleetWatcher {
    *  `dialogIds` — the dialog going away is the end of the hold. */
   private heldAsks = new Map<string, { until: number; askId: number;
     ev: Parameters<FleetWatcher['pushOne']>[0] }>();
-  /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared here
-   *  (RULING F2) so the mint fork below compiles; permanently `false` until
-   *  Task 7 sets it from the same registry listing `sweepMail` performs — an
-   *  interim value that is exactly today's behaviour (every ask holds). */
+  /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
+   *  Task 6 (RULING F2) so the mint fork below compiled before this method
+   *  existed; now SET by `sweepAsks` below, off the same registry listing
+   *  `sweepMail` reads for `MAIL_DISABLED_MARKER` — `listing === null`
+   *  ("can't tell") reads as disabled, never as license to keep holding. */
   private asksDisabled = false;
   /**
    * `id#prNumber` keys already told "merged, held, nothing archived" — so
@@ -547,6 +564,9 @@ export class FleetWatcher {
   private activeProjects = new Set<string>();
   /** The seventh lane's clock. */
   private lastMailSweep = 0;
+  /** The ask-release lane's own clock (Task 7) — same `!== 0` never-run
+   *  sentinel `lastMailSweep` above uses, gated by `ASK_SWEEP_MS`. */
+  private lastAskSweep = 0;
   /** Per session: when this lane last injected. IN MEMORY BY DESIGN, and the
    *  direction of the failure is why: a restart forgets the cooldown and may
    *  deliver one message sooner than it should have. Persisting it would buy
@@ -821,6 +841,10 @@ export class FleetWatcher {
       // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepMail` immediately above — the
+      // release CAS and its own registry listing must not sit in front of the
+      // dialog detector either. Own clock (`ASK_SWEEP_MS`).
+      void this.sweepAsks().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
       // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
       // generation per sweep. Awaiting it would put the dialog detector and
@@ -3450,6 +3474,114 @@ export class FleetWatcher {
       }
     }
     return pending;
+  }
+
+  /** Fire every held ask whose grace window has lapsed. The payload pushed is
+   *  the one `hold` snapshotted at mint time, pushed VERBATIM — `detectDialogs`'s
+   *  two triggers (`last !== dialog.id`, the amendment branch) are one-shot
+   *  edges: `dialogIds`/`actionlessAsks` are stamped on first sighting
+   *  regardless of whether a push was actually raised, so there is no second
+   *  chance to re-derive the same object later; re-deriving it here would find
+   *  nothing to re-raise.
+   *
+   *  `store.releaseAsk` is the CAS gate: it fires the push only when THIS call
+   *  is the one that moved the row `held -> released`. A `false` return means
+   *  something else moved the row first, and RULING F9 (task-7-brief) is the
+   *  reason this branches on the row's actual state instead of dropping the
+   *  `heldAsks` entry unconditionally the moment the CAS fails — the naive
+   *  "delete, then consult the result" order (the brief's own Step 3, before
+   *  the ruling) drops the deferred push forever whenever a parent is mid-
+   *  answer, which is the exact failure this lane exists to prevent:
+   *   - `'answering'` — a principal has taken the row and may still submit an
+   *     answer. KEEP the map entry so a later sweep can retry once that
+   *     resolves; pushing now would buzz the operator over a question someone
+   *     is actively answering.
+   *   - `'answered'` | `'released'` | `'stale'` — somebody already resolved
+   *     it (an answer landed, an explicit `POST /api/asks/:id/release`, or
+   *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
+   *     question is already closed.
+   *   - the row itself is gone (`askById` returns `null`, e.g. a lost
+   *     coord.db) — its loss is free BY DESIGN (`heldAsks`'s own docstring):
+   *     drop the entry and push, degrading to exactly today's ordinary
+   *     immediate-notification behaviour rather than swallowing the question.
+   *
+   *  PUBLIC so a test can await it directly — `sweepMail`'s own reason:
+   *  `tick()` void-dispatches this (it can sit behind whatever `sweepMail`
+   *  and every other lane are doing), so a test that only awaits `tick()` has
+   *  NOT awaited this sweep. */
+  async sweepAsks(): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastAskSweep !== 0 && now - this.lastAskSweep < ASK_SWEEP_MS) return;
+    this.lastAskSweep = now;
+
+    // Fail-shut, same discipline as `sweepMail`'s own `MAIL_DISABLED_MARKER`
+    // read a few hundred lines up: a registry we cannot list is a kill-switch
+    // we cannot read, so `listing === null` ("can't tell") reads as disabled
+    // rather than as license to keep holding new asks.
+    const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
+    this.asksDisabled = listing === null || listing.includes(ASKS_DISABLED_MARKER);
+
+    if (this.heldAsks.size === 0) return;
+    for (const [id, held] of [...this.heldAsks]) {
+      if (held.until > now) continue;
+
+      let released: boolean;
+      try {
+        released = store.releaseAsk(held.askId, now);
+      } catch (err) {
+        console.warn(`ccrc-server: releaseAsk failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
+        continue;
+      }
+      if (released) {
+        this.heldAsks.delete(id);
+        this.pushOne(held.ev, this.activeProjects);
+        continue;
+      }
+
+      // Beaten: the CAS did not move the row. Re-check its actual state
+      // before touching the map entry — see this method's own docstring and
+      // RULING F9.
+      let row: AskRow | null;
+      try {
+        row = store.askById(held.askId);
+      } catch (err) {
+        console.warn(`ccrc-server: askById failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
+        continue;
+      }
+      if (row === null) {
+        this.heldAsks.delete(id);
+        this.pushOne(held.ev, this.activeProjects);
+        continue;
+      }
+      switch (row.state) {
+        case 'answering':
+          continue;                    // still live — retry next sweep, no push
+        case 'answered':
+        case 'released':
+        case 'stale':
+          this.heldAsks.delete(id);    // settled by someone else — no push
+          continue;
+        case 'held':
+        case 'unknown':
+          // 'held' should be unreachable here (the CAS above just failed
+          // against exactly this state, and nothing else runs between that
+          // call and this read in a single-threaded process); 'unknown' is a
+          // state token this build cannot interpret (`hydrateAsk`'s own
+          // degrade). Both fall to the safe side: drop the stale hold rather
+          // than push blind or retry forever.
+          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in unexpected state '${row.state}' after a failed release — dropping the hold without a push`);
+          this.heldAsks.delete(id);
+          continue;
+        default: {
+          const _exhaustive: never = row.state;
+          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(_exhaustive)}' after a failed release — dropping the hold without a push`);
+          this.heldAsks.delete(id);
+        }
+      }
+    }
   }
 
   /**
