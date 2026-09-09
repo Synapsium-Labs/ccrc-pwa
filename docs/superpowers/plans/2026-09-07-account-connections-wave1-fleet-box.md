@@ -17882,3 +17882,130 @@ lanes, and a `limitsTouched` claim widened to both exit paths — and the rest c
 command output, golden-md5 mutation runs, and an independent re-measurement of the full suite (254 files,
 6963 passed, 354s) that matches the commit's own claim. Adversarial verification that rescopes three
 claims in five is working, not rubber-stamping.
+
+### D-2328 — the cap fix pins the INSTANCE, not the RULE its own header claims
+
+`capDetail`'s header says one edit closes all five slots plus every arm a later commit adds, and D-2266
+says the same. **Nothing measures that.** Moving the cap out of the `row` factory and into the 401 arm
+alone leaves `ccrc-account.test.ts` at **248/248 passed**, while the residual, `unreachable` and
+`api_error_status` slots go straight back to `exit 1`, `no-answer`, and node refusing the argument list —
+all three reproduced through the whole verb.
+
+**The green mutation is disambiguated, which is what makes this a finding rather than a shrug:** the same
+mutant reproduces the defect end-to-end on the uncovered slots, so the guard is *unpinned*, not
+unreachable and not un-applied. The single oversized row fixture is `ccrc-account.test.ts:6527` — one of
+five slots. The remedy is a loop over five bodies asserting the marker, which the existing test already
+knows how to build.
+
+This is the wave's signature shape at its purest: **a fix that is right, and a test that holds the
+example it was written from.** The whole reason for choosing the factory over per-arm slices was
+generality, and generality is the one property left unmeasured.
+
+### D-2329 — D-2270's shipped justification is falsified by the code it justifies, one line below
+
+The comment argues that nothing is lost by tightening the `ok` arm because the residual *already names
+the shape it saw*. It does not. Four distinguishable bodies at exit 0 — `is_error` absent, `"false"`,
+`null`, and `0` — all answer the identical `exit 0, terminal_reason absent`, which names the one field
+that is **not** the reason.
+
+So the tightening that was justified by the overloaded-null rule **collapses four conditions into one
+sentence** in the very arm it hands them to. And the asymmetry is inside this same wave: the `loggedIn`
+arm (D-2223 F5) uses `shapeOf` for exactly this and says so; the `is_error` arm does not, though
+`shapeOf` sits in the same file. The new test cannot see it either — asserting the detail contains
+`exit 0` is satisfied by that constant string for every body.
+
+The verdict is right. The detail is the defect.
+
+### D-2330 — D-2268's fix made the remedy the first thing the note cap eats
+
+The new caller clause is 221 characters and was placed **between the diagnosis and the remedy**, while
+`_acct_note_cap` truncates from the right at 1024. Measured on a fixture HOME 772 characters deep: the
+note is 1078 characters, the truncation marker is present, and *"Run 'ccrc wrappers' to write the missing
+launcher."* **is gone.** The note length is HOME + ~306, so truncation begins at a ~718-character HOME and
+the remedy is fully lost by ~768 — well inside real fleet paths.
+
+Before the fix the same remedy sat behind a 33-character clause. **The fix cut ~190 characters of
+headroom on the path that had none to spare** — a regression introduced by the change that closed
+D-2268. Put the remedy before the editorial clause, or cap the clause rather than the sentence naming the
+next step.
+
+### D-2331 — the 125 arm names a cause and no remedy, and its assertion cannot tell
+
+Exit 125 answers with what the deadline shim's own argument error *is*, which is a cause, not a next
+step: there is nothing for an operator to do. The other three all carry an action — 127 points at
+`ccrc wrappers`, 126 at mode bits and interpreter, 137 at an OOM kill.
+
+And the guard is vacuous exactly there: the test asserts the note contains a substring **of the cause
+sentence**, under a message that says *names no remedy*. A test whose expectation is a slice of the text
+it is checking cannot fail on the condition it is named for — D-2209's family, in a assertion written to
+enforce the opposite.
+
+### D-2332 — MY OWN FALSE CLAIM: the probe is not the tree's first command-substitution caller
+
+D-2272 states the probe is the tree's **first** caller of `_plat_timeout` inside a command substitution.
+**False.** There are ten across `ccd/`: `ccd/ccd:1169`, `:1473`, `:1858`, `:2738`, `:2838`;
+`ccd/ccrc:5603`, `:5973`; `ccd/ccrc-doctor-checks:443`, `:517`, `:1770` — most long predating this wave.
+I took the claim from a review finding and repeated it without measuring, and it propagated into the
+shipped comment and into a test.
+
+**The correction makes the defect worse, not smaller.** If ten callers predate it, the orphaned sleeper
+has been holding the pipe for all of them on any box without coreutils — the `gh auth status` doctor
+check would have paid its full deadline on every single run there. D-2272 is not *Task 30 made this
+reachable*; it is **Task 30 is where we noticed a defect that has been live for every one of those call
+sites**. The fix is unchanged and correct; its provenance, its severity and its blast radius were all
+understated, and the sentence must be corrected wherever it was copied.
+
+### D-2333 — D-2273 opened D-2275's own class at the twin address, and the commit fixed one of two
+
+Bracketing the auth-status question means a run **whose probe never ran** can now have moved the shared
+telemetry directory — and both refusal paths on that arm still hard-code *"Nothing was written."*
+`ccd/ccrc:6003` sits ~28 lines below the new bracket and says it, while its exact probe twin at `:6179`
+was given the situational helper. Constructed twice: one run's wire says `limitsTouched: true` while the
+same box's prose says nothing was written, and the file is on disk to prove it.
+
+`ccd/ccrc:6280`'s hard-coded clause reaches the operator on the short-circuit path whenever the health op
+refuses, with the same contradiction.
+
+**Two identical sentences, one fixed.** This is the wave's most common shape restated: a fix that closes
+its finding and opens the neighbour it was standing next to.
+
+### D-2334 — a load-bearing comment the fix falsified and left standing
+
+`ccd/ccrc:6276-6279` says a verdict from the cheap question means the run *wrote nothing at all*, while a
+run reaching the probe created a directory and ran a launcher. D-2273's entire argument is that the cheap
+question **runs the lane's own launcher with the lane's own config dir** and can move the telemetry
+directory — measured. That sentence is the justification for D-2333's hard-coded clause, so it is
+load-bearing rather than decorative, and a reader repairing D-2333 would find this comment telling them
+not to.
+
+### D-2335 — D-2275 landed PARTIAL, and my own commit message overstates it
+
+The commit says the stands clause no longer claims writes were confined when the same function measured
+otherwise. Measured: in the `true` case the clause still asserts, verbatim, that anything the launcher
+wrote is still under that lane's config dir, and **only then** appends the qualifier — so the sentence
+contradicts itself rather than being conditioned. The appended half is correct and D-2274-faithful; the
+leading half is unconditional and should not be.
+
+Recorded here rather than by rewriting the commit, because this branch's convention is that the ledger
+carries the correction and the history stays honest about what was claimed when.
+
+### D-2336 — the cap can slice a surrogate pair, and the contract survives it
+
+Constructed: a `terminal_reason` of one ASCII character followed by 100 000 astral-plane characters puts
+the cap's slice mid-pair. The row still parses, the verdict still survives, and the answer still reaches
+the operator — the escape happens at serialisation. **D-2267's contract holds**, so this is recorded as a
+measured edge rather than a defect, and noted so the next author of a cap does not discover it as a
+surprise.
+
+### D-2337 — what the verification round is evidence of
+
+Twenty verdicts: sixteen landed **and** measured red-when-reverted, four gaps. **Every gap sits beside a
+fix that works** — which is the same sentence this wave has now written about sixteen unmeasured
+mechanisms, three reintroduced defect classes, and two prose-reading scans.
+
+Two findings deserve their standing separately. D-2267's ruling was confirmed by **constructing the
+counterfactual** rather than arguing it: a row clipped at the argv boundary really does make the health
+op answer *no readable row*, so the choice of cap site was load-bearing and is now measured, not
+reasoned. And D-2272's timing claim — 10 006 ms before, 9 ms after — was **re-measured independently by
+someone who did not write it**, which is the only reason D-2332 was found: verifying the number meant
+reading the callers, and reading the callers falsified the sentence beside it.
