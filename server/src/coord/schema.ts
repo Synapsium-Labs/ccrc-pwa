@@ -832,6 +832,39 @@ export const MIGRATIONS: readonly string[] = [
     CREATE INDEX asks_by_child ON asks(childId);
     CREATE INDEX asks_by_parent ON asks(parentId, state);
   `,
+
+  // ── 10: user_version 9 -> 10 ──────────────────────────────────────────────
+  // Cross-repo programmes: the ONE migration that build has (design 2026-09-08
+  // §8). MIGRATIONS[0..8] ARE FROZEN, for the reason every entry above states:
+  // db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so an
+  // amendment to an applied entry never runs again.
+  //
+  // `programs.homeProject` (§3 F2) — the project whose repository holds this
+  // programme's ledger, spec and plan. A programme is initiated in ONE project
+  // and its waves may dispatch runs into any; before this column "the
+  // programme's own repo" was true by accident, whenever every wave happened to
+  // share one project.
+  //
+  // `feed_events.runId` (§4) — which run a feed row is about, so
+  // `GET /api/feed?program=` can join through `runs` to a programme. The
+  // recorders that KNOW a run (the mail lane and the run-transition lane)
+  // populate it; every other kind is programless.
+  //
+  // NULLABLE, NO DEFAULT, BOTH, and each null means one thing:
+  //   `homeProject` NULL = no home was ever stored (an older row, or a
+  //     coordinator that omitted it during the legacy generation). NOT "the
+  //     home is the run's own project" — nothing is guessed into this column,
+  //     precisely so a later explicit home can BACKFILL it rather than collide
+  //     with a default nobody chose.
+  //   `runId` NULL = this event is about no run. An `ask`/`done`/`merged` is
+  //     about a SESSION; it is programless and appears unfiltered only. NOT
+  //     "the run could not be read" — nothing here reads a run.
+  // A `DEFAULT` on either would be the overloaded null the entries above each
+  // argued through.
+  `
+  ALTER TABLE programs ADD COLUMN homeProject TEXT;
+  ALTER TABLE feed_events ADD COLUMN runId INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -1694,6 +1694,23 @@ export class CoordStore {
     return rows.map((r) => ({ slug: r.slug, title: r.title, state: isProgramState(r.state) ? r.state : 'unknown' }));
   }
 
+  /**
+   * The project whose repository holds this programme's ledger, spec and plan —
+   * or `null` when the row stores none (design §3 F2).
+   *
+   * TWO CONDITIONS ANSWER NULL and the caller must not fold them: a programme
+   * row whose `homeProject` IS NULL, and a slug with no programme row at all.
+   * The open route establishes existence first (`programs()`) and only then
+   * asks this method, because it records `home-project-backfilled` for the
+   * first and nothing for the second. Stated here rather than encoded in the
+   * return type, which is a compromise this build wrote down rather than hid.
+   */
+  programHome(slug: string): string | null {
+    const row = this.db.prepare('SELECT homeProject FROM programs WHERE slug = ?')
+      .get(slug) as { homeProject: string | null } | undefined;
+    return row?.homeProject ?? null;
+  }
+
   /** `RunRowDb` -> `RunRow`. The one place a raw `runs` row becomes the typed
    *  shape everything else in this class and its callers use — every enum
    *  column goes through its guard here, never a cast, so this is also the
@@ -2837,8 +2854,9 @@ export class CoordStore {
   recordFeedEvent(epoch: string, e: NotifyEvent): void {
     tx(this.db, () => {
       this.db.prepare(
-        'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, e.body);
+        'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, e.body, e.runId);
       this.db.prepare(
         'DELETE FROM feed_events WHERE id NOT IN (SELECT id FROM feed_events ORDER BY id DESC LIMIT ?)',
       ).run(CoordStore.FEED_RETENTION);
@@ -2863,12 +2881,17 @@ export class CoordStore {
       ? Math.min(Math.floor(limit), CoordStore.FEED_RETENTION)
       : CoordStore.FEED_RETENTION;
     const rows = this.db.prepare(
-      'SELECT seq, at, kind, sessionId, title, body FROM ' +
+      'SELECT seq, at, kind, sessionId, title, body, runId FROM ' +
       '(SELECT * FROM feed_events ORDER BY id DESC LIMIT ?) ORDER BY id ASC',
-    ).all(n) as { seq: number; at: number; kind: string; sessionId: string; title: string; body: string }[];
+    ).all(n) as { seq: number; at: number; kind: string; sessionId: string; title: string;
+                  body: string; runId: number | null }[];
     return rows.map((r) => ({
       seq: r.seq, at: r.at, kind: isNotifyKind(r.kind) ? r.kind : 'unknown', sessionId: r.sessionId,
-      title: r.title, body: r.body,
+      // Straight through, on `claimedBy`'s idiom in `hydrateRun`: an integer
+      // column with no vocabulary has nothing to read it through, and NULL from
+      // a row written before migration 9 means exactly what NULL means for a row
+      // written after it — this event is about no run.
+      title: r.title, body: r.body, runId: r.runId,
     }));
   }
 

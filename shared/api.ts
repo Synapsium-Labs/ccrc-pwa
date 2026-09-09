@@ -3437,6 +3437,23 @@ export interface NotifyEvent {
    *  degradation this union was given `unknown` for. */
   kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
+  /**
+   * WHICH RUN this notification is about, or `null` when it is about none.
+   *
+   * ADDITIVE (design 2026-09-08 §4); `FLEET_PROTO` is deliberately not bumped.
+   * The ONE tolerant reader is `reviveNotifyEvent` below — an older server's
+   * frame carries no `runId` at all, and that absence becomes `null` there and
+   * nowhere else.
+   *
+   * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
+   * `coord` are about a SESSION or about the config; they belong to no
+   * programme and appear only in the unfiltered feed. The two lanes that DO
+   * know a run — the mail lane and the run-transition lane — populate it, which
+   * is what makes `GET /api/feed?program=` a join rather than a guess. Nothing
+   * reads a run to compute this, so there is no read that could fail and no
+   * third condition to fold in here.
+   */
+  runId: number | null;
 }
 
 /** `resync: true` means "I cannot prove you saw everything" — the epoch moved,
@@ -3501,6 +3518,14 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
       sessionId: reqStr(o, 'sessionId'),
       title: reqStr(o, 'title'),
       body: reqStr(o, 'body'),
+      // TOLERANT, and deliberately not `reqNum`: an older server's frame omits
+      // this field entirely, and rejecting the whole event over an additive
+      // field would drop a real notification for a build difference. Anything
+      // that is not a number — absent, null, a string — becomes `null`, which
+      // is this field's own documented "about no run". The `kind` degradation
+      // eight lines up is the same policy for the same reason.
+      runId: typeof (o as { runId?: unknown }).runId === 'number'
+        ? (o as { runId: number }).runId : null,
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;

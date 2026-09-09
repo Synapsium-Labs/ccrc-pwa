@@ -1,9 +1,10 @@
 // The durable feed's client half: degrade an unknown kind, never fabricate an
 // event, never silently lose one, and merge two sources by seq.
 //
-// `NotifyEvent` has no `runId` (PR I reconciliation, item 2 — a feed row
-// cannot link back to its run without a second lookup) and its per-field
-// revival already has ONE implementation, `reviveNotifyEvent` (shared/api.ts).
+// `NotifyEvent` now carries `runId` (cross-repo programmes, design 2026-09-08
+// §4 — superseding the earlier "no second lookup" call PR I reconciliation
+// item 2 made) and its per-field revival already has ONE implementation,
+// `reviveNotifyEvent` (shared/api.ts).
 // `reviveNotifyEvents` here is a caller of it, not a second copy — so a field
 // of the wrong type rejects the WHOLE event (that function's own contract),
 // never degrades in place.
@@ -14,7 +15,7 @@ import { FEED_CAP, mergeBySeq, reviveNotifyEvents } from '../src/lib/feed';
 import type { NotifyEvent } from '../../shared/api';
 
 const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
-  seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b', ...over,
+  seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b', runId: null, ...over,
 });
 
 describe('reviveNotifyEvents', () => {

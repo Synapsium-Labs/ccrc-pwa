@@ -1195,6 +1195,7 @@ export class FleetWatcher {
         kind: 'mail', sessionId: m.toId, project,
         title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
+        runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
@@ -1243,6 +1244,7 @@ export class FleetWatcher {
           kind: 'run', sessionId: r.sessionId, project: r.project,
           title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
           body: `program:${r.program} wave ${r.wave}/${r.waveOf ?? '?'}`,
+          runId: r.runId,
           tag: `run-${r.runId}-${r.toState}`,
           recordAlways: true,
           recordOnly: r.toState === 'closing',
@@ -1287,6 +1289,13 @@ export class FleetWatcher {
    */
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
+    /** WHICH RUN this push is about, when the lane raising it knows one
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: five of
+     *  this method's seven call sites are about a session and about no run at
+     *  all, and an omitted field and an explicit `null` are the SAME fact for
+     *  this one field — "about no run" — which is why folding them costs
+     *  nothing. The two lanes that know a run pass the one they already have. */
+    runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
      *  pass one: two different messages about one session must not replace
@@ -1319,7 +1328,8 @@ export class FleetWatcher {
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
     const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
+    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
+      runId: e.runId ?? null });
     void log?.flush();
     // The durable feed archive — same record, same point, ALL kinds (Task
     // 10's orchestrator-added scope). Only reachable when NotifyLog actually
@@ -2930,6 +2940,7 @@ export class FleetWatcher {
             project: sessionProjects.get(senderId) ?? '',
             title: `✉ blocked › ${d.toId}`,
             body: `${origin.subject}: ${why}`,
+            runId: origin.runId,
             tag,
             recordAlways: true,
           }, projects);

@@ -295,8 +295,8 @@ describe('FleetScreen', () => {
       conn: 'open',
       sessions: [],
       feed: [
-        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '' },
-        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '' },
+        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
+        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
       ],
     });
     expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();

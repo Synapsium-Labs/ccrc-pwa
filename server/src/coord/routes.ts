@@ -1503,6 +1503,7 @@ export function registerCoordRoutes(
           title: 'caps changed',
           body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
                 `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+          runId: null,
         });
         coord.recordFeedEvent(log.epoch, ev);
       } catch (err) {

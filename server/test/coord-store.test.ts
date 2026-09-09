@@ -1096,7 +1096,7 @@ describe('CoordStore: feed (Task 10)', () => {
   // signature would never let a caller pass, then read it back.
   it('reads a kind token this build does not know as `unknown`, never as a raw string', () => {
     const s = store();
-    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b' });
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     s.db.prepare('UPDATE feed_events SET kind = ? WHERE seq = ?').run('review', 1);
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['unknown']);
   });
@@ -1104,7 +1104,7 @@ describe('CoordStore: feed (Task 10)', () => {
   it('still reads every KNOWN kind through the same guard, unchanged', () => {
     const s = store();
     for (const kind of ['ask', 'done', 'merged', 'mail', 'run'] as const) {
-      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b' });
+      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
@@ -2288,10 +2288,36 @@ describe('CoordStore: the coord feed kind', () => {
     // that the row lands would have passed against exactly that defect.
     const s = store();
     s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'coord', sessionId: '',
-      title: 'caps', body: 'workers 3 to 5' });
+      title: 'caps', body: 'workers 3 to 5', runId: null });
     expect(s.feedEvents(10)).toEqual([
-      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5' },
+      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
     ]);
+  });
+});
+
+describe('the durable feed carries the run it is about', () => {
+  it('stores and returns runId, and answers null for an event about no run', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if ('refused' in r) throw new Error('open refused');
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'mail', sessionId: 'demo-quiet-mesa',
+      title: 't', body: 'b', runId: r.id });
+    // An `ask` is about a SESSION and belongs to no run. Programless, not
+    // unmeasured — and it must still be in the unfiltered feed.
+    s.recordFeedEvent('epoch-1', { seq: 2, at: 1001, kind: 'ask', sessionId: 'demo-quiet-mesa',
+      title: 'q', body: '', runId: null });
+    expect(s.feedEvents(10).map((e) => e.runId)).toEqual([r.id, null]);
+  });
+});
+
+describe('programHome', () => {
+  it('answers the stored home, and null for a programme that stores none', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if ('refused' in r) throw new Error('open refused');
+    expect(s.programHome('build4')).toBeNull();
   });
 });
 
