@@ -17587,3 +17587,36 @@ no-arguments gate — correct at BASE, **`:2012` at HEAD**; the same commit used
 everywhere else, so this is one pre-commit number in a set of post-commit ones. And `:2594`'s cite of
 `:4090-4093` for the prose rule is broken by this commit (now `:4102-4105`). Population for the sweep in
 this file: **97 refs, 61 in the `+12` band and 11 in the `+173` band.**
+
+### D-2225 — a bracket test that measured nothing because its own warm-up performed the write it looked for
+
+Round 2's fix for D-2223's F6 was a filesystem bracket around `check`, to give "Nothing was written."
+a mechanism. It passed. **Both of its mutations survived.**
+
+Cause: the baseline was taken *after* a throwaway `check` run, so the warm-up performed the very write
+being looked for and the bracket compared two post-write states. `box()` already calls `env(home)` at
+construction for exactly this reason — its own header says so — so the warm-up bought nothing and cost
+the measurement.
+
+The round found this itself, at its own address, by applying D-2145 to its own new test rather than only
+to the code under review. **That is the whole argument for requiring a mutation beside a kept claim
+(D-2163): the test passed, and passing was not evidence.**
+
+**Two corrections to D-2221, both measured on this box (coreutils 9.4).** (a) It lists an empty knob
+beside `abc` as a 125 case. Not reachable — `: "${VAR:=15}"` substitutes on unset **or null**, so an
+empty knob is already 15 before `timeout` sees it. (b) It predicts enormous values produce 125; they are
+**accepted and clamped** — a second spelling of unbounded, not a refusal. The shipped validator refuses
+both anyway, on shape, zero, length and ceiling, in that order — and **the length gate is separately
+load-bearing**: delete only it and the suite reds with `integer expression expected`, because a cap
+written as a comparison alone fails *open* on exactly the input it exists to catch.
+
+**One warning for every remaining task in `ccd/`.** `macos-platform.test.ts` scans for a bare `timeout`
+command and deliberately does **not** strip string literals — so a refusal *sentence* that quotes a GNU
+command line reds that suite. It caught this round's prose and it was right to. Reword the sentence;
+never touch the guard.
+
+**And one self-inflicted instance of D-2223's own citation defect.** The round wrote `ccd/ccrc:8842` for
+the `BASH_SOURCE` main guard — correct at BASE, `:8991` at HEAD — one pre-commit number in a set of
+post-commit ones, which is verbatim the shape D-2223 had just named. It caught and fixed it in the same
+commit. The class is not a lapse of care; it is what happens when a file moves under a citation being
+written, and only re-measuring at HEAD catches it.
