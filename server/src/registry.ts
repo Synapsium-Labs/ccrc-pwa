@@ -366,8 +366,8 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * `project-mismatch` rung, which decides on `.project` and therefore must
  * read it MEASURED rather than through `SessionRecord.project`'s `?? id`
  * default — a display default that would otherwise reach a decision as if it
- * were a measurement (cross-repo programmes wave 1, recorded in that wave's
- * deviation ledger). Every other caller stays in this file.
+ * were a measurement (cross-repo programmes wave 1, D-2342). Every other
+ * caller stays in this file.
  */
 export async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
   const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));

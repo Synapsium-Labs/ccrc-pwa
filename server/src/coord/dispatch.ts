@@ -532,7 +532,8 @@ export async function dispatchRun(
     // consumer; only the DECISION reads measured. Putting `project` on the
     // measured ladder inside `readRegistryMeasured` itself is the fuller
     // remedy and reaches every consumer of `SessionRecord.project` — it is
-    // recorded in this wave's deviation ledger as the follow-up, not done here.
+    // recorded as D-2342 in this wave's deviation ledger, with the fuller
+    // remedy as the follow-up, not done here.
     //
     // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
     // and its identity measured, and BEFORE the hold, the injected `/clear` and
