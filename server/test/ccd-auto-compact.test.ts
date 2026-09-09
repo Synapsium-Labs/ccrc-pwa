@@ -471,3 +471,29 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
     expect(sendKeys()).toEqual([]);
   });
 });
+
+describe('an armed auto-continue is never cancelled by /compact (D-2229)', () => {
+  const ARMED = [
+    '  ▓ ctx ████████░░ 61%',
+    'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel',
+    '❯ ',
+  ].join('\n');
+  it('a pane waiting out a limit gets no keystroke, and the note says why', () => {
+    seed(); sessionJson('idle', 120);
+    tick(ARMED);
+    expect(sendKeys()).toEqual([]);
+    expect(reason()).toBe('auto-continue');
+    expect(skipLines().at(-1)).toContain('compact-skip demo-quiet-mesa: auto-continue');
+  });
+  it('the "continuing shortly" variant is the same wait', () => {
+    seed(); sessionJson('idle', 120);
+    tick(ARMED.replace('continuing automatically at 11:50am', 'continuing shortly'));
+    expect(sendKeys()).toEqual([]);
+    expect(reason()).toBe('auto-continue');
+  });
+  it('control: the same pane without the wait line compacts', () => {
+    seed(); sessionJson('idle', 120);
+    tick(ARMED.split('\n').filter((l) => !l.includes('Usage limit')).join('\n'));
+    expect(sendKeys().some((k) => k.includes('/compact'))).toBe(true);
+  });
+});

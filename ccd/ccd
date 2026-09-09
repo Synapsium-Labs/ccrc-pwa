@@ -12564,6 +12564,15 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   [[ -n "$obest" ]] && echo "$obest"
 }
 
+_pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
+  # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
+  # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
+  # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
+  # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
+  # injection, and the fallback re-drive — must not.
+  grep -qE "continuing automatically|continuing shortly" <<<"$1"
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
@@ -12918,6 +12927,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
   [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
   [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
+  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
   [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
   # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
@@ -13583,6 +13593,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
   local t="$1" cur
+  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
+    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+  fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
