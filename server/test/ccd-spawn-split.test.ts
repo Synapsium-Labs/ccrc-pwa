@@ -682,7 +682,7 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  so the substring form pinned the flag's PRESENCE and nothing about the
    *  command it composes.
    *
-   *  FIX ROUND 1 (D-TBD-resenv-composed-command-mismatch): Task 1 (D-2227)
+   *  FIX ROUND 1 (D-2262): Task 1 (D-2227)
    *  threads `$resenv` — one line of `env` KEY=value assignments switching on
    *  Claude Code's interrupted-turn resume — between `COLORTERM=truecolor` and
    *  the wrapper path on both spawn lines. This suite is byte-exact, so it
