@@ -225,7 +225,7 @@ describe('parseRegistry (§4.1)', () => {
     expect(() => parseRegistry(r)).toThrow(/discovery/);
   });
 
-  // models.mjs:218 minor: MODEL_ID_RE on a discovery entry is the ONLY
+  // minor: MODEL_ID_RE on a discovery entry is the ONLY
   // validation an explicit discovery list gets when a registry is read off
   // disk — a hand-edited file's entries never pass through
   // deploy/models-op.mjs's own `--model` validation. No existing case feeds a
@@ -312,7 +312,7 @@ describe('parseRegistry (§4.1)', () => {
     }
   });
 
-  // models.mjs:145 minor: the top-level shape guard, discriminated from the
+  // minor: parseRegistry's top-level shape guard, discriminated from the
   // fall-through a deleted guard leaves behind. `parseRegistry(7)` still
   // reaches a later, unrelated refusal (`json['probe'] === undefined`) with
   // the guard gone — only a non-object whose properties a TypeError-throwing
@@ -432,7 +432,7 @@ describe('parseCatalogue', () => {
     expect(() => parseCatalogue(bad)).toThrow(CatalogueInvalid);
   });
 
-  // models.mjs:145 minor: `null`, not `7` — with the top-level guard deleted,
+  // minor: parseCatalogue's top-level guard — `null`, not `7`, because with it deleted,
   // `7` still refuses via the UNRELATED `json['probe'] === undefined` check
   // (a property read off a number is just undefined), so the `.each` case
   // above cannot discriminate this guard's removal. `null['probe']` throws a

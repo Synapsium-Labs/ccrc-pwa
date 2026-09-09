@@ -55,6 +55,31 @@ const curlCalls = (): string[] => {
 const catalogueAt = (id: string): unknown =>
   JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', `${id}.json`), 'utf8'));
 
+/** The named function's own text, brace-counted out of the probe — same idiom
+ *  `deploy-env-guard.test.ts`'s `extractFn` uses on `deploy.sh`. Run it
+ *  standalone (via {@link isLoopback}) instead of through the whole probe:
+ *  it takes no fixture, no HOME, no network, just a string. */
+function extractFn(name: string): string {
+  const src = fs.readFileSync(PROBE, 'utf8').split('\n');
+  const start = src.findIndex((l) => l.startsWith(`${name}() {`));
+  if (start === -1) throw new Error(`ccrc-models-probe no longer defines ${name}()`);
+  let depth = 0;
+  for (let i = start; i < src.length; i++) {
+    for (const ch of src[i]!) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+    if (depth === 0) return src.slice(start, i + 1).join('\n');
+  }
+  throw new Error(`unbalanced braces reading ${name}() out of ccrc-models-probe`);
+}
+
+const isLoopback = (url: string): boolean => {
+  const body = extractFn('_models_probe_base_is_loopback');
+  const r = spawnSync(BASH, ['-c', `${body}\n_models_probe_base_is_loopback "$1"`, '_', url], { encoding: 'utf8' });
+  return r.status === 0;
+};
+
 beforeEach(() => { home = mkTmp('ccrc-models-probe-'); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
@@ -138,7 +163,7 @@ describe('the Codex arm (§5)', () => {
     expect(mode).toBe(0o600);
   });
 
-  // bash:425 / security:427 minors: `$NORM` used to be CREATED by a plain
+  // the staging-mode minors: `$NORM` used to be CREATED by a plain
   // `> "$NORM"` redirect (the normaliser's python) or `open(dst, "w")`
   // (`_mark_stale`'s rewrite) — at the ambient umask, in `~/.ccrc/models`,
   // which `mkdir -p` leaves 0775 — so the staged file was world-readable for
@@ -150,7 +175,7 @@ describe('the Codex arm (§5)', () => {
   // a later `chmod` cannot, because by the time it runs the file has already
   // existed, readable, for the whole write. This pins the mechanism: reds if
   // the pre-create is removed and the file goes back to being created bare.
-  it('stages the catalogue write at 0600 from the moment it exists, not chmod-after (bash:425/security:427)', () => {
+  it('stages the catalogue write at 0600 from the moment it exists, not chmod-after', () => {
     const src = fs.readFileSync(PROBE, 'utf8');
     expect(src).toMatch(/install -m 600 \/dev\/null "\$NORM"/);
   });
@@ -222,11 +247,12 @@ describe('the Codex arm (§5)', () => {
     expect(fs.readdirSync(target), 'the directory the link pointed at must stay untouched').toEqual([]);
     // This is an END-STATE check, not a race-window witness: a live poll of
     // "does $OUT ever name nothing mid-write" needs syscall-grade timing this
-    // suite does not carry (the sibling minor on the bash:425/security:427
-    // test above makes the same call). What it CAN measure post-hoc is the
-    // end state a `rename(2)` and a remove-then-rename pair leave differently
-    // — no `$OUT.tmp.$$` staging file surviving beside the destination, and
-    // exactly one entry at the destination's own name.
+    // suite does not carry (the sibling minor on the staging-mode test above
+    // makes the same call). Measured: that end state is the SAME whether the
+    // move is the real `rename(2)` or a remove-then-rename pair — these
+    // assertions cannot tell the two apart, and do not claim to. What they DO
+    // red on is a plain `mv -f`, which follows the symlink and drops the file
+    // INSIDE the target directory instead of replacing the link.
     expect(fs.readdirSync(home).filter((n) => n.startsWith('out-link')),
       'no .tmp staging file may survive beside the destination, and nothing but the destination itself may be there')
       .toEqual(['out-link']);
@@ -330,7 +356,36 @@ describe('failure keeps the previous catalogue and marks it stale (§11)', () =>
     expect(r.code).toBe(1);
     expect(r.stderr).not.toContain('Traceback');
     expect(r.stderr).toMatch(/^ccrc-models-probe: /m);
+    // The exact reason, not just "some non-empty line": deleting the
+    // `isinstance(cat, dict)` guard lets `cat["stale"] = True` run on the
+    // list and raise a TypeError instead, which the outer catch-all turns
+    // into a DIFFERENT `$PROG:` line (`could not mark the catalogue stale:
+    // TypeError: …`) — so this exact text only survives while the guard is
+    // still the thing that catches the case.
+    expect(r.stderr).toContain('is valid JSON but not an object');
     expect(fs.readFileSync(gptJson, 'utf8')).toBe('[1,2,3]');
+  });
+
+  it('a previous catalogue this process cannot read (chmod 000) reports a permission reason, not the JSON one', () => {
+    // whoami must not be root for this: root ignores a mode-000 refusal.
+    const gptJson = path.join(home, '.ccrc', 'models', 'gpt.json');
+    fs.mkdirSync(path.dirname(gptJson), { recursive: true });
+    fs.writeFileSync(gptJson, JSON.stringify({ probe: 'codex', fetchedAt: 1, stale: false, models: [] }),
+      { mode: 0o600 });
+    fs.chmodSync(gptJson, 0o000);
+    try {
+      const r = run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-file') });
+      expect(r.code).toBe(1);
+      expect(r.stderr).not.toContain('Traceback');
+      expect(r.stderr).toMatch(/^ccrc-models-probe: /m);
+      expect(r.stderr).toContain('could not be read');
+      // The old unconditional message named a JSON-shape problem this
+      // catalogue does not have — it parses cleanly once readable.
+      expect(r.stderr).not.toContain('is not a JSON object');
+      expect(r.stderr).not.toContain('not a parseable JSON object');
+    } finally {
+      fs.chmodSync(gptJson, 0o600); // afterEach's rmSync needs to see inside it
+    }
   });
 });
 
@@ -470,6 +525,25 @@ describe('the compatible arm (§5)', () => {
       { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'nope') });
     expect(r.code).toBe(1);
     expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'lane.json'))).toBe(false);
+  });
+});
+
+describe('_models_probe_base_is_loopback — the same set parseRegistry\'s host check accepts', () => {
+  it('a real loopback host with an explicit port is loopback', () => {
+    expect(isLoopback('http://127.0.0.1:8080/v1/models')).toBe(true);
+    expect(isLoopback('http://localhost/v1/models')).toBe(true);
+    expect(isLoopback('http://[::1]:8080/v1/models')).toBe(true);
+  });
+
+  it('userinfo ahead of a loopback-shaped port is NOT loopback — the host is what follows the @', () => {
+    // `new URL('http://127.0.0.1:8080@evil.com/').hostname` is 'evil.com': the
+    // port strip below takes the FIRST `:` it finds, which — with userinfo
+    // still attached — is the one INSIDE `127.0.0.1:8080`, not a real
+    // host:port separator, so `evil.com` was dropped and `127.0.0.1` read as
+    // the host. Stripping userinfo first is what makes this agree with
+    // `parseRegistry`'s `new URL(...).hostname` again.
+    expect(isLoopback('http://127.0.0.1:8080@evil.com/')).toBe(false);
+    expect(isLoopback('http://user:pass@evil.com/')).toBe(false);
   });
 });
 

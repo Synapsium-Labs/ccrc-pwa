@@ -271,6 +271,10 @@ function materialise(account, registry, catalogue) {
       return { err: ['unroutable-lane', e.message] };
     }
   }
+  // Every tmp name this call creates, so the catch below can unlink whichever
+  // ones are still around — `writeRegistry`'s own catch does the same for its
+  // one tmp; this function has up to two.
+  const tmps = [];
   try {
     mkdirSync(modelsDir(), { recursive: true });
     if (block !== null) {
@@ -284,10 +288,18 @@ function materialise(account, registry, catalogue) {
     for (const [p, text] of [[classes, classesTsv(registry, catalogue)],
       [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]]) {
       const tmp = `${p}.${process.pid}.tmp`;
+      tmps.push(tmp);
       writeFileSync(tmp, text, { mode: 0o600 });
       renameSync(tmp, p);
     }
   } catch (e) {
+    // A renameSync failure on the classes tmp used to leave it behind
+    // forever with the pre-C7 fixed name — the NEXT run's write to that same
+    // name would overwrite it. `${p}.${process.pid}.tmp` means a run that
+    // keeps failing (e.g. a wedged permissions problem on the hourly timer)
+    // leaves a NEW stray file every time instead, so the catch unlinks
+    // whatever it created this call, the same way `writeRegistry` does.
+    for (const tmp of tmps) { try { unlinkSync(tmp); } catch { /* renamed away, or never created */ } }
     if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
     return { err: ['materialise-failed', `${e.message}`] };
   }

@@ -3,14 +3,41 @@
 // `classesTsv` touch no disk at all, and `mergeSettingsEnv` touches exactly
 // one path the caller names. Every case below runs against a `mkTmp` HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../../shared/modelenv.mjs';
 import type { Registry } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
+
+const MODELENV_MJS_URL = pathToFileURL(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'modelenv.mjs'),
+).href;
+
+/** Runs `count` real, separate node processes at once, each importing
+ *  `shared/modelenv.mjs` fresh and calling ONLY the named export with the
+ *  given (JSON-serialisable) arguments — no roster parsing, no registry
+ *  read, nothing else on the way to the call, so the processes arrive at
+ *  the write this is testing as close together in wall-clock time as this
+ *  harness can put them, which is what makes a fixed-tmp-name collision
+ *  observable at all: a `deploy/models-op.mjs` CLI round trip (roster read,
+ *  parse, validate) spreads the six calls out enough that the race almost
+ *  never fires in a run short enough for a test suite. */
+function concurrentCalls(fn: 'mergeSettingsEnv' | 'clearSettingsEnv', args: unknown[], count: number)
+  : Promise<{ code: number; err: string }[]> {
+  const script = `import { ${fn} } from ${JSON.stringify(MODELENV_MJS_URL)};\n`
+    + `${fn}(${args.map((a) => JSON.stringify(a)).join(', ')});\n`;
+  return Promise.all(Array.from({ length: count }, () => new Promise<{ code: number; err: string }>((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script]);
+    let err = '';
+    child.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+    child.on('close', (code) => resolve({ code: code ?? -1, err }));
+  })));
+}
 
 let home: string;
 beforeEach(() => { home = mkTmp('ccrc-modelenv-'); });
@@ -91,8 +118,11 @@ describe('modelEnvBlock', () => {
   // `fable` — both haiku and sonnet null, with BOTH opus and fable non-null,
   // so a chain that (wrongly) fell through to fable would read a real model
   // id rather than failing the same way the all-null case above does. Every
-  // other case in this file leaves `fable: null` too, which cannot make this
-  // distinction (a null fable and a stopped chain both read the sentinel).
+  // other case in this file that REACHES the SMALL_FAST line leaves
+  // `fable: null` too, which cannot make this distinction (a null fable and a
+  // stopped chain both read the sentinel) — the one case below with fable set
+  // (a fable-only lane) throws from the ANTHROPIC_MODEL primary-null guard
+  // before the SMALL_FAST line is ever evaluated, so it is not a counterexample.
   it('ANTHROPIC_SMALL_FAST_MODEL stops at the sentinel — the chain never reaches fable (C1)', () => {
     const noHaikuNoSonnet = reg({ classes: { haiku: null, sonnet: null, opus: 'o', fable: 'f' },
       subagent: 'opus', discovery: ['o', 'f'], effort: {} });
@@ -246,10 +276,47 @@ describe('mergeSettingsEnv', () => {
   // C8: unpinned before this — dropping `{ mode: 0o600 }` at this write site
   // survived the whole covering suite (127/127, measured). The settings file
   // this writes carries every model alias a lane routes to.
+  //
+  // The mode pin is vacuous under a permissive test-runner umask: dropping
+  // `{ mode: 0o600 }` falls back to `writeFileSync`'s default (0o666), and
+  // 0o666 masked by umask 077 is ALSO 0o600 — the mutant survives with no
+  // change to this assertion. Forcing a known 022 umask around the write
+  // means the mutant lands on 0o644 (0o666 & ~0o022) instead, so this reds
+  // under any runner umask, not only a permissive one. Measured:
+  // `(umask 077; npx vitest run test/modelenv.test.ts)` against the mutant
+  // (the `{ mode: 0o600 }` dropped) passed before this change and fails after.
   it('writes settings.json at 0600 (C8)', () => {
+    const prevUmask = process.umask(0o022);
+    try {
+      fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+      mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
+      expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prevUmask);
+    }
+  });
+
+  // C7's fix for `deploy/models-op.mjs`'s two tmp sites (`materialise`'s
+  // concurrency test, models-op.test.ts) never exercises THIS write:
+  // `op('init', …)` there already materialises the identical settings block
+  // once, so every later concurrent `materialise` call finds `changed:
+  // false` and `existed: true` and returns from the `!changed && existed`
+  // short-circuit before it ever reaches this function's own tmp write —
+  // 120 calls prove nothing about this site. This test calls
+  // `mergeSettingsEnv` directly, with nothing ahead of it, and deletes the
+  // settings file before every round so `existed` is always false and the
+  // short-circuit cannot fire: every one of the round's calls must reach
+  // the tmp write, genuinely concurrently.
+  it('concurrent mergeSettingsEnv calls on the same settings file all succeed — unique tmp names, not a race on one', async () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
-    expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
+    const block = modelEnvBlock(SEEDED, null);
+    const rounds = 15;
+    const width = 8;
+    for (let round = 0; round < rounds; round += 1) {
+      fs.rmSync(settings(), { force: true });
+      const results = await concurrentCalls('mergeSettingsEnv', [settings(), block], width);
+      for (const r of results) expect(r.code, `round ${round}: ${r.err}`).toBe(0);
+    }
   });
 
   it('refuses a settings file that is not JSON, rather than overwriting it', () => {
@@ -305,14 +372,23 @@ describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1
 
   // C8: unpinned before this — dropping `{ mode: 0o600 }` at this write site
   // survived the whole covering suite (120/120, measured).
+  //
+  // Same vacuousness as `mergeSettingsEnv`'s pin above, same fix: force a
+  // known 022 umask around the write so the dropped-mode mutant lands on
+  // 0o644, not on 0o600 by coincidence of the runner's own umask.
   it('the rewrite lands at 0600 (C8)', () => {
-    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    fs.writeFileSync(settings(), JSON.stringify({
-      alwaysThinkingEnabled: true,
-      env: { ...modelEnvBlock(SEEDED, CODEX), DISABLE_TELEMETRY: '1' },
-    }, null, 2));
-    clearSettingsEnv(settings(), MODEL_ENV_KEYS);
-    expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
+    const prevUmask = process.umask(0o022);
+    try {
+      fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+      fs.writeFileSync(settings(), JSON.stringify({
+        alwaysThinkingEnabled: true,
+        env: { ...modelEnvBlock(SEEDED, CODEX), DISABLE_TELEMETRY: '1' },
+      }, null, 2));
+      clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+      expect(fs.statSync(settings()).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prevUmask);
+    }
   });
 
   it('removes env entirely once emptied by the deletion, rather than writing {}', () => {

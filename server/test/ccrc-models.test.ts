@@ -839,8 +839,44 @@ describe('ccrc models <id> discovery', () => {
     expect(r.code).toBe(1);
     expect(poisonLog('curl').join('\n')).not.toContain('ambient-token');
     expect(poisonLog('curl').join('\n')).not.toContain('Authorization');
+    // C13 moved the header off argv onto curl's stdin (`-K -`), so an argv-only
+    // check passes even when the token still reaches curl: this is the arm the
+    // finding's own repro exercises, and it must never appear on stdin either.
+    expect(poisonStdin('curl')).not.toContain('ambient-token');
     expect(r.stdout).not.toContain('ambient-token');
     expect(r.stderr).not.toContain('ambient-token');
+  });
+
+  // Item 3 of the final wave's round 2: `_models_run_probe` unsets
+  // CHATGPT_TOKEN_DIR now too — the codex arm's own credential
+  // (`ccrc-models-probe`'s `_fetch_codex` reads it to find `auth.json`), for
+  // the same reason as ANTHROPIC_AUTH_TOKEN above: a lane with no secrets
+  // file must not inherit whatever CHATGPT_TOKEN_DIR the calling shell
+  // happens to carry, e.g. another lane's real token directory. `litellm` and
+  // the venv `python` beside it are poisoned so a leak would be OBSERVABLE
+  // without this test ever making a real network call: `_fetch_codex`
+  // resolves its interpreter off `command -v litellm`, so the poisoned
+  // `litellm` on PATH redirects it to the poisoned `python` right beside it,
+  // which never runs at all when the scrub holds — the bash-level `[ -f
+  // "$token_dir/auth.json" ]` guard refuses first, against the DEFAULT
+  // directory, because the ambient one never reached `$token_dir`.
+  it('an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json never reaches a codex lane\'s fetch', () => {
+    const poisonedDir = join(home, 'someone-elses-chatgpt-auth');
+    fs.mkdirSync(poisonedDir, { recursive: true });
+    fs.writeFileSync(join(poisonedDir, 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
+    fs.writeFileSync(join(home, '.local', 'bin', 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'python'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    run(['models', 'gpt', 'init', 'codex']);
+    const r = run(['models', 'refresh', 'gpt'], { CHATGPT_TOKEN_DIR: poisonedDir });
+    expect(r.code).toBe(1);
+    expect(fs.existsSync(join(home, 'python-poison')),
+      'a scrubbed CHATGPT_TOKEN_DIR leaves no auth.json for the codex fetch to find, so it must refuse before the interpreter ever runs')
+      .toBe(false);
+    expect(r.stdout).not.toContain(poisonedDir);
+    expect(r.stdout).not.toContain('leaked-account-id');
+    expect(r.stderr).not.toContain(poisonedDir);
+    expect(r.stderr).not.toContain('leaked-account-id');
   });
 });
 

@@ -3863,17 +3863,22 @@ _models_class_ok() {   # <class>
 # which must never carry the lane's key past this one call. The line is
 # `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
-# credential names the probe honours (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY)
-# before doing anything else — measured fix, C3 of the final wave: without
-# this, a lane with no secrets file ran the probe against whatever this shell
-# already had, which on this fleet is ordinarily the CALLING lane's own key
-# (every wrapper-started session sources it before exec'ing `claude`), so
-# `ccrc models refresh --all` could ship that key to a `compatible` lane's
-# third-party `baseUrl`. Scrubbed first, a lane with a secrets file gets only
-# what that file sets, and a lane with none gets NO token, ever, regardless of
-# what the calling session is carrying — and its own refusal ("needs the
-# lane's key: set ANTHROPIC_AUTH_TOKEN") is what surfaces — captured here, not
-# reworded, and never containing the key's VALUE, only its name.
+# credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
+# (every arm that sends a bearer header) and, on the codex arm only,
+# CHATGPT_TOKEN_DIR (it names the directory `_fetch_codex` reads `auth.json`
+# from) — measured fix, C3 of the final wave: without this, a lane with no
+# secrets file ran the probe against whatever this shell already had,
+# which on this fleet is ordinarily the CALLING lane's own key (every
+# wrapper-started session sources it before exec'ing `claude`), so `ccrc
+# models refresh --all` could ship that key, or another lane's codex token
+# directory, to a lane it was never issued for. Scrubbed first, a lane with a
+# secrets file gets only what that file sets, and a lane with none gets NO
+# credential, ever, regardless of what the calling session is carrying — and
+# its own refusal ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what
+# surfaces — captured here, not reworded, and never containing the
+# credential's VALUE, only its name. ANTHROPIC_API_KEY is unset alongside them
+# as defence in depth, not because the probe honours it — it does not; nothing
+# in `ccrc-models-probe` reads it.
 #
 # ONE SEAM, TWO CALLERS: `_models_endpoints` (the ownership-whitelist
 # question, on a single model) and `_models_refresh_one` (a lane's whole
@@ -3886,11 +3891,11 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
   local secrets
   secrets="$(jq -r --arg id "$id" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
   if [ -n "$secrets" ]; then
-    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
       exec "$@" )
   else
-    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       exec "$@" )
   fi
 }
@@ -3917,9 +3922,14 @@ _models_id_ok() {   # <token> — a usage-level gate, before node
   # `ccrc-wrapper-shape` is sourced once, at the top of `cmd_models` (below),
   # the same idiom `cmd_wrappers` uses; a fourth typed-out copy of
   # `shared/roster.ts`'s ID_RE is exactly the drift that file's own header
-  # exists to prevent, and this one was the ONLY guard standing between
-  # `ccrc models <id> init` and a write outside ~/.ccrc/models/ —
-  # `deploy/models-op.mjs` has no traversal guard of its own.
+  # exists to prevent. `deploy/models-op.mjs` re-validates its own `--id`
+  # against the identical shape too, at every op's entry, before any path is
+  # built (C6, added since this comment first shipped) — so this is no longer
+  # the only guard standing between a bad id and a write outside
+  # ~/.ccrc/models/. The shell keeps its own anyway: this is the
+  # usage-level gate, checked before `deploy/models-op.mjs` is ever invoked,
+  # so a bad id here is a clean usage refusal (exit 2) rather than a
+  # subprocess spin-up whose only job would be to say no.
   local id="$1" w
   for w in $MODELS_RESERVED; do
     [ "$w" = "$id" ] && return 1

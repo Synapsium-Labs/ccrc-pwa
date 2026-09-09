@@ -196,6 +196,14 @@ PY
 _models_probe_base_is_loopback() {   # <baseUrl> -> 0 iff its host is loopback
   local rest="${1#*://}"
   local host="${rest%%/*}"
+  # Userinfo comes off BEFORE the port strip below, or a URL like
+  # `http://127.0.0.1:8080@evil.com/` reads as loopback: the port strip takes
+  # the FIRST `:` it finds, which is the one inside the userinfo
+  # (`127.0.0.1:8080`), not the one (absent here) between a real host and its
+  # port — so `evil.com` is dropped entirely and `127.0.0.1` is what remains.
+  # `new URL('http://127.0.0.1:8080@evil.com/').hostname` gives `evil.com`;
+  # this must agree.
+  host="${host##*@}"
   if [[ "$host" == \[*\]* ]]; then
     host="${host%%]*}]"
   else
@@ -407,27 +415,59 @@ _mark_stale() {   # <reason>
   # valid-but-non-dict previous catalogue (`[1,2,3]`) escaped the
   # `except ValueError` entirely and raised an unhandled `TypeError` — a raw
   # Python traceback on stderr, no `$PROG:` prefix, becoming `reason` verbatim.
-  if ! CCRC_STALE_WHY="$why" python3 - "$OUT" "$NORM" <<'PY' 2>/dev/null
+  # Five distinct ways this heredoc can fail — $OUT unreadable, $OUT not JSON,
+  # $OUT valid JSON but not an object, $NORM unwritable, the chmod itself
+  # failing — each print their OWN one-line `$PROG:`-prefixed reason, and a
+  # catch-all around the whole body turns any OTHER exception into the same
+  # shape instead of a bare traceback. Nothing here is `2>/dev/null`'d any
+  # more: the line captured below IS what the operator reads as the refresh
+  # row's reason, not a guess.
+  local mark_err
+  if ! mark_err="$(CCRC_STALE_WHY="$why" PROG="$PROG" python3 - "$OUT" "$NORM" <<'PY' 2>&1
 import json, os, sys
+
+prog = os.environ["PROG"]
 src, dst = sys.argv[1], sys.argv[2]
+
+
+def fail(msg):
+    print(f"{prog}: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 try:
-    cat = json.load(open(src))
-except ValueError:
-    raise SystemExit(1)
-if not isinstance(cat, dict):
-    raise SystemExit(1)
-cat["stale"] = True
-cat["lastError"] = os.environ["CCRC_STALE_WHY"]
-with open(dst, "w") as f:
-    json.dump(cat, f)
-# The mode must survive a failure too: without this, the rewritten file comes
-# out at whatever `open(dst, "w")`'s umask gives it — measured 0644/0664, not
-# the 0600 a successful probe writes, and an OpenRouter catalogue carries the
-# lane's price list.
-os.chmod(dst, 0o600)
+    try:
+        raw = open(src).read()
+    except OSError as e:
+        fail(f"\"{src}\" could not be read: {e.strerror or e}")
+    try:
+        cat = json.loads(raw)
+    except ValueError as e:
+        fail(f"\"{src}\" is not valid JSON: {e}")
+    if not isinstance(cat, dict):
+        fail(f"\"{src}\" is valid JSON but not an object")
+    cat["stale"] = True
+    cat["lastError"] = os.environ["CCRC_STALE_WHY"]
+    try:
+        with open(dst, "w") as f:
+            json.dump(cat, f)
+    except OSError as e:
+        fail(f"\"{dst}\" could not be written: {e.strerror or e}")
+    try:
+        # The mode must survive a failure too: without this, the rewritten
+        # file comes out at whatever `open(dst, "w")`'s umask gives it —
+        # measured 0644/0664, not the 0600 a successful probe writes, and an
+        # OpenRouter catalogue carries the lane's price list.
+        os.chmod(dst, 0o600)
+    except OSError as e:
+        fail(f"\"{dst}\" could not be chmod'd to 0600: {e.strerror or e}")
+except SystemExit:
+    raise
+except Exception as e:
+    fail(f"could not mark the catalogue stale: {type(e).__name__}: {e}")
 PY
-  then
-    echo "$PROG: $why — and the previous catalogue at \"$OUT\" could not be marked stale (it exists but is not a parseable JSON object); nothing was changed." >&2
+  )"; then
+    echo "$PROG: $why — and the previous catalogue at \"$OUT\" could not be marked stale: ${mark_err#*: }; nothing was changed." >&2
     return 1
   fi
   _probe_mv_notdir "$NORM" "$OUT" || {
@@ -439,7 +479,7 @@ PY
 }
 
 mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
-# bash:425 / security:427 minors: $NORM used to come into existence via
+# the staging-mode fix: $NORM used to come into existence via
 # whichever writer got to it first — the normaliser's `> "$NORM"` redirect, or
 # `_mark_stale`'s python `open(dst, "w")` — at the ambient umask (measured
 # 0664 on this box), inside `~/.ccrc/models`, which `mkdir -p` leaves 0775. A

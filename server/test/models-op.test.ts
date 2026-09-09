@@ -541,7 +541,7 @@ describe('set-class', () => {
     expect(classesOf('router')['sonnet']).toBeNull();
   });
 
-  // minor (models-op.mjs:737): the not-discovered gate's own ERROR CODE, not
+  // minor: the openrouter not-discovered gate's own ERROR CODE, not
   // only `field`/`detail` — removing the gate does not open a write
   // (`parseRegistry`'s containment rule still refuses the same reassignment),
   // and THAT fallback refusal also carries `field: "discovery"` with a
@@ -892,10 +892,48 @@ describe('materialise', () => {
   // ccrc-models.test.ts). Unlike the registry file's own pin (`the registry
   // write` describe above), nothing asserted the mode of either file this
   // same writer loop produces.
+  //
+  // Same vacuousness as `shared/modelenv.mjs`'s pins, same fix: a dropped
+  // `{ mode: 0o600 }` falls back to 0o666 masked by whatever umask the
+  // process has, and under a strict 077 that ALSO comes out 0o600 — the
+  // mutant survives by coincidence. `op` forks a child via `spawnSync`, which
+  // inherits the parent's umask at fork time, so forcing 022 here reaches the
+  // child too: the mutant then lands on 0o644, not 0o600, under any runner
+  // umask.
   it('the TSV and the effort file both land at 0600 (C8)', () => {
+    const prevUmask = process.umask(0o022);
+    try {
+      op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+      expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv')).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json')).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prevUmask);
+    }
+  });
+
+  // materialise's catch never unlinked its own tmp — `writeRegistry`'s catch
+  // does, this one did not. A deterministic rename failure (a directory
+  // sitting at the TSV destination) leaked one `.tmp` file per failing call;
+  // with the pre-C7-fix FIXED tmp name that was at most one stray total (the
+  // next run's write reused the same name), but `${p}.${process.pid}.tmp`
+  // turns it into a NEW leaked file every failing run — the failing writer
+  // here being the hourly ccrc-models.timer this same wave wires into
+  // `ccrc install`, so a lane wedged on this could accumulate one stray 0600
+  // file an hour forever.
+  it('a failed materialise unlinks its own tmp, run repeatedly', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv')).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json')).mode & 0o777).toBe(0o600);
+    writeCatalogue('gpt');
+    const tsvPath = path.join(home, '.ccrc', 'models', 'gpt.classes.tsv');
+    fs.rmSync(tsvPath, { force: true });
+    // A directory at the TSV's own destination: `renameSync(tmp, tsvPath)`
+    // fails deterministically (EISDIR), every run, without racing anything.
+    fs.mkdirSync(tsvPath);
+    for (let i = 0; i < 3; i += 1) {
+      const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+      expect(r.code, `run ${i}: ${JSON.stringify(r.body)}`).toBe(1);
+    }
+    const leftovers = fs.readdirSync(path.join(home, '.ccrc', 'models')).filter((n) => n.includes('.tmp'));
+    expect(leftovers, `stray tmp files after 3 failing runs: ${JSON.stringify(leftovers)}`).toEqual([]);
   });
 
   it('on a lane with NO registry writes nothing and says so', () => {
@@ -930,12 +968,24 @@ describe('materialise', () => {
   // reviewer's repro ran once — but the collision is systemic (fires on any
   // overlap, not a rare interleaving), so 20*6 = 120 calls is already far
   // past the point a fixed name would show at least one failure.
+  //
+  // This exercises `deploy/models-op.mjs`'s OWN two tmp sites (the TSV and
+  // the effort file) on every round, but NOT `shared/modelenv.mjs`'s
+  // `mergeSettingsEnv` — `op('init', …)` above already materialises the
+  // settings block once, so every later round's six calls compute the SAME
+  // env, `mergeSettingsEnv`'s `!changed && existed` short-circuit returns
+  // before it ever reaches its own tmp write, and 120 calls prove nothing
+  // about that site. Deleting settings.json before each round removes
+  // `existed`, so the short-circuit cannot fire and every round's six calls
+  // race a genuine concurrent write there too.
   it('N concurrent materialise calls on the same lane all succeed (C7)', async () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     writeCatalogue('gpt');
+    const settingsPath = path.join(home, '.claude-gpt', 'settings.json');
     const rounds = 20;
     const width = 6;
     for (let round = 0; round < rounds; round += 1) {
+      fs.rmSync(settingsPath, { force: true });
       const results = await Promise.all(
         Array.from({ length: width }, () => opAsync('materialise', '--file', rosterPath(), '--id', 'gpt')),
       );
@@ -946,9 +996,9 @@ describe('materialise', () => {
   });
 });
 
-// models-op.mjs:632 minor: the check-only/`--commit true` two-phase protocol
-// (Task 10 fix round 1's whole point, per progress.md:109) had zero coverage
-// at THIS layer — `grep -n commit server/test/models-op.test.ts` returned
+// minor: the check-only/`--commit true` two-phase protocol (Task 10 fix
+// round 1's whole point, per the ledger's own record of that task) had zero
+// coverage at THIS layer — `grep -n commit server/test/models-op.test.ts` returned
 // nothing before this. It IS killed tree-wide, through
 // `test/ccrc-models.test.ts`'s `_models_litellm` calls, but this op is the
 // one writer of these bytes and its own suite could not tell check-only from

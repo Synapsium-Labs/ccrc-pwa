@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
 const probePath = path.join(here, 'types', 'ok', 'legit-modelenv-composition.ts');
+const contextTokensProbePath = path.join(here, 'types', 'ok', 'legit-client-default-context-tokens.ts');
 
 // Same harness as `ccdargv-brand.test.ts` and `typecheck-tests.test.ts`:
 // `typescript/bin/tsc` is not an exported subpath, so resolve the package's
@@ -68,6 +69,15 @@ describe('shared/modelenv.d.mts — measured, not merely believed clean (fix rou
     expect(src).toContain('clearSettingsEnv(settingsPath, MODEL_ENV_KEYS)');
     // No cast anywhere: the legitimate shape has to flow on its own.
     expect(src).not.toContain(' as ');
+  });
+
+  it('the CLIENT_DEFAULT_CONTEXT_TOKENS probe really does import and use it', () => {
+    // Without this, emptying the probe file would make the check above pass
+    // trivially while removing the only evidence this declaration is in a
+    // compiled program at all.
+    const src = readFileSync(contextTokensProbePath, 'utf8');
+    expect(src).toContain("import { CLIENT_DEFAULT_CONTEXT_TOKENS } from '../../../../shared/modelenv.mjs'");
+    expect(src).toContain('CLIENT_DEFAULT_CONTEXT_TOKENS');
   });
 
   it('ModelEnv is a type alias, not an interface — the fact the whole finding turns on', () => {
