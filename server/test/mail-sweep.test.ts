@@ -2061,8 +2061,12 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     expect(deliveryRow(coord, d.id).state).toBe('rejected');
 
     const feed = coord.feedEvents(50);
-    expect(feed.filter((e) => e.sessionId === 'demo-boss' && /gave up|undeliverable/.test(e.body)))
-      .toHaveLength(1);
+    const parkRows = feed.filter((e) => e.sessionId === 'demo-boss' && /gave up|undeliverable/.test(e.body));
+    expect(parkRows).toHaveLength(1);
+    // The park is about the run the parked mail was queued on (review finding 1,
+    // fix round 3) — `tellSender`'s `pushOne` call passes `runId: origin.runId`,
+    // and this queues run-scoped mail through `openRunClaimedBy`/`queueFrom` above.
+    expect(parkRows[0].runId).toBe(runId);
     // A park is not a state transition, and `advanceInner` stays the only
     // writer of `run_events`.
     const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
