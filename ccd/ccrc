@@ -4350,13 +4350,13 @@ _acct_add_parse() {
     .claude*) ;;
     *) _acct_refuse 2 suffix-outside-read-root "config directory \"$ACCT_SUFFIX\" is outside \$HOME/.claude*, which is the only place the ccrc agent may read (agent/src/whitelist.ts). A lane there is one this box could roster and never show you. Use a suffix starting with \".claude\". Nothing was written." ;;
   esac
-  # The second, independent gate — the same one `shared/roster.ts` and
-  # `shared/wrapper.mjs` keep their own copies of, sourced here rather than
-  # re-spelled (`ccrc-wrapper-shape:73`, `^\.[A-Za-z0-9._-]+$`). "." and ".."
-  # pass a character-class test and resolve to $HOME and its parent.
-  { [ "$ACCT_SUFFIX" != "." ] && [ "$ACCT_SUFFIX" != ".." ] \
-    && [[ "$ACCT_SUFFIX" =~ $WRAPPER_SUFFIX_SAFE_RE ]]; } \
-    || _acct_refuse 2 bad-suffix "config directory \"$ACCT_SUFFIX\" is not a safe single directory name under \$HOME: letters, digits, \".\", \"-\" and \"_\" only, dot-prefixed, and never exactly \".\" or \"..\". Nothing was written."
+  # The second, independent gate, SHARED WITH `declare` since review round 2 —
+  # `_acct_suffix_or_refuse` below, and the sentence is unchanged for the reason
+  # the id lift gives: a lift that reworded an answer would be a behaviour
+  # change wearing a refactor's clothes. The read-root gate above stays HERE and
+  # is not shared, and D-2142 says why: `add` creates and provisions that
+  # directory, `declare` records somebody else's.
+  _acct_suffix_or_refuse "$ACCT_SUFFIX"
 }
 
 # ── THE TWO CONVERGERS, WITH THEIR TRANSCRIPT ON THE OTHER STREAM ──────────
@@ -4954,6 +4954,36 @@ _acct_id_or_refuse() {   # <id> — refuses, or returns 0
     || _acct_refuse 2 reserved-id "\"auth\" is reserved: the auth pane's tmux session is named cc-auth-<id>, which for this id would collide with the pane of a session running on it. Pick another id. Nothing was written."
 }
 
+# THE ONE SUFFIX-SAFETY GATE, SHARED (review round 2, D-2143). It was spelled
+# inline in `_acct_add_parse` until `declare` needed the same rule, and it is
+# lifted here rather than copied for `_acct_id_or_refuse`'s reason: a second
+# spelling of a refusal SENTENCE in bash is drift nothing in this tree can see,
+# because `server/test/single-definition.test.ts` filters `/\.tsx?$/` and never
+# reads `ccd/`.
+#
+# THE READ-ROOT GATE IS NOT PART OF IT. `add`'s `suffix-outside-read-root` stays
+# at its own call site: the two verbs deliberately disagree there (D-2142), and
+# folding a rule only one of them holds into a shared helper would need a
+# boolean argument — which is how a shared gate becomes two gates wearing one
+# name.
+#
+# `_acct_shape` HERE, NOT ONLY IN THE CALLER, and `${1:-}` beside it: this reads
+# `$WRAPPER_SUFFIX_SAFE_RE` off the contract, and under `set -uo pipefail` a
+# caller that had not sourced it would get `unbound variable` on stderr and NO
+# JSON on stdout — the one thing this verb's contract forbids. Its sibling above
+# was already self-sufficient; the two are now the same shape.
+_acct_suffix_or_refuse() {   # <suffix> — refuses, or returns 0
+  local suffix="${1:-}"
+  _acct_shape
+  # The same gate `shared/roster.ts` and `shared/wrapper.mjs` keep their own
+  # copies of, sourced rather than re-spelled (`ccrc-wrapper-shape:73`,
+  # `^\.[A-Za-z0-9._-]+$`). "." and ".." pass a character-class test and resolve
+  # to $HOME and its parent.
+  { [ "$suffix" != "." ] && [ "$suffix" != ".." ] \
+    && [[ "$suffix" =~ $WRAPPER_SUFFIX_SAFE_RE ]]; } \
+    || _acct_refuse 2 bad-suffix "config directory \"$suffix\" is not a safe single directory name under \$HOME: letters, digits, \".\", \"-\" and \"_\" only, dot-prefixed, and never exactly \".\" or \"..\". Nothing was written."
+}
+
 # THE ROSTERED IDS, from a SUBSHELL source of the projection — `_inst_dirs`' rule
 # and `_acct_candidates`' shape, one function up: `~/.ccrc/accounts.sh` declares
 # `_ccrc_cfg_dir`, `_ccrc_label` and `_ccrc_hue` in the SAME `_ccrc_*` namespace
@@ -5022,11 +5052,32 @@ _acct_projection() {   # <what-still-stands>
 # device+inode THROUGH the symlink, so it needs no `readlink` and it catches a
 # hard link too.
 #
-# FOUR CODES, AND THEY STAY FOUR. `launcher-absent` and `launcher-not-a-file` are
-# two conditions an operator acts on differently (put a launcher there / look at
-# what is there), and so are `launcher-not-executable` (chmod +x) and
-# `launcher-alias` (pick a different id, or declare the one that already exists).
-# Collapsing any pair is the overloaded seam CLAUDE.md forbids.
+# SIX CODES, AND THE LAST TWO ARE THE SAME RULE THE FIRST FOUR ARE (D-2144).
+# `launcher-absent` and `launcher-not-a-file` are two conditions an operator acts
+# on differently (put a launcher there / look at what is there), and so are
+# `launcher-not-executable` (chmod +x) and `launcher-alias` (pick a different id,
+# or declare the one that already exists). Collapsing any pair is the overloaded
+# seam CLAUDE.md forbids — and review round 2 measured two pairs that WERE
+# collapsed, by the four codes written to prevent exactly that:
+#
+#  - `launcher-dangling`. `[ -e ]` FOLLOWS a symlink, so a link whose target is
+#    gone read as `launcher-absent`, whose remedy is "put the launcher there
+#    first" — and `ln -s` then fails EEXIST, because something IS at that path.
+#    What that operator needs is `ls -ld`, which only `launcher-not-a-file`
+#    offered. Two conditions, two remedies, one code: the seam itself.
+#  - `launcher-empty`. A zero-byte 0755 file was DECLARED — exit 0, marker
+#    written, and `ccd` would exec it. Decision 22(c)'s "its shape is nobody's
+#    business" defends a COMPILED launcher that spells its config dir in a way no
+#    `export` matches; it does not describe zero bytes, which cannot be any
+#    launcher at all. `[ -s ]` is a fifth code and not a shape judgement: it
+#    reintroduces neither `_wrap_is_script` nor `_wrap_declares_config_dir`, and
+#    it asks nothing about what the bytes SAY — only whether there are any.
+#
+# `-s` COMES BEFORE `-x`, DELIBERATELY. A zero-byte file that is also not
+# executable is both, and `chmod +x` is the wrong next act for it: the file has
+# no content to run either way, so telling the operator to fix its mode sends
+# them to fix the wrong thing — which is this entry's own argument about the
+# dangling link, applied to the pair beside it.
 #
 # NO SELF-SKIP, unlike `_acct_candidates`' loop, and the difference is that this
 # function is asked about an id that is NOT supposed to be rostered yet: the
@@ -5037,12 +5088,29 @@ _acct_projection() {   # <what-still-stands>
 # always `-ef` itself.
 ACCT_ALIAS_OF=""
 _acct_declarable() {   # <id> — refuses, or returns 0 with ACCT_ALIAS_OF empty
-  local id="$1" f="$WRAPPER_BIN_DIR/$id" other
+  # `_acct_shape` HERE AND NOT ONLY IN THE CALLER (review round 2). This
+  # function reads `$WRAPPER_BIN_DIR`, which the shape contract declares, and
+  # under `set -uo pipefail` a caller that had not sourced it got `unbound
+  # variable` on stderr and NO JSON on stdout — the one thing this verb's
+  # contract forbids, reached by nothing but an oversight: `_acct_id_or_refuse`,
+  # its sibling one screen up, has always sourced its own contract. `${1:-}` and
+  # the empty `f`/`other` are the same rule for the same reason — a hand call
+  # with no argument is a refusal, not a crash.
+  local id="${1:-}" f="" other=""
   ACCT_ALIAS_OF=""
+  _acct_shape
+  f="$WRAPPER_BIN_DIR/$id"
+  # THE ONLY TEST IN THIS FUNCTION THAT DOES NOT FOLLOW THE LINK, so it has to
+  # come first: every predicate below resolves the target, and a dangling link
+  # answers all of them as though nothing were there at all.
+  { [ -L "$f" ] && [ ! -e "$f" ]; } \
+    && _acct_refuse 1 launcher-dangling "the path $f is a symlink and its target does not exist, so there is no launcher to declare and nothing can be put at that path while the link is there — 'ln -s' would fail with EEXIST. Read it with: ls -ld $f — then repoint it at the real launcher, or remove it. Nothing was written."
   [ -e "$f" ] \
     || _acct_refuse 1 launcher-absent "there is no $f on this box, so there is no launcher to declare — put the launcher there first, or use 'ccrc account add' to have ccrc write one. Nothing was written."
   [ -f "$f" ] \
     || _acct_refuse 1 launcher-not-a-file "the path $f exists and is not a regular file, and ccd execs it directly — look at what is there: ls -ld $f. Nothing was written."
+  [ -s "$f" ] \
+    || _acct_refuse 1 launcher-empty "the launcher $f is zero bytes long, and ccd execs it directly — an empty file is no launcher at all, compiled or scripted, so declaring it would roster a lane whose every session exits at once. Put the real launcher there, then re-run. Nothing was written."
   [ -x "$f" ] \
     || _acct_refuse 1 launcher-not-executable "the launcher $f is not executable, and ccd runs it directly — chmod +x $f, then re-run. Nothing was written."
   for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
@@ -5064,7 +5132,10 @@ _acct_declarable() {   # <id> — refuses, or returns 0 with ACCT_ALIAS_OF empty
 # one would have to be told which.
 #
 # ── THE ORDERED WRITE, AND WHY THE MARKER IS FIRST ────────────────────────
-# Identity, then disk, then the switch, then the roster, then the projection.
+# Identity, then the pre-pass, then disk, then the switch, then the roster, then
+# the projection. The pre-pass (`check-declare`, D-2143) is the step this order
+# gained in review round 2, and it goes where it does because everything before
+# it is decidable without forking node and everything after it writes.
 #
 # THE MARKER GOES IN FRONT OF THE ROSTER ENTRY (D-2134's ruling, applied here).
 # The WEAKEST TRUE version of the hazard, because an entry that overstates its
@@ -5083,7 +5154,9 @@ _acct_declarable() {   # <id> — refuses, or returns 0 with ACCT_ALIAS_OF empty
 #
 # `_acct_declarable` IS STILL BEFORE THE MARKER, and that is the same rule read
 # forwards: a refusal an operator can act on must not leave a file behind, and
-# all four launcher refusals are that kind.
+# all six launcher refusals are that kind. So is every refusal `check-declare`
+# can reach, which is what that op was added for — before this task the field
+# faults were the one class this verb answered with a file already on disk.
 _acct_declare() {
   local id="" provider="" baseurl="" label="" hue="" suffix="" v="" flag="" other=""
   _acct_shape
@@ -5099,6 +5172,22 @@ _acct_declare() {
         v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account declare has no argument \"$1\"" ;;
     esac
+    # A FLAG GIVEN AN EMPTY VALUE IS NOT A FLAG NOBODY GAVE (D-2144). The three
+    # optional flags reach node through `${x:+…}`, which drops an empty value
+    # SILENTLY — so `ccrc account declare --provider ''` used to exit 0 having
+    # rostered a lane with no provider and said nothing about it, while `add`
+    # answers `missing-value` at exit 2 for the same bytes. Flag-absent and
+    # flag-present-but-empty are two conditions a caller handles differently and
+    # must not collapse to one value.
+    #
+    # THE GATE IS HERE, ON `$v`, and not six times below: both spellings of
+    # every flag land in `$v` exactly once, which is the same property the
+    # `flag="${1%%=*}"` line above exists for. It also puts `--id ''`,
+    # `--label ''` and `--hue ''` on this sentence rather than on the three
+    # "a value is required" ones downstream — same code, same class, and one
+    # answer for one mistake instead of four.
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value. A flag present with nothing in it is not the same as a flag nobody passed, so it is refused rather than dropped: give it a value, or leave it off. Nothing was written."
     case "$flag" in
       --id)       id="$v" ;;
       --provider) provider="$v" ;;
@@ -5120,11 +5209,45 @@ _acct_declare() {
   _acct_id_or_refuse "$id"
   [ -n "$label" ] || _acct_refuse 2 missing-value "declare needs a human label: pass --label. The roster carries one for every account. Nothing was written."
   [ -n "$hue" ]   || _acct_refuse 2 missing-value "declare needs a hue: pass --hue. The roster carries one for every account. Nothing was written."
+  # ON A SUFFIX THE OPERATOR GAVE, AND ONLY THEN. The DEFAULT is `declaredEntry`'s
+  # `.<id>` and is spelled once, in node: it is derived from an id
+  # `_acct_id_or_refuse` has already measured against `WRAPPER_ID_RE`, so it is a
+  # safe one-segment name by construction and there is nothing here for a gate to
+  # find. That is what spares `declare` the second spelling `add` cannot avoid —
+  # `_acct_add_parse` must materialise `.claude-$ACCT_ID` before its own two
+  # gates can measure it, and `check-add` must default it again for a hand caller.
+  [ -z "$suffix" ] || _acct_suffix_or_refuse "$suffix"
   _acct_roster_ids
   for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
     [ "$other" = "$id" ] \
       && _acct_refuse 1 duplicate-id "the id $id is already an account in \$HOME/.ccrc/accounts.json — 'ccrc account roster' lists what is there. Nothing was written."
   done
+
+  # ── 0. THE PRE-PASS ─────────────────────────────────────────────────────
+  # SIDE-EFFECT-FREE, AND BEFORE EVERY WRITE THIS VERB MAKES (D-2143). It judges
+  # the proposed entry — hue, label, provider, the config directory and whatever
+  # else `rosterFromJson` decides — while nothing at all is on disk, which is
+  # what `add` has had since Task 23 and `declare` did not: under D-2134's order
+  # the kill-switch marker lands BEFORE the roster entry, so the writer that was
+  # once "its own only judge" now judges with a file already written.
+  #
+  # BEFORE `_acct_declarable`, NOT AFTER, and that is this file's standing rule
+  # rather than a preference: identity first, disk second (the `duplicate-id`
+  # gate above says it in those words, and `_acct_id_or_refuse` is placed by
+  # it). An unknown hue is decidable from argv against a constant set — class 2
+  # — and answering a class-1 fact about the filesystem first would tell an
+  # operator to go and install a launcher for a request this box was never
+  # going to accept.
+  #
+  # `_acct_read_op`, NOT `_acct_write_op`: this op ANSWERS (the entry it
+  # judged), so an empty body is `no-answer` and not success. The clause is the
+  # honest one at this line and the shortest in the verb.
+  _acct_read_op "Nothing was written." check-declare --file "$(_acct_roster_path)" \
+    --id "$id" --label "$label" --hue "$hue" \
+    ${suffix:+--suffix "$suffix"} \
+    ${provider:+--provider "$provider"} \
+    ${baseurl:+--base-url "$baseurl"}
+
   _acct_declarable "$id"
 
   # ── 1. THE SWITCH, OFF ──────────────────────────────────────────────────

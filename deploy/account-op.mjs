@@ -225,6 +225,151 @@ function readRoster(file) {
   return json;
 }
 
+/** ── THE GATES `check-add` AND `check-declare` BOTH RUN (D-2143) ──────────
+ *  ONE SPELLING, TWO CALLERS. The two verbs disagree about nearly everything —
+ *  one writes a launcher, the other records somebody else's and never touches
+ *  it — but they take the same `--label` and the same `--hue`, judged against
+ *  the same two constants `rosterFromJson` itself decides with. A second
+ *  spelling of either gate inside the new arm would be two deciders on one
+ *  rule, free to drift the day a hue is added, so each gate lives here once and
+ *  both arms call it.
+ *
+ *  THEY RETURN A CLASS, NOT A BOOLEAN (`ccd/ccrc:24-33`): 0 when they said
+ *  nothing, 2 when the request was not legal on its face. The caller's own
+ *  `return` is what leaves, so no gate here can decide an exit code for an arm
+ *  that has more to say.
+ *
+ *  WHERE THE OTHER SHARED RULES LIVE, because "no second spelling" is a claim
+ *  about the whole cluster and not about this file: the ID SHAPE is
+ *  `ccd/ccrc`'s `_acct_id_or_refuse`, which both verbs already call; SUFFIX
+ *  SAFETY is `_acct_suffix_or_refuse` in that same file, lifted out of
+ *  `_acct_add_parse` when this task gave it a second caller; and the PROPOSED
+ *  ENTRY is `declaredEntry` below, which `check-declare` and `declare-entry`
+ *  both build from rather than each assembling their own.
+ *
+ *  WHAT IS DELIBERATELY *NOT* SHARED IS THE ENDPOINT BLOCK, and this is the
+ *  line the sharing stops at. `check-add`'s base-url block does two things
+ *  beyond judging a URL: it materialises the provider's DEFAULT endpoint, and
+ *  it decides which lanes have an endpoint at all from the `envVar` column.
+ *  Neither is true of a declared lane — D-2142: that endpoint belongs to
+ *  somebody else's launcher, `declare` records what the operator said and
+ *  defaults nothing — so sharing the URL half alone would leave the
+ *  `base-url-required` half with the validator and put TWO vocabularies on one
+ *  field. One field, one owner: for `declare` the owner is `rosterFromJson`,
+ *  whose message reaches the operator verbatim (D-2142's "one refusal, one
+ *  owner"). The rule that draws the line: a fault decidable against a CONSTANT
+ *  SET this file already imports gets its own code, the same one `add` gives
+ *  and from the same line; a fault about a value the validator owns end to end
+ *  stays the validator's. */
+function hueAndLabelClass(a) {
+  // ── THE TWO IDENTITY GATES THIS PAIR USED TO ONLY CHECK FOR PRESENCE ────
+  // D-2004. Until Task 24 `check-add` checked that `--hue` and `--label` were
+  // GIVEN and nothing about what they said, so an unknown hue or a
+  // control-character label was refused by `add-entry`'s `rosterFromJson` —
+  // one step AFTER the caller had written the 0600 secrets file. Both are
+  // decidable from argv alone, so they belong above the line that derives a
+  // path, beside the id and provider gates rather than downstream of them.
+  //
+  // BOTH CONSTANTS ARE IMPORTED FROM THE VALIDATOR, not re-spelled here. The
+  // writers' own `rosterFromJson(next)` calls still run and are not redundant:
+  // `add-entry` and `declare-entry` are callable by hand, and each is its own
+  // last gate. Two pre-passes, four callers, ONE validator.
+  if (!HUES.has(a['hue'])) {
+    refuse('unknown-hue',
+      `"${a['hue']}" is not a hue this build knows. It knows: ${[...HUES].join(', ')}.`);
+    return 2;
+  }
+  // A label is one line of display text and it reaches TWO renderers — the
+  // PWA's DOM, where a stray newline is invisible, and
+  // `ccd/statusline-command.sh`'s one-line terminal status bar, which
+  // `server/src/pane/statusline.ts` then parses back out of a tmux capture. A
+  // newline there splits the status line in two and the fleet view quietly
+  // disagrees with the session; an escape byte is worse, because the label
+  // recolours everything printed after it. `shared/roster.ts:610-627` carries
+  // the argument and REFUSES rather than stripping, for the reason this file
+  // refuses everywhere else: silently rewriting an operator's value is an
+  // adapter narrowing a distinction it received.
+  if (LABEL_UNSAFE_RE.test(a['label'])) {
+    refuse('bad-label',
+      `the label ${JSON.stringify(a['label'])} carries a control character. A label is one line `
+      + 'of display text: it reaches a one-line terminal status bar that a tab or a newline '
+      + 'splits, and an escape byte recolours everything printed after it. Give a label with no '
+      + 'control characters in it.');
+    return 2;
+  }
+  return 0;
+}
+
+/** IS THIS A PROVIDER AT ALL — the half of `check-add`'s provider block that
+ *  both verbs mean. The OTHER half is `check-add`'s alone and must stay there:
+ *  `!P.generatable` sends an `openai` request to `declare`, and `declare` is
+ *  where it was sent. */
+function providerKnownClass(provider) {
+  if (!Object.hasOwn(PROVIDER_DEPLOY, provider)) {
+    refuse('unknown-provider',
+      `"${provider}" is not a provider this build knows. It knows: `
+      + `${Object.keys(PROVIDER_DEPLOY).join(', ')}.`);
+    return 2;
+  }
+  return 0;
+}
+
+/** THE ROSTER FACT BOTH VERBS NAME IDENTICALLY. Class 1, not 2: the request was
+ *  legal on its face and the BOX said no (`ccd/ccrc:24-33`). */
+function suffixFreeClass(accounts, suffix, file) {
+  if (accounts.some((x) => x['configDirSuffix'] === suffix)) {
+    refuse('suffix-collision',
+      `config directory ${JSON.stringify(suffix)} already belongs to an account in `
+      + `${file}. Two accounts sharing one CLAUDE_CONFIG_DIR share one set of transcripts, `
+      + 'one settings.json and one credential.');
+    return 1;
+  }
+  return 0;
+}
+
+/** THE PROPOSED `external` ENTRY, ASSEMBLED ONCE. `check-declare` judges this
+ *  object and `declare-entry` writes it, and they must be the same object or
+ *  the pre-pass is judging something other than what lands — the defect a
+ *  second spelling here would produce silently, since both would still parse.
+ *
+ *  `external` IS THE DECLARED KIND: ccrc records where somebody else's launcher
+ *  points and never writes that launcher (decision 22(c)). `provider` is
+ *  optional on it — an entry with none is `undeclared` on the wire and offers
+ *  no provider operation but enable/disable and remove (§4.1) — and `baseUrl`
+ *  is declarative for exactly the reason `secretsFile` is.
+ *
+ *  `homeAble: false` and `telemetry: 'none'`, and neither is a placeholder. A
+ *  declared launcher is not a lane ccd may LAND a session on unasked: its
+ *  config dir is its own business, which is the same sentence
+ *  `ccd/ccrc-doctor-checks` uses to explain why doctor asks only whether the
+ *  file exists. `telemetry: 'none'` is what keeps a metered lane out of
+ *  `CCRC_MEASURED`, which is what §4.6's `_ws_least_loaded` fix reads. The
+ *  operator turns either on by editing the roster; the verb does not guess.
+ *
+ *  AND THE SUFFIX DEFAULT IS `.<id>`, NOT `add`'s `.claude-<id>` (D-2142),
+ *  spelled HERE AND ONLY HERE — unlike `add`'s, which `_acct_add_parse` must
+ *  also materialise before its own two suffix gates can measure it. `declare`
+ *  needs no bash copy because its gate (`_acct_suffix_or_refuse`) runs only on
+ *  a suffix the operator GAVE: the default is derived from an id
+ *  `_acct_id_or_refuse` has already measured against `WRAPPER_ID_RE`, so
+ *  `.<id>` is a safe one-segment name by construction and there is nothing for
+ *  a gate to find. It is deliberately NOT gated against $HOME/.claude* the way
+ *  `add`'s is: `add` creates and provisions that directory, so a suffix the
+ *  agent could never read is a lane this box could roster and never show; a
+ *  declared launcher's config dir is somebody else's, may not hold Claude Code
+ *  transcripts at all, and an operator who wants it readable passes
+ *  `--suffix .claude-<id>`. */
+function declaredEntry(a) {
+  const exec = { kind: 'external' };
+  if (a['provider'] !== undefined) exec.provider = a['provider'];
+  if (a['base-url'] !== undefined) exec.baseUrl = a['base-url'];
+  return {
+    id: a['id'], label: a['label'], hue: a['hue'],
+    configDirSuffix: a['suffix'] ?? `.${a['id']}`,
+    homeAble: false, telemetry: 'none', exec,
+  };
+}
+
 /** DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccd/ccrc-doctor-checks:166) and
  *  `ccd/ccrc-api`'s `ROUTES` shape: one row per op, naming the keys it takes.
  *  `repeat` lists the keys that may appear more than once and arrive as an
@@ -261,12 +406,32 @@ const OPS = {
     keys: ['file', 'id', 'disabled', 'provisioned', 'operator-step'],
     repeat: ['provisioned', 'operator-step'],
   },
-  // `declare` HAS NO PRE-PASS OP, and that is not an omission. `add`'s
-  // `check-add` exists because `add` writes a 0600 credential BEFORE the roster
-  // entry, so the request has to be judged while nothing is on disk; `declare`
-  // writes no secret and creates no launcher, so its only writer can also be its
-  // only judge. `suffix` is optional and `provider`/`base-url` are the two
+  // `declare` HAS A PRE-PASS, AND THIS COMMENT USED TO ARGUE IT DID NOT
+  // (D-2143). What it said was that `add` needs `check-add` because `add`
+  // writes a 0600 credential BEFORE the roster entry, while "`declare` writes
+  // no secret and creates no launcher, so its only writer can also be its only
+  // judge." That was sound when it was written and FALSE for the code shipped
+  // beside it: D-2134's ordering, applied to `declare` at D-2140, puts the
+  // kill-switch marker on disk BEFORE the roster entry. Something IS written
+  // when the writer judges, so the writer cannot be the only judge — and the
+  // measured consequence was an operator-visible split between two verbs typed
+  // interchangeably (`add --hue puce` → `unknown-hue`, exit 2, nothing written;
+  // `declare --hue puce` → `roster-invalid`, exit 1, marker on disk), against
+  // the invariant the whole cluster is named for.
+  //
+  // So `check-declare` exists for `check-add`'s reason at a second address: a
+  // request has to be judged while nothing is on disk, and the only way to do
+  // that is a separate, side-effect-free op. NOT a `--dry-run` flag on
+  // `declare-entry` — that would put a does-it-write switch on a write op, when
+  // this architecture already answers that question with a separate op.
+  //
+  // The two rows take the SAME KEYS, deliberately: `_acct_declare` builds one
+  // argv and passes it to both, so a key the judge cannot see is a key nobody
+  // judged. `suffix` is optional and `provider`/`base-url` are the two
   // declarative fields §5 names.
+  'check-declare': {
+    keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
+  },
   'declare-entry': {
     keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
   },
@@ -376,42 +541,13 @@ function main(argv) {
     const id = a['id'];
     const provider = a['provider'];
 
-    // ── THE TWO IDENTITY GATES THIS ARM USED TO ONLY CHECK FOR PRESENCE ─────
-    // D-2004. Until this commit the arm checked that `--hue` and `--label` were
-    // GIVEN and nothing about what they said, so an unknown hue or a
-    // control-character label was refused by `add-entry`'s `rosterFromJson` —
-    // one step AFTER the caller had written the 0600 secrets file. That
-    // contradicted this arm's own opening sentence. Both are decidable from
-    // argv alone, so they belong above the line that derives a path, beside the
-    // id and provider gates rather than downstream of them.
-    //
-    // BOTH CONSTANTS ARE IMPORTED FROM THE VALIDATOR, not re-spelled here. The
-    // writer's `rosterFromJson(next)` call still runs and is not redundant:
-    // `add-entry` is callable by hand with a hand-written `--plan`, and it is
-    // the writer's own last gate. Two gates, two callers, ONE validator.
-    if (!HUES.has(a['hue'])) {
-      refuse('unknown-hue',
-        `"${a['hue']}" is not a hue this build knows. It knows: ${[...HUES].join(', ')}.`);
-      return 2;
-    }
-    // A label is one line of display text and it reaches TWO renderers — the
-    // PWA's DOM, where a stray newline is invisible, and
-    // `ccd/statusline-command.sh`'s one-line terminal status bar, which
-    // `server/src/pane/statusline.ts` then parses back out of a tmux capture. A
-    // newline there splits the status line in two and the fleet view quietly
-    // disagrees with the session; an escape byte is worse, because the label
-    // recolours everything printed after it. `shared/roster.ts:610-627` carries
-    // the argument and REFUSES rather than stripping, for the reason this file
-    // refuses everywhere else: silently rewriting an operator's value is an
-    // adapter narrowing a distinction it received.
-    if (LABEL_UNSAFE_RE.test(a['label'])) {
-      refuse('bad-label',
-        `the label ${JSON.stringify(a['label'])} carries a control character. A label is one line `
-        + 'of display text: it reaches a one-line terminal status bar that a tab or a newline '
-        + 'splits, and an escape byte recolours everything printed after it. Give a label with no '
-        + 'control characters in it.');
-      return 2;
-    }
+    // ── THE TWO IDENTITY GATES, SHARED WITH `check-declare` (D-2004, D-2143) ─
+    // The gates and their sentences moved to `hueAndLabelClass` above when
+    // `declare` grew a pre-pass that needs exactly these two; the arguments for
+    // both live there. Nothing about this arm's order changed: they are still
+    // decided from argv alone, above the line that derives a path.
+    const identity = hueAndLabelClass(a);
+    if (identity !== 0) return identity;
 
     // ── THE CONFIG DIRECTORY ────────────────────────────────────────────────
     // §4.4's default. `--suffix` is OPTIONAL here, unlike the five above, and
@@ -435,12 +571,10 @@ function main(argv) {
     const suffix = a['suffix'] ?? `.claude-${id}`;
 
     // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
-    if (!Object.hasOwn(PROVIDER_DEPLOY, provider)) {
-      refuse('unknown-provider',
-        `"${provider}" is not a provider this build knows. It knows: `
-        + `${Object.keys(PROVIDER_DEPLOY).join(', ')}.`);
-      return 2;
-    }
+    // The "is it a provider at all" half is `providerKnownClass` above, shared
+    // with `check-declare`; the half below is this arm's alone.
+    const known = providerKnownClass(provider);
+    if (known !== 0) return known;
     const P = PROVIDER_DEPLOY[provider];
     if (!P.generatable) {
       // §4.2: this lane is somebody else's launcher. `add` WRITES a wrapper;
@@ -691,13 +825,10 @@ function main(argv) {
         + "--credential -' to replace its key, or pick another id.");
       return 1;
     }
-    if (accounts.some((x) => x['configDirSuffix'] === suffix)) {
-      refuse('suffix-collision',
-        `config directory ${JSON.stringify(suffix)} already belongs to an account in `
-        + `${a['file']}. Two accounts sharing one CLAUDE_CONFIG_DIR share one set of transcripts, `
-        + 'one settings.json and one credential.');
-      return 1;
-    }
+    // THE SECOND, shared with `check-declare` — one config directory, one
+    // account, whichever verb is asking.
+    const free = suffixFreeClass(accounts, suffix, a['file']);
+    if (free !== 0) return free;
 
     // ── WHAT TASKS 24 AND 25 WRITE FROM ─────────────────────────────────────
     // The RESOLVED plan, computed once, here, so no later step re-derives a
@@ -949,6 +1080,66 @@ function main(argv) {
     return 0;
   }
 
+  if (op === 'check-declare') {
+    // EVERY REFUSAL IN THIS ARM FIRES BEFORE ITS CALLER HAS WRITTEN A BYTE —
+    // `check-add`'s opening sentence at this arm's own address, and the whole
+    // reason the op exists (D-2143). `_acct_declare` calls it BEFORE the
+    // kill-switch marker, which is the first thing that verb puts on disk.
+    // Nothing below opens a file for writing, and nothing may.
+    for (const k of ['file', 'id', 'label', 'hue']) {
+      if (a[k] === undefined) { refuse('bad-argv', `check-declare needs --${k}`); return 2; }
+    }
+    const identity = hueAndLabelClass(a);
+    if (identity !== 0) return identity;
+    // OPTIONAL, SO THE GATE IS CONDITIONAL AND THE ABSENCE IS NOT A FAULT: an
+    // entry with no provider is `undeclared` on the wire (§4.1). What is a
+    // fault is a provider nothing knows, and it is decidable from argv against
+    // a constant set — class 2, the same code and the same line `add` uses.
+    if (a['provider'] !== undefined) {
+      const known = providerKnownClass(a['provider']);
+      if (known !== 0) return known;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const entry = declaredEntry(a);
+    const free = suffixFreeClass(json['accounts'], entry.configDirSuffix, a['file']);
+    if (free !== 0) return free;
+    // THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT THE WRITER BUILDS.
+    // This is the gate that makes the op worth having rather than a list of
+    // three checks: it catches every field-validity fault the constants above
+    // do not name — a bad endpoint, a `compatible` lane with none, a
+    // configDirSuffix the validator refuses — and it catches them with NOTHING
+    // on disk. It also closes a window the bash side cannot: `_acct_declare`'s
+    // `duplicate-id` gate reads `~/.ccrc/accounts.sh`, the PROJECTION, while
+    // this reads `~/.ccrc/accounts.json` itself, so an id already in the roster
+    // and not yet in a stale projection is refused HERE — before the marker,
+    // which is D-2137's hazard measured rather than argued.
+    //
+    // THE CLASS IS 1 AND THE MESSAGE IS THE VALIDATOR'S, VERBATIM (D-2142).
+    // Not translated into a table of this file's own codes: for a declared lane
+    // the endpoint and the config directory belong to somebody else's launcher,
+    // `declare` defaults neither, and one field with two vocabularies is the
+    // seam this cluster keeps closing. One refusal, one owner.
+    try {
+      rosterFromJson({ ...json, accounts: [...json['accounts'], entry] });
+    } catch (e) {
+      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+      refuse('roster-invalid',
+        `declaring "${a['id']}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
+      return 1;
+    }
+    // THE ENTRY IT JUDGED, so a hand caller can read what would be written and
+    // `_acct_read_op` has a body to measure. `declare-entry` does NOT take it
+    // back as a `--plan` the way `add-entry` does, and that is not an
+    // inconsistency: `add`'s plan carries decisions `check-add` RESOLVED (a
+    // materialised endpoint, a secrets-file name, a method default) which no
+    // later step may re-derive, while this arm resolves nothing — every field
+    // here is the operator's own value or `declaredEntry`'s constant, and both
+    // ops build it from that one function.
+    out({ ok: true, entry });
+    return 0;
+  }
+
   if (op === 'declare-entry') {
     for (const k of ['file', 'id', 'label', 'hue']) {
       if (a[k] === undefined) { refuse('bad-argv', `declare-entry needs --${k}`); return 2; }
@@ -968,35 +1159,18 @@ function main(argv) {
     // `readRoster`'s `roster-invalid`, above — and "the entry you asked for would
     // break it" is a flag to change, which is the check after the append.
     //
-    // `external` IS THE DECLARED KIND: ccrc records where somebody else's
-    // launcher points and never writes that launcher (decision 22(c)).
-    // `provider` is optional on it — an entry with none is `undeclared` on the
-    // wire and offers no provider operation but enable/disable and remove (§4.1)
-    // — and `baseUrl` is declarative for exactly the reason `secretsFile` is.
-    const exec = { kind: 'external' };
-    if (a['provider'] !== undefined) exec.provider = a['provider'];
-    if (a['base-url'] !== undefined) exec.baseUrl = a['base-url'];
-    // `homeAble: false` and `telemetry: 'none'`, and neither is a placeholder.
-    // A declared launcher is not a lane ccd may LAND a session on unasked: its
-    // config dir is its own business, which is the same sentence
-    // `ccd/ccrc-doctor-checks` uses to explain why doctor asks only whether the
-    // file exists. `telemetry: 'none'` is what keeps a metered lane out of
-    // `CCRC_MEASURED`, which is what §4.6's `_ws_least_loaded` fix reads. The
-    // operator turns either on by editing the roster; the verb does not guess.
+    // THE ENTRY IS `declaredEntry`'S, NOT ASSEMBLED HERE (D-2143). `check-declare`
+    // judges the same object this writes, and a second spelling of the assembly
+    // would be a pre-pass judging something other than what lands — a
+    // disagreement no parser could see, since both shapes would still validate.
+    // Every argument about the three fields this verb DECIDES rather than takes
+    // (`homeAble`, `telemetry`, the `.<id>` suffix default) lives on that
+    // function.
     //
-    // AND THE SUFFIX DEFAULT IS `.<id>`, NOT `add`'s `.claude-<id>`, which is
-    // the validator's own worked example for a fresh entry
-    // (shared/roster-json.mjs's duplicate-suffix remedy). It is deliberately
-    // NOT gated against $HOME/.claude* the way `add`'s is: `add` creates and
-    // provisions that directory, so a suffix the agent could never read is a
-    // lane this box could roster and never show; a declared launcher's config
-    // dir is somebody else's, may not hold Claude Code transcripts at all, and
-    // an operator who wants it readable passes --suffix .claude-<id>.
-    const entry = {
-      id: a['id'], label: a['label'], hue: a['hue'],
-      configDirSuffix: a['suffix'] ?? `.${a['id']}`,
-      homeAble: false, telemetry: 'none', exec,
-    };
+    // AND THE `rosterFromJson` BELOW IS STILL NOT REDUNDANT, for `add-entry`'s
+    // reason: this op is callable by hand without the pre-pass, and it is the
+    // writer's own last gate. Two gates, two callers, ONE validator.
+    const entry = declaredEntry(a);
     const next = { ...json, accounts: [...json['accounts'], entry] };
     try {
       rosterFromJson(next);

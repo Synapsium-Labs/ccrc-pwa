@@ -645,7 +645,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
  *  commit creates while it is half-deployed. `ccd/ccrc` lands by
  *  `install_atomic` and `deploy/` by rsync, so a run can find a ccrc that
  *  knows `roster` beside an `account-op.mjs` that does not. */
-function skewedBox(prefix: string, unknownOpExit = 2): string {
+function skewedBox(prefix: string, unknownOpExit = 2, knows: string[] = []): string {
   const home = box(prefix);
   rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
   mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
@@ -655,6 +655,16 @@ function skewedBox(prefix: string, unknownOpExit = 2): string {
     + '  const g = (k) => a[a.indexOf(`--${k}`) + 1];\n'
     + '  process.stdout.write(`${JSON.stringify(\n'
     + '    { ok: false, error: g("code"), detail: g("detail") })}\\n`);\n'
+    + '  process.exitCode = 0;\n'
+    // `knows` LETS THE SKEW BE PLACED AT A CHOSEN OP RATHER THAN AT THE FIRST
+    // ONE (review round 2). `declare` now forks node TWICE before it writes —
+    // `check-declare`, then `declare-entry` — and the two seams they stand for
+    // are different claims: the first refuses with nothing on disk, the second
+    // with the kill-switch marker on it. A fixture that only ever failed the
+    // first op could not reach the second, and the D-2138 case that names the
+    // marker in its clause is a case about the second.
+    + `} else if (${JSON.stringify(knows)}.includes(a[2])) {\n`
+    + '  process.stdout.write(\'{"ok":true}\\n\');\n'
     + '  process.exitCode = 0;\n'
     + '} else {\n'
     + '  process.stderr.write("usage: node deploy/account-op.mjs <refuse> [--<key> <value>]…\\n");\n'
@@ -3207,6 +3217,96 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       '--label', 'lab·dev0', '--hue', 'violet']))['error']).toBe('launcher-not-executable');
   });
 
+  it('a dangling symlink is its OWN code, because "put a launcher there" is the wrong remedy',
+    () => {
+      // D-2144's SECOND SHAPE. `[ -e ]` FOLLOWS the link, so before this commit
+      // a link whose target was gone read as `launcher-absent` and the operator
+      // was told "there is no <path> on this box … put the launcher there
+      // first" — and `ln -s` then fails EEXIST, because something IS at that
+      // path. The act they need is `ls -ld`, which only `launcher-not-a-file`
+      // offered. Two conditions with different remedies behind one code is the
+      // overloaded seam the four-code set was written to avoid.
+      //
+      // THE ROW BESIDE IT IS THE HEALTHY LINK, and it is here rather than
+      // implied: `-L` alone would refuse the alias case above, which is a live
+      // symlink and must still reach `launcher-alias`. The gate is `-L` AND NOT
+      // `-e`, and a mutation that drops either half has to red on one of these
+      // two lines.
+      const home = box('ccrc-account-declare-dangling-');
+      seedRosterJson(home, [UPSTREAM]);
+      symlinkSync(join(home, '.local', 'bin', 'nothing-here'),
+        join(home, '.local', 'bin', 'lab-dev0'));
+      expect(lstatSync(join(home, '.local', 'bin', 'lab-dev0')).isSymbolicLink()).toBe(true);
+      expect(existsSync(join(home, '.local', 'bin', 'lab-dev0')),
+        'the fixture link is not dangling').toBe(false);
+      const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
+        '--label', 'lab·dev0', '--hue', 'violet']);
+      expect(r.code).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('launcher-dangling');
+      // THE REMEDY IS THE POINT, so it is asserted rather than the code alone:
+      // the sentence must send the operator to LOOK at the link, and must not
+      // tell them to put a file at a path where `ln -s` would fail.
+      expect(String(j['detail'])).toContain(`ls -ld ${join(home, '.local', 'bin', 'lab-dev0')}`);
+      expect(String(j['detail']),
+        'the dangling-link remedy still tells the operator to put a launcher there')
+        .not.toContain('put the launcher there first');
+      expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(false);
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('lab-dev0');
+    });
+
+  it('an EMPTY 0755 file is refused, not declared — zero bytes is no launcher at all', () => {
+    // D-2144's FIRST SHAPE, and it was an exit 0. Measured before this commit:
+    // a zero-byte 0755 file at `~/.local/bin/<id>` passed all four codes, the
+    // marker was written, the entry landed and `ccd` would have exec'd it.
+    // Decision 22(c)'s "its shape is nobody's business" defends a COMPILED
+    // launcher that spells its config dir in a way no `export` matches — the
+    // case the row above this one pins — and it does not describe zero bytes,
+    // which cannot be any launcher. `[ -s ]` reintroduces neither predicate the
+    // doctor's rule excludes: it asks nothing about what the bytes say, only
+    // whether there are any.
+    const home = box('ccrc-account-declare-empty-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'lab-dev0', '');
+    expect(lstatSync(join(home, '.local', 'bin', 'lab-dev0')).size).toBe(0);
+    const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
+      '--label', 'lab·dev0', '--hue', 'violet']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('launcher-empty');
+    expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(false);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('lab-dev0');
+    // AND IT IS ANSWERED BEFORE THE MODE (`-s` above `-x`): a zero-byte file
+    // that is ALSO not executable is both faults at once, and `chmod +x` is the
+    // wrong next act — the file has no content to run either way. Without this
+    // row the order of the two gates is unmeasured, and it is the order that
+    // decides which remedy the operator reads.
+    chmodSync(join(home, '.local', 'bin', 'lab-dev0'), 0o644);
+    expect(oneObject(run(home, ['account', 'declare', '--id', 'lab-dev0',
+      '--label', 'lab·dev0', '--hue', 'violet']))['error']).toBe('launcher-empty');
+  });
+
+  it('_acct_declarable sources its own contract, so a caller that skipped the gate gets JSON', () => {
+    // REVIEW ROUND 1'S SECOND FINDING. This function reads `$WRAPPER_BIN_DIR`,
+    // which `ccrc-wrapper-shape` declares, and it did NOT call `_acct_shape` —
+    // unlike `_acct_id_or_refuse`, its sibling one screen up, which always has.
+    // Under `set -uo pipefail` that is `unbound variable` on stderr and an EMPTY
+    // stdout: the one thing this verb's contract forbids on every reachable
+    // path. Unreachable through the shipped verb (`_acct_declare` sources the
+    // contract first) and reachable by every future caller, which is what makes
+    // it worth a row rather than a comment.
+    const home = box('ccrc-account-declarable-selfsufficient-');
+    seedRosterJson(home, [UPSTREAM]);
+    const r = sourceCall(home, '_acct_declarable lab-dev0');
+    expect(r.code, `no JSON and no refusal: ${r.stderr}`).toBe(1);
+    expect(r.stderr).not.toMatch(/unbound variable/);
+    expect(oneObject(r)['error']).toBe('launcher-absent');
+    // AND WITH NO ARGUMENT AT ALL it refuses rather than crashing — `${1:-}`,
+    // the same rule at the same address.
+    const bare = sourceCall(home, '_acct_declarable');
+    expect(bare.stderr).not.toMatch(/unbound variable/);
+    expect(oneObject(bare)['ok']).toBe(false);
+  });
+
   it('collapses an alias: one file under two names is one account', () => {
     // The measured case is `gpt -> ccgpt`, both in ~/.local/bin, ONE file
     // (`ccrc-doctor-checks:2403-2408`). Two accounts over one CLAUDE_CONFIG_DIR
@@ -3307,13 +3407,51 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
     // itself, not a proxy.
     expect(r.stderr).toBe(`account-op: ${String(j['detail'])} (roster-invalid)\n`);
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('lab-dev0');
-    // THE ORDER, MADE OBSERVABLE (D-2134's ruling, applied to `declare`). The
-    // marker is on disk although the roster write refused, and it is inert in
-    // the safe direction: no roster entry names this id, so it switches nothing
-    // off, and the retry rewrites it. This assertion is what goes red if the
-    // marker is moved back behind the roster write.
-    expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(true);
+    // AND NOW THE MARKER IS NOT THERE EITHER — THIS ASSERTION WAS INVERTED BY
+    // D-2143, and the inversion is the whole point of that entry. Until review
+    // round 2 this row measured D-2134's ordering by the file a refused write
+    // left behind: the marker stood, inert, because `declare` wrote it before
+    // the roster entry and only the roster write refused. What D-2143 ruled is
+    // that a FIELD fault should never get that far — `check-declare` judges
+    // this endpoint while nothing at all is on disk — so the row that once
+    // proved the ordering now proves the pre-pass instead. The ordering keeps
+    // its own two pins, on the two paths that still reach the marker: the
+    // `roster-write` case below, and the `no-answer` case whose clause names
+    // the marker.
+    expect(existsSync(offMarker(home, 'lab-dev0')),
+      'a field fault the pre-pass owns still left a file behind').toBe(false);
   });
+
+  it('the marker is on disk BEFORE the roster entry — a refusing declare-entry leaves an inert file',
+    () => {
+      // D-2134's ORDERING, AT THE ONE PATH THAT STILL SEES IT (D-2143), and it
+      // is `add`'s own case at this verb's address (`ccrc account add: the lane
+      // is off …`, the `add-entry` row). Every green declare writes both files,
+      // so no successful run can tell the two orders apart; only a run that
+      // refuses BETWEEN them can. `check-declare` passes — the request is
+      // perfectly legal — and `declare-entry` then cannot write, because
+      // `~/.ccrc` is read-only. The marker is on disk and the entry is not,
+      // which is what "marker first" means; swap the two calls and this reds.
+      const home = box('ccrc-account-declare-order-');
+      seedRosterJson(home, [UPSTREAM]);
+      plantLauncher(home, 'lab-dev0');
+      const dir = join(home, '.ccrc');
+      chmodSync(dir, 0o500);
+      try {
+        const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
+          '--label', 'lab·dev0', '--hue', 'violet']);
+        expect(r.code, r.stderr).toBe(1);
+        expect(oneObject(r)['error']).toBe('roster-write');
+        expect(existsSync(offMarker(home, 'lab-dev0')),
+          'the marker was written AFTER the roster entry, not before it').toBe(true);
+        expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+          .not.toContain('lab-dev0');
+      } finally {
+        // RESTORED BEFORE `afterAll`, `add`'s marker-row rule: `tmpHelpers`'
+        // `rmSync` cannot unlink a child of a 0500 directory.
+        chmodSync(dir, 0o700);
+      }
+    });
 
   it('keeps the mode the roster had (D-2052, at this verb\'s own writer)', () => {
     // `declare-entry` writes a tmp and RENAMES it, which replaces the inode — so
@@ -3345,7 +3483,13 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       // second one of its own, and the CLAUSE is `_acct_declare`'s: by that line
       // the kill-switch marker is on disk, so a shared "Nothing was written."
       // would state the opposite of what happened (D-2138).
-      const home = skewedBox('ccrc-account-declare-skew-');
+      // THE SKEW IS PLACED AT `declare-entry`, NOT AT THE FIRST OP (D-2143).
+      // `check-declare` now runs BEFORE the marker, so a stub that refuses
+      // every op reaches `no-answer` one step earlier, with nothing written —
+      // which is the row below this one, and a different claim. Letting the
+      // pre-pass through is what keeps THIS case about the seam it was written
+      // for: the write op, with the marker already on disk.
+      const home = skewedBox('ccrc-account-declare-skew-', 2, ['check-declare']);
       seedBoxRoster(home, FIXTURE_ROSTER);
       plantLauncher(home, 'lab-dev0');
       const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -3356,6 +3500,32 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       expect(String(j['detail'])).toContain('exited 2');
       expect(String(j['detail'])).toContain(join(home, '.cc-sessions', 'lab-dev0-disabled'));
       expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(true);
+    });
+
+  it('the pre-pass answers the same seam ONE STEP EARLIER, with nothing on disk (D-2143)',
+    () => {
+      // THE SAME HALF-UPDATED BOX, MEASURED AT THE OP THAT NOW GOES FIRST. A
+      // `ccrc` that knows `check-declare` beside an `account-op.mjs` that does
+      // not is exactly the skew `install_atomic` + rsync can leave, and the
+      // property this row exists for is the CLAUSE: at this line the verb has
+      // written nothing, so "Nothing was written." is the true sentence and the
+      // marker path must not appear in it. Delete the `_acct_read_op` call and
+      // this row goes green for the wrong reason — the run reaches
+      // `declare-entry` instead — which is why the marker assertion is negative
+      // and the clause assertion is exact.
+      const home = skewedBox('ccrc-account-declare-skew-check-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantLauncher(home, 'lab-dev0');
+      const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
+        '--label', 'lab·dev0', '--hue', 'violet']);
+      expect(r.code).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('no-answer');
+      expect(String(j['detail'])).toContain("'check-declare'");
+      expect(String(j['detail']).endsWith('Nothing was written.'),
+        `the pre-pass seam did not end in its own clause:\n    ${String(j['detail'])}`).toBe(true);
+      expect(String(j['detail'])).not.toContain('lab-dev0-disabled');
+      expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(false);
     });
 
   /** A box whose `account-op.mjs` is a STUB with a working `refuse` arm and
@@ -3383,6 +3553,13 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       + 'process.exitCode = 0;\n');
     return home;
   };
+
+  /** The stub body the two `no-answer` cases below share. `check-declare` is a
+   *  READ op and runs FIRST (D-2143), so a stub that answered nothing at all
+   *  would refuse there — one step before the seam either case is about, with a
+   *  different clause. Letting the pre-pass answer is what keeps each case
+   *  measuring its own op. */
+  const PASSES_CHECK = '  if (a[2] === "check-declare") process.stdout.write(\'{"ok":true}\\n\');\n';
 
   it('refuses `projection-absent`, not `roster-absent`, when accounts.sh is the missing file (D-1923)',
     () => {
@@ -3429,7 +3606,7 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
     // `declare` a roster entry and a marker do, after `remove` an entry has just
     // gone — so a shared sentence would be false for one of them. This is the
     // measurement that keeps the parameter load-bearing.
-    const home = stubOpBox('ccrc-account-declare-noproj2-', '', false);
+    const home = stubOpBox('ccrc-account-declare-noproj2-', PASSES_CHECK, false);
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantLauncher(home, 'lab-dev0');
     const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -3449,7 +3626,7 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       // and `_acct_no_answer`'s own third branch says exactly that rather than
       // inventing a cause. Without this guard the verb prints a blank line and
       // exits 0, which is `JSON.parse('')` for the server.
-      const home = stubOpBox('ccrc-account-declare-silent-', '');
+      const home = stubOpBox('ccrc-account-declare-silent-', PASSES_CHECK);
       seedBoxRoster(home, FIXTURE_ROSTER);
       plantLauncher(home, 'lab-dev0');
       const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -3529,5 +3706,226 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       expect(oneObject(call(null))['error']).toBe('bad-argv');
       expect(oneObject(call('false'))['disabled']).toBe(false);
       expect(oneObject(call('true'))['disabled']).toBe(true);
+    });
+});
+
+/** `ccrc account declare …` with the override shape `addArgs` takes, so the two
+ *  verbs' refusal tables read as one comparison rather than two lists. A `null`
+ *  override DROPS the flag; an EMPTY STRING passes it with nothing in it, which
+ *  is a distinct request and one of the three D-2144 closes. */
+function declareArgs(over: Record<string, string | null> = {}): string[] {
+  const base: Record<string, string | null> = {
+    '--id': 'lab-dev0', '--label': 'lab·dev0', '--hue': 'violet',
+  };
+  const out: string[] = ['account', 'declare'];
+  for (const [k, v] of Object.entries({ ...base, ...over })) {
+    if (v === null) continue;
+    out.push(k, v);
+  }
+  return out;
+}
+
+describe('ccrc account declare: the pre-pass, and the class a field fault answers (D-2143)', () => {
+  // WHAT THIS TABLE IS, AND WHY IT IS A TABLE. `deploy/account-op.mjs` argued
+  // that `declare` needed no `check-*` op because "its only writer can also be
+  // its only judge" — sound when written, false for the code shipped beside it:
+  // D-2134's ordering, applied to this verb at D-2140, puts the kill-switch
+  // marker on disk BEFORE the roster entry, so the writer judges with a file
+  // already written. MEASURED at 6ae21f2a, on the three rows D-2143 names,
+  // against `add`'s answer for the identical operator mistake:
+  //
+  //   operator types      add                        declare (before)
+  //   --hue puce          unknown-hue, exit 2        roster-invalid, 1, marker on disk
+  //   --provider orchard  unknown-provider, exit 2   roster-invalid, 1, marker on disk
+  //   a colliding suffix  suffix-collision, exit 1   roster-invalid, 1, marker on disk
+  //
+  // Every row below asserts the CODE, the CLASS and the absence of BOTH files,
+  // and the last of those is the assertion that reds if `check-declare` is
+  // moved behind the marker or deleted.
+  //
+  // NO LAUNCHER IS PLANTED, DELIBERATELY. `_acct_declarable` would refuse each
+  // of these requests with `launcher-absent` at exit 1 if it ran first, so a
+  // fixture that planted one would pass whichever order shipped. Identity
+  // first, disk second is this file's own rule (`_acct_declare`'s duplicate-id
+  // gate says it in those words), and this is where it is measured for the
+  // pre-pass.
+  const cases: [string, Record<string, string | null>, string, number][] = [
+    // ── THE THREE ROWS OF D-2143'S TABLE ────────────────────────────────────
+    ['a hue nothing knows', { '--hue': 'puce' }, 'unknown-hue', 2],
+    ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
+    // `.claude` is UPSTREAM's own config directory in this fixture, so this is
+    // the collision `add` answers `suffix-collision` at exit 1 for. Class 1 and
+    // not 2 on BOTH verbs: the request was legal on its face and the box said
+    // no (ccd/ccrc:24-33).
+    ['a suffix another account already holds', { '--suffix': '.claude' }, 'suffix-collision', 1],
+    // ── AND THE TWO GATES THE SAME LIFT SHARES ──────────────────────────────
+    // A TAB (U+0009), inside `LABEL_UNSAFE_RE`'s control-character class — the
+    // benign end of that class to print in a test report, and the same row
+    // `add` carries. Its presence HERE is what makes `hueAndLabelClass` a
+    // shared gate rather than a second copy: both verbs drive the same two
+    // lines, so a mutation of either has to red twice.
+    ['a label carrying a control character', { '--label': 'lab\tdev0' }, 'bad-label', 2],
+    // `_acct_suffix_or_refuse`, lifted out of `_acct_add_parse` for this
+    // caller. `add`'s row for the identical value is `bad-suffix` at exit 2.
+    // The OTHER suffix gate is deliberately not shared and has no row here:
+    // `suffix-outside-read-root` stays `add`'s, because a declared launcher's
+    // config dir is somebody else's and may hold no transcripts at all (D-2142).
+    ['a suffix that is not a safe one-segment name', { '--suffix': '.claude/../x' },
+      'bad-suffix', 2],
+    // ── D-2144's THIRD SHAPE: PRESENT-BUT-EMPTY IS NOT ABSENT ───────────────
+    // All three used to be dropped by `${x:+…}` and answered EXIT 0 — a lane
+    // with no provider, no endpoint, or a config dir the operator did not
+    // choose, and no message about any of it. `add` refuses `--provider ''`
+    // with `missing-value` at exit 2, which is the answer all three now give.
+    ['a --provider present with nothing in it', { '--provider': '' }, 'missing-value', 2],
+    ['a --base-url present with nothing in it', { '--base-url': '' }, 'missing-value', 2],
+    ['a --suffix present with nothing in it', { '--suffix': '' }, 'missing-value', 2],
+    // The three the same gate also covers on its way past, each of which HAD an
+    // answer at the right class and a different sentence. They are rows because
+    // the gate is one line for six flags: delete it and these three fall back
+    // to the downstream checks while the three above go green at exit 0, so
+    // only the whole set measures the whole line.
+    ['a --label present with nothing in it', { '--label': '' }, 'missing-value', 2],
+    ['a --hue present with nothing in it', { '--hue': '' }, 'missing-value', 2],
+    ['an --id present with nothing in it', { '--id': '' }, 'missing-value', 2],
+  ];
+
+  for (const [name, over, code, exit] of cases) {
+    it(`refuses ${name} with "${code}" at exit ${exit}, having written nothing`, () => {
+      const home = box('ccrc-account-declare-pre-');
+      seedRosterJson(home, [UPSTREAM]);
+      const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+      const r = run(home, declareArgs(over));
+      expect(r.code, `${name}: ${r.stderr}`).toBe(exit);
+      const j = oneObject(r);
+      expect(j['ok']).toBe(false);
+      expect(j['error'], name).toBe(code);
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'), name).toBe(before);
+      expect(existsSync(offMarker(home, 'lab-dev0')),
+        `${name}: a refused declare left the kill-switch marker behind`).toBe(false);
+      // AND THE PROJECTION WAS NOT REGENERATED EITHER — the third write this
+      // verb makes, and the one a refusal at any of these gates never reaches.
+      expect(readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8')).not.toContain('lab-dev0');
+    });
+  }
+
+  it('and the SAME request with everything right is accepted, so the table is not vacuous', () => {
+    // THE ACCEPTANCE ROW EVERY REFUSAL TABLE NEEDS. `declareArgs()` with no
+    // override is the request each row above breaks in exactly one place, so
+    // this proves the rows fail for their own reason rather than for a fixture
+    // that could never have succeeded.
+    const home = box('ccrc-account-declare-pre-ok-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'lab-dev0');
+    const r = run(home, declareArgs());
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['id']).toBe('lab-dev0');
+  });
+
+  it('the marker it could not write is a refusal, and the clause is THIS site\'s (D-2135)', () => {
+    // THE `declare` SITE'S `_acct_disable_new` CLAUSE, WHICH MEASURED NOTHING
+    // (review round 1). Every other declare case runs on a box where the marker
+    // write succeeds, so replacing this call's clause with "Nothing was
+    // written." — a sentence that is true at `add`'s first write and at the
+    // pre-pass, and false here — left the whole file green. A clause has to be
+    // REACHED to be measured, and the only way to reach it is a box where the
+    // write fails.
+    //
+    // TWO ROWS, BECAUSE THE TWO `||` ARMS FAIL ON DIFFERENT ERRORS — `add`'s
+    // own table's reason: `mkdir -p` is a no-op on an existing directory, so a
+    // marker NAME that is a directory reaches the second arm and never the
+    // first, while `$REG` being a regular file reaches only the first.
+    const clause = (h: string): string =>
+      'Nothing else was written: no roster entry names "lab-dev0" yet, so this box does not '
+      + `have that account, and the launcher ${join(h, '.local', 'bin', 'lab-dev0')} is `
+      + "somebody else's file that ccrc never writes. Re-run this same command once the cause "
+      + 'is fixed.';
+    const rows: [string, string, (h: string) => void][] = [
+      ['$REG is a regular file', 'cannot create',
+        (h) => writeFileSync(join(h, '.cc-sessions'), 'not a directory\n')],
+      ['the marker name is a directory', 'cannot write',
+        (h) => mkdirSync(join(h, '.cc-sessions', 'lab-dev0-disabled'), { recursive: true })],
+    ];
+    for (const [what, opening, breakIt] of rows) {
+      const home = box('ccrc-account-declare-nomarker-');
+      seedRosterJson(home, [UPSTREAM]);
+      plantLauncher(home, 'lab-dev0');
+      breakIt(home);
+      const r = run(home, declareArgs());
+      expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+      const j = oneObject(r);
+      expect(j['ok'], `${what}: answered ok about a switch it did not throw`).toBe(false);
+      expect(j['error'], what).toBe('disable-marker');
+      expect(String(j['detail']), what).toContain(opening);
+      // THE CLAUSE ENDS THE SENTENCE, and it says what is true at THIS line and
+      // nowhere else in the verb: nothing written, and — unlike `add` — nothing
+      // ever writes the launcher, because it is not ccrc's file.
+      expect(String(j['detail']).endsWith(clause(home)),
+        `${what} did not end in the declare site's own clause:\n    ${String(j['detail'])}`)
+        .toBe(true);
+      // AND THE TWO FILES A LATER STEP WOULD HAVE WRITTEN ARE NOT THERE.
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('lab-dev0');
+      expect(readFileSync(join(home, '.local', 'bin', 'lab-dev0'), 'utf8')).toBe('exit 0\n');
+    }
+  });
+
+  it('check-declare reaches its own refusals with no caller, and writes nothing on any of them',
+    () => {
+      // THE OP DIRECTLY, `check-add`'s own no-caller row at this arm's address.
+      // It is not a duplicate of the table above: that one drives the whole
+      // verb and can only reach the codes bash lets through, while this one
+      // reaches the four `bad-argv` refusals no bash path can produce (bash
+      // always passes `--file`, `--id`, `--label` and `--hue`) and pins the
+      // SUCCESS shape, which the verb swallows.
+      const home = box('ccrc-account-check-declare-');
+      seedRosterJson(home, [UPSTREAM]);
+      const file = join(home, '.ccrc', 'accounts.json');
+      const before = readFileSync(file, 'utf8');
+      const call = (over: Record<string, string | null> = {}): Result => {
+        const merged: Record<string, string | null> = {
+          '--file': file, '--id': 'lab-dev0', '--label': 'lab·dev0', '--hue': 'violet', ...over,
+        };
+        const args = ['check-declare'];
+        for (const [k, v] of Object.entries(merged)) {
+          if (v === null) continue;
+          args.push(k, v);
+        }
+        const p = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+          { encoding: 'utf8' });
+        return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+      };
+      // THE FOUR REQUIRED KEYS, each named by the refusal rather than folded
+      // into one "bad request".
+      for (const k of ['--file', '--id', '--label', '--hue']) {
+        const r = call({ [k]: null });
+        expect(r.code, k).toBe(2);
+        expect(oneObject(r)['error'], k).toBe('bad-argv');
+        expect(String(oneObject(r)['detail']), k).toContain(k.slice(2));
+      }
+      // THE ANSWER, AND IT IS THE ENTRY `declare-entry` WILL WRITE. Asserted
+      // field for field because this object is the whole reason the two ops can
+      // share one assembly: a pre-pass judging a different shape from the one
+      // that lands is a pre-pass that judged nothing.
+      const ok = call();
+      expect(ok.code, ok.stderr).toBe(0);
+      expect(oneObject(ok)['entry']).toEqual({
+        id: 'lab-dev0', label: 'lab·dev0', hue: 'violet', configDirSuffix: '.lab-dev0',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external' },
+      });
+      // …and with the two declarative fields, which reach `exec` and nowhere else.
+      expect((oneObject(call({ '--provider': 'openai', '--base-url': 'https://orchard-api/v1' }))
+        ['entry'] as { exec: unknown }).exec)
+        .toEqual({ kind: 'external', provider: 'openai', baseUrl: 'https://orchard-api/v1' });
+      // THE VALIDATOR'S OWN WORDS, VERBATIM, at class 1 (D-2142): for a
+      // declared lane the endpoint belongs to somebody else's launcher and
+      // `declare` defaults nothing, so `rosterFromJson` stays the one owner of
+      // that field rather than this file growing a second vocabulary for it.
+      const bad = call({ '--provider': 'compatible', '--base-url': 'http://orchard-api/v1' });
+      expect(bad.code).toBe(1);
+      expect(oneObject(bad)['error']).toBe('roster-invalid');
+      expect(bad.stderr).toBe(`account-op: ${String(oneObject(bad)['detail'])} (roster-invalid)\n`);
+      // NOTHING THIS OP DID TOUCHED THE FILE, on any of the paths above — the
+      // property the whole ruling rests on, measured rather than argued.
+      expect(readFileSync(file, 'utf8')).toBe(before);
     });
 });
