@@ -127,6 +127,14 @@ const STUB_STACK_EXIT0 = "#!/usr/bin/env node\n"
 const STUB_VALID_REFUSAL = '#!/usr/bin/env node\n'
   + "process.stdout.write(JSON.stringify({ok:false,error:'roster-absent',detail:'stub refusal'}) + '\\n');\n"
   + 'process.exit(1);\n';
+/** C2: a VALID object, `type=="object"`, rc 0 — `_models_answer`'s three
+ *  clamps (non-empty, object, 0/1/2) all pass this — but with no `lanes`
+ *  FIELD at all, the exact half-updated-box shape `_models_answer`'s own
+ *  clamps do not reach: a node half new enough to answer at all, old enough
+ *  that its `lanes` op does not exist yet. */
+const STUB_VALID_NO_LANES = '#!/usr/bin/env node\n'
+  + "process.stdout.write(JSON.stringify({ok:true}) + '\\n');\n"
+  + 'process.exit(0);\n';
 
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(h, { ...process.env, HOME: h, ...extra });
@@ -465,6 +473,34 @@ describe('the _models_answer seam ("no-answer")', () => {
     const b = oneObject(r);
     expect(b['error']).toBe('roster-absent');
     expect(b['detail']).toBe('stub refusal');
+  });
+});
+
+// C2: `_models_answer`'s three clamps (non-empty, object, 0/1/2) all pass a
+// valid-but-fieldless body — none of them check that the body carries the
+// FIELDS the caller for this op then reads. `refresh --all` used to read
+// `.lanes[]` with no shape guard of its own: on a body missing `lanes`, that
+// jq call failed, the loop variable and its count both went empty, the
+// `while` loop never ran, and the tail printed `all(.ok)` over an empty
+// array — `ok:true`, exit 0 — over a body the seam's own comment says "must
+// not reach the caller as a bare exit code".
+describe('ccrc models refresh --all guards the lanes answer\'s SHAPE, not just its emptiness (C2)', () => {
+  it('a valid object with no "lanes" field is a no-answer refusal, never a zero-row ok:true', () => {
+    home = boxWithStubOp(STUB_VALID_NO_LANES);
+    const r = run(['models', 'refresh', '--all']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    expect(b['error']).toBe('no-answer');
+    expect(r.stderr).not.toBe('');
+    expect(r.stderr.split('\n').filter((l) => l.length > 0).every((l) => l.startsWith('ccrc:'))).toBe(true);
+  });
+
+  it('the named-lane form already refuses correctly, unaffected by this guard', () => {
+    home = boxWithStubOp(STUB_VALID_NO_LANES);
+    const r = run(['models', 'refresh', 'router']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-answer');
   });
 });
 
@@ -949,6 +985,35 @@ describe('ccrc models refresh', () => {
     const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean }[];
     expect(rows.find((x) => x.id === 'gpt')!.ok).toBe(true);
     expect(rows.find((x) => x.id === 'router')!.ok).toBe(false);
+  });
+
+  // C7 (second half): re-materialise's failure used to be swallowed
+  // (`_models_node materialise ... || true`), so a lane whose catalogue had
+  // just refreshed kept reporting `ok:true` with a fresh `count` while its
+  // TSV/settings.json stayed STALE — the exact silent-drift shape the row's
+  // own STOP-THEN-WRITE comment already refuses for LiteLLM. Forcing
+  // materialise to fail deterministically: pre-creating a DIRECTORY at the
+  // TSV path it writes means its `renameSync(tmp, p)` throws (p is not a
+  // file), the same failure shape a permissions or disk-full problem would
+  // produce on a real box.
+  it('a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)', () => {
+    run(['models', 'gpt', 'init', 'codex']);
+    const tsvPath = join(home, '.ccrc', 'models', 'gpt.classes.tsv');
+    fs.rmSync(tsvPath, { force: true });
+    fs.mkdirSync(tsvPath);
+    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string; litellm?: string }[];
+    expect(rows).toEqual([{ id: 'gpt', ok: false, reason: expect.any(String) }]);
+    expect(rows[0]!.reason!.length).toBeGreaterThan(0);
+    // The probe's own effect stands (§6.1 amendment: a failed materialise
+    // does not undo a successful catalogue fetch) — only the derived files
+    // and the LiteLLM step, which reads them, are what the failure gates.
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
+    expect(fs.existsSync(join(home, '.handoff', 'litellm-config.yaml'))).toBe(false);
+    expect(fs.existsSync(join(home, 'ccgpt-calls')), 'the litellm step must never run when materialise failed').toBe(false);
   });
 
   it('refuses an id the roster does not have', () => {

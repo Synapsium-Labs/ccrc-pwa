@@ -244,7 +244,7 @@ export function mergeSettingsEnv(settingsPath, block) {
   if (json.env === undefined) { json.env = env; changed = true; }
   else json.env = env;
   if (!changed && existed) return { changed: false };
-  const tmp = `${settingsPath}.ccrc.tmp`;
+  const tmp = `${settingsPath}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, settingsPath);
@@ -307,7 +307,7 @@ export function clearSettingsEnv(settingsPath, keys) {
   if (!changed) return { changed: false };
   if (Object.keys(env).length === 0) delete json.env;
   else json.env = env;
-  const tmp = `${settingsPath}.ccrc.tmp`;
+  const tmp = `${settingsPath}.${process.pid}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, settingsPath);

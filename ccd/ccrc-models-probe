@@ -399,12 +399,22 @@ _mark_stale() {   # <reason>
     return 1
   }
   local why="$1"
-  CCRC_STALE_WHY="$why" python3 - "$OUT" "$NORM" <<'PY' || return 1
+  # C4: both guards below used to `return 1` silently on failure — one on a
+  # bare `except ValueError` with no message, the other by falling straight
+  # through `_probe_mv_notdir`'s own non-`$PROG:` stderr. `_models_refresh_one`
+  # (ccd/ccrc) reads this function's first stderr line as the refresh row's
+  # `reason`, so a silent guard here became a `reason:""` row, and a
+  # valid-but-non-dict previous catalogue (`[1,2,3]`) escaped the
+  # `except ValueError` entirely and raised an unhandled `TypeError` — a raw
+  # Python traceback on stderr, no `$PROG:` prefix, becoming `reason` verbatim.
+  if ! CCRC_STALE_WHY="$why" python3 - "$OUT" "$NORM" <<'PY' 2>/dev/null
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
 try:
     cat = json.load(open(src))
 except ValueError:
+    raise SystemExit(1)
+if not isinstance(cat, dict):
     raise SystemExit(1)
 cat["stale"] = True
 cat["lastError"] = os.environ["CCRC_STALE_WHY"]
@@ -416,7 +426,14 @@ with open(dst, "w") as f:
 # lane's price list.
 os.chmod(dst, 0o600)
 PY
-  _probe_mv_notdir "$NORM" "$OUT" || return 1
+  then
+    echo "$PROG: $why — and the previous catalogue at \"$OUT\" could not be marked stale (it exists but is not a parseable JSON object); nothing was changed." >&2
+    return 1
+  fi
+  _probe_mv_notdir "$NORM" "$OUT" || {
+    echo "$PROG: $why — the stale rewrite was prepared but could not be moved into place at \"$OUT\"; nothing was changed." >&2
+    return 1
+  }
   echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
   return 1
 }

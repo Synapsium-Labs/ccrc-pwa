@@ -13,7 +13,7 @@
 // and a lane's settings.json; the live ones on the box this suite runs on are
 // the operator's.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +63,24 @@ function op(...args: string[]): Result {
   expect(lines[lines.length - 1], `stdout is not newline-terminated: ${JSON.stringify(stdout)}`).toBe('');
   expect(lines.length, `stdout carried ${lines.length - 1} lines, not one`).toBe(2);
   return { code: r.status ?? -1, body: JSON.parse(lines[0]!), stderr: r.stderr ?? '', stdout };
+}
+
+/** Same contract as `op`, but async — required to launch several op
+ *  processes so they actually overlap in the OS, which `spawnSync`, being
+ *  synchronous, cannot do (C7's concurrent-materialise test). */
+function opAsync(...args: string[]): Promise<Result> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [OP, ...args], { env: { ...process.env, HOME: home } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const lines = stdout.split('\n');
+      resolve({ code: code ?? -1, body: JSON.parse(lines[0] ?? '{}'), stderr, stdout });
+    });
+  });
 }
 
 const regPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.classes.json`);
@@ -862,6 +880,31 @@ describe('materialise', () => {
     const r = op('materialise', '--file', rosterPath(), '--id', 'claude-a');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('anthropic-lane');
+  });
+
+  // C7: a fixed `${p}.ccrc.tmp` name means two overlapping `materialise`
+  // calls on the SAME lane race on ONE tmp file — the loser's `renameSync`
+  // throws ENOENT once the winner has already renamed it away. Measured on
+  // the pinned sha before this file's fix: 23-27/360 concurrent calls (6
+  // wide, 60 rounds) failed this way. `${p}.${process.pid}.tmp` gives every
+  // process its own name, so nothing to collide on remains. 20 rounds of 6
+  // is narrower than the reviewer's 60 — this suite runs on every push, the
+  // reviewer's repro ran once — but the collision is systemic (fires on any
+  // overlap, not a rare interleaving), so 20*6 = 120 calls is already far
+  // past the point a fixed name would show at least one failure.
+  it('N concurrent materialise calls on the same lane all succeed (C7)', async () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    writeCatalogue('gpt');
+    const rounds = 20;
+    const width = 6;
+    for (let round = 0; round < rounds; round += 1) {
+      const results = await Promise.all(
+        Array.from({ length: width }, () => opAsync('materialise', '--file', rosterPath(), '--id', 'gpt')),
+      );
+      for (const r of results) {
+        expect(r.code, `round ${round}: ${JSON.stringify(r.body)} stderr=${r.stderr}`).toBe(0);
+      }
+    }
   });
 });
 

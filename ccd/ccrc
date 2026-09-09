@@ -4181,6 +4181,17 @@ _models_box_sub() {   # <subcommand> [args…]
       # pre-check (`showbody`, above) is the same shape.
       local lanes rc
       lanes="$(_models_answer lanes --file "$file")" || { rc=$?; printf '%s\n' "$lanes"; exit "$rc"; }
+      # C2: `_models_answer`'s three clamps (non-empty, object, rc in 0/1/2)
+      # verify the ENVELOPE, not that this op's own answer carries the
+      # FIELD it reads next. A valid-but-fieldless body (a half-updated box
+      # whose node half does not know the `lanes` op yet) used to fail the
+      # `.lanes[]` jq below silently: the loop variable and its count both
+      # went empty, the `while` loop never ran, and the tail printed
+      # `all(.ok)` over an empty array — `ok:true` at exit 0, over a body
+      # this seam's own comment says "must not reach the caller as a bare
+      # exit code". Guarded here, before that jq ever runs.
+      printf '%s' "$lanes" | jq -e 'has("lanes") and (.lanes|type=="array")' >/dev/null 2>&1 \
+        || _models_refuse no-answer 1 "deploy/models-op.mjs's \"lanes\" op answered without a \"lanes\" array, so this run has nothing to tell you. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
       # `hasRegistry` now reflects the REGISTRY FILE's presence alone (Fix
       # round 1, Finding 2, ruling): a corrupt CATALOGUE no longer excludes a
       # lane from this list — `registryInvalid`/`catalogueInvalid` are
@@ -4226,8 +4237,20 @@ _models_box_sub() {   # <subcommand> [args…]
           # lane whose catalogue just changed can have a lane default that
           # has stopped being offered and a class that has just been retired
           # — and the files ccd and the shim read have to learn that in the
-          # same run.
-          _models_node materialise --file "$file" --id "$id" >/dev/null 2>&1 || true
+          # same run. C7: its failure used to be swallowed (`|| true`), so a
+          # lane whose catalogue had just refreshed kept serving a STALE
+          # TSV/env block under an `ok:true` row with no operator signal — the
+          # same silent-drift shape the STOP-THEN-WRITE ruling below already
+          # refuses for LiteLLM. Captured the same way: stdout only (2>/dev/
+          # null — the JSON is the contract, not the human sentence on
+          # stderr), and a failure here makes this row ok:false and skips the
+          # LiteLLM step, which reads the same freshly-materialised state.
+          local mreason="" mat_body mat_rc=0
+          mat_body="$(_models_node materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          if [ "$mat_rc" -ne 0 ]; then
+            mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
+            [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
+          fi
           count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
           # §5: the LiteLLM step runs for a CODEX lane, and the RENDERER
           # decides whether anything changed — comparing bytes it just
@@ -4236,7 +4259,7 @@ _models_box_sub() {   # <subcommand> [args…]
           # because the visible set is the only input the rendering has.
           lit="skipped"
           local lreason=""
-          if [ "$probe" = "codex" ]; then
+          if [ -z "$mreason" ] && [ "$probe" = "codex" ]; then
             local lbody
             if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
               [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
@@ -4256,7 +4279,10 @@ _models_box_sub() {   # <subcommand> [args…]
               lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail')"
             fi
           fi
-          if [ -n "$lreason" ]; then
+          if [ -n "$mreason" ]; then
+            row="$(jq -cn --arg id "$id" --arg reason "$mreason" '{id:$id, ok:false, reason:$reason}')"
+            failed=1
+          elif [ -n "$lreason" ]; then
             row="$(jq -cn --arg id "$id" --arg reason "$lreason" '{id:$id, ok:false, reason:$reason}')"
             failed=1
           else
@@ -5543,6 +5569,16 @@ _inst_units() {
     # sweep above it — a server box holds no account wrappers to keep alive.
     _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.timer" "$dir/ccd-telemetry-keepalive.timer" 644
+    # C5: the model-class registry's hourly refresh, role-gated exactly as its
+    # three siblings above — a server box holds no account lanes and no
+    # `~/.ccrc/models` registries to refresh. Before this fix these two names
+    # appeared in neither `_inst_units`, the enable block below, nor
+    # `cmd_uninstall` — `deploy.sh agent` was the only installer, so `ccrc
+    # install --role fleet` shipped the verbs and the probe but no timer to
+    # ever run them (measured), and `ccrc uninstall` after `deploy.sh agent`
+    # left the timer enabled and orphaned.
+    _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
@@ -5622,6 +5658,11 @@ _inst_enable() {
   # well-informed, it is not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-telemetry-keepalive.timer \
     || echo "install: keepalive: could not enable ccd-telemetry-keepalive.timer — run: systemctl --user enable --now ccd-telemetry-keepalive.timer" >&2
+  # C5: same gate, same DEGRADE-rather-than-die idiom — a server box has no
+  # lanes to refresh, and a systemd that will not take this one timer must not
+  # turn an otherwise converged install into a failed one.
+  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccrc-models.timer \
+    || echo "install: models: could not enable ccrc-models.timer — run: systemctl --user enable --now ccrc-models.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:719-721` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -6945,7 +6986,8 @@ _uninst_units() {
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
-      ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service; do
+      ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
+      ccrc-models.timer ccrc-models.service; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -6958,6 +7000,7 @@ _uninst_units() {
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
+    "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"

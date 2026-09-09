@@ -306,6 +306,31 @@ describe('failure keeps the previous catalogue and marks it stale (§11)', () =>
     expect(cat.stale).toBe(false);
     expect(cat.lastError).toBeUndefined();
   });
+
+  // C4: `_mark_stale`'s two `|| return 1` guards used to return silently —
+  // `_models_refresh_one` (ccd/ccrc) reads this function's first stderr line
+  // as the refresh row's `reason`, so a silent guard here became `reason:""`.
+  it('an unparseable previous catalogue: the guard names why, not silence', () => {
+    const gptJson = path.join(home, '.ccrc', 'models', 'gpt.json');
+    fs.mkdirSync(path.dirname(gptJson), { recursive: true });
+    fs.writeFileSync(gptJson, 'not json', { mode: 0o600 });
+    const r = run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-file') });
+    expect(r.code).toBe(1);
+    expect(r.stderr.trim().length, 'the stale-rewrite failure must not be silent').toBeGreaterThan(0);
+    expect(r.stderr).toMatch(/^ccrc-models-probe: /m);
+    expect(fs.readFileSync(gptJson, 'utf8')).toBe('not json');
+  });
+
+  it('a previous catalogue that is valid JSON but not an object: no traceback, a named reason', () => {
+    const gptJson = path.join(home, '.ccrc', 'models', 'gpt.json');
+    fs.mkdirSync(path.dirname(gptJson), { recursive: true });
+    fs.writeFileSync(gptJson, '[1,2,3]', { mode: 0o600 });
+    const r = run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-file') });
+    expect(r.code).toBe(1);
+    expect(r.stderr).not.toContain('Traceback');
+    expect(r.stderr).toMatch(/^ccrc-models-probe: /m);
+    expect(fs.readFileSync(gptJson, 'utf8')).toBe('[1,2,3]');
+  });
 });
 
 describe('schema drift refuses the WHOLE response (§11)', () => {

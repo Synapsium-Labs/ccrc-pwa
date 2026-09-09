@@ -232,7 +232,7 @@ function readRegistry(id, catalogue) {
  *  trailing newline, the shape every hand-editable ccrc file has. */
 function writeRegistry(id, registry) {
   const p = registryPath(id);
-  const tmp = `${p}.ccrc.tmp`;
+  const tmp = `${p}.${process.pid}.tmp`;
   try {
     mkdirSync(modelsDir(), { recursive: true });
     writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
@@ -283,7 +283,7 @@ function materialise(account, registry, catalogue) {
     // transient.
     for (const [p, text] of [[classes, classesTsv(registry, catalogue)],
       [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]]) {
-      const tmp = `${p}.ccrc.tmp`;
+      const tmp = `${p}.${process.pid}.tmp`;
       writeFileSync(tmp, text, { mode: 0o600 });
       renameSync(tmp, p);
     }
@@ -660,7 +660,7 @@ function main(argv) {
       // not come back up on the rendering, the operator needs the config that
       // was working, and `ccrc doctor` needs something to compare against.
       if (previous !== null) writeFileSync(`${a.out}.prev`, previous, { mode: 0o600 });
-      const tmp = `${a.out}.ccrc.tmp`;
+      const tmp = `${a.out}.${process.pid}.tmp`;
       writeFileSync(tmp, text, { mode: 0o600 });
       renameSync(tmp, a.out);
     } catch (e) {
