@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c6a5e9b166beb4e50b33455085696462c8745e471739ced9514dba43102a3890
+# ccrc:generated 1 sha256=773216ebb40c370ab9775dde2dfbcf3b1a10b49f3954a9fdeaa2b3e7b33d5a26
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -773,7 +773,8 @@ WORKTREES_ROOT="$HOME/worktrees"
 # THE PROJECT POOL TAG lives in a DOTLESS registry subdirectory, one file per
 # project (spec §4, approach B). Outside every git tree and every session cwd,
 # beside the switches an operator already hand-touches (`<w>-disabled`,
-# `coordinator-paused`, `mail-disabled`) — `ls ~/.cc-sessions/pools/` shows
+# `coordinator-paused`, `mail-disabled`) and the one marker a MACHINE writes
+# there (`<account>-authdead`, see `_authdead`) — `ls ~/.cc-sessions/pools/` shows
 # every tag and `echo pool-a > pools/demo` is the 2 am idiom.
 #
 # DOTLESS, and that is measured rather than assumed: every registry glob is
@@ -1119,6 +1120,31 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+# The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
+# format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
+# executable, never this file — ccd makes no outbound network call, and adding
+# one would be a new dependency class); CLEARED by that probe on a 403, by a
+# successful spawn (`_spawn_settle`), and by an operator `rm`.
+#
+# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob:
+# `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*`
+# and skip any suffix containing a dot, so `$REG/claude-authdead` is invisible
+# to all three even when a session id spells it exactly.
+#
+# NOT `-disabled`. That name is OPERATOR intent, has no writer in this tree, and
+# both its conjuncts in `_account_ok` are things a human did. This one is a
+# MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and its two
+# consumers rank-last (`_swap_target`) and skip-scoring (`_ws_least_loaded`)
+# instead. A rescue must always have a destination.
+#
+# THE DIGITS GATE, exactly as `_auto_swap_check` validates `swapblocked`'s epoch
+# (ccd/ccd:12229-12230): the field is bytes off disk. Here it also decides the answer — an
+# empty or half-written marker is NOT a verdict, and reading one as "dead" would
+# let a truncated write bar an account nothing ever measured.
+_authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it
+  local t; t=$(cat "$REG/$1-authdead" 2>/dev/null); t="${t%% *}"
+  [[ "$t" =~ ^[0-9]+$ ]]
+}
 _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
 # and it may never `die`: every decider calls it once per decision and one of
@@ -1408,10 +1434,12 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 11 of
-# them call sites — the other six are prose, this sentence's own quoting of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 11 of
+# them call sites — the other seven are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
-# of them. CORRECTED at merge review (M5): this read "finds 16 call sites now
+# of them. (17/11 before C1, which added one PROSE mention and no call site:
+# `_auto_swap_check`'s new measurement paragraph names `_pool_ok` among the
+# consumers of the value it measures.) CORRECTED at merge review (M5): this read "finds 16 call sites now
 # (a count this sentence's own quoting of the pattern adds one to)", which
 # asserts 15 call sites, and the answer is 11. `grep -c` counts LINES, and
 # five of the sixteen are comments. Two quantities, so the pin in
@@ -1624,6 +1652,67 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
   _plat_mv_notdir "$tmp" "$REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
 }
 _reg_get() { cat "$REG/$1.$2" 2>/dev/null; }                # id field
+# THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
+# for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
+# overloaded null the ring rules forbid at a seam. It stays exactly as it is,
+# and the reason is a count rather than a preference: 134 call sites, by
+# `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l` (measured
+# 2026-09-08 — re-measure it; the figure is not the point, the order of
+# magnitude is). Two spellings that do NOT answer this question, both tried
+# while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
+# prose too, including this line's own quoting of it, and `grep -c` counts
+# LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`
+# already books one function away. Widening `_reg_get` is therefore a
+# fleet-wide change. NOTHING is claimed here about what those 134 callers want:
+# C1 converted exactly ONE of them (the marker record, inside
+# `_crosspool_valid`), and the other `_reg_read` calls are reads that had no
+# `_reg_get` predecessor at all, so they were never members of that set (D-2001).
+#
+# `_reg_read` is the distinguishing sibling, for the callers that must not act
+# on a value they did not measure. `server/src/io.ts`'s measured reads are the
+# pattern it copies (`readFileMeasured` tells absent from unreadable); here the
+# vocabulary is an EXIT CODE, because that is what this file already uses for a
+# three-way answer — `_pool_ok`'s rc 2 is "nobody decides", and this rc 2 means
+# the same thing about a registry field.
+#
+# ADDED FOR C1 (wave 2b's merge review, closed 2026-09-08): `_crosspool_tick`
+# deleted a crossing marker off a read that had failed, and logged a move that
+# never happened. `grep -n '_reg_read ' ccd/ccd` is the census of who needs the
+# distinction; every other reader keeps `_reg_get` and keeps the fold.
+_reg_read() {   # id field -> stdout the value; rc 0 = read, 1 = absent, 2 = unreadable
+  local f="$REG/$1.$2" v
+  if v=$(cat -- "$f" 2>/dev/null); then printf '%s' "$v"; return 0; fi
+  # `cat` failed, so the question is now WHY, and the two levels are asked in
+  # the order `_project_pool_state` asks them (`grep -n '^_project_pool_state()'
+  # ccd/ccd`): the DIRECTORY the field sits in first, then the field.
+  #
+  # THE REGISTRY LEVEL (D-1989, corrected at review to D-1996). This is the
+  # POSITIVE pairing, `-d && -x`, copied from `ccd/ccd:1141` — the one
+  # condition that was here before, `-d "$REG" && ! -x "$REG"`, covered exactly
+  # one of the anomalies and left `$REG` missing, `$REG` a regular file, `$REG`
+  # a symlink loop and `$REG`'s own PARENT unsearchable all answering ABSENT
+  # for fields that may well exist. The sibling's comment states the ruling
+  # this now shares: "`$REG` missing entirely gets the SAME `unreadable`
+  # verdict". A registry you cannot enter tells you nothing about a field.
+  [[ -d "$REG" && -x "$REG" ]] || return 2
+  # THE FIELD LEVEL. `-e` follows symlinks, so a DANGLING symlink is a name
+  # that exists and cannot be read; `-L` is what keeps it out of the absent
+  # arm, spelled as the same one-expression pairing `_project_pool_state` uses
+  # at `:1151-1152`.
+  [[ -e "$f" || -L "$f" ]] && return 2
+  return 1
+}
+# WHERE THIS DIVERGES FROM THE PATTERN IT COPIES, said here because citing a
+# pattern without its exceptions is how a reader inherits a claim nobody made
+# (D-1998). `server/src/io.ts`'s measured reads are the model for the
+# absent/unreadable SPLIT, and that much is copied exactly. The dangling
+# symlink is where the two part company: `io.ts` rules it ABSENT and argues
+# why in its own docstring (`readFile` follows the link, the target is missing,
+# the errno IS ENOENT). This rules it UNREADABLE, because the question here is
+# not "what did the syscall say" but "may a destructive arm act on this" — and
+# a name that exists while its target does not is precisely the input no arm
+# may act on. Neither is wrong; they answer different questions, and only one
+# of them can end a crossing.
 # THE ONE WRITER OF `started`, and the reason it is a function rather than eight
 # `_reg_set` lines: the field is what `_session_state` and shared/'s
 # `sessionLifecycle` read to tell `orphan` from `never-started`, and (Wave 1)
@@ -3896,10 +3985,12 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # UNKNOWN IS NOT UNPLACEABLE either. On a fresh box nothing has reported yet,
   # and refusing to place work there would break first run, so if NO account was
   # measured this falls back to the first _account_ok account in iteration order
-  # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
+  # THAT THE HEALTH PROBE HAS NOT CONDEMNED — and only if every one of them is
+  # condemned, to the first condemned one. Same rule, same two tiers, same
+  # answer, as the server's projectHome (server/src/limits.ts).
   #
   # The server's copy (projectHome, server/src/limits.ts) is stricter about
-  # "unknown" in TWO ways this is not, and both are stated here rather than
+  # "unknown" in exactly ONE way this is not, and it is stated here rather than
   # discovered later:
   #
   #   1. It skips an account whose roster entry says telemetry:'none' — an
@@ -3908,21 +3999,33 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   #      gap did not close with it: the generated file carries ids, home-ability
   #      and the upstream id, and no telemetry field at all (shared/
   #      generate.mjs), so bash still has nothing to consult.
-  #   2. It treats a HALF-measured row as unknown, where _limit_score
-  #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
-  #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
-  #      that account at 0 and the server picks the cheapest fully-measured one.
   #
-  # Parity holds today because both gaps are reachable only through the SAME
-  # account: gpt is the only telemetry:'none' account and the only one whose
-  # file carries a null half (it has no 5h window at all), and gpt is not
-  # home-able — absent from CCRC_HOME_ABLE here and from roster.homeAble there —
-  # so neither implementation ever scores it. Nothing else writes a half-null
-  # file: statusline-command.sh emits both fields for every Anthropic account.
-  # But `_limit_score`'s own `:=0` defaults and `_limit_five`'s back-compat shim
-  # exist precisely because a file CAN be missing a key, so this is an agreement
-  # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
-  # the same fixtures and says so the day the circumstance changes.
+  # THERE USED TO BE A SECOND, AND BRIEFLY A THIRD; BOTH ARE NOW CLOSED, and
+  # what closed them is one line — `_limit_score`'s `[[ -z "$five" || -z
+  # "$seven" ]]`, which was `&&` with `: "${five:=0}"` filling the gap.
+  #   • The old gap 2 was the HALF-MEASURED row: `{"five":null,"seven":0}`
+  #     scored 0 in bash and unknown on the server.
+  #   • The old gap 3 was the HALF-ROLLED row, created by the provenance fix
+  #     itself: `{five: <window ended>, seven: 5}` scored 5 in bash and unknown
+  #     on the server. Unlike gap 2 that one was REACHABLE by any Anthropic
+  #     account at any 5h reset, and it was the placement magnet this file's
+  #     first paragraph describes, surviving through the readable half — which
+  #     is why it was closed in the same change that opened it rather than
+  #     recorded and deferred.
+  # Both were one defect wearing two faces: a score is a MAXIMUM, so one known
+  # half bounds the truth only from below, and a bound from below is not a
+  # score. `_limit_score` now says so, and `half-rolled-window` in
+  # projected-home.test.ts's shared fixtures asserts the two sides agree on it.
+  #
+  # Gap 1 is reachable only through gpt: it is the only telemetry:'none'
+  # account, and it is not home-able — absent from CCRC_HOME_ABLE here and from
+  # roster.homeAble there — so neither implementation ever scores it. That is
+  # still an agreement of circumstance rather than of rule, and
+  # `projected-home.test.ts` runs both sides over the same fixtures so it says
+  # so the day the circumstance changes. (`_limit_five`'s back-compat shim
+  # survives as the standing evidence that a limits file CAN be missing a key;
+  # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
+  # — they were the mechanism of the gap, not a defence against it.)
   #
   # THE FOUR CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
@@ -3962,18 +4065,19 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
   # below by this function's own fallback: PREFER MEASURED ACCOUNTS; IF NONE IS
-  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER. Skipping
-  # here and ranking-last in `_swap_target` are the two affordable spellings of
-  # the same preference — this function can skip because it HAS that fallback,
-  # and the rescue loop cannot because its "no candidate" answer strands a stuck
-  # session. `_avail` stays permissive because it answers eligibility, not rank.
+  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER THAT THE
+  # HEALTH PROBE HAS NOT CONDEMNED. Skipping here and ranking-last in
+  # `_swap_target` are the two affordable spellings of the same preference —
+  # this function can skip because it HAS that fallback, and the rescue loop
+  # cannot because its "no candidate" answer strands a stuck session. `_avail`
+  # stays permissive because it answers eligibility, not rank.
   # Full reasoning on `_avail`.
   #
   # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
-  # roster.homeAble as-is), and that order is load-bearing twice over: the
-  # `first` fallback below takes the first placeable account, and the tie-break
-  # is a STRICT `<`, so the first home-able account also wins every tie. The
-  # server's `projectHome` ranks ties by the same declaration order.
+  # roster.homeAble as-is), and that order is load-bearing twice over: each
+  # fallback tier below takes the first placeable account IN ITS TIER, and the
+  # tie-break is a STRICT `<`, so the first home-able account also wins every
+  # tie. The server's `projectHome` ranks ties by the same declaration order.
   #
   # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
   # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
@@ -3995,18 +4099,64 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
   # is no second channel on this seam — stdout carries a wrapper name — so the
   # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  #
+  # WHAT "" NEVER MEANS IS "every in-pool lane is condemned", and that is why
+  # `cmd_ws_add`'s reason builder needs no auth-dead arm: this function answers
+  # a lane in that case (see the tiers at the end of the loop). Both meanings ""
+  # does carry are things a human declared or must repair; a health verdict is a
+  # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
-  local best="" bs=1000 first="" w sc
+  local best="" bs=1000 first="" condemned="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
-    # AFTER `_account_ok`, BEFORE `first`: the fallback below must land on the
-    # first IN-POOL account, never on a cheaper-looking lane in another pool.
+    # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
+    # account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
+    # TWO FALLBACK TIERS, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
+    # must not be PREFERRED — it is a measurement that a credential no longer
+    # authenticates — but it must stay ELIGIBLE, because that measurement can be
+    # wrong and no destination at all is worse than a bad one (`_authdead`'s
+    # header: it never joins `_account_ok`). Those two are compatible only with
+    # a SECOND fallback, which is what this branch builds: `first` collects the
+    # first candidate NOBODY CONDEMNED, `condemned` the first condemned one, and
+    # the condemned tier is reached below only when `first` is empty — i.e. only
+    # when every in-pool lane is condemned.
+    #
+    # BOTH ONE-VARIABLE SPELLINGS ARE WRONG, and this function shipped the first
+    # of them (D-1954). Assigning a single `first` ABOVE this skip takes the
+    # first candidate in roster order whether or not the probe has condemned it,
+    # so on a fleet where nothing is measured — a fresh box, or every window
+    # rolled over at once — placement lands on a lane measured DEAD while a
+    # healthy lane sits one position behind it. Assigning it BELOW the skip is
+    # the other wrong answer: it empties the fallback on an all-condemned fleet,
+    # this function answers "", and `cmd_ws_add` dies with no destination for a
+    # reason no operator asked for. The pair of variables is what satisfies both.
+    if _authdead "$w"; then
+      [[ -z "$condemned" ]] && condemned="$w"
+      continue
+    fi
     [[ -z "$first" ]] && first="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
+  # THREE TIERS, WIDENING: the cheapest MEASURED lane nobody condemned; then the
+  # first UNMEASURED lane nobody condemned; then — only when every in-pool lane
+  # is condemned — the first CONDEMNED one, in the same roster declaration order
+  # every other answer here uses.
+  #
+  # THE LAST TIER IS A LANE, NOT "". That is the deliberate half of the decision
+  # and it is not the same call as the all-disabled one: `""` above means
+  # ELIGIBILITY IS EXHAUSTED — an operator switched every lane off, or a wrapper
+  # is missing, or the pool tag is undecidable — and every one of those is
+  # something a human did or must fix before work can land. A health verdict is
+  # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
+  # function would let one bad probe run wedge every `ws-add` on the box.
+  # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
+  # The server's `projectHome` (server/src/limits.ts) makes both calls the same
+  # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
+  # day either side changes its mind is the day the suite says so.
   [[ -z "$best" ]] && best="$first"
+  [[ -z "$best" ]] && best="$condemned"
   echo "$best"
 }
 
@@ -11974,7 +12124,11 @@ _fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpos
   else                     printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
-_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale
+_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" when unknown
+  # FOUR conditions answer "": no file, no value for this field, a caller that
+  # demanded fresher telemetry than exists, and a value whose own window has
+  # ENDED. They mean one thing to every caller — nobody has measured this
+  # window — and what they must NOT mean is 0, which is a measurement.
   local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset
   [[ -f "$f" ]] || return 0
   val=$(_limit_json_num "$f" "$field")
@@ -11983,39 +12137,76 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if 
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
   # resetAt comes straight from the API (statusline-command.sh), so this is fact,
-  # where the age rules below are inference. It matters because telemetry is only
+  # where the age rule below is inference. It matters because telemetry is only
   # written when a session renders its statusline: an idle account stops
   # reporting entirely, so its last sample can outlive its window by days.
   # Observed 2026-07-27: claude read seven=98 for 14h after its 7d window reset,
   # which excluded it from every pool and stranded two sessions on gpt.
-  # Both rules below rewrite a KNOWN value; neither may conjure one. gpt.json carries
+  # Both rules below RETRACT a known value; neither may conjure one. gpt.json carries
   # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
   # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
   # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
   reset=$(_limit_json_num "$f" "${field}ResetAt")
   if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
-    printf '0'; return 0
+    # WAS `printf '0'`. That 0 was INFERRED from a timestamp, never observed,
+    # and it entered the ranking as the best measurement on the fleet:
+    # _limit_score returned max(0,0)=0, and _ws_least_loaded's strict `<` kept
+    # it over every account that had honestly reported. Nothing runs on the
+    # account it won, so nothing ever replaced the 0 — the emptiest-looking
+    # account was simply the one whose window had lapsed. Same magnet, same
+    # shape, as the two unknown-is-zero defects recorded in _ws_least_loaded and
+    # _swap_target; this is the third site, and unlike those two it fires on a
+    # perfectly healthy fleet every time a window turns over.
+    #
+    # The honest answer is "": this window ended and nobody has measured the new
+    # one. _avail keeps the account ELIGIBLE (see its comment — eligibility and
+    # rank are different questions, and it refuses only on a KNOWN half at the
+    # ceiling), _ws_least_loaded skips it, _swap_target ranks it last at 100.
+    # Availability does not change; only preference does — and that holds for a
+    # row with only ONE window ended, because _limit_score answers "" unless
+    # both halves are measured.
+    return 0
   fi
   # Fallback when the file carries no resetAt (the gpt 429 exclusion, and files
   # written before those fields existed): a sample older than its own window has
-  # certainly rolled over. (7d decays slowly, so a stale seven only zeroes after
-  # a full week.)
+  # certainly rolled over. (7d decays slowly, so a stale seven only answers
+  # unknown after a full week.) Same answer as the branch above and for the same
+  # reason — this path INFERS that the window turned over, so it may not report
+  # a measurement. The server's mirror sets fiveRolledOver/sevenRolledOver on
+  # exactly this path for exactly this reason (server/src/limits.ts).
   if [[ -n "$val" && -n "$ts" ]]; then
-    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && val=0
-    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && val=0
+    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && return 0
+    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && return 0
   fi
   printf '%s' "$val"
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 
-_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly unknown
+_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
   # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
   # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
   # its weekly cap should evacuate just like one nearing its 5h cap.
+  #
+  # EITHER HALF UNKNOWN MAKES THE ROW UNKNOWN. This was `&&` — "" only when
+  # BOTH halves were empty — with `: "${five:=0}"` substituting 0 for the
+  # missing one. That substitution is the same unknown-is-zero magnet the
+  # provenance fix removed from _limit_field, surviving through the half that
+  # was still readable: `{five: <window ended>, seven: 5}` scored 5, which made
+  # an account whose 5h state nobody had measured the emptiest-looking on the
+  # fleet, and _ws_least_loaded's strict `<` sent placement there. The score is
+  # a MAXIMUM, so one known half bounds the truth only from BELOW — it could
+  # really be 99 — and a bound from below is not a score.
+  #
+  # This is a RANK, and rank is the only thing it answers. Eligibility asks a
+  # different question and needs only that lower bound, so `_avail` reads
+  # `_limit_field` itself rather than routing through here; see its comment.
+  # Splitting the two is what let this guard tighten without stripping the gpt
+  # lane of its only exclusion — measured: with `_avail` still reading this
+  # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
+  # "enabled, available" and three _gpt_status assertions went red.
   local five seven
   five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
-  [[ -z "$five" && -z "$seven" ]] && return 0
-  : "${five:=0}"; : "${seven:=0}"
+  [[ -z "$five" || -z "$seven" ]] && return 0
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
 
@@ -12030,6 +12221,26 @@ _id_wrapper() { _ccrc_id_wrapper "$1"; }   # id -> the wrapper encoded in the id
 # there are no arms to edit any more. Unlike `_cfg_dir`, this one DOES have a
 # default arm: an id matching no account resolves to CCRC_UPSTREAM.
 _home_for() { local h; h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" || _id_wrapper "$1"; }
+# `_home_for` WITH THE FOLD REMOVED (C1). It agrees with `_home_for` on every
+# DECIDED input and differs only by refusing to answer on an undecidable one —
+# the two must never disagree about the same row, which is why the fallback is
+# spelled the same way rather than re-derived.
+#
+# THE SUBSTITUTION THIS EXISTS TO STOP (D-1986). `_home_for`'s `[[ -n "$h" ]]`
+# cannot tell a failed read from an absent file, so an UNREADABLE `.home`
+# silently answers `_id_wrapper "$1"` — the account encoded in the id prefix, a
+# real account name that no read produced. That is worse than an empty string
+# in both directions: it cannot match a crossing marker when it should, and it
+# CAN match one when it should not, keeping a crossing alive on a value nobody
+# measured. ABSENT and EMPTY stay DECIDED here: a row that never had a `.home`
+# (pre-2026-07-28) is old, not unmeasurable, and the fallback is its answer.
+_home_measured() {   # id -> stdout the effective home; rc 0 decided, rc 2 unreadable
+  local h rc
+  h=$(_reg_read "$1" home); rc=$?
+  [[ "$rc" -eq 2 ]] && return 2
+  [[ -n "$h" ]] && { printf '%s' "$h"; return 0; }
+  _id_wrapper "$1"
+}
 
 _avail() {   # wrapper -> success if it has included-usage headroom (rate score under the ceiling).
   # The monthly spend cap only gates PAID OVERAGE above 100%, so an account under the ceiling is
@@ -12050,12 +12261,34 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
   #     telemetry" case is exactly that rescue, run over a fleet with no
   #     telemetry files whatsoever: it passes only while unknown is available.
+  #     AND UNKNOWN IS NO LONGER RARE. Since the provenance fix, _limit_field
+  #     answers "" for a window that has merely ENDED, not only for an account
+  #     nobody ever measured — so every account passes through unknown each time
+  #     a window turns over, on a healthy fleet. That makes this function's
+  #     permissiveness load-bearing rather than a corner case: a rolled-over
+  #     account was available because it scored 0 and is available now because
+  #     no KNOWN half sits at the ceiling — the same answer for an honest
+  #     reason, and reached without consulting a score at all (next bullet).
   #   • Ranking is where unknown must lose, and both ranking sites now make it
   #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
   #     unmeasured account outright (it has a fallback for the all-unmeasured
   #     fleet, so skipping costs nothing). `_swap_target` cannot skip — a
   #     rescue with no destination strands a stuck session — so it ranks
   #     unmeasured LAST instead, eligible but never preferred.
+  #   • ELIGIBILITY NEEDS ONLY A LOWER BOUND; RANK NEEDS A FULL MEASUREMENT.
+  #     That is why this function reads `_limit_field` directly instead of
+  #     asking `_limit_score`, which now answers "" whenever EITHER half is
+  #     unknown. A single KNOWN half at or above the ceiling is already PROOF
+  #     there is no headroom, whatever the other half turns out to be — so it
+  #     refuses. Nothing known says nothing, so it admits. The extension is
+  #     byte-identical to the `max(five, seven) < SWAP_CEILING` this replaced:
+  #     for a fully-measured row `max < C` is exactly "neither half >= C", for a
+  #     wholly-unknown row both spellings admit, and for a half-known row the
+  #     old `: "${five:=0}"` made the score the known half anyway. What changes
+  #     is only WHICH function it depends on, and that is the whole point: it
+  #     frees `_limit_score` to be strict about rank without taking gpt's only
+  #     exclusion with it (`{"five": null, "seven": 99}` must stay excluded, and
+  #     _gpt_status's entry guard at ccd:1254 is this function).
   #
   # An earlier version of this comment claimed the three sites could not be
   # aligned without breaking something. That was true only of the alignment it
@@ -12069,9 +12302,11 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   # Placement's fallback is the one deliberate exception, and it is a fallback
   # rather than a ranking: prefer measured accounts; if NONE is measured, take
   # the first home-able account in roster order.
-  local w="$1" sc
-  sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
-  [[ "$sc" -lt "$SWAP_CEILING" ]]
+  local w="$1" five seven
+  five=$(_limit_field "$w" five 0); seven=$(_limit_field "$w" seven 0)
+  [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
+  [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
+  return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
 _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
@@ -12092,10 +12327,25 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
   # never dies — it runs inside the long-lived supervise loop.
-  local project pps prc cross_cur="" cross_home=""
+  local project pps prc cvrc cross_cur="" cross_home=""
   project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
-  _crosspool_valid "$id" "$pps" "$cur"  && cross_cur=1
-  _crosspool_valid "$id" "$pps" "$home" && cross_home=1
+  # UNDECIDABLE IS NOT A DECISION — FOR THE MARKER TOO, NOT ONLY FOR THE TAG
+  # (C1, D-1991). rc 2 says the marker's own record could not be read, so this
+  # function cannot say whether a deliberate crossing stands. Taking that as
+  # "no crossing" is what made a transient EACCES destructive from HERE: with
+  # `cross_cur` empty, `force=pool` below turns a wrong-pool current account
+  # into a MUST-LEAVE and the session is relocated off the account an operator
+  # deliberately crossed it onto — while `_crosspool_tick`, on the same tick
+  # and the same input, correctly left the marker standing. Preserving the
+  # marker and moving the session anyway is not half a fix; it is the same bug
+  # wearing the fix's clothes. The remedy is the one the tag already gets, one
+  # paragraph down: answer nothing, and let the next tick try again.
+  _crosspool_valid "$id" "$pps" "$cur"; cvrc=$?
+  [[ "$cvrc" -eq 2 ]] && return 0
+  [[ "$cvrc" -eq 0 ]] && cross_cur=1
+  _crosspool_valid "$id" "$pps" "$home"; cvrc=$?
+  [[ "$cvrc" -eq 2 ]] && return 0
+  [[ "$cvrc" -eq 0 ]] && cross_home=1
   # UNDECIDABLE IS NOT A DECISION. An unreadable or malformed tag means nobody
   # decides: answer nothing. The caller (`_auto_swap_check`) marks a strand
   # when the pane is hard-blocked and this returns empty; an undecidable tag
@@ -12185,11 +12435,41 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # session every time the fleet has gone quiet (see the ruling on `_avail`).
     # Eligibility must survive; only preference changes.
     #
-    # 100 is exact, not a large-ish number. `_avail` above has already rejected
-    # every candidate scoring >= SWAP_CEILING (98), so a measured candidate
-    # that reaches this line is at most 97 and always outranks an unmeasured
-    # one — while 100 is still far below `best_score`'s 999 sentinel, so an
-    # unmeasured candidate is picked the moment it is the only one left.
+    # And unmeasured now has a SECOND source, routine rather than exceptional:
+    # since the provenance fix a candidate whose window has merely ended reads
+    # unmeasured too — EITHER window, since `_limit_score` answers "" unless
+    # both halves are measured. It stays eligible and ranks 100 here, which is
+    # the correct treatment — its old inferred 0 made it the preferred rescue
+    # destination on a fleet where nothing had run on it, which is the magnet
+    # this comment already describes, arriving by a third route. `_avail` above
+    # still admits it, and admits it for a reason that no longer depends on this
+    # function's score: it refuses only a KNOWN half at the ceiling.
+    #
+    # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
+    # — not one. This paragraph used to cite `_avail` alone ("has already
+    # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
+    # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
+    # does not reject on a SCORE any more, it refuses only a KNOWN half at the
+    # ceiling. The derivation that actually holds:
+    #
+    #   1. A candidate reaches the comparison below carrying a NUMBER only if
+    #      `_limit_score` returned one, and it returns one only when BOTH
+    #      halves are measured.
+    #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
+    #
+    # Both halves known and both < 98 makes their max <= 97, so every SCORED
+    # candidate outranks 100 — while 100 is still far below `best_score`'s 999
+    # sentinel, so an unmeasured candidate is picked the moment it is the only
+    # one left.
+    #
+    # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
+    # the split it is eligible and SCORELESS at the same time — one half at 40,
+    # the other's window merely ended: `_avail` admits it (no known half at the
+    # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
+    # tier at 100, NOT in the measured one, and that is correct — one known half
+    # bounds the truth only from below. A reader sent to `_avail` for the <= 97
+    # claim would conclude the opposite.
+    #
     # Unmeasured candidates tie with each other at 100 and the strict `<` takes
     # the first in pool order, i.e. roster declaration order, the same
     # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
@@ -12201,6 +12481,57 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # unknown one that might have been emptier. That is the same trade
     # placement already makes, and the alternative is the magnet.
     sc=$(_limit_score "$cand"); : "${sc:=100}"
+    # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
+    # than at the `_account_ok` line above, which is an unconditional
+    # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
+    # finds no candidate is left wedged on the dead account with no swap.log
+    # line, no swapblocked stamp and no notification — silent in every channel
+    # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
+    # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
+    # preference and must never cost eligibility.
+    #
+    # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+    # This was `sc=100` — the same number as the `:=100` above — until fix round
+    # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
+    # TELEMETRY, because telemetry is written by a session rendering its
+    # statusline and nothing can run there. So its last sample ages out
+    # (`_limit_field` retracts a window that has ended), `_limit_score` answers
+    # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
+    # entire effect was the few hours in which a condemned lane still carried
+    # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
+    # marked lane earlier in roster order BEAT a healthy quiet one at the strict
+    # `-lt` below — a rescue landing on the account we have measured as dead.
+    # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
+    # tick of wrongness.
+    #
+    # THE FULL ORDER, derived rather than asserted — the derivation above
+    # applies unchanged, and this number extends it by exactly one:
+    #
+    #   measured  <= 97   both halves known (`_limit_score`) and neither at the
+    #                     ceiling (`_avail`) — see the two facts above
+    #   unmeasured   100   eligible, no score: never measured, window ended, or
+    #                     half-measured
+    #   auth-dead    101   eligible, and measured as not authenticating
+    #   sentinel     999   `best_score`'s initial value
+    #
+    # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+    # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
+    # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+    # is still far below the 999 sentinel, so a condemned candidate is picked
+    # the moment it is the only one left — eligibility is untouched by this
+    # change, only preference. That is the same rule the `:=100` above obeys and
+    # the reason this line is an assignment and not a `continue`.
+    #
+    # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
+    # walk below now sorts candidates into two: home-able ones compete for
+    # `best`, overflow ones for `obest`, and the brackets are consulted in
+    # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+    # condemned lane ranks last IN ITS OWN bracket rather than being pushed
+    # out of the rotation: a condemned overflow lane still beats no
+    # destination at all, which is the same eligibility-vs-preference rule
+    # the paragraph above derives. The two changes compose because one sets
+    # the score and the other only chooses which bracket reads it.
+    _authdead "$cand" && sc=101
     if _is_home_able "$cand"; then
       [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
     else
@@ -12228,8 +12559,29 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
-  local project pps prc crossed="" new aff_verb=auto-home
-  wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
+  local project pps prc crossed="" ctrc wrc new aff_verb=auto-home
+  # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
+  # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
+  # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
+  # affinity arm's verb, `_swap_target`'s per-account questions, the strand
+  # marker's account. Acting on `""` is how the crossing expirer came to log
+  # `moved off <acct>` for a move nothing observed — but that was one symptom,
+  # not the defect, and guarding the expirer alone left every other consumer
+  # reading the same fold. So the measurement happens ONCE, here, at the only
+  # point where all of them are still downstream.
+  #
+  # `-n` AS WELL AS rc 0, because rc alone is not enough: a zero-byte `.wrapper`
+  # is READ SUCCESSFULLY and says nothing, so an rc-only guard passes it
+  # straight through to the arms that treat `""` as an account. Read failure
+  # and read-nothing are different conditions with the same remedy here.
+  #
+  # Skipping the tick costs nothing: it is idempotent and runs every 5 seconds,
+  # so a transient failure is retried almost immediately, and a permanent one
+  # is a broken row that an operator must fix — not one this tick should keep
+  # making moves about.
+  wrapper=$(_reg_read "$id" wrapper); wrc=$?
+  [[ "$wrc" -eq 0 && -n "$wrapper" ]] || { _tick_undecidable "$id" wrapper; return 0; }
+  home=$(_home_measured "$id") || { _tick_undecidable "$id" home; return 0; }
   # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
   # THIS READ happens once, here, and BEFORE the cooldown gates below — that
   # is not the same claim as "once per tick": `_project_pool_state` runs
@@ -12241,7 +12593,29 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # wait 900 s behind a gate that exists to stop swap storms, and it is
   # idempotent the moment `.home` is back in pool.
   project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
-  _crosspool_tick "$id" "$wrapper" "$home" "$pps" && crossed=1
+  # THREE OUTCOMES, NOT TWO (C1, D-1988). `_crosspool_tick` answers rc 2 —
+  # "nobody can say" — when an input it would have ended the crossing on could
+  # not be measured. `&& crossed=1` reads that as "no crossing stands", which
+  # is the one reading that is unsafe: the re-seed below would then clobber
+  # `.home` off exactly the undecidable state the tick just refused to act on,
+  # finishing by hand the destructive act the tick declined. So the code is
+  # kept and the RE-SEED below is gated on the POSITIVE answers only.
+  #
+  # ONE DECISION, NOT TWO — corrected at review, because the sentence above
+  # used to say "the two decisions below" and the second one is not gated.
+  # `aff_verb` (`grep -n 'aff_verb=auto-pool' ccd/ccd`) still reads `crossed`,
+  # so rc 2 leaves it on the two-way path. That is deliberate and it is not the
+  # same kind of decision: the re-seed CHANGES the row, while `aff_verb` only
+  # LABELS a relocation that is happening anyway because `$wrapper` failed the
+  # pool rule — which is true whether or not a crossing could be read. Gating
+  # it too would add a guard no case in this tree can red, and an unpinned
+  # guard is what this wave is trying to stop shipping.
+  _crosspool_tick "$id" "$wrapper" "$home" "$pps"; ctrc=$?
+  # THE ROW'S VERDICT IS WHAT DECIDES THE VOICE, not any one read: this is the
+  # only place that has all three answers, so the stamp is set and cleared here
+  # rather than inside the reads (D-1995).
+  if [[ "$ctrc" -eq 2 ]]; then _tick_undecidable "$id" crosspool; else _tick_decided "$id"; fi
+  [[ "$ctrc" -eq 0 ]] && crossed=1
   # ONE BIT, TWO DECISIONS WITH DIFFERENT SUBJECTS — DELIBERATE, review round
   # 1 (Minor 2). `_swap_target` asks `cross_cur`/`cross_home` SEPARATELY,
   # because it answers a per-account question — "may THIS account serve as
@@ -12270,7 +12644,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `_ws_seed_home` — that never clobbers, and clobbering is the entire point.
   # A row with no `.home` file at all (pre-2026-07-28) gets one written here
   # for the first time.
-  if [[ -z "$crossed" ]]; then
+  # `-eq 1` rather than `-z "$crossed"`: re-seed only on a MEASURED "no crossing
+  # stands". On rc 2 both are false, so the row is left exactly as it is until
+  # the input becomes readable again — the same standing-still the undecidable
+  # project tag already produces one level down.
+  if [[ "$ctrc" -eq 1 ]]; then
     _pool_ok "$home" "$pps"; prc=$?
     if [[ "$prc" -eq 1 ]]; then
       new=$(_ws_least_loaded "$project")
@@ -13117,7 +13495,17 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
-    0) rm -f "$REG/$id.stopped" ;;
+    #
+    # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
+    # that came up on `$wrapper` is proof that account's credential
+    # authenticates — the second of the three owners §A.6 gives that marker,
+    # beside the probe's own 403 and an operator `rm`. Deliberately NOT the
+    # `cmd_start` shape one screen down, which clears `swapblocked` on the
+    # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
+    # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
+    # ("waiting for login") and rc 5 ("hard-blocked at startup … or lost auth")
+    # are the opposite of evidence and are pinned to keep the marker.
+    0) rm -f "$REG/$id.stopped" "$REG/$wrapper-authdead" ;;
     # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.
@@ -14424,7 +14812,7 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   return 0
 }
 
-_crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing marker names one of them
+_crosspool_valid() {   # id pool-state account... -> 0 valid / 1 none / 2 the record cannot be read. A VALID crossing marker names one of them
   # RULING 8 (spec §5.7.2). `$REG/<id>.crosspool` records a DELIBERATE crossing
   # and is meant to switch off the pool machinery's reaction to it — the
   # must-leave force, the home re-seed, the home guard, and `cmd_swap`'s
@@ -14481,17 +14869,37 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # stats and never a `cat` — `_swap_target` calls this once for `cur` and
   # once for `home` per decision, every row, every 5-second tick, and each
   # call returns at the `-e` line.
-  local id="$1" pps="$2" raw ts pool acct a
+  local id="$1" pps="$2" raw rrc ts pool acct a
   shift 2
-  [[ -e "$REG/$id.crosspool" ]] || return 1
-  raw=$(_reg_get "$id" crosspool)
+  # `|| -L` (D-1994). A bare `-e` is a FOURTH read of this path, and it kept
+  # exactly the fold `_reg_read` was added to remove: a dangling symlink or a
+  # symlink loop at the marker answered "no crossing stands" here while
+  # `_reg_read` calls the same path unreadable. Under the caller added by C1
+  # that answer is no longer merely permissive — rc 1 is the one value that
+  # positively ENABLES the home re-seed, so the cheap gate could authorise the
+  # clobber the expensive one refuses.
+  [[ -e "$REG/$id.crosspool" || -L "$REG/$id.crosspool" ]] || return 1
+  raw=$(_reg_read "$id" crosspool); rrc=$?
+  # C1, AND THE REASON THE DISTINGUISHING READ BELONGS HERE RATHER THAN IN THE
+  # EXPIRER. This is the ONLY place in this file that reads the marker's own
+  # bytes, so a third answer put here is inherited by every consumer at once:
+  # `_crosspool_tick` (the expirer), `_swap_target`'s two per-account
+  # questions, and `cmd_swap`'s in-unit refusal. rc 2 means "the record could
+  # not be read", which is NOT "no crossing stands" — and answering 1 there was
+  # enough, on its own, to undo a deliberate crossing from a call site that
+  # never touches the marker: `_swap_target` read `cross_cur=""`, set
+  # `force=pool`, and relocated the session while the expirer was correctly
+  # leaving the marker alone (D-1991).
+  [[ "$rrc" -eq 2 ]] && return 2
+  # rc 1 — it went away between the `-e` above and this line. Nothing stands.
+  [[ "$rrc" -eq 1 ]] && return 1
   read -r ts pool acct <<<"$raw" || :
   [[ -n "${pool:-}" && "$pps" == "named $pool" ]] || return 1
   for a in "$@"; do [[ -n "$a" && "$a" == "${acct:-}" ]] && return 0; done
   return 1
 }
 
-_crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing stands; else END it
+_crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 none does / 2 nobody can say
   # THE MARKER MUST EXPIRE, or a stale crossing is indistinguishable from a
   # live one and the pool machinery stays switched off on that row for ever.
   # Evaluated once per tick, BEFORE the re-seed consults it.
@@ -14527,43 +14935,86 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing sta
   # end every live crossing on the fleet box inside one tick, irreversibly,
   # with no writer able to put the marker back.
   #
-  # THE ASSURANCE DOES NOT REACH THE OTHER INPUTS TO THIS SAME DECISION, and
-  # said nothing about them until now. `_reg_get` is `cat … 2>/dev/null`
-  # (`grep -n '^_reg_get()' ccd/ccd`): it folds ABSENT, UNREADABLE and EMPTY
-  # into one `""`. That is precisely the overloaded null the ring rules forbid
-  # at a seam — inherited here, not introduced here — and two consequences of
-  # it are live in this function today:
-  #   - the `crosspool` read below reaches `[[ -z "${pool:-}" ]]` and then
-  #     `rm -f` for a marker record that is merely UNREADABLE as readily as
-  #     for one that is empty: an undecidable input ending a crossing, which
-  #     is the exact thing the paragraph above refuses to do for the tag. The
-  #     reason string it logs says "unreadable" for both, because at this
-  #     seam they are the same value;
-  #   - `cur`/`home` arrive from the caller's own `_reg_get` of `.wrapper`
-  #     and `.home`, so a failed read of either presents as `""`,
-  #     `_crosspool_valid`'s account clause cannot match `""`, and the `else`
-  #     arm below logs `moved off <acct>` — a move that never happened.
-  # PROSE ONLY IN THIS ROUND, deliberately. The code fix is a WAVE 3 CARRY
-  # (the merge review's C1) and it carries an EMBARGO: no `--cross-pool` verb
-  # runs on the live fleet until it lands, so there is no marker to lose in
-  # the meantime. Do not "fix" this by widening the gate above without a
-  # measured case per input — what this needs is a read that DISTINGUISHES
-  # absent from unreadable (`server/src/io.ts`'s measured reads are the
-  # pattern), not another predicate over the same collapsed value.
-  local id="$1" cur="$2" home="$3" pps="$4" raw ts pool acct reason
-  [[ -e "$REG/$id.crosspool" ]] || return 1
-  _crosspool_valid "$id" "$pps" "$cur" "$home" && return 0
+  # THE ASSURANCE NOW REACHES THE OTHER INPUTS TOO — C1, LANDED 2026-09-08,
+  # and the EMBARGO IT CARRIED IS LIFTED. What stood here was prose describing
+  # a gap: `_reg_get` is `cat … 2>/dev/null` (`grep -n '^_reg_get()' ccd/ccd`),
+  # folding ABSENT, UNREADABLE and EMPTY into one `""`, and this function acted
+  # on that fold twice — deleting a marker whose record it merely could not
+  # read, and logging `moved off <acct>` for a current account it had never
+  # measured. `_reg_read` (rc 0 read / 1 absent / 2 unreadable) is the
+  # distinguishing read the carry asked for, and the three guards below spend
+  # it. The rule they enforce is the SAME one the project tag already had, one
+  # paragraph up: undecidable is not a decision, so the marker survives and
+  # this function answers rc 2 rather than picking an arm.
+  #
+  # ONE MEASURED CORRECTION (D-1986) to what this comment used to say, because
+  # the old sentence made the `home` arm look like the `cur` arm and it is not:
+  # "a failed read of either presents as `""`" was true of `cur` and FALSE of
+  # `home`. `home` reaches this function through `_home_for`
+  # (`grep -n '^_home_for()' ccd/ccd`), which is `[[ -n "$h" ]] && echo "$h" ||
+  # _id_wrapper "$1"` — so an unreadable `.home` presents not as `""` but as
+  # the account encoded in the id prefix, a real account name that no read
+  # produced. That is worse than an empty string in BOTH directions: a
+  # substituted name cannot match the marker when it should, and it CAN match
+  # when it should not — and the second direction is the one a guard inside
+  # this function could never have closed, because `_crosspool_valid` above
+  # consumes `home` four lines before any guard here would run. Both directions
+  # are closed by measuring `home` at the top of `_auto_swap_check` instead
+  # (`grep -n '^_home_measured()' ccd/ccd`), which is why no `.home` guard
+  # appears in this function at all. `ccd-crosspool.test.ts` pins the
+  # substitution itself, and pins that an ABSENT `.home` still decides.
+  #
+  # STILL FOLDED, DISCLOSED NOT CLOSED (D-1990) — AND THE FIRST VERSION OF THIS
+  # PARAGRAPH WAS WRONG, which is why it is spelled out rather than summarised.
+  # It said the residual was "the same two fields" and that every other read of
+  # them "refuses or ranks, it does not delete a marker". Both halves were
+  # false: the marker RECORD was a third folded input, and `_swap_target`'s use
+  # of it set `force=pool` — a RELOCATION, not a refusal. Those are closed now
+  # (D-1991), and `.wrapper`/`.home` are measured before any consumer sees them
+  # (D-1992).
+  #
+  # WHAT IS ACTUALLY LEFT is `.project`. `project=$(_reg_get "$id" project)`
+  # feeds `_project_pool_state` at four sites (`grep -n 'pps=$(_project_pool_state'
+  # ccd/ccd`), and that function answers `untagged` for an empty argument — on
+  # purpose, for the pre-2026-07-28 rows that have no `.project` at all. So an
+  # UNREADABLE `.project` reads as "this project is in no pool" and silently
+  # lifts the pool constraint for that row. Same class, different field, wider
+  # than this carry: REPORTED to the coordinator, not folded in here (D-2000).
+  local id="$1" cur="$2" home="$3" pps="$4" raw rrc cvrc ts pool acct reason
+  # `|| -L` for the same reason `_crosspool_valid`'s own pre-gate carries it
+  # (D-1994) — the two must agree about which paths exist.
+  [[ -e "$REG/$id.crosspool" || -L "$REG/$id.crosspool" ]] || return 1
+  _crosspool_valid "$id" "$pps" "$cur" "$home"; cvrc=$?
+  [[ "$cvrc" -eq 0 ]] && return 0
+  # UNDECIDABLE, decided by the one reader of the record (C1). The marker
+  # survives untouched and this function says so, rather than picking an arm.
+  [[ "$cvrc" -eq 2 ]] && return 2
   [[ "$pps" == named* || "$pps" == untagged ]] || return 1
-  raw=$(_reg_get "$id" crosspool)
+  raw=$(_reg_read "$id" crosspool); rrc=$?
+  # A SECOND READ, FOR THE REASON ONLY — the verdict above was
+  # `_crosspool_valid`'s. It is measured too, because the record can turn
+  # unreadable between the two reads and an arm below would then name a
+  # condition nothing observed. rc 1 is the same race one line up: the record
+  # went away, so there is nothing left to end and nothing to log.
+  [[ "$rrc" -eq 2 ]] && return 2
+  [[ "$rrc" -eq 1 ]] && return 1
   read -r ts pool acct <<<"$raw" || :
-  if [[ -z "${pool:-}" ]]; then
-    # The MARKER's own record is what is broken here — empty or unreadable
-    # — not the project tag: `$pps` is already known to be a DECIDED state
-    # by this line (the gate above). Falling into "project pool is now
-    # $pps" would be a LIE whenever `$pps` happens to be exactly the pool
-    # this crossing was made under — the operator would go hunting for a
-    # retag that never happened.
-    reason="marker record is unreadable"
+  if [[ -z "$raw" ]]; then
+    # The MARKER's own record is what is broken here — not the project tag:
+    # `$pps` is already known to be a DECIDED state by this line (the gate
+    # above). Falling into "project pool is now $pps" would be a LIE whenever
+    # `$pps` happens to be exactly the pool this crossing was made under —
+    # the operator would go hunting for a retag that never happened.
+    #
+    # EMPTY AND MALFORMED BOTH END IT (D-1987), and both are correct to end
+    # on, for the reason the first paragraph of this function gives: a record
+    # that names no pool can never be validated by any later tick, so keeping
+    # it would switch the pool machinery off on this row for ever. They get
+    # SEPARATE reasons because they send an operator to different places —
+    # a zero-byte write versus bytes that do not parse.
+    reason="marker record is empty"
+  elif [[ -z "${pool:-}" ]]; then
+    reason="marker record is malformed"
   elif [[ "$pps" != "named $pool" ]]; then
     reason="project pool is now $pps"
   else
@@ -14573,6 +15024,31 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing sta
   echo "$(date '+%F %T') crosspool-ended $id: $reason" >> "$REG/swap.log"
   return 1
 }
+
+# THE VOICE rc 2 WOULD OTHERWISE NOT HAVE (D-1995). C1 turned a destructive
+# answer into a standing-still, which is the right trade only if the standing
+# still is OBSERVABLE — and every `return 2` path writes nothing at all. The
+# code before C1 was wrong and LOUD: it emitted one `crosspool-ended <id>:
+# marker record is unreadable` line, misnamed but naming the row and putting an
+# operator on the file. Silence is a worse failure than a wrong reason, because
+# nothing in ccd ever re-chmods a registry file: a permanently unmeasurable
+# field parks the row for ever, its crossing never expiring and its home never
+# re-seeded, with no artifact anywhere on the box. `$REG/swap.log` is the only
+# window onto this machinery.
+#
+# FIRST-WRITE-WINS, NOT A COOLDOWN. The condition repeats every 5 seconds, so a
+# plain `echo` is 720 lines an hour per stuck row. The stamp field makes it one
+# line per EPISODE: `_tick_decided` removes it the moment the row decides
+# again, so a transient hiccup logs once and a permanent one logs once, and the
+# next real episode logs again. Same shape as `_strand_mark`'s notify debounce,
+# and the `-e` test is first so a healthy row writes nothing at all.
+_tick_undecidable() {   # id field — one swap.log line per episode of standing still
+  [[ -e "$REG/$1.tickstuck" ]] && return 0
+  _reg_set "$1" tickstuck "$(date +%s) $2"
+  echo "$(date '+%F %T') tick-undecidable $1: $2 could not be measured — deciding nothing" \
+    >> "$REG/swap.log"
+}
+_tick_decided() { [[ -e "$REG/$1.tickstuck" ]] && rm -f -- "$REG/$1.tickstuck"; return 0; }
 
 _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
   # One dot-free registry field, so `_reg_purge` (`grep -n '^_reg_purge()'
@@ -14648,6 +15124,14 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   [[ "$prc" -eq 2 ]] \
     && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
   if [[ "$prc" -eq 1 ]]; then
+    # `if` TAKES rc 2 AS FALSE, AND THAT IS THE RIGHT ANSWER HERE (C1) — but it
+    # is right for a reason, not by luck, so it is said out loud. This is the
+    # only one of `_crosspool_valid`'s three consumers where "the marker cannot
+    # be read" must FAIL SHUT rather than stand still: an operator is asking to
+    # move a session out of pool right now, a standing crossing is the only
+    # thing that would let it through unflagged, and a crossing nobody can read
+    # is not one this verb may act on. Same rule as the undecidable TAG four
+    # lines up, same outcome — refuse, and say so.
     if _crosspool_valid "$id" "$pps" "$target"; then
       : # the operator already crossed to this account and the crossing stands
     elif [[ -n "$cross" ]]; then

@@ -2761,9 +2761,20 @@ export interface AccountUsage {
   ts: number | null;
   fiveResetAt: number | null;   // epoch seconds the 5h window resets
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
-  fiveRolledOver: boolean;      // the 5h window reset; the 0 above is inferred, not measured
-  sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
+  fiveRolledOver: boolean;      // the 5h window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
+  sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on
+  /** The fleet host's account-health probe measured this account's credential
+   *  and it did not authenticate (`~/.cc-sessions/<wrapper>-authdead`).
+   *
+   *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it, on
+   *  `RosterWire.hidden`'s exact terms. A reader must test `=== true` and never
+   *  truthiness: a server built before this field omits it, and ABSENCE MEANS
+   *  "not condemned", so an older payload keeps rendering every account exactly
+   *  as it did. REQUIRED on this interface all the same, for `hidden`'s reason:
+   *  the route builds its rows field by field and the compiler is the only
+   *  thing that can catch a rebuild dropping one. */
+  authDead: boolean;
 }
 
 /** The account a new workspace would land on, projected server-side.

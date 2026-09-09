@@ -508,6 +508,32 @@
   color: var(--ink-tertiary);
   text-align: right;
 }
+/* The health probe's verdict, on the row rather than instead of it — a
+   condemned lane stays pickable (a measurement can be wrong, and the manual
+   swap it feeds accepts the target anyway), so the mark is the whole
+   affordance. Same muted tertiary ink and mono 2xs as `.acct-unknown` above,
+   which is the neighbour it shares the gauges column with. */
+.acct-condemned {
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  text-align: right;
+}
+/* Greying a condemned row's gauge fills is `.accounts-row[data-disabled='true']
+   .acct-fill`'s rule, one surface over, for its exact reason: nothing runs on
+   the lane to refresh its statusline, so a frozen crit-red bar keeps reading as
+   live pressure on an account the same row calls expired. Scoped to `.acct-list`
+   like every other picker-row rule in this block. */
+.acct-list .acct-row[data-disabled='true'] .limit-fill { background: var(--edge-subtle); }
+/* A picker with nothing to offer says which emptiness it is (SwapSheet's
+   `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
+   it should live meanwhile". Same treatment as `.proj-none`, the sibling
+   already doing this for the project step of the very same sheet. */
+.acct-none {
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  padding: var(--sp-4) var(--sp-1);
+}
 .acct-chev {
   flex: none;
   font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);

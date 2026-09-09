@@ -1,0 +1,40 @@
+[Unit]
+Description=Run the telemetry keepalive every 15 minutes (spec 2026-09-07 §C)
+[Timer]
+# `OnActiveSec=`, NOT `OnBootSec=`, and the difference is money (D-1981).
+#
+# `OnBootSec=` anchors to MACHINE BOOT. The only moment this timer is ever
+# first armed on the fleet host is a deploy — `deploy.sh agent`'s AGENT_CMD, or
+# `ccrc install`'s enable — and a box taking a deploy has been up for days, so
+# the boot-relative elapse point is already in the past and systemd starts the
+# oneshot AT ONCE, bounded only by AccuracySec. That is the wrong moment twice
+# over. `~/.ccrc/keepalive-state` is EMPTY on a first install, so the attempt
+# throttle (`ccd-telemetry-keepalive`'s own `lastAttempt` gate) skips nobody and
+# the pass is the largest this script will ever take — one `timeout 120 claude
+# -p` per idle measured account, all of it billed to the windows it exists to
+# measure. And it lands on top of `deploy.sh`'s supervisor sweep, which is at
+# that instant `try-restart`ing every `claude-session@*` unit on the box and
+# running `verify-service.sh` per unit.
+#
+# `OnActiveSec=` anchors to the moment THIS TIMER UNIT is activated instead. On
+# a boot that is the same thing to within a boot's worth of seconds — the user
+# manager's `timers.target` arms it there under linger — so the boot behaviour is
+# unchanged. On a deploy it is the ten minutes the number always claimed: long
+# enough for the sweep to finish and for every restarted supervisor's statusline
+# to re-stamp `~/.cc-limits`, which is what makes those accounts read FRESH and
+# be skipped rather than spent on. It is also the honest anchor for a UNIT IN THE
+# PER-USER MANAGER, which is what this is: that manager does not necessarily
+# start at boot at all, and `OnBootSec=` in it counts from a clock it was not
+# running on.
+#
+# `Persistent=` is not the knob for any of this and adding it would do nothing:
+# it only has an effect on timers configured with `OnCalendar=`.
+#
+# The sibling `ccd-account-health.timer` made the OPPOSITE call on purpose and
+# argues it at its own `OnBootSec=`; the asymmetry is that this one spends
+# tokens and that one spends a `curl`.
+OnActiveSec=10min
+OnUnitActiveSec=15min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

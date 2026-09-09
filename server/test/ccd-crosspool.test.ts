@@ -221,21 +221,462 @@ describe('an undecidable or unreadable record decides nothing, or lies', () => {
   // `_crosspool_tick`'s header shipped LOOKING covered — a green case whose
   // title claimed a condition its fixture could not produce.
   //
-  // The shipped log line still reads `marker record is unreadable` for BOTH
-  // conditions, and that is not a naming slip: `_reg_get` is
-  // `cat … 2>/dev/null`, so at this seam empty and unreadable ARE the same
-  // value and no reason string can tell them apart. Separating them needs a
-  // distinguishing read, which is the wave-3 carry (C1); the `chmod 000`
-  // marker case belongs to that fix, not to this round.
+  // C1 HAS LANDED, and this case is where it shows first. The shipped log line
+  // used to read `marker record is unreadable` for BOTH conditions, and that
+  // was not a naming slip: `_reg_get` is `cat … 2>/dev/null`, so at that seam
+  // empty and unreadable WERE the same value and no reason string could tell
+  // them apart. `_reg_read` (C1) tells them apart, so the reason is now the
+  // condition that actually held — and the two have OPPOSITE outcomes: an
+  // EMPTY record is permanently unusable and ends the crossing, an UNREADABLE
+  // one may be readable again next tick and must not.
   it("a marker whose OWN record is EMPTY ends with an honest reason, never a fabricated retag", () => {
     seedRow(); tagPool('demo', 'pool-a');
     h.sh(`_reg_set ${ID} crosspool ""; rm -f "$HOME/.cc-sessions/${ID}.lastswap"`);
     tick(QUIET);
     expect(h.reg(ID, 'crosspool')).toBeNull();
-    expect(swapLog()).toContain(`crosspool-ended ${ID}: marker record is unreadable`);
+    expect(swapLog()).toContain(`crosspool-ended ${ID}: marker record is empty`);
     expect(swapLog(), 'must not fabricate a retag the project pool never had')
       .not.toContain('project pool is now named pool-a');
   });
+
+  // The THIRD broken-record condition, which the fold could not name either: a
+  // record whose bytes were read whole and simply do not carry a pool token.
+  // `read -r ts pool acct <<<"1788888888"` leaves `pool` empty exactly as an
+  // empty record does, so before C1 this logged `unreadable` too — a third
+  // condition wearing the first one's name.
+  it('a MALFORMED marker record says so — the bytes were read and they name no pool', () => {
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} crosspool "1788888888"; rm -f "$HOME/.cc-sessions/${ID}.lastswap"`);
+    tick(QUIET);
+    expect(h.reg(ID, 'crosspool')).toBeNull();
+    expect(swapLog()).toContain(`crosspool-ended ${ID}: marker record is malformed`);
+    expect(swapLog(), 'must not fabricate a retag the project pool never had')
+      .not.toContain('project pool is now named pool-a');
+  });
+});
+
+describe('`_reg_read` — the distinguishing read C1 is built on', () => {
+  // Every arm of this helper gets a case of its own, INCLUDING the two that
+  // `_crosspool_tick` cannot reach through its own `-e` pre-gate. A guard no
+  // case can red is an unpinned guard, and this helper is the thing later
+  // callers will trust: its contract is pinned here, at the helper, not
+  // inferred from the one function that consumes it today.
+  const rc = (snippet: string): string => h.sh(`${snippet} >/dev/null; echo $?`);
+
+  it('a READABLE field answers the value, rc 0', () => {
+    seedRow();
+    expect(h.sh(`_reg_read ${ID} wrapper`)).toBe('claude');
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('0');
+  });
+
+  it('an EMPTY field is rc 0 with an empty value — NOT absent', () => {
+    // The distinction C1 buys, at its smallest: `_reg_get` answers `""` for
+    // both of these and `_crosspool_tick` used to end a crossing on either.
+    seedRow();
+    h.sh(`_reg_set ${ID} crosspool ""`);
+    expect(rc(`_reg_read ${ID} crosspool`)).toBe('0');
+    expect(h.sh(`_reg_read ${ID} crosspool`)).toBe('');
+  });
+
+  it('an ABSENT field is rc 1', () => {
+    seedRow();
+    expect(rc(`_reg_read ${ID} nosuchfield`)).toBe('1');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an UNREADABLE field is rc 2', () => {
+    seedRow();
+    const w = reg(`${ID}.wrapper`);
+    fs.chmodSync(w, 0o000);
+    try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
+    finally { fs.chmodSync(w, 0o644); }
+  });
+
+  it('a FIELD THAT IS A DIRECTORY is rc 2 — and this one works at every uid', () => {
+    // The root-safe way to build unreadability (D-1997). `cat` refuses a
+    // directory with EISDIR whoever runs it, so unlike `chmod 000` this case
+    // is not skipped for root — and `-e` stays TRUE, so a caller's `-e`
+    // pre-gate is still passed and the read is genuinely reached. A dangling
+    // symlink would not do: it fails `-e`, and the pre-gate would return first.
+    seedRow();
+    const w = reg(`${ID}.wrapper`);
+    fs.rmSync(w); fs.mkdirSync(w);
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('2');
+  });
+
+  // A MISSING `$REG` GETS NO CASE, AND THAT IS MEASURED RATHER THAN OVERLOOKED.
+  // `ccd` runs `mkdir -p "$REG"` at source time (`grep -n 'mkdir -p "\$REG"'
+  // ccd/ccd`), so by the time any function in it runs the directory is back:
+  // a test that renames it away measures rc 1 for a genuinely-absent field in a
+  // freshly-created registry, not the branch it meant to reach. The positive
+  // `-d && -x` pairing still covers it deliberately — `_project_pool_state`'s
+  // own paragraph is the normative statement of why an unreachable branch is
+  // still written to refuse, and it is not restated here (D-1996). The two
+  // anomalies that ARE reachable through that `mkdir -p` each have a case: a
+  // `$REG` that is a regular file (mkdir cannot convert it) and one that is
+  // unsearchable (mkdir succeeds and changes nothing).
+
+  it('a registry directory that is a REGULAR FILE is rc 2, not rc 1', () => {
+    // The other half of the positive `-d && -x` pairing: the single `! -x`
+    // conjunct this replaced was false here, so every field read ABSENT.
+    seedRow();
+    const dir = path.join(h.home, '.cc-sessions');
+    const moved = path.join(h.home, '.cc-sessions-moved');
+    fs.renameSync(dir, moved);
+    fs.writeFileSync(dir, 'not a directory');
+    try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
+    finally { fs.rmSync(dir); fs.renameSync(moved, dir); }
+  });
+
+  it('a DANGLING SYMLINK is rc 2, not rc 1 — it exists and cannot be read', () => {
+    // `-e` follows symlinks, so this is the case the `|| -L` arm exists for.
+    seedRow();
+    fs.symlinkSync('/nonexistent/target', reg(`${ID}.dangling`));
+    expect(rc(`_reg_read ${ID} dangling`)).toBe('2');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'an UNSEARCHABLE registry directory is rc 2 for every field — not rc 1', () => {
+      // The arm with the widest blast radius, and the one no caller can reach
+      // through a `-e` pre-gate: without it a single mode change on `$REG`
+      // would report every field on every row ABSENT, which is the fold this
+      // read exists to remove wearing its most convincing disguise.
+      seedRow();
+      const dir = path.join(h.home, '.cc-sessions');
+      fs.chmodSync(dir, 0o000);
+      try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
+      finally { fs.chmodSync(dir, 0o755); }
+    });
+});
+
+describe('C1 — the tick MEASURES its own inputs, so a transient failure never ends a crossing', () => {
+  // THE CARRY, CLOSED. `_crosspool_tick`'s own header named this gap in prose
+  // and shipped under an embargo: `_reg_get` is `cat … 2>/dev/null`, folding
+  // ABSENT, UNREADABLE and EMPTY into one `""`, and the arms that END a
+  // crossing could not tell a value they had measured from one they had not.
+  // `_reg_read` is the distinguishing read (rc 0 / 1 / 2) and the rule it
+  // enforces is the one the PROJECT TAG already had: UNDECIDABLE IS NOT A
+  // DECISION. A transient permission hiccup on `$REG` must not end a live
+  // crossing inside one tick, irreversibly, with no writer able to restore it.
+  //
+  // WHERE THE READS ACTUALLY LIVE, because a guard on the expirer alone does
+  // not close this: the marker's own bytes are read in exactly one place,
+  // `_crosspool_valid`, whose three consumers are the expirer, `_swap_target`
+  // and `cmd_swap`; and `cur`/`home` are read once at the top of the tick and
+  // consumed by every decision it makes. So the distinguishing read is spent
+  // at those two points, not at the arms downstream of them.
+  //
+  // `chmod 000` is the only technique that builds real unreadability and it
+  // cannot build it for root — hence `skipIf`, matching the project-tag case
+  // two describes up. The two ZERO-BYTE cases carry no `skipIf`: they need no
+  // permission trick, and they are the ones an rc-only guard lets through.
+
+  it.skipIf(process.getuid?.() === 0)(
+    'an UNREADABLE `.wrapper` never fabricates a move off the crossed account', () => {
+      // `cur` reaches the tick from `.wrapper`. Before C1 a failed read
+      // presented as `""`, `_crosspool_valid`'s account clause could not match
+      // it, and the tick logged `moved off claude-b` — a move that never
+      // happened, asserted from a read that never succeeded.
+      seedRow(); tagPool('demo', 'pool-a');
+      h.sh(`_reg_set ${ID} wrapper claude-b`);
+      crossed('pool-a', 'claude-b');
+      const w = reg(`${ID}.wrapper`);
+      fs.chmodSync(w, 0o000);
+      try { tick(QUIET); } finally { fs.chmodSync(w, 0o644); }
+      expect(String(h.reg(ID, 'crosspool'))).toMatch(/^\d{10} pool-a claude-b$/);
+      expect(swapLog(), 'the current account was never measured, so no move may be claimed')
+        .not.toContain('crosspool-ended');
+    });
+
+  it('a ZERO-BYTE `.wrapper` is read-nothing, not read-a-value — and decides nothing either', () => {
+    // THE CASE AN rc-ONLY GUARD LETS THROUGH, and the reason the tick tests
+    // `-n` as well as rc 0. This file is READ SUCCESSFULLY: `_reg_read` answers
+    // rc 0, so a guard that only asks "did the read succeed" passes it, and the
+    // empty value flows on into the arms that treat `""` as an account —
+    // reaching the same fabricated `moved off` the unreadable case reaches, by
+    // a different route and with every read reporting success (D-1993).
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');
+    fs.writeFileSync(reg(`${ID}.wrapper`), '');
+    tick(QUIET);
+    expect(String(h.reg(ID, 'crosspool'))).toMatch(/^\d{10} pool-a claude-b$/);
+    expect(swapLog()).not.toContain('crosspool-ended');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'an UNREADABLE `.home` never fabricates a move off the crossed account', () => {
+      // The `prefer`-shaped crossing: the marker records the HOME account, so
+      // `home` is the argument that has to match.
+      seedRow(); tagPool('demo', 'pool-a');
+      h.sh(`_reg_set ${ID} home claude-b`);
+      crossed('pool-a', 'claude-b');
+      const hf = reg(`${ID}.home`);
+      fs.chmodSync(hf, 0o000);
+      try { tick(QUIET); } finally { fs.chmodSync(hf, 0o644); }
+      expect(String(h.reg(ID, 'crosspool'))).toMatch(/^\d{10} pool-a claude-b$/);
+      expect(swapLog()).not.toContain('crosspool-ended');
+    });
+
+  it('an UNREADABLE `.home` — built the ROOT-SAFE way, so this one is never skipped', () => {
+    // The twin of the `chmod 000` case above, and the reason it exists: a root
+    // run skips every `chmod` case, and a suite that reports green while the
+    // whole mechanism is unpinned is worse than no suite (D-1997). A DIRECTORY
+    // in the field's place is refused by `cat` at every uid (EISDIR) and keeps
+    // `-e` true, so the read is genuinely reached rather than short-circuited.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} home claude-b`);
+    crossed('pool-a', 'claude-b');
+    const hf = reg(`${ID}.home`);
+    fs.rmSync(hf); fs.mkdirSync(hf);
+    tick(QUIET);
+    expect(String(h.reg(ID, 'crosspool'))).toMatch(/^\d{10} pool-a claude-b$/);
+    expect(swapLog()).not.toContain('crosspool-ended');
+  });
+
+  it('a ZERO-BYTE `.home` falls back like an absent one — the fallback is a DECIDED answer', () => {
+    // The other half of the `-n`/rc distinction, and the half that goes the
+    // OTHER way. An empty `.home` is not undecidable: `_home_for` has always
+    // answered `_id_wrapper` for it, a row that never had a `.home` is old
+    // rather than unmeasurable, and `_home_measured` must agree with
+    // `_home_for` on every decided input or the two disagree about one row.
+    // Here that fallback is `claude`, which is NOT the crossed account, so the
+    // crossing legitimately ends — what is asserted is that it ends for the
+    // MEASURED reason and names it.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} home claude-b`);
+    crossed('pool-a', 'claude-b');
+    fs.writeFileSync(reg(`${ID}.home`), '');
+    expect(h.sh(`_home_measured ${ID}`), 'empty is decided: the id-prefix fallback').toBe('claude');
+    tick(QUIET);
+    expect(swapLog()).toContain(`crosspool-ended ${ID}: moved off claude-b`);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    '`_home_for` answers a DIFFERENT account for an unreadable `.home`, not an empty one', () => {
+      // The measured correction C1 turned up (D-1986), and the reason
+      // `_home_measured` had to exist rather than an `-n` test being enough:
+      // `_home_for` is `h=$(_reg_get "$1" home); [[ -n "$h" ]] && echo "$h" ||
+      // _id_wrapper "$1"`, so a failed read does not present as `""` — it
+      // presents as the account encoded in the id prefix, a real account name
+      // that no read produced. A substituted name can also MATCH the marker
+      // and keep a crossing alive on a value nobody measured.
+      seedRow();
+      h.sh(`_reg_set ${ID} home claude-b`);
+      expect(h.sh(`_home_for ${ID}`), 'readable: the recorded home').toBe('claude-b');
+      const hf = reg(`${ID}.home`);
+      fs.chmodSync(hf, 0o000);
+      try {
+        expect(h.sh(`_home_for ${ID}`), 'unreadable: the id prefix, substituted silently')
+          .toBe('claude');
+        expect(h.sh(`_home_measured ${ID}; echo "rc=$?"`), 'the measured sibling refuses instead')
+          .toBe('rc=2');
+      } finally { fs.chmodSync(hf, 0o644); }
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'an UNREADABLE record stops `_swap_target` too — the marker survives AND the session stays', () => {
+      // THE HALF A GUARD ON THE EXPIRER ALONE DOES NOT REACH (D-1991).
+      // `_crosspool_valid` is the one reader of the marker's bytes, and
+      // `_swap_target` asks it the same question on the same tick. While the
+      // expirer correctly left the marker standing, `_swap_target` read "no
+      // crossing", set `force=pool` on a wrong-pool current account and
+      // relocated the session off the very account the crossing protects —
+      // preserving the marker and undoing the crossing anyway.
+      seedRow('claude-b'); tagPool('demo', 'pool-a');   // crossed onto pool-b
+      crossed('pool-a', 'claude-b');
+      writeLimits('claude', 5, 5);                      // a healthy pool-a destination
+      writeLimits('claude-a', 9, 9);
+      const marker = reg(`${ID}.crosspool`);
+      fs.chmodSync(marker, 0o000);
+      try { tick(QUIET); } finally { if (fs.existsSync(marker)) fs.chmodSync(marker, 0o644); }
+      expect(String(h.reg(ID, 'crosspool')), 'the marker survives an input nobody could read')
+        .toMatch(/^\d{10} pool-a claude-b$/);
+      expect(swapLog(), 'an unreadable record is not a reason to end a crossing')
+        .not.toContain('crosspool-ended');
+      expect(h.reg(ID, 'home'), 'and nothing re-seeds the home behind it').toBe('claude-b');
+      expect(swapLog(), 'no rehome may ride an undecidable crossing')
+        .not.toContain(` rehome ${ID}:`);
+      // AND THE HALF THE TICK CANNOT SHOW. A `.not.toContain('dispatch')` here
+      // would be ornamental: under QUIET the affinity arm needs a process
+      // status file reading `"status":"idle"` that no fixture in this suite
+      // plants, so it returns long before dispatching whatever `_swap_target`
+      // answered. Ask `_swap_target` directly instead — it is the function the
+      // guard is in, and its answer IS the relocation.
+      fs.chmodSync(marker, 0o000);
+      try {
+        expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+          'an unreadable marker is not a licence to relocate off the crossed account')
+          .toBe('');
+      } finally { fs.chmodSync(marker, 0o644); }
+      expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+        'readable again: the crossing is honoured and the session stays')
+        .toBe('');
+    });
+
+  it('a record that fails the FIRST read and succeeds on the second still decides nothing', () => {
+    // The tick reads the record TWICE — once through `_crosspool_valid` for the
+    // verdict, once for the reason — and the two can disagree, because a
+    // permission hiccup is a moment, not a state. Without the tick honouring
+    // `_crosspool_valid`'s rc 2, the second read wins: the record parses, its
+    // pool matches, and the `else` arm logs `moved off claude-b` for a crossing
+    // whose account clause was never evaluated at all. Shadowing `_reg_read` is
+    // the only way to build a flip deterministically; the harness already
+    // shadows `tmux` and `_dispatch_swap` the same way.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');                 // a VALID crossing, readable on disk
+    const FLIP = `
+      eval "_reg_read_orig() $(declare -f _reg_read | tail -n +2)";
+      _reg_read() {
+        if [[ "\${2:-}" == crosspool && ! -e "$HOME/flipped" ]]; then
+          : > "$HOME/flipped"; return 2
+        fi
+        _reg_read_orig "$@"
+      };
+    `;
+    const rc = h.sh(`${FLIP} _crosspool_tick ${ID} claude-b claude "named pool-a"; echo "rc=$?"`);
+    expect(rc, 'the first read failed, so nobody can say').toBe('rc=2');
+    expect(String(h.reg(ID, 'crosspool'))).toMatch(/^\d{10} pool-a claude-b$/);
+    expect(swapLog()).not.toContain('crosspool-ended');
+  });
+
+  it('the ABSENT halves of the two guards go OPPOSITE ways, and each way is pinned', () => {
+    // The diff's most-argued decision, and it was pinned by nothing: each guard
+    // could be flipped to the other's polarity with the suite green. ABSENT
+    // `.wrapper` REFUSES — "there is no `.wrapper`" is not evidence of a move —
+    // while ABSENT `.home` PROCEEDS, because `_home_for`'s `_id_wrapper`
+    // fallback is a decided answer for a row that never had one. Root-safe:
+    // absence is free to build.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');
+    fs.rmSync(reg(`${ID}.wrapper`));
+    tick(QUIET);
+    expect(String(h.reg(ID, 'crosspool')), 'no current account was measured: decide nothing')
+      .toMatch(/^\d{10} pool-a claude-b$/);
+    expect(swapLog()).not.toContain('crosspool-ended');
+  });
+
+  it('an ABSENT `.home` is DECIDED, so a retag still ends the crossing', () => {
+    // The opposite polarity, and the reason the two guards cannot share one.
+    // If ABSENT refused here too, a pre-2026-07-28 row with no `.home` would
+    // answer rc 2 on every tick for ever: its marker could never be expired by
+    // a retag or an untag, the crossing would be immortal and the pool
+    // machinery switched off on that row — the exact hazard
+    // `_crosspool_tick`'s own opening paragraph exists to prevent.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');
+    fs.rmSync(reg(`${ID}.home`));
+    tagPool('demo', 'pool-b');                       // the operator changed their mind
+    tick(QUIET);
+    expect(h.reg(ID, 'crosspool')).toBeNull();
+    expect(swapLog()).toContain(`crosspool-ended ${ID}: project pool is now named pool-b`);
+  });
+
+  it('the marker record ABSENT at the read logs nothing — a race is not a reason', () => {
+    // The record went away between the `-e` pre-gate and the read. rc 1 leaves
+    // `raw=""`, which without this arm falls into the EMPTY reason and writes
+    // `marker record is empty` about a record the tick never read — a
+    // fabricated line, which is the class C1 exists to remove. Shadowing
+    // `_reg_read` is what makes the race deterministic.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');
+    h.sh(`_reg_read() { [[ "\${2:-}" == crosspool ]] && return 1; cat -- "$HOME/.cc-sessions/$1.$2" 2>/dev/null; };
+          ${QUIET} _auto_swap_check ${ID}`);
+    expect(swapLog()).not.toContain('crosspool-ended');
+  });
+
+  it('a DANGLING SYMLINK marker stops `_swap_target` too — the pre-gate is shared, so it must agree', () => {
+    // `_crosspool_valid` has its OWN `-e` pre-gate, and the tick's second
+    // measured read masks a `-L` missing from it — but `_swap_target` and
+    // `cmd_swap` call the predicate directly and have no such second read. For
+    // them a bare `-e` answers "no crossing stands" for a path `_reg_read`
+    // calls unreadable, and `force=pool` relocates the session off it (D-1994).
+    seedRow('claude-b'); tagPool('demo', 'pool-a');
+    crossed('pool-a', 'claude-b');
+    writeLimits('claude', 5, 5);
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker);
+    fs.symlinkSync('/nonexistent/target', marker);
+    expect(h.sh(`_crosspool_valid ${ID} "named pool-a" claude-b; echo "rc=$?"`)).toBe('rc=2');
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+      'a marker path nobody can measure is not a licence to relocate').toBe('');
+  });
+
+  it('a marker path that is a DANGLING SYMLINK decides nothing — and no re-seed rides it', () => {
+    // The `-e` pre-gate used to answer "no crossing stands" for a path
+    // `_reg_read` calls unreadable (D-1994), and under C1's caller that answer
+    // is the one value that positively ENABLES the home re-seed. So the cheap
+    // gate could authorise the clobber the expensive one refuses.
+    seedRow('claude-b'); tagPool('demo', 'pool-a');
+    crossed('pool-a', 'claude-b');
+    writeLimits('claude', 5, 5);
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker);
+    fs.symlinkSync('/nonexistent/target', marker);
+    tick(QUIET);
+    expect(h.reg(ID, 'home'), 'an unmeasurable marker path is not a licence to re-seed')
+      .toBe('claude-b');
+    expect(swapLog()).not.toContain(` rehome ${ID}:`);
+  });
+
+  it('standing still is SAID — once per episode, not once per tick', () => {
+    // C1 traded a destructive answer for a standing-still, and that trade is
+    // only sound if the standing-still is observable (D-1995). Nothing in ccd
+    // ever re-chmods a registry file, so an unmeasurable field parks the row
+    // for ever; `$REG/swap.log` is the operator's only window onto it. One
+    // line per EPISODE — a plain echo here would be 720 an hour per stuck row.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} wrapper claude-b`);
+    crossed('pool-a', 'claude-b');
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);          // uid-independent unreadability
+    tick(QUIET, 3);
+    expect(logLines('tick-undecidable'), 'three ticks, one line').toHaveLength(1);
+    expect(swapLog()).toContain(`tick-undecidable ${ID}: crosspool could not be measured`);
+    // …and the stamp clears the moment the row decides again, so the NEXT
+    // episode is audible too rather than being swallowed by the first.
+    fs.rmdirSync(marker);
+    crossed('pool-a', 'claude-b');
+    tick(QUIET);
+    expect(h.reg(ID, 'tickstuck'), 'a decided row carries no stamp').toBeNull();
+  });
+
+  it('`_swap_target` stands still on an unmeasurable marker — the ROOT-SAFE twin', () => {
+    // Same mechanism as the `chmod 000` case above, built with a directory so
+    // it runs at every uid (D-1997). `_swap_target` is asked directly because
+    // its answer IS the relocation, and the affinity arm that would carry it
+    // needs a process status file no fixture in this suite plants.
+    seedRow('claude-b'); tagPool('demo', 'pool-a');
+    crossed('pool-a', 'claude-b');
+    writeLimits('claude', 5, 5);
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+      'an unreadable marker is not a licence to relocate off the crossed account')
+      .toBe('');
+    fs.rmdirSync(marker);
+    crossed('pool-a', 'claude-b');
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+      'readable again: the crossing is honoured and the session stays').toBe('');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    '`_crosspool_valid` itself answers rc 2 — the third answer every consumer inherits', () => {
+      seedRow(); tagPool('demo', 'pool-a');
+      crossed('pool-a', 'claude-b');
+      const marker = reg(`${ID}.crosspool`);
+      fs.chmodSync(marker, 0o000);
+      try {
+        expect(h.sh(`_crosspool_valid ${ID} "named pool-a" claude-b; echo "rc=$?"`))
+          .toBe('rc=2');
+      } finally { fs.chmodSync(marker, 0o644); }
+      expect(h.sh(`_crosspool_valid ${ID} "named pool-a" claude-b; echo "rc=$?"`),
+        'readable again: it answers the question')
+        .toBe('rc=0');
+    });
 });
 
 /** The self-swap fixture: `tmux display-message` answers with this session's

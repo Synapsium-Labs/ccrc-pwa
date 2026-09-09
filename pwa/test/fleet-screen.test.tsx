@@ -233,7 +233,7 @@ describe('FleetScreen', () => {
   // rendered no strip.
   it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false }],
+      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
       projected: { wrapper: 'claude', score: 0 },
       roster: [],
     });
@@ -944,7 +944,7 @@ describe('AccountsStrip', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
-        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false },
+        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
       ],
       // gpt is not home-able, so the projection names an Anthropic account
       // regardless of what telemetry exists — see `projectHome` in limits.ts,

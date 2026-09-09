@@ -33,7 +33,7 @@ const stubFetch = (body: unknown, status = 502): void => {
  *  route this blanket stub answers still gets the bare `'{}'` 200, which is
  *  fine for a POST action that only needs to succeed. `/api/accounts` is
  *  different: `SwapSheet` mounts under every `SessionActionsSheet` and polls
- *  it via `useDisabledWrappers` whenever the sheet is open, so a bare `{}`
+ *  it via `useAccountUsage` whenever the sheet is open, so a bare `{}`
  *  here answered `roster: undefined` — a wire shape the server never sends
  *  (fix round 1: the guards this motivated should be a production boundary
  *  check, not load-bearing for the suite). */
@@ -112,7 +112,7 @@ describe('actions', () => {
     render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
     // SwapSheet is mounted (hidden) alongside every SessionActionsSheet and
-    // polls /api/accounts on its own effect (useDisabledWrappers), so the
+    // polls /api/accounts on its own effect (useAccountUsage), so the
     // restart call is no longer necessarily the first fetch recorded — find
     // it by the id it must carry, rather than assume its position.
     await waitFor(() =>
@@ -313,7 +313,7 @@ describe('hold and release', () => {
     released = [];
     // A fetch stub that RECORDS hold/release requests rather than merely
     // answering 200 — `stubFetch`'s blanket 502 above is the wrong shape
-    // here (SwapSheet's useDisabledWrappers polls /api/accounts on its own
+    // here (SwapSheet's useAccountUsage polls /api/accounts on its own
     // effect, mounted alongside every SessionActionsSheet, and that call
     // must not read as a hold/release failure).
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

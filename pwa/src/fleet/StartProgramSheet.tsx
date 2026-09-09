@@ -312,7 +312,7 @@ export function StartProgramSheet({
   // level (review fix round 1, Minor 2): without gating the poll, `/runs`
   // would ask `/api/accounts` every 20s whether or not the door is ever
   // tapped, the exact shape `useProjectedHome.ts`'s own docstring (citing
-  // `useDisabledWrappers`) warns against.
+  // `useAccountUsage`) warns against.
   const projected = useProjectedHome(open);
 
   const [slug, setSlug] = useState('');

@@ -1,5 +1,6 @@
-// Task 10 — lifecycle UI: NewSessionSheet (account rows from the fleet store
-// with live limits; account+project selection arms a confirm that posts the
+// Task 10 — lifecycle UI: NewSessionSheet (account rows with their limits off
+// GET /api/accounts — the one source for an account-level fact, see
+// `useAccountUsage`; account+project selection arms a confirm that posts the
 // exact body), SwapSheet (excludes the current wrapper, suggests the least
 // loaded, posts the target through a QuickConfirm), the stop flow (QuickConfirm
 // fires api.stop only on confirm), and the header overflow menu ("Change
@@ -93,10 +94,11 @@ const storeWith = (sessions: FleetSession[]): FleetStore => {
 const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   wrapper: 'claude', five: 0, seven: 0, ts: null,
   fiveResetAt: null, sevenResetAt: null,
-  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
-/** Stubs GET /api/accounts — the endpoint useDisabledWrappers polls. */
+/** Stubs GET /api/accounts — the endpoint `useAccountUsage` polls, and the
+ *  ONLY source either picker reads an account's numbers or eligibility from. */
 const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
     accounts,
@@ -118,19 +120,31 @@ const PROJECTS = {
 // — NewSessionSheet —
 
 describe('NewSessionSheet', () => {
-  it('renders all five account rows with labels and the fleet-store limits', () => {
+  // WAS "…and the fleet-store limits". The gauges no longer come off the live
+  // fleet frame: `FleetSession.limits` is `{five, seven}` with no provenance,
+  // and this sheet was already polling `GET /api/accounts`, which carries the
+  // same numbers PLUS the rollover flags that say whether a `0` was measured or
+  // merely inferred. One source per fact — see `useAccountUsage`.
+  it('renders all five account rows with labels and the polled account limits', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+    ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
 
     for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // Live limits ride the rows that have a session on that account…
-    expect(screen.getByText('62%')).toBeInTheDocument();
+    // The polled rows ride the accounts they were measured for…
+    expect(await screen.findByText('62%')).toBeInTheDocument();
     expect(screen.getByText('71%')).toBeInTheDocument();
     expect(screen.getByText('8%')).toBeInTheDocument();
     expect(screen.getByText('22%')).toBeInTheDocument();
-    // …and the accounts without one say so instead of faking a gauge.
+    // …and the accounts telemetry has never mentioned say so instead of faking
+    // a gauge. `readLimits` builds a row per `~/.cc-limits/*.json` plus any
+    // markered lane and nothing else, so an account that has never run has no
+    // row at all — exactly the state this renders.
     expect(screen.getAllByText(/limits unknown/)).toHaveLength(3);
   });
 
@@ -211,6 +225,86 @@ describe('NewSessionSheet', () => {
 
     expect(await screen.findByRole('button', { name: /team·alt/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /gpt/i })).not.toBeInTheDocument();
+  });
+});
+
+// STEP 1 ANSWERS THE ELIGIBILITY RULING THE SAME WAY THE SWAP PICKER DOES, and
+// that is a decision this suite states rather than an accident of the two
+// sheets sharing `AccountRow`. A swap is the RESCUE of a wedged session; this
+// starts a brand-new one, so "a rescue must always have a destination" does not
+// reach it directly. It reaches it by the fleet-side twin: `ws-add` is what
+// this sheet is a phone-shaped copy of, and `_ws_least_loaded` grew a
+// condemned-lane fallback tier ("letting it empty this function would let one
+// bad probe run wedge every `ws-add` on the box"), which `projectHome` mirrors.
+// Both of those are AUTOMATIC placement — the stricter setting — so a human
+// choosing on purpose cannot be the one barred. The full case is on
+// NewSessionSheet.tsx at the seam; these are the states it claims.
+describe('NewSessionSheet step 1 — the same eligibility ruling as the swap picker', () => {
+  it('offers and MARKS an auth-dead lane, and never lets it be suggested', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('sign-in expired on the fleet host'));
+    expect(row).toHaveAttribute('data-disabled', 'true');
+    // NewSessionSheet never passes `suggested`, so the tag is absent for a
+    // different reason than in SwapSheet — assert the pick instead, which is
+    // the fact this sheet actually owns.
+    fireEvent.click(row);
+    expect(await screen.findByText(/on team·alt — change/)).toBeInTheDocument();
+  });
+
+  it('ALL-CONDEMNED still offers every lane — one bad probe run cannot wedge a new session', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', authDead: true }),
+      acct({ wrapper: 'claude2', authDead: true }),
+      acct({ wrapper: 'claude-corp', authDead: true }),
+      acct({ wrapper: 'gpt', authDead: true }),
+      acct({ wrapper: 'claude-dev0', authDead: true }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    await waitFor(() =>
+      expect(screen.getAllByText('sign-in expired on the fleet host')).toHaveLength(5));
+    for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
+  });
+
+  it('an operator kill switch still removes the lane here too', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
+  });
+
+  it('says WHY it is empty when every lane is switched off — never a silent list', async () => {
+    // The wedge in its remaining reachable form. The old sheet rendered a bare
+    // `<div className="acct-list">` under "Pick the account it runs on".
+    stubAccounts([
+      acct({ wrapper: 'claude', disabled: true }),
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'gpt', disabled: true }),
+      acct({ wrapper: 'claude-dev0', disabled: true }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    expect(await screen.findByText(
+      'Every account is switched off on the fleet host — turn one back on from Accounts.',
+    )).toBeInTheDocument();
+    for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.queryByRole('button', { name: new RegExp(label) })).not.toBeInTheDocument();
+    }
   });
 });
 
@@ -335,7 +429,13 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
 // — SwapSheet —
 
 describe('SwapSheet', () => {
-  it('lists only the other accounts and marks the least loaded as suggested', () => {
+  it('lists only the other accounts and marks the least loaded as suggested', async () => {
+    // The numbers come off `GET /api/accounts`, not the fleet frame — that is
+    // the only source that says whether a `0` was measured or inferred.
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+    ]);
     render(
       <SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={makeFleet()} />,
     );
@@ -345,8 +445,9 @@ describe('SwapSheet', () => {
     for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // claude2 (8/22) is the least loaded of the accounts with known limits.
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
+    // claude2 (8/22) is the least loaded of the accounts with measured limits.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
   });
 
   it('confirming the move posts the target wrapper', async () => {
@@ -510,41 +611,49 @@ describe('SwapSheet', () => {
   // `server/src/fleet.ts` passes it through as a NON-null `limits` object, so
   // the unreadable account scored 0% and was recommended as the emptiest pool
   // — while its own gauges rendered '—'.
-  it('never suggests an account whose limits were not read — an unread window is not 0%', () => {
-    const fleet = storeWith([
-      fleetSession(),  // claude, the current account: excluded as a target
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
+  it('never suggests an account whose limits were not read — an unread window is not 0%', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),   // the current account: excluded as a target
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
       // The whole limits file failed to read: both windows unknown.
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: null, seven: null } }),
+      acct({ wrapper: 'claude-corp', five: null, seven: null }),
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
     expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
     // And it still says so where the reader can see it, rather than 0%.
     expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('—');
   });
 
-  it('never suggests on a HALF-read account either — max() of one known window is a lower bound', () => {
+  it('never suggests on a HALF-read account either — max() of one known window is a lower bound', async () => {
     // `{five: 3, seven: null}` scored 3 under `?? 0` and beat a measured 8,
     // while its unread 7-day window could have been at 99. The score is a
     // maximum; one window cannot produce it.
-    const fleet = storeWith([
-      fleetSession(),
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: 3, seven: null } }),
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude-corp', five: 3, seven: null }),
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
     expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
   });
 
-  it('suggests nobody at all when no account has both windows read', () => {
-    const fleet = storeWith([
-      fleetSession(),
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: null, seven: null } }),
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: null }),
+  it('suggests nobody at all when no account has both windows read', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: null, seven: null }),
+      // claude-corp has no row at all — telemetry has never mentioned it.
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    // Wait for the poll to land before asserting an ABSENCE, or this passes
+    // against the pre-poll state and measures nothing. claude2's row is the
+    // sentinel: it has a ROW with both windows unread, so it renders two `—`
+    // gauges, which no row renders before the poll arrives (they all say
+    // "limits unknown" until then).
+    expect(await screen.findAllByText('—')).toHaveLength(2);
     expect(screen.queryByText('suggested')).not.toBeInTheDocument();
     // Every target is still offered and still tappable — not scoring is not
     // hiding.
@@ -573,7 +682,7 @@ describe('SwapSheet', () => {
 
   it('does not poll /api/accounts while the sheet is closed', () => {
     // SwapSheet mounts unconditionally from both its callers (open only
-    // toggles the inner vaul Sheet), so without gating useDisabledWrappers on
+    // toggles the inner vaul Sheet), so without gating useAccountUsage on
     // `open` this would poll forever in the background, visible or not.
     const accounts = vi.spyOn(api, 'accounts');
     render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
