@@ -2900,7 +2900,8 @@ cmd_memory() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --apply) apply=1; shift ;;
-      *) _ccrc_usage_die "unknown argument: $1" ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
     esac
   done
   local h b slug d state n=0 forked=0
@@ -2910,7 +2911,7 @@ cmd_memory() {
       [ -d "$d" ] || continue
       slug=$(basename -- "${d%/}")
       case "$slug" in -tmp*) continue ;; esac
-      [ -e "${d}memory" ] || continue
+      [ -e "${d}memory" ] || [ -L "${d}memory" ] || continue
       state=$(_mem_state "$h" "$slug")
       n=$((n+1))
       [ "$state" = forked ] && forked=$((forked+1))
