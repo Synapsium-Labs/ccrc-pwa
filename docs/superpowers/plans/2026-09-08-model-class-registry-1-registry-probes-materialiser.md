@@ -4967,8 +4967,10 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     fs.writeFileSync(p, JSON.stringify(j, null, 2));
     // The beforeEach's `init` ran against a written catalogue, so the eighth
     // key is live before `rm` runs — this is the case that shows `rm` reaps
-    // it too, not just the seven keys that predate the §6.1 amendment.
-    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // it too, not just the seven keys that predate the §6.1 amendment. The
+    // default model's catalogue context (272000) is capped at 200000 (§6.1,
+    // amended 2026-09-08, Task 16c).
+    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
     expect(r.body['removed']).toEqual([
@@ -7403,6 +7405,13 @@ Create `deploy/litellm-config.template.yaml`:
 #
 # `mode: responses` is required by this provider, and it only parses STREAMED
 # responses — a non-streaming probe fails with "Unknown items".
+#
+# THERE ARE NO `[1m]` ALIASES IN THIS FILE, on purpose (amended 2026-09-08,
+# Task 16c): the suffix names a 1M belief that measured false on this surface
+# — the largest prompt ever accepted on gpt-5.6-sol was 196,341 tokens over
+# 2,339 transcripts, with 30 refusals past that wall. A `/model <id>[1m]`
+# must fail loudly at LiteLLM instead of routing a request Claude Code
+# believes has room it does not.
 model_list:
 # ccrc:model-list
 litellm_settings:
@@ -7449,30 +7458,46 @@ describe('the shipped template', () => {
     expect(TEMPLATE).toContain('drop_params: true');
     expect(TEMPLATE).toContain('master_key: os.environ/LITELLM_MASTER_KEY');
   });
+
+  it('carries the note explaining why there is no [1m] alias (Task 16c fix round 1, Important 2)', () => {
+    expect(TEMPLATE).toContain('THERE ARE NO `[1m]` ALIASES IN THIS FILE');
+  });
 });
 
 describe('renderLitellmConfig', () => {
   const rendered = (): string => renderLitellmConfig(TEMPLATE, CODEX);
-
-  it('emits one entry per VISIBLE model and its [1m] alias, and nothing for hidden ones', () => {
+  // The two negatives below are scoped to the GENERATED block (Task 16c fix
+  // round 1, Important 2): a whole-file `not.toMatch(/\[1m\]/)` would trip on
+  // the template's own header note, the same way the sibling `reasoning` ban
+  // is already scoped in `carries NO reasoning key` above it.
+  const modelListBlock = (): string => {
     const out = rendered();
+    return out.slice(out.indexOf('model_list:'), out.indexOf('litellm_settings:'));
+  };
+
+  it('emits one entry per VISIBLE model and NO [1m] alias, for any model, and nothing for '
+    + 'hidden ones (§6.3, amended 2026-09-08, Task 16c)', () => {
+    // A `/model <id>[1m]` believes the client has a 1M window no measured wall
+    // supports (§6.1's amendment above); LiteLLM now refuses that name loudly
+    // instead of routing the request to a real entry with the wrong window.
+    const out = rendered();
+    expect(modelListBlock()).not.toMatch(/\[1m\]/);
     for (const id of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
       'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']) {
       expect(out, id).toContain(`  - model_name: ${id}\n`);
-      expect(out, `${id}[1m]`).toContain(`  - model_name: ${id}[1m]\n`);
       expect(out, id).toContain(`litellm_params: {model: chatgpt/${id}}`);
     }
     expect(out).not.toContain('gpt-reserve');
     expect(out).not.toContain('codex-auto-review');
   });
 
-  it('is 14 entries for today\'s catalogue — seven visible, each twice', () => {
-    expect(rendered().split('\n').filter((l) => l.startsWith('  - model_name: '))).toHaveLength(14);
+  it('is 7 entries for today\'s catalogue — one per visible model, no [1m] alias', () => {
+    expect(rendered().split('\n').filter((l) => l.startsWith('  - model_name: '))).toHaveLength(7);
   });
 
   it('gives every entry mode: responses — the provider requires it', () => {
     expect(rendered().split('\n').filter((l) => l.includes('model_info: {mode: responses}')))
-      .toHaveLength(14);
+      .toHaveLength(7);
   });
 
   it('emits NO reasoning key, for any model', () => {
@@ -7544,6 +7569,15 @@ Expected: FAIL with `Failed to resolve import "../../shared/litellm.mjs"`.
 // account's catalogue, and lacked four of the nine models the backend
 // advertises. A hand-kept list of somebody else's catalogue is a list that is
 // wrong the day after it is written.
+//
+// WHY THERE IS NO `[1m]` ALIAS (amended 2026-09-08, Task 16c). A fleet-host
+// measurement found the catalogue's advertised context is not the usable one:
+// the largest prompt ever accepted on gpt-5.6-sol, over 2,339 transcripts, was
+// 196,341 tokens, against an advertised 272000/872000, with 30 refusals past
+// that wall. The backend has no such NAME — the removed alias mapped to the
+// real id all along; the client's 1M window BELIEF was the lie (2026-07-26).
+// The generator stopped emitting it, so `/model <id>[1m]` fails at LiteLLM
+// with an invalid model name instead.
 
 /** The one line the template reserves for the generated entries. Its own line,
  *  exactly once: a marker that appeared twice would make the destination
@@ -7567,11 +7601,15 @@ const YAML_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
 /**
  * `(templateText: string, catalogue: Catalogue) => string`
  *
- * One `chatgpt/<id>` entry per VISIBLE model and one for its `[1m]` alias —
- * Claude Code appends that suffix to render a 1M context window and the backend
- * has no such name, so the suffixed name has to map back (`infra/handoff/
- * litellm-config.yaml`'s own note). Hidden models are excluded, matching what a
- * `"catalogue"` discovery list offers (§4.2, decision 6).
+ * One `chatgpt/<id>` entry per VISIBLE model, and NO `[1m]` alias (§6.3,
+ * amended 2026-09-08, Task 16c): a fleet-host measurement found the
+ * catalogue's advertised context is not the usable one (§6.1's amendment —
+ * 272000/872000 advertised, 196,341 the largest prompt ever accepted, 30
+ * refusals past that wall), so a `[1m]` name would route a request Claude
+ * Code believes has 1M of room to a backend with no such name; a `/model
+ * <id>[1m]` now fails at LiteLLM with an invalid model name, loudly, instead.
+ * Hidden models are excluded, matching what a `"catalogue"` discovery list
+ * offers (§4.2, decision 6).
  *
  * NO `reasoning` KEY, for any model. Effort has exactly one owner — the shim
  * (§6.4) — so config-versus-request precedence inside LiteLLM never decides
@@ -7604,11 +7642,9 @@ export function renderLitellmConfig(templateText, catalogue) {
         `model id ${JSON.stringify(m.id)} is not safe to write as an unquoted YAML scalar, so this `
         + 'catalogue cannot be rendered. Nothing was written.');
     }
-    for (const name of [m.id, `${m.id}[1m]`]) {
-      entries.push(`  - model_name: ${name}`);
-      entries.push('    model_info: {mode: responses}');
-      entries.push(`    litellm_params: {model: chatgpt/${m.id}}`);
-    }
+    entries.push(`  - model_name: ${m.id}`);
+    entries.push('    model_info: {mode: responses}');
+    entries.push(`    litellm_params: {model: chatgpt/${m.id}}`);
   }
   return [...lines.slice(0, at[0]), ...entries, ...lines.slice(at[0] + 1)].join('\n');
 }
@@ -7633,7 +7669,7 @@ Expected: PASS, exit 0.
 - [ ] **Step 7: Measured mutation check — hidden models stay out of the config**
 
 Change `const visible = catalogue.models.filter((m) => !m.hidden);` to `const visible = catalogue.models;`. Run `cd server && npx vitest run test/litellm-render.test.ts`.
-Expected: two cases red — `emits one entry per VISIBLE model and its [1m] alias, and nothing for hidden ones` and `is 14 entries for today's catalogue — seven visible, each twice`. Restore and re-run; expected PASS.
+Expected: two cases red — `emits one entry per VISIBLE model and NO [1m] alias, for any model, and nothing for hidden ones (§6.3, amended 2026-09-08, Task 16c)` and `is 7 entries for today's catalogue — one per visible model, no [1m] alias`. Restore and re-run; expected PASS.
 
 - [ ] **Step 8: Measured mutation check — the YAML-safety gate**
 
@@ -7749,9 +7785,23 @@ describe('ccrc models litellm', () => {
     expect(r.code).toBe(0);
     expect(oneObject(r)['changed']).toBe(true);
     const yaml = fs.readFileSync(configPath(), 'utf8');
-    expect(yaml).not.toContain('reasoning');
+    // Scoped to the GENERATED block, not the whole file — the shipped
+    // template's own header comment (carried verbatim) legitimately says
+    // "reasoning" explaining why there is none; `litellm-render.test.ts`'s
+    // own template-level case already bans a literal `reasoning:` key
+    // anywhere, including in a comment.
+    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toContain('reasoning');
     expect(yaml).toContain('  - model_name: gpt-6-astra');
-    expect(yaml).toContain('  - model_name: gpt-6-astra[1m]');
+    // No `[1m]` alias in the GENERATED block (§6.3, amended 2026-09-08, Task
+    // 16c; scoped in fix round 1 — the template's own header comment, carried
+    // verbatim, now legitimately says `[1m]` explaining why there is none, so
+    // a whole-file ban would fail on that prose, same as the `reasoning` ban
+    // above). A fleet-host measurement found the catalogue's advertised
+    // context is not the usable one, so the generator stops emitting a name
+    // that would tell Claude Code it has 1M of room — the backend has no such
+    // NAME (the removed alias mapped to the real id all along); the client's
+    // window BELIEF was the lie (2026-07-26).
+    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toMatch(/\[1m\]/);
     expect(yaml).not.toContain('gpt-reserve');
   });
 
