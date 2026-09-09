@@ -1308,3 +1308,69 @@ most.
 413 on a 10,549-byte review. The right shape is a tight ranked body plus the full detail as an ABSOLUTE
 -path artifact, which is what shipped — every verdict and its reproduction in the artifact, the ranking
 and the argument in the body.
+
+## 2026-09-09 — round 2 verified: three defects introduced, and an S7 arc worth three entries
+
+Seven lenses on opus over `74a50164`, 45 findings, each handed to a sonnet skeptic told to kill it:
+**30 CONFIRMED, 14 PARTLY, 1 REFUTED.** 52 agents. I re-derived the top three myself before relaying,
+and one changed shape when I did.
+
+### The headline is live, and it is the ordinary row
+
+The round's own new pool-undecidable arm **defeats the debounce D-1995 exists for.** `_tick_decided`
+(`:12745`) removes `$REG/<id>.tickstuck`; the new `_tick_undecidable "$id" pool` (`:12853`) debounces on
+that file's presence. On a row whose pool tag is undecidable but whose crossing read decided, every
+tick clears the stamp and re-writes it: **720 swap.log lines and 720 registry write-cycles per hour per
+row**, into an unrotated file, firing on a HEALTHY quiet pane.
+
+Three lenses found it. What I added by checking reachability myself is that it is worse than they
+said: `_crosspool_tick`'s first line is `[[ -e "$REG/$id.crosspool" || -L … ]] || return 1`, so on any
+row with **no crossing marker — every row on the box — `ctrc` is 1 and the `else` branch runs.** This is
+not a double fault. It is the ordinary row plus one bad tag, and one bad tag on a shared project storms
+every session on that project.
+
+And the comment three lines above it — *"this is the only place that has all three answers, so the
+stamp is set and cleared here rather than inside the reads (D-1995)"* — is falsified by the same
+commit's new setter 108 lines below. **The sentence naming the invariant and the line breaking it
+shipped together.**
+
+### The S7 arc — three layers, and each layer was right to exist
+
+1. I filed S7: an un-debounced `tmux capture-pane` per tick. Every mechanical claim true.
+2. The worker refuted it by **widening the measurement boundary from the function to the loop** —
+   `_auto_compact_check` runs in the same tick line and already captures on such a row. I confirmed that
+   premise myself and accepted the refutation.
+3. The verification round measured D-2162 and found **the refuting measurement is itself false for five
+   of seven trip shapes.** "10 -> 20, not 0 -> 10" holds only when the WHOLE registry is unreadable; when
+   `.wrapper` alone is broken — the round's own listed trip shape — `lastcompact`/`lastswap` read fine,
+   the compact lane returns at its 1800s cooldown with no capture, and the new lane's capture is the
+   tick's only one. 0 -> 1.
+
+**And S7 stays refuted anyway, on a ground nobody had stated:** the control case measures a HEALTHY row
+at 2 captures per tick, so an affected row never rises above the ordinary per-row cost. That closes it
+far more cleanly than the doubling claim.
+
+**Standing rule: a refutation is a claim and gets measured like any other.** I accepted layer 2 after
+verifying its premise and stopped there — the premise was true and the inference from it was not, which
+is this program's oldest failure shape and I walked into it while checking someone else's version of it.
+The entry that closes a finding is the one nobody re-reads; it earns the most scrutiny, not the least.
+This round's own D-2032 says "a count is a measurement or it is decoration" — and the entry written to
+close the round was decoration.
+
+### The pattern, now four rounds long
+
+**#67 introduced two defects, round 1 introduced two (S2, S3), round 2 introduced three (the storm, a
+constraint-lift, an unmutated guard).** That is not a competence problem — it is the standing cost of a
+dense change in a 5-second hot loop, and *every one of them was caught by measurement rather than by
+reading*. The mutation table and the adversarial lens are the only two things in this program that have
+ever caught this class. Neither is optional, and the count going up is evidence they work, not evidence
+they don't.
+
+Two more worth keeping: **D-2157's hang class is not closed** — `_authdead` still cats blind on the tick
+path at `:1098`, reached at `:12616`, and the file is `$REG/<account>-authdead`, not `$REG/<id>.<field>`,
+so `_reg_get`'s new guard does not cover it; no ccd code writes that path, which makes it exactly the
+un-owned file the safety argument assumes is safe, and a FIFO there wedges the tick for EVERY row that
+reaches the candidate loop. And **S3 traded a loud failure for a silent one**: a `.project` that is a
+FIFO used to wedge the supervisor visibly and now reads as untagged, which relocates across pools with
+no strand and no line — the constraint-lifting class arrived at from the other direction. The remedy is
+the measured reader at that site, not reverting the guard.
