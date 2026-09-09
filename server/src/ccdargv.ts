@@ -184,6 +184,10 @@ export const CCD_ARGV = {
    *  separate entry because the two words are separate grants in the agent's
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
   enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
+  /** `start`/`enable` with the crossing declared — see `swapCross` below for
+   *  why the flag leads and why these are separate entries. */
+  startCross:  (w: string, p: string, wd?: string) => argv(['start', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
+  enableCross: (w: string, p: string, wd?: string) => argv(['enable', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
   /** `surface` is REQUIRED, not defaulted — the caller always knows who is
    *  asking, and a default here would be how a second caller quietly
@@ -221,6 +225,21 @@ export const CCD_ARGV = {
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
+  /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
+   *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
+   *  route picks the entry, so both spellings are enumerated by
+   *  `whitelist-subset.test.ts` and neither can drift out of the agent's list.
+   *
+   *  THE FLAG LEADS, and the position is the safety property, not a style
+   *  choice. A trailing `--cross-pool` on an old ccd's `start <w> <p> <wd>`
+   *  binds as a silently-ignored fourth positional and `runCcdOr502` renders
+   *  its exit 0 as `200 {ok:true}` — the silent-success class this file already
+   *  paid for once with `stop --surface`. A LEADING one is refused by
+   *  `_is_valid_wrapper` on every ccd that has ever shipped, so the wrong guess
+   *  costs a loud 502. `capSupported(state, POOLS_CAP)` at the call site is the
+   *  gate that should stop it reaching an old box at all; this is the second
+   *  lock. */
+  swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
   wsAdd:     (p: string) => argv(['ws-add', p]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at

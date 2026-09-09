@@ -2335,6 +2335,7 @@ git commit -m "feat(pools): the tick relays the tags on change, off the listing 
 
 ---
 
+### Task 8 — DONE 2026-09-09 (2/2 mutations red)
 ### Task 8: `swapCross`, `startCross`, `enableCross` — a LEADING flag, enumerated
 
 **Files:**
