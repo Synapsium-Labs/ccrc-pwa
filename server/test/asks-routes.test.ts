@@ -607,3 +607,132 @@ describe('GET /api/asks', () => {
     expect((res.json() as { asks: unknown[] }).asks).toHaveLength(1);
   });
 });
+
+/**
+ * `POST /api/sessions/:id/ask` — the OPERATOR's own answer path, closing the
+ * hole Task 12 exists for (D-2171). Before this task the route never
+ * consulted the `asks` table at all: if the operator answered first, the
+ * row stayed `'held'` forever, the parent's later `/api/asks/:id/answer`
+ * call CAS'd it to `'answering'`, got refused by `answerAsk` (the menu was
+ * already gone), rolled back to `'held'` via `untakeAsk` — and the row never
+ * named the operator. Both routes serialize through the ONE per-session
+ * `KeyedQueue` (`askDeps`, shared, `server.ts`'s own comment on why), so
+ * exactly one digit ever reaches the pane regardless — this is a RECORD
+ * defect, not a safety one, and these tests prove the record.
+ *
+ * `routes.test.ts`'s own `POST /api/sessions/:id/ask` describe block — the
+ * pre-Task-12 suite, `makeApp` untouched, `deps.coord` left undefined the
+ * way most of that file's server instances are built — is the byte-for-byte
+ * proof that a coord-less box takes exactly its old path; it is NOT
+ * duplicated here on purpose (duplicating it would let the two drift).
+ * This file adds the coord-configured cases `routes.test.ts` has no way to
+ * build: a row held for the child, and a coord-configured box with no row
+ * at all (the "parentless path" the overwhelming majority of asks take).
+ */
+describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const post = (id: string, body: Record<string, unknown>) =>
+    app!.inject({ method: 'POST', url: `/api/sessions/${id}/ask`, payload: body });
+
+  /** Same shape as `/answer`'s own `setup` above: registry, a fresh waiting
+   *  hookstate for the child at `now`, and — the one difference — the
+   *  caller decides whether to mint a `held` row at all, since this route's
+   *  whole point is to behave identically whether one exists or not. */
+  const setup = async (now: number, mintRow: boolean, panes: (string | null)[] = [ASK_PANE]) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    seedHookstate(home, CHILD, CHILD_UUID, now);
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const { run, calls } = tmuxRunner(panes);
+    const w = await openApp(home, run, { notifyLog });
+    app = w.app;
+    const id = mintRow ? w.coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    }) : null;
+    return { coord: w.coord, id, now, calls };
+  };
+
+  it('records the operator as the answerer and locks the parent out', async () => {
+    const { coord, id } = await setup(Date.now(), true);
+    const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+
+    const row = coord.askById(id!)!;
+    expect(row.state).toBe('answered');
+    expect(row.answeredBy).toBe('operator');
+    expect(row.answer).toBe('Blue');
+
+    // The row is what the parent's own route CASes against — it must now
+    // find nothing to take.
+    const parent = await app!.inject({
+      method: 'POST', url: `/api/asks/${id}/answer`, headers: TOK,
+      payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
+    });
+    expect(parent.statusCode).toBe(409);
+    expect(parent.json()).toEqual({ ok: false, error: 'not-held' });
+
+    // D-2172's second durable record, same as the parent's own route writes
+    // on its own successful press.
+    const ev = coord.feedEvents(10).at(-1)!;
+    expect(ev.kind).toBe('ask');
+    expect(ev.sessionId).toBe(CHILD);
+    expect(ev.body).toContain('operator');
+    expect(ev.body).toContain('Blue');
+  });
+
+  it('a refused operator press leaves the row held, not stranded — and still refuses the client', async () => {
+    const { coord, id, calls } = await setup(Date.now(), true);
+    // Out of range for a 2-option question — `answerAsk` refuses before any
+    // keystroke, so the take must roll back to `held`.
+    const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [5] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'range' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(coord.askById(id!)!.state).toBe('held');
+    expect(coord.askById(id!)!.answeredBy).toBeNull();
+  });
+
+  it('when the parent already holds the row, the operator is never refused — the press proceeds on its own merits', async () => {
+    const { coord, id, now, calls } = await setup(Date.now(), true);
+    // The parent got there first: CAS the row to 'answering' directly — the
+    // same state `takeAskForAnswer` leaves it in mid-flight, before this
+    // route ever runs. The operator's own take must then lose the race.
+    const taken = coord.takeAskForAnswer(id!, now);
+    expect(taken.ok).toBe(true);
+
+    const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+
+    // The operator never took the row — left exactly where the parent's CAS
+    // put it, neither settled nor rolled back out from under the parent.
+    const row = coord.askById(id!)!;
+    expect(row.state).toBe('answering');
+    expect(row.answeredBy).toBeNull();
+  });
+
+  it('the parentless path (coord configured, no row for this child) is unaffected', async () => {
+    const { calls } = await setup(Date.now(), false);
+    const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+  });
+
+  it('a stale/mismatched askKey with a held row still refuses ask-mismatch, and the row stays held', async () => {
+    const { coord, id, calls } = await setup(Date.now(), true);
+    const res = await post(CHILD, { askKey: 'deadbeefdeadbeef', optionIndexes: [0] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(coord.askById(id!)!.state).toBe('held');
+  });
+});

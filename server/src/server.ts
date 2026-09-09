@@ -1336,6 +1336,31 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
   };
 
+  /**
+   * Task 12's own re-measurement, the exact shape `coord/routes.ts`'s
+   * `freshAskAt` uses for `/api/asks/:id/answer` — re-read fresh rather than
+   * trusting the row's own stored `askAt`, because comparing a value to
+   * itself would never catch the child having repainted an identical
+   * question (`askKey` hashes content only, D-2170). `-1` on anything
+   * unmeasurable — no session record, no measured identity, no readable
+   * hookstate — because `-1` can never equal a stored `askAt`
+   * (`insertAsk` always takes it from a real hookstate's `updatedAt`), so
+   * an unmeasurable read fails the CAS shut rather than proceeding on a
+   * guess. Not shared with `coord/routes.ts`'s copy: this task's brief
+   * scopes the change to this file alone, and the two already read through
+   * different `Deps` (`deps.io`/`deps.cfg` here, the coord module's own
+   * `deps` there) — see this route's own comment for why a lost CAS here
+   * never refuses the operator regardless of which unmeasurable arm fired.
+   */
+  const freshAskAtFor = async (childId: string): Promise<number> => {
+    const read = await readSessionRecord(deps.io, deps.cfg, childId);
+    if (!read.found) return -1;
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return -1;
+    const hs = await readHookState(deps.io, deps.cfg.registryDir, childId, identity.uuid, Date.now());
+    return hs === null ? -1 : hs.updatedAt;
+  };
+
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
   // sharing one token+attribution gate inline here would be a second copy of
@@ -1620,6 +1645,40 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
+  /**
+   * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
+   * lock-screen route every ask goes through, PWA and pre-emption lane
+   * alike. Before this task it never consulted the `asks` table at all: if
+   * the operator answered first, the row stayed `'held'`, the parent's
+   * later `POST /api/asks/:id/answer` CAS'd it to `'answering'`, got
+   * refused by `answerAsk` below (the menu was already gone), and rolled
+   * back to `'held'` via `untakeAsk` — asserting the question was STILL
+   * pre-emptible when it had in fact just been answered, and never naming
+   * who answered it. Both routes serialize through the ONE per-session
+   * `KeyedQueue` (`askDeps`, built once per server, above), so exactly one
+   * digit ever reaches the pane regardless of this route's own logic — this
+   * is a RECORD defect, not a safety one, and everything below is in
+   * service of the record alone.
+   *
+   * `heldAskFor` returning null — no row for this child, the overwhelming
+   * majority of asks — takes EXACTLY the pre-Task-12 path: one `answerAsk`
+   * call, same refusal shape, no added read once a row exists nowhere to
+   * look up (a coord-less box skips `heldAskFor` entirely). This is the
+   * single most important property of this route: it is not new behaviour
+   * layered onto the common case, it is new behaviour reached only on the
+   * lane's own minority path.
+   *
+   * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
+   * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
+   * `freshAskAtFor` above) BEFORE the keystroke: the row is the mutex, so
+   * taking it after the press would be decorative. Unlike the parent's own
+   * route, though, a LOST race here never refuses the caller — the operator
+   * is the authority this row exists to protect against being locked out
+   * of, not a third party mediated by it, so losing the CAS only means this
+   * request cannot claim the record; the press still goes through on its
+   * own merits (`answerAsk`'s own twelve guards are the only refusal that
+   * still applies).
+   */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -1629,8 +1688,89 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         !body.optionIndexes.every((n) => typeof n === 'number')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await answerAsk(askDeps, id, body.askKey, body.optionIndexes);
-    return res.ok ? res : reply.code(409).send(res);
+    const optionIndexes = body.optionIndexes as number[];
+    // Narrowed to `string` by the guard above, but that narrowing does not
+    // cross into `pressPlain`'s own closure below — a fresh `const` of the
+    // narrowed type carries it there.
+    const key = body.askKey;
+
+    // The plain press, byte-identical to every line this route ran before
+    // Task 12 existed — reached by BOTH "no coord configured" and "coord
+    // configured, nothing held for this child" below, deliberately the same
+    // call rather than two copies that could drift apart.
+    const pressPlain = async () => {
+      const res = await answerAsk(askDeps, id, key, optionIndexes);
+      return res.ok ? res : reply.code(409).send(res);
+    };
+
+    const coord = deps.coord;
+    if (coord === undefined) return pressPlain();
+    const held = coord.heldAskFor(id);
+    if (held === null) return pressPlain();
+
+    const taken = coord.takeAskForAnswer(held.id, await freshAskAtFor(id));
+    const res = await answerAsk(askDeps, id, key, optionIndexes);
+
+    if (!taken.ok) {
+      // Lost the CAS — another principal already holds the row (mid-answer)
+      // or the instance moved since the mint. Nothing was taken, so there is
+      // nothing to roll back and nothing this request may settle. The
+      // operator is never refused for this: the press above already ran on
+      // its own merits.
+      return res.ok ? res : reply.code(409).send(res);
+    }
+
+    if (!res.ok) {
+      // Refused before any keystroke — every `answerAsk` guard returns
+      // before its send loop, so no digit landed. Roll the row back to
+      // `held`, not stranded `answering`: the same rollback verb
+      // `/api/asks/:id/answer` uses on its own refused press.
+      if (!coord.untakeAsk(held.id)) {
+        console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
+          "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return reply.code(409).send(res);
+    }
+
+    // The digit landed. D-2172's second durable record — written BEFORE
+    // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
+    // `settleAsk` then throws, at least one durable trace of the answer
+    // survives. Independently optional, same as that route: a box with no
+    // `notifyLog` configured still answers the request.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: id,
+          title: 'question answered',
+          body: `operator answered ${id}'s question: ${held.question} → ` +
+                `${held.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    // GUARDED (Task 9's own lesson): the digit already landed above, so a
+    // failure to record it must never turn a successful press into a 500.
+    // The row is held exclusively by this request (CAS'd to `'answering'`
+    // above), so this is a genuine infra fault if it throws, not a lost
+    // race — but left unguarded it would strand the row `'answering'` and
+    // 500 a press that actually succeeded. The digit is pressed either way,
+    // so the response below is unconditional.
+    try {
+      coord.settleAsk(held.id, 'operator', held.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +
+        'the feed record above (if it landed) is the surviving audit trace');
+    }
+
+    return res;
   });
 
   app.get('/api/sessions/:id/commands', async (req, reply) => {
