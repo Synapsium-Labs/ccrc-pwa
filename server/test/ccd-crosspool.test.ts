@@ -1550,10 +1550,22 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     fs.rmSync(reg(`${ID}.project`), { force: true, recursive: true });
   });
 
-  it('and every input that answered before still answers the SAME', () => {
+  it('every input that answered before answers the same VALUE, and one rc moves', () => {
     // The widening adds no distinction and narrows none — that is what makes it
-    // safe across 135 call sites, and it is the half worth pinning, because it
+    // safe across 133 call sites, and it is the half worth pinning, because it
     // is the half a future reader will doubt.
+    //
+    // RETITLED AND RE-ASSERTED (#69 review round 3). This case was called "and
+    // every input that answered before still answers the SAME", and its own
+    // last assertion measured an input that does NOT: `cat /dev/null` exits 0,
+    // so `/dev/null` went rc 0 -> rc 1 when the type check landed. The message
+    // said it had been "refused on content before" — it was not refused at all.
+    // A case whose title certifies a history its own assertion contradicts is
+    // worse than no case: the next person to make `_reg_get`'s exit status mean
+    // something reads the title, trusts it, and reasons from a baseline the
+    // suite has already measured as false. What is TRUE, and is what licenses
+    // the change fleet-wide, is that the VALUE is unchanged for all five and no
+    // call site can see the status — pinned separately below.
     seedRow();
     const f = reg(`${ID}.project`);
     fs.writeFileSync(f, 'demo');
@@ -1564,9 +1576,313 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     expect(h.sh(`_reg_get ${ID} project; echo "rc=$?"`), 'a dangling symlink is empty').toBe('rc=1');
     fs.rmSync(f);
     fs.symlinkSync('/dev/null', f);
+    expect(h.sh(`printf '[%s]' "$(_reg_get ${ID} project)"`),
+      '/dev/null answers the empty string, exactly as it did before the type check')
+      .toBe('[]');
     expect(h.sh(`_reg_get ${ID} project; echo "rc=$?"`),
-      '/dev/null is a character device — refused on TYPE, as it was refused on content before')
+      '/dev/null is the ONE input whose rc moved: cat exits 0, the -f guard returns 1')
       .toBe('rc=1');
     fs.rmSync(f);
+  });
+
+  it('no call site can see that rc — which is what licenses the change, not the inputs', () => {
+    // THE MEASURED PROPERTY THAT REPLACES A FALSE ONE (#69 review round 3).
+    // `_reg_get`'s comment argued its own safety from the INPUTS ("rc 1 either
+    // way"), and one of the five named inputs falsifies it. The argument that
+    // actually holds is about the CALLERS, and unlike the other it is
+    // measurable: every invocation is a `$(…)` capture whose status nothing
+    // reads. Pin it here so the first rc-consuming caller reds this case and
+    // inherits the duty, rather than inheriting a sentence.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const lines = src.split('\n')
+      .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
+    expect(lines.length, 'the census moved; re-measure the comment too')
+      .toBeGreaterThan(100);
+    const outsideCapture = lines.filter((l) => !/\$\(_reg_get "/.test(l));
+    expect(outsideCapture, 'an invocation outside a capture COULD branch on the rc')
+      .toEqual([]);
+    const rcReaders = lines.filter((l) => /=\$\(_reg_get "[^)]*\)\s*(\|\||&&)/.test(l));
+    expect(rcReaders, 'an assignment followed by || or && branches on the rc')
+      .toEqual([]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// #69 REVIEW ROUND 3. Every case below reds on the round-2 tree, and each red
+// names the condition it is about — the discipline this series keeps failing
+// at is not "write a test", it is "write a test whose red is not about
+// something adjacent". Where a case discriminates against TWO wrong fixes
+// (round 2's storm and the obvious over-correction into silence), it says so.
+// ───────────────────────────────────────────────────────────────────────────
+
+const calls = (): string =>
+  fs.existsSync(path.join(h.home, 'ccd-calls'))
+    ? fs.readFileSync(path.join(h.home, 'ccd-calls'), 'utf8') : '';
+
+/** An UNREADABLE pool tag, built the root-safe way (D-1997): a directory is
+ *  refused with EISDIR at every uid, where `chmod 000` is not. */
+const undecidablePoolTag = (project = 'demo'): void => {
+  fs.mkdirSync(reg('pools'), { recursive: true });
+  const f = path.join(reg('pools'), project);
+  fs.rmSync(f, { force: true, recursive: true });
+  fs.mkdirSync(f);
+};
+
+describe('R1 — the tick takes ONE verdict, once every read has answered', () => {
+  it('an undecidable POOL TAG says it once per episode, not once per tick', () => {
+    // ROUND 2's REGRESSION, MEASURED. The verdict sat 108 lines above the pool
+    // answer and cleared the stamp on every tick where the CROSSING read
+    // decided — which is every row with no crossing marker, i.e. every row on
+    // the box. The `strc == 2` arm then re-wrote it. One `swap.log` append, one
+    // `_reg_set` (tmp write + atomic rename) and one `rm` per row per five
+    // seconds, for ever, into an unrotated file — and on a HEALTHY QUIET pane,
+    // because `_strand_mark` is gated on `hard_blocked` and the tick's voice
+    // is not. Reverting the verdict's move reds this at 5.
+    seedRow(); undecidablePoolTag();
+    tick(QUIET, 5);
+    expect(logLines('tick-undecidable'), 'once per episode, not once per tick')
+      .toHaveLength(1);
+    expect(logLines('tick-undecidable')[0], 'and it names the POOL, not the crossing')
+      .toContain('pool could not be measured');
+    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the field it is about')
+      .toContain('pool');
+    expect(noticeLines(), 'a quiet pane is announced to nobody').toHaveLength(0);
+  });
+
+  it('a CHANGED condition is said; the same one is not — and that discriminates both ways', () => {
+    // THE CASE THAT KILLS THE OBVIOUS OVER-CORRECTION. Moving the verdict alone
+    // is not enough: the debounce tested bare EXISTENCE, so the first condition
+    // of a row silenced every later one for as long as the stamp stood, and
+    // `ccd` never re-chmods a registry file. Here `.home` goes unreadable, then
+    // recovers onto an unreadable POOL TAG — two real episodes, one after the
+    // other. Round 2's tree reds this at 4 (the storm); a fix that only hoists
+    // the verdict reds it at 1 (the swallow), with the stamp still naming a
+    // condition that ended. Only a debounce that compares the FIELD gives 2.
+    seedRow(); undecidablePoolTag();
+    const home = reg(`${ID}.home`);
+    fs.rmSync(home, { force: true }); fs.mkdirSync(home);
+    tick(QUIET, 3);
+    expect(logLines('tick-undecidable'), 'episode one, said once').toHaveLength(1);
+    expect(String(h.reg(ID, 'tickstuck'))).toContain('home');
+
+    fs.rmSync(home, { recursive: true }); fs.writeFileSync(home, 'claude');
+    tick(QUIET, 3);
+    const said = logLines('tick-undecidable');
+    expect(said, 'the second episode is a DIFFERENT condition and gets its own line')
+      .toHaveLength(2);
+    expect(said[0], 'first the home').toContain('home could not be measured');
+    expect(said[1], 'then the pool — not a repeat of the home').toContain('pool could not be measured');
+    expect(String(h.reg(ID, 'tickstuck')), 'and the stamp follows the truth')
+      .toContain('pool');
+  });
+
+  it('the clear is gated on the verdict, not on `_swap_target` having answered', () => {
+    // MY OWN REGRESSION, CAUGHT BY THE SUITE WHILE THIS FIX WAS BEING WRITTEN.
+    // An `hrc` 2 row still reaches the bottom of the tick with a perfectly good
+    // destination — `_swap_target` skips the home arm and ranks the pool loop
+    // instead — so a clear placed there and NOT gated on the verdict retracts,
+    // every tick, the stamp the verdict just wrote. Five ticks, five lines: the
+    // storm being removed, reintroduced 100 lines below its own removal.
+    seedRow('claude-b'); plantNotify();
+    writeLimits('claude-b', 1, 1); writeLimits('claude', 1, 1);
+    const home = reg(`${ID}.home`);
+    fs.rmSync(home, { force: true }); fs.mkdirSync(home);
+    tick(QUIET, 5);
+    expect(logLines('tick-undecidable'), 'one line, whatever `_swap_target` found')
+      .toHaveLength(1);
+    expect(String(h.reg(ID, 'tickstuck'))).toContain('home');
+  });
+
+  it('and a row that decides clears the stamp, so the NEXT episode is said too', () => {
+    // The other half of the same guard: if the clear never fires, one episode
+    // per row per lifetime is all `swap.log` ever gets. Delete the clear and
+    // this reds at 1.
+    seedRow(); undecidablePoolTag();
+    tick(QUIET, 2);
+    expect(logLines('tick-undecidable')).toHaveLength(1);
+    fs.rmSync(path.join(reg('pools'), 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(reg('pools'), 'demo'), 'pool-a');
+    tick(QUIET, 2);
+    expect(h.reg(ID, 'tickstuck'), 'a decided row carries no stamp').toBeNull();
+    undecidablePoolTag();
+    tick(QUIET, 2);
+    expect(logLines('tick-undecidable'), 'a NEW episode of the same condition is said again')
+      .toHaveLength(2);
+  });
+});
+
+describe('R2 — the FIFO hang class, closed on the whole tick and not just one reader', () => {
+  it('`_authdead` answers instead of blocking, and answers the SAME for every input that answered', () => {
+    // NOT COVERED BY ROUND 2's `_reg_get` GUARD, and that is the finding: this
+    // path is the DOTLESS `$REG/<account>-authdead`, not `$REG/<id>.<field>`.
+    // Both call sites are inside ACCOUNT loops on the tick, so one bad file
+    // wedges every row that reaches the loop. `timeout` in a child shell is the
+    // assertion — a test for a hang must not be able to hang.
+    seedRow();
+    const f = reg('claude-authdead');
+    const rc = (): string =>
+      h.sh(`timeout 5 bash -c 'source "${CCD}"; _authdead claude'; echo "rc=$?"`);
+
+    execFileSync('mkfifo', [f]);
+    expect(rc(), 'a FIFO with no writer: answered, and rc 124 would mean it hung').toBe('rc=1');
+    fs.rmSync(f);
+    fs.symlinkSync('/dev/zero', f);
+    expect(rc(), 'an unbounded character device: answered').toBe('rc=1');
+    fs.rmSync(f);
+
+    // The inputs that answered before must answer identically, or this is a
+    // narrowing rather than a type check.
+    expect(rc(), 'absent').toBe('rc=1');
+    fs.writeFileSync(f, '');
+    expect(rc(), 'empty is not a verdict').toBe('rc=1');
+    fs.writeFileSync(f, 'garbage');
+    expect(rc(), 'a torn marker is not a verdict').toBe('rc=1');
+    fs.writeFileSync(f, '1700000000 lost-auth');
+    expect(rc(), 'a well-formed marker still condemns').toBe('rc=0');
+    fs.rmSync(f);
+    fs.mkdirSync(f);
+    expect(rc(), 'a directory').toBe('rc=1');
+    fs.rmSync(f, { recursive: true });
+  });
+
+  it('the session-status file is typed before it is grepped, on the compact lane', () => {
+    // `grep FILE` opens by name and blocks for ever on a FIFO, inside the same
+    // 5-second tick — the identical class, at a read `_reg_get`'s guard cannot
+    // see because it is not a registry field at all. Behaviour-identical for
+    // every input that answers today: absent, a directory and `/dev/null` all
+    // make grep produce nothing and the lane returns on the line below.
+    seedRow();
+    const pane = 'ctx ▓▓▓▓ 80%\\n❯ ';
+    const stubs = `
+      tmux() { case "\${1:-}" in
+                 capture-pane) printf '%s\\n' "${pane}" ;;
+                 list-panes)   echo ${PANE_PID} ;;
+               esac; return 0; };
+      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+    const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
+    fs.mkdirSync(sfDir, { recursive: true });
+    const sf = path.join(sfDir, `${PANE_PID}.json`);
+
+    execFileSync('mkfifo', [sf]);
+    const out = h.sh(
+      `timeout 5 bash -c 'source "${CCD}"; ${stubs} _auto_compact_check ${ID}'; echo "rc=$?"`);
+    expect(out, 'a FIFO status file: the lane returns, and rc 124 would mean it hung')
+      .toContain('rc=0');
+    expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('compact');
+    fs.rmSync(sf);
+  });
+});
+
+describe('R3 — an unreadable `.project` stops the tick, but ONLY where a pool could exist', () => {
+  it('a tagged box stands still and says so, instead of relocating across pools', () => {
+    // THE CONSTRAINT LIFT ROUND 2 OPENED. `_reg_get` folds UNREADABLE into
+    // `""`, `_project_pool_state` answers `untagged` for `""`, and `untagged`
+    // is the ONE state `_pool_ok` admits every account under — so an unreadable
+    // `.project` silently made a pool-tagged project unconstrained, and the
+    // next limit block relocated the session out of its pool with no strand and
+    // no line. Measured on the round-2 tree: `dispatch claude-demo -> claude-b`.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    writeLimits('claude', 99, 99); writeLimits('claude-b', 1, 1);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    tick(BLOCKED);
+    expect(calls(), 'no relocation off a tag nobody measured').not.toContain('dispatch');
+    expect(logLines('tick-undecidable')[0], 'and the standing still is SAID')
+      .toContain('project could not be measured');
+    expect(String(h.reg(ID, 'stranded')), 'the strand names the condition, not a pool census')
+      .toContain('project could not be measured');
+    expect(notices(), 'and the banner names the account that WAS measured')
+      .toContain('blocked on claude');
+    expect(notices(), 'never the placeholder for one that was not')
+      .not.toContain('<unmeasured>');
+  });
+
+  it('but an UNTAGGABLE box still rescues — the regression the obvious fix ships', () => {
+    // THE OPPOSITE DIRECTION, AND IT IS THE HALF THAT MAKES THIS SAFE.
+    // `$POOLS_DIR` has one `mkdir` in the tree, so until an operator tags a
+    // first project the directory is absent and `_project_pool_state` answers
+    // `untagged` for EVERY name — the unread field could not have changed the
+    // verdict, and refusing there would kill the limit rescue on every box that
+    // has not adopted pools to close a hole it does not have. That is the #67
+    // R1 shape: an inert defect traded for a live one. Drop the
+    // `_pool_untaggable` gate and this reds with no dispatch at all.
+    seedRow(); plantNotify();
+    expect(fs.existsSync(reg('pools')), 'this case is about a box with no pools').toBe(false);
+    writeLimits('claude', 99, 99); writeLimits('claude-b', 1, 1);
+    const p = reg(`${ID}.project`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    tick(BLOCKED);
+    expect(calls(), 'the rescue still fires').toContain('dispatch');
+    expect(h.reg(ID, 'stranded'), 'and nothing is stranded').toBeNull();
+  });
+});
+
+describe('R4 — the strand marker is a CURRENT-STATE claim and follows the truth', () => {
+  it('a changed cause replaces the marker; the log line and the epoch do not move', () => {
+    // ROUND 2's S2 FIX WAS HALF A FIX. It retracts a stale marker only through
+    // a HEALTHY pane — and when the unreadable field recovers while the pane
+    // stays blocked, `_strand_mark`'s `-e` debounce swallows the genuine strand
+    // that follows, so the operator reads a registry fault that lasted one tick
+    // for the rest of a five-hour window. The marker is what `registry.ts`
+    // ships VERBATIM to every surface.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    // EVERY account at the ceiling, because the finding is about a row with
+    // NOWHERE TO GO: leave one free and a destination exists, the tick clears
+    // the strand outright, and the case measures the clear instead of the
+    // frozen cause it is about.
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    h.sh(`_reg_set ${ID} stranded "1700000000 wrapper could not be measured"`);
+    tick(BLOCKED);
+    const mark = String(h.reg(ID, 'stranded'));
+    expect(mark, 'the cause the tick can now measure replaces the stale one')
+      .not.toContain('wrapper could not be measured');
+    expect(mark, 'and it is the real census, naming candidates by name')
+      .toContain('claude-a');
+    expect(mark.split(' ')[0], 'the episode keeps its own epoch — `stranded.at` is "since when"')
+      .toBe('1700000000');
+    expect(logLines('stranded'), 'the APPEND keeps its per-episode floor').toHaveLength(0);
+  });
+
+  it('an UNREADABLE marker is not rewritten, and leaks no shell error doing it', () => {
+    // THE FOLD THE OBVIOUS VERSION OF THIS FIX WALKS INTO: read the old cause
+    // with `_reg_get` and a marker that is a DIRECTORY reads `""`, which
+    // compares unequal to every cause, so the tick commits a write to a path it
+    // proved only `-e` for — one unsuppressed `mv: cannot overwrite directory`
+    // per stranded row per tick, for ever, from the two `_strand_mark` calls in
+    // `_auto_swap_check` that carry no redirect group. `_reg_read` stands still.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    const m = reg(`${ID}.stranded`);
+    fs.rmSync(m, { force: true }); fs.mkdirSync(m);
+    const r = shFail(`${BLOCKED} { for ((i=0;i<3;i++)); do _auto_swap_check ${ID}; done; } 2>"$HOME/tick-err"`);
+    expect(r.code, 'the tick still completes').toBe(0);
+    const errs = fs.readFileSync(path.join(h.home, 'tick-err'), 'utf8').split('\n').filter(Boolean);
+    expect(errs, 'nothing decided off an unmeasured read, so nothing to complain about')
+      .toEqual([]);
+    expect(fs.statSync(m).isDirectory(), 'and the marker is left exactly as found').toBe(true);
+    fs.rmSync(m, { recursive: true });
+  });
+});
+
+describe('R6 — the stderr group round 2 shipped unpinned', () => {
+  it('a `swap.log` that is a DIRECTORY produces no shell error through the strand arm', () => {
+    // ROUND 2's GROUP WAS THE ONE CHANGE OF EIGHT NOBODY MUTATED, and the whole
+    // ccd sweep is green without it — the only red is the provenance stamp,
+    // which is a red naming the wrong case. Pinned here the root-safe way
+    // (D-1997): `>>` onto a DIRECTORY fails with "Is a directory" at every uid,
+    // where `chmod 000` is a no-op for root. That is also the exact failure the
+    // sibling comment says this spelling exists to catch, so the pin measures
+    // the argument the code makes. Delete the `{ …; } 2>/dev/null` and this
+    // reds naming `swap.log`.
+    seedRow();
+    const p = reg(`${ID}.wrapper`);
+    fs.rmSync(p, { force: true }); fs.mkdirSync(p);
+    fs.rmSync(reg('swap.log'), { force: true });
+    fs.mkdirSync(reg('swap.log'));
+    const r = shFail(`${BLOCKED} { _tick_strand_undecidable ${ID} wrapper; } 2>"$HOME/tick-err"`);
+    expect(r.code).toBe(0);
+    const errs = fs.readFileSync(path.join(h.home, 'tick-err'), 'utf8').split('\n').filter(Boolean);
+    expect(errs, 'the group silences the failed append inside `_strand_mark`').toEqual([]);
+    fs.rmSync(reg('swap.log'), { recursive: true });
   });
 });

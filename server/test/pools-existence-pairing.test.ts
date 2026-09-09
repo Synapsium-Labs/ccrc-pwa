@@ -504,6 +504,17 @@ function poolsBlocks(filePath: string): string[] {
 // and say why in the commit, which is the point: the set moves visibly or not
 // at all.
 const CCD_SITES: string[] = [
+  // `_pool_untaggable` (#69 review round 3, R3) is the FIRST function since
+  // this pin was written to move BOTH lists, which is what the note below
+  // predicted would happen and what tells the two halves apart. It answers one
+  // question — "can any project on this box be in a pool at all?" — so a
+  // caller that could not read a `.project` field knows whether the value it
+  // failed to read could have mattered. That means it tests `$POOLS_DIR` for
+  // existence itself, and so it owes the pairing rule: `-e` and `-L` in ONE
+  // statement, because `-e` alone is blind to a dangling symlink and to a
+  // symlink loop, and reading either as "no pools directory" would license a
+  // cross-pool relocation off a path nobody measured.
+  '_pool_untaggable: -e POOLS_DIR',
   // The reader's two subjects, each decided by TWO statements since the
   // same-statement pairing landed: "neither there nor a link" (untagged) and
   // "not there but a link" (unreadable).
@@ -533,7 +544,13 @@ const DOCTOR_SITES: string[] = [
 // rule, and the `CCD_SITES` half above stayed byte-identical, which is the
 // measurement that says so. A function that gains a pools path and an
 // EXISTENCE TEST would move both lists, and only one of them moved.
+// AND ROUND 3 IS THE CASE THAT PARAGRAPH DESCRIBES. `_pool_untaggable` gained a
+// pools path AND an existence test, and BOTH lists moved — the first entry to
+// do so. Read the two together: `_auto_swap_check` moved one list and owed
+// nothing, this one moved both and owes the pairing rule, and neither fact had
+// to be remembered by anyone.
 const CCD_BLOCKS: string[] = [
+  '_pool_untaggable',
   '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_auto_swap_check', 'cmd_start',
   '_strand_why', 'cmd_swap', 'cmd_prefer',
 ];
