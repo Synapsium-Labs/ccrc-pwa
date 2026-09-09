@@ -1562,3 +1562,65 @@ Union re-verified after the peer's own post-merge write (they stamped one file i
 byte-identical): five roots, one md5, 60 files each. **The union survived its first concurrent write,
 which is the property that actually matters** — reconciliation that decays on the next write would have
 bought nothing.
+
+---
+
+## 2026-09-09 14:2x — the memory union was NOT byte-identical when I said it was (peer mail 355 → my 356)
+
+**Correcting my own paragraph above.** The sentence "five roots, one md5, 60 files each — the union
+survived its first concurrent write" is FALSE, and I am pointing at it rather than editing it away.
+Measured 33 minutes after the sweep applied: four roots held 60 files, one held **61**.
+
+The extra file is a project memory another session wrote at 12:09:32Z. My sweep APPLIED at 13:40:30Z.
+So the file existed before the write and after the ENUMERATION — the file union carried the list I had
+built, while the index regenerator read each root's real directory. That is why one root's `MEMORY.md`
+came out 275 bytes longer **at the same timestamp as the other four**: two halves of one sweep
+disagreed, and the disagreement was the only symptom. Nothing failed. Nothing warned.
+
+**The rule, recorded as `a-sweep-reports-the-list-not-the-result`:** an enumerate-then-apply sweep
+reports the PRE-state, because the natural report is composed from the input list — the one artefact
+guaranteed to be stale. Never report a sweep's outcome from its input; re-measure the post-state and
+report that. And where two halves of a sweep can disagree (a union over a list, an index over a
+directory), that disagreement is the cheapest detector available — look for it on purpose.
+
+Repaired and re-measured from the post-state: five roots, **62 files each, `differing=0 extra=0`**.
+
+**What the peer session `ccrc-pwa-brisk-cove` is shipping, and why my pass was the manual version of
+it.** Branch `ws/project-scoped-memory` (local, 4/5 tasks reviewed green, D-2238..D-2252): a
+SessionStart hook that converges a `(home, project)` pair, `ccrc memory` as a read-only census,
+`ccrc memory --apply` to union every root's `memory/` into ONE store under `~/.ccrc/memory/<slug>/` and
+symlink each root at it, and a `ccrc doctor` check reporting forked and unreachable as DIFFERENT
+failures because the remedies differ. **Do not run `--apply` — it is not deployed and still under
+review.** Their point stands and mine did not: a snapshot has a half-life; the mechanism does not.
+
+**What I measured that they did not have.** Their mail named "the two `.claude-corp` symlinks"; there
+are **eight**, six in one root and two in another, across six projects — and every one points at the
+`.claude` root, not at `~/.ccrc`. That root is already an informal hub for six projects, two of them
+three-home clusters. I chased the order-dependency before reporting it: if the hub converges first the
+other links resolve THROUGH it to the store, so absorb runs with `src == store`, every `dest` is the
+file itself, `cmp -s` takes the identical arm, and the pass is a no-op; if a symlinked root converges
+first, `readlink -f` lands on the hub's real directory and absorbs the real data. Both orders safe —
+so this is a census correction, not a finding, and their inference survives my false premise intact.
+That symmetry is `a-refutation-is-a-claim` turned on my own evidence: wrong premise, right conclusion,
+and only the premise gets retracted.
+
+Also measured: the two homes they flagged as outside the roster are not alike — one carries 38 projects
+and a real memory store, the other carries **zero** entries under `projects/`. Both still pass the
+census's own gate (an empty directory satisfies `[ -d ]`), so they are outside the ROSTER, not outside
+the enumeration — which is their own unreachable-vs-forked split, and it holds. And the five-root
+figure for this project is confirmed independently: exactly five homes hold a `ccrc-pwa` memory store.
+
+**One finding sent back, INERT today:** the index builder returns silently on a memory file with no
+`name:` frontmatter, so the file survives on disk and vanishes from the index — and the index is the
+artefact actually loaded into context. That is the absorber's own "the bytes were never lost, only
+unmentioned" argument one layer up, and the index builder has no counter. 0 of 62 files hit it today:
+the same inert-until-it-isn't class the three ccd queue items are built from. Left as their call.
+
+**Operational consequence for this program:** that was the last manual reconciliation round. Once
+`--apply` deploys, memory is written to one root and converges. And the eleven-memory consolidation
+question I was going to put to the operator mostly dissolves at one store per project — worth saying
+before they rule on a problem about to stop existing.
+
+**PR #69 unchanged through all of this:** head `be16dbf3`, MERGEABLE, five checks SUCCESS, last pushed
+12:46:30Z. The worker is closing B2–B5; I re-review only the delta. Nothing about the memory exchange
+touches the merge gate.
