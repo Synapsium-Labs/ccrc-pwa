@@ -985,6 +985,9 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -1104,6 +1107,9 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
@@ -1121,6 +1127,9 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // inflate the exact `runEvents().length` assertion below (Task 4, §3 F2).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
@@ -2339,6 +2348,9 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` === [] assertion below (Task 4, §3 F2).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
