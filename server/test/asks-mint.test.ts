@@ -127,6 +127,23 @@ function fixture(opts: {
   };
 }
 
+/**
+ * "No ask row exists, for ANY parent" — `SELECT COUNT(*) FROM asks`, the
+ * assertion the whole-branch review (M1) prescribed in place of the
+ * `asksForParent(<some id>, 'held')` reads these tests used to make.
+ *
+ * The defect it replaces: `asksForParent('coord-1', 'held')` is a
+ * KEYED read, so in a fixture that never names `coord-1` — the
+ * no-parent-derivable case below, whose only session is in no run at all —
+ * it answers `[]` whether or not a row was minted under some other parent.
+ * The assertion could not fail, so it proved nothing about the mint gate it
+ * was written to guard. Counting the whole table is the same sentence
+ * ("nothing was held") with no key to get wrong, and it is what actually
+ * reds when an eligibility gate is deleted.
+ */
+const askRowCount = (f: ReturnType<typeof fixture>): number =>
+  (f.coord.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n;
+
 /** The tag `pushOne` gives a `kind: 'ask'` push by default — `PushPayload`
  *  itself carries no `kind`, so this is the only way a test can tell an ask
  *  push for THIS session apart from any other push in the same tick. */
@@ -171,6 +188,53 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(held[0]!.options).toEqual(['Red', 'Blue']);
   });
 
+  // WHOLE-BRANCH REVIEW, M1 — the missing PRIMING-TICK case. Every test in
+  // this block puts its menu up on the SECOND tick, so none of them ever
+  // exercised the first, and `hold`'s placement INSIDE `if (notify)` was
+  // unpinned: moving it out (or above the gate) kept the whole suite green.
+  //
+  // What the first tick must do, and this pins: nothing. `this.primed` is
+  // false on the tick after boot (`watch.ts`), so `notify` is false — the
+  // watcher has no way to tell a question raised a second ago from one that
+  // has been on screen for an hour, and raising every dialog in the fleet on
+  // every restart is the noise the priming tick exists to prevent. No push,
+  // and — the part that had no test — NO ASK ROW EITHER: minting one would
+  // hold a push that was never going to fire, addressed to a parent, for a
+  // question the operator will never be told about.
+  //
+  // It is also the mechanism behind F2(b): `dialogIds.set()` runs BEFORE the
+  // gate, unconditionally, so the edge is spent on the priming tick and no
+  // later tick ever re-mints for this dialog. A row that WAS held across a
+  // restart is therefore unreachable to every later tick, which is why the
+  // chip needs a time bound rather than a state transition it can wait for.
+  it('mints nothing and pushes nothing when the menu is already up on the PRIMING tick', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    // The dialog is on the pane BEFORE the very first tick — a server that
+    // restarted while a child was blocked on its question.
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();                                      // priming: notify === false
+
+    expect(sent).toEqual([]);
+    expect(askRowCount(f)).toBe(0);
+
+    // …and it stays that way: `dialogIds` was stamped on that first tick, so
+    // the same dialog is not a new one on the second and never becomes an
+    // ask at all. This is the residual D-2169 names, pinned rather than
+    // remembered.
+    await f.tick();
+    expect(sent).toEqual([]);
+    expect(askRowCount(f)).toBe(0);
+  });
+
   it('pushes immediately when no parent is derivable', async () => {
     const sent: PushPayload[] = [];
     const push = { notify: async (p: PushPayload) => { sent.push(p); } };
@@ -183,7 +247,11 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     await f.tick();
 
     expect(sent.filter((p) => p.tag === askTag('orphan-1'))).toHaveLength(1);
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    // THE ASSERTION THAT USED TO BE VACUOUS (M1): this fixture opens no run,
+    // so `coord-1` is a name it never uses — the old
+    // `asksForParent('coord-1', 'held')` answered `[]` no matter what was
+    // minted. The table count cannot be keyed wrong.
+    expect(askRowCount(f)).toBe(0);
   });
 
   it('pushes immediately for an ask askActions refuses (D-2173)', async () => {
@@ -210,7 +278,9 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     await f.tick();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    // Whole table (M1): deleting the `actions !== null` eligibility gate
+    // mints a row here, and this is what sees it.
+    expect(askRowCount(f)).toBe(0);
   });
 
   it('mails the derived parent with a subject unique per ask', async () => {
@@ -363,7 +433,9 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     await f.tick();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect(f.coord.asksForParent('cc-a', 'held')).toEqual([]);
+    // Whole table (M1): deleting the `parent !== r.id` guard mints a row
+    // naming the child as its own parent, and this is what sees it.
+    expect(askRowCount(f)).toBe(0);
   });
 
   // Fix round 1, item 4 (Important). Two single-question dialogs appear back
