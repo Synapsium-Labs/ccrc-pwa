@@ -16064,6 +16064,20 @@ That brings the sweep to **thirteen sites plus six displaced pointers**, across 
 (`ccd/ccrc:N`, bare `ccrc:N-M`, `§N:NNN`, and `deploy.sh:N` from inside `ccd/`). The fourth form is new
 here and, like the third and the second, no earlier census looked for it.
 
+**Five more from Task 25's review round 2**, none moved by that commit — all verified by reading the
+target, and all of the REFERENT face rather than the shift face, which is the one no sweep can repair
+mechanically: `deploy/account-op.mjs:220` cites `ccd/ccrc:4911-4915` for `_inst_accounts_sh`'s rule
+(that range is the **tmux dependency probe**); `:808` cites `:4882-4887` for `_inst_roster`'s rule
+(the **service-manager probe**); `:837` cites `:6358-6364` for D-1244's mode ruling (that is
+`_inst_skills`' `CCRC_SKILL_SRC` prose — D-1244 is at `:6530-6536`, which `_acct_settings_env` cites
+correctly, so the tree now spells the same reference both rightly and wrongly);
+`ccrc-install-graphify.test.ts:1155` cites `:6356-6357` for `lb`'s start marker ("TWO HALVES PER
+SKILL"); and `:1188` cites `:5411` for `_inst_graph_hooks_off` (that line is `tmp="$dest.tmp.$$"`).
+
+**Eighteen sites plus six displaced pointers.** Two of the six overlap the five above, which is itself
+worth noting: a pointer can be displaced AND have been wrong before it moved, and repairing only the
+displacement certifies the older error — D-2007 exactly.
+
 ### D-2120 — Task 25's step makes eight existing tests red, and the plan does not mention it
 
 `_acct_provision` refuses when `$HOME/.cc-sessions/<installer>` is missing or not executable. Every one
@@ -16262,3 +16276,41 @@ being internal:
 Neither is a defect at this commit, which is why they are recorded rather than fixed here: the array is
 read by nothing until Task 26. Task 26 must close both **before** it publishes the key, because after
 that they are API.
+
+### D-2128 — the same run names the credential file in one refusal and not in the three beside it
+
+D-2126's clause is now carried by all seven of `_acct_settings_env`'s refusals, and it names the 0600
+credential file by its measured path. `_acct_provision`'s own three refusals — which fire on the same
+run, from the same function, one line above the call that passes the clause down — still say only
+*"The roster entry was written; run 'ccrc install' once the cause is fixed."*
+
+So an operator who hits `provision-failed` is told the roster entry stands; an operator who hits
+`settings-merge`, one step later in the same command, is told the roster entry AND the credential file
+stand, with its path. Same state on disk, two different accounts of it. The reasonable inference from
+the first sentence — that no credential was written — is false, and it is the one an operator makes
+when the other sentence exists and this one omits it.
+
+**RULING: `_acct_provision` builds the "what stands" clause ONCE and uses it for its own three
+refusals and for the one it hands to `_acct_settings_env`.** That is the cleaner reading of D-2126 than
+the one that shipped: the clause belongs to the CALLER, and `_acct_provision` is the caller for all
+four sites, so there is one caller and there should be one clause. Review round 2 was right to leave it
+— D-2126 quoted those three as correct and the brief said one fix — and right to ask.
+
+**Folded into Task 26 rather than given its own round**, because Task 26 is already inside this
+function: it inserts the disable marker into `_acct_add`'s tail and must close D-2127's two
+`ACCT_PROVISIONED` defects before publishing that array as an answer key. A fourth round to edit three
+sentences in a function the next task opens anyway is a round spent on scheduling rather than on work.
+
+**D-2126 CORRECTED: it says "five refusals" and there are SEVEN.** Four say "exactly as it was", a
+fifth says "refusing to rewrite it", and **two said nothing about the file at all** — `"$f could not be
+read"` and `"writing $f failed"`. Those two are worse than the class D-2126 named: not locally true and
+globally misleading, but silent in both directions. Both are provably untouched-file paths (the read
+fails before the merge; the write is tmp + `chmod` + `mv -f`), so they took the local half as well as
+the caller's clause. Counting the sites before ruling about them would have caught this; I counted the
+ones the report quoted.
+
+One honest limit, recorded because it will not show up as a failure: whether the clause parameter is
+`"$3"` or `"${3:-}"` is **unmeasurable** — every caller passes it, so making it optional leaves the
+suite green. `_acct_no_answer`'s own `$3` has the identical property. The source says why it is
+required and no assertion defends it; a caller that forgot it would be caught by the sentence
+assertions, not by the signature.
