@@ -59,8 +59,14 @@ describe('ccrc memory — the census', () => {
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(wrongTarget, path.join(d, 'memory'));
     const out = run(['memory']).out;
-    expect(out).toMatch(/forked/);
-    expect(out).not.toMatch(/converged/);
+    // Fix round 2 (R13 audit): the bare `toMatch(/forked/)` this test had is
+    // the SAME vacuous shape the reviewer found in the dangling-link test —
+    // the summary line always contains the literal substring "forked", so
+    // this half of the assertion passed regardless of the row. The negative
+    // below is what actually caught M2 (and still does); anchor the positive
+    // to the row too so it carries real signal on its own.
+    expect(out).toMatch(/-p-demo\s+forked$/m);
+    expect(out).not.toMatch(/-p-demo\s+converged$/m);
   });
 
   // Fix round 1, Important 1 (R10): `[ -e "${d}memory" ]` DEREFERENCES, so a
@@ -71,13 +77,25 @@ describe('ccrc memory — the census', () => {
   // callee provides: a broken link and a genuinely empty slug are two
   // different facts, and only this case (target absent) tells them apart.
   // Seed the link's TARGET path without ever creating the store directory.
+  //
+  // Fix round 2 (R13): the original version of this test asserted
+  // `toMatch(/forked/)` against the WHOLE output, which is vacuous — the
+  // summary line (`printf '\n%s pairs, %s forked\n'`) always contains the
+  // literal substring "forked" (e.g. "0 forked"), so the assertion passed
+  // even while the row itself was silently dropped. Assert against the ROW
+  // (slug followed by its state at end of line) and carry the negative, the
+  // same shape the sibling wrong-target test above already uses. This is
+  // also the test that must go RED on R12's fix (`_mem_state` requiring
+  // `[ -d "$store" ]` for `converged`, not just a matching link target) —
+  // without the row-level negative, a `_mem_state` that reports this
+  // dangling link as `converged` would slip through unnoticed.
   it('reports a dangling symlink as forked, not as no memory at all', () => {
     const d = path.join(home, '.claude', 'projects', '-p-demo');
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(path.join(home, '.ccrc', 'memory', '-p-demo'), path.join(d, 'memory'));
     const out = run(['memory']).out;
-    expect(out).toContain('-p-demo');
-    expect(out).toMatch(/forked/);
+    expect(out).toMatch(/-p-demo\s+forked$/m);
+    expect(out).not.toMatch(/-p-demo\s+converged$/m);
   });
 
   it('changes nothing on disk — the census is read-only', () => {

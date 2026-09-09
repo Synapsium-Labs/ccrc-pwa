@@ -2885,10 +2885,21 @@ _mem_homes() {   # -> one agent-home path per line
   done
 }
 
+# CONVERGED MEANS THE LINK POINTS AT THE STORE *AND THE STORE EXISTS* (R12,
+# review round 2) — not just that `readlink`'s text matches. A link written
+# before its store, or orphaned when its store was deleted, has the right
+# target TEXT with nothing behind it; treating that as `converged` would make
+# `--apply` (Task 3) skip exactly the pair it should repair (it skips
+# `converged` pairs by design) and would make `ccrc doctor` (Task 4) call the
+# box PASS — the same silence this whole branch exists to remove, one layer
+# down. So the `[ -d "$store" ]` conjunct below is part of the DEFINITION of
+# `converged`, not a defensive extra: deleting it produces a green suite only
+# if the covering test asserts the row's classification, not the summary line.
 _mem_state() {   # <home> <slug> -> converged | forked | absent
   local link="$1/projects/$2/memory" store="$HOME/.ccrc/memory/$2"
   if [ -L "$link" ]; then
-    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && { printf 'converged'; return 0; }
+    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && [ -d "$store" ] \
+      && { printf 'converged'; return 0; }
     printf 'forked'; return 0
   fi
   [ -e "$link" ] && { printf 'forked'; return 0; }
