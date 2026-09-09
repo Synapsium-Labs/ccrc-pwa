@@ -133,3 +133,137 @@ describe('ccrc memory — the census', () => {
     expect(r.out).toMatch(/usage: ccrc/);
   });
 });
+
+describe('ccrc memory --apply — the union', () => {
+  const storeDir = (): string => path.join(home, '.ccrc', 'memory', '-p-demo');
+  const linkOf = (h: string): string =>
+    path.join(home, h, 'projects', '-p-demo', 'memory');
+
+  it('moves a file unique to one home into the store, and symlinks the home', () => {
+    seed('.claude', '-p-demo', { 'only-here.md': 'body' });
+    expect(run(['memory', '--apply']).code).toBe(0);
+    expect(fs.readFileSync(path.join(storeDir(), 'only-here.md'), 'utf8')).toBe('body');
+    expect(fs.lstatSync(linkOf('.claude')).isSymbolicLink()).toBe(true);
+  });
+
+  it('unions two homes that hold different files', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    seed('.claude-corp', '-p-demo', { 'b.md': 'B' });
+    run(['memory', '--apply']);
+    expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
+    expect(fs.readFileSync(path.join(storeDir(), 'b.md'), 'utf8')).toBe('B');
+  });
+
+  it('KEEPS BOTH when the same filename differs — never picks a winner', () => {
+    seed('.claude', '-p-demo', { 'same.md': 'first' });
+    seed('.claude-corp', '-p-demo', { 'same.md': 'second' });
+    run(['memory', '--apply']);
+    const names = fs.readdirSync(storeDir()).sort();
+    expect(names).toContain('same.md');
+    expect(names.some((n) => n.startsWith('same.') && n.includes('claude-corp'))).toBe(true);
+    const bodies = names.filter((n) => n.startsWith('same.'))
+      .map((n) => fs.readFileSync(path.join(storeDir(), n), 'utf8')).sort();
+    expect(bodies).toEqual(['first', 'second']);
+  });
+
+  it('deduplicates a byte-identical collision into ONE file', () => {
+    seed('.claude', '-p-demo', { 'same.md': 'identical' });
+    seed('.claude-corp', '-p-demo', { 'same.md': 'identical' });
+    run(['memory', '--apply']);
+    expect(fs.readdirSync(storeDir()).filter((n) => n.startsWith('same.')))
+      .toEqual(['same.md']);
+  });
+
+  it('rebuilds MEMORY.md from frontmatter rather than merging it', () => {
+    seed('.claude', '-p-demo', {
+      'one.md': '---\nname: one\ndescription: the first\n---\nbody\n',
+      'MEMORY.md': '- stale line that mentions nothing real\n',
+    });
+    seed('.claude-corp', '-p-demo', {
+      'two.md': '---\nname: two\ndescription: the second\n---\nbody\n',
+      'MEMORY.md': '- a different stale line\n',
+    });
+    run(['memory', '--apply']);
+    const idx = fs.readFileSync(path.join(storeDir(), 'MEMORY.md'), 'utf8');
+    expect(idx).toContain('one.md');
+    expect(idx).toContain('the first');
+    expect(idx).toContain('two.md');
+    expect(idx).toContain('the second');
+    expect(idx).not.toContain('stale line');
+    expect(fs.readdirSync(storeDir()).filter((n) => n.startsWith('MEMORY.')))
+      .toEqual(['MEMORY.md']);
+  });
+
+  it('backs up each source directory before replacing it', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    run(['memory', '--apply']);
+    const parent = path.join(home, '.claude', 'projects', '-p-demo');
+    expect(fs.readdirSync(parent).some((n) => n.startsWith('memory.pre-ccrc-'))).toBe(true);
+  });
+
+  it('re-points a symlink that targets another HOME, not the store', () => {
+    const other = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, 'a.md'), 'A');
+    const d = path.join(home, '.claude-corp', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(other, path.join(d, 'memory'));
+    run(['memory', '--apply']);
+    expect(fs.readlinkSync(path.join(d, 'memory'))).toBe(storeDir());
+    expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
+  });
+
+  it('is idempotent — a second run changes nothing and reports zero forked', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    run(['memory', '--apply']);
+    const before = fs.readdirSync(storeDir()).sort();
+    const r = run(['memory', '--apply']);
+    expect(fs.readdirSync(storeDir()).sort()).toEqual(before);
+    expect(r.out).toMatch(/0 forked/);
+  });
+
+  // R12/R10: `_mem_state` (Task 2) classifies a link whose TARGET TEXT matches
+  // the canonical store, but whose store directory does not exist, as
+  // `forked` (not `converged`) — a link written before its store, or orphaned
+  // when the store was deleted. `_mem_apply` must repair this pair rather
+  // than skip it. Two things have to be true at once for that: the top-of-
+  // loop gate must not `continue` past a dangling link (R10 — `[ -e "$link" ]`
+  // alone DEREFERENCES and is false for a dangling link, exactly like the
+  // census's own `[ -e ] || [ -L ] || continue` fix in Task 2's `cmd_memory`),
+  // and once past the gate the existing `[ -L "$link" ]` arm must create the
+  // store, absorb nothing from the (non-existent) target, drop the dangling
+  // link and re-point it at the store it just created. Seed the link pointing
+  // at the exact canonical path with nothing behind it yet.
+  it('repairs a dangling link whose target already looks correct (R12/R10)', () => {
+    const d = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(storeDir(), path.join(d, 'memory'));
+    expect(fs.existsSync(storeDir())).toBe(false); // sanity: genuinely dangling, not merely unusual
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.statSync(storeDir()).isDirectory()).toBe(true);
+    expect(fs.readlinkSync(path.join(d, 'memory'))).toBe(storeDir());
+  });
+
+  // R9: the brief's `cmd_memory` called `_mem_apply` and returned a flat 0,
+  // discarding its status — so a migration that stopped halfway (a `mkdir`,
+  // backup `mv` or `ln` failure) would read as a clean exit. Drive a REAL
+  // failure: make the store's parent unwritable so `mkdir -p "$store"` fails
+  // partway through the run, and require both the exit code and the stderr
+  // message to survive up through `cmd_memory`. Restore the mode before the
+  // assertions so `afterEach`'s `rm -rf` of the fixture home can still work.
+  it('a failure inside --apply is not swallowed as a false success', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    const memRoot = path.join(home, '.ccrc', 'memory');
+    fs.mkdirSync(memRoot, { recursive: true });
+    fs.chmodSync(memRoot, 0o500);
+    let r: { code: number; out: string };
+    try {
+      r = run(['memory', '--apply']);
+    } finally {
+      fs.chmodSync(memRoot, 0o700);
+    }
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('cannot create');
+  });
+});

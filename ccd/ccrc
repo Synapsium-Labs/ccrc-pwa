@@ -1090,9 +1090,11 @@ already running).
             external account. [--dry-run] [--adopt] [--force]
   memory    census every (home, project) memory pair on this box: one line
             per pair naming its home, project slug and state — converged,
-            forked or absent — then a summary count. Read-only; homes are
-            enumerated from the filesystem, never the roster. [--apply] is
-            reserved and not yet implemented
+            forked or absent — then a summary count. Read-only unless
+            [--apply] is given, which unions every forked pair into
+            ~/.ccrc/memory/<slug>, backs up each source directory, and
+            symlinks every home to the shared store. Homes are enumerated
+            from the filesystem, never the roster.
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -2930,14 +2932,114 @@ cmd_memory() {
     done
   done
   printf '\n%s pairs, %s forked\n' "$n" "$forked"
-  [ "$apply" -eq 1 ] && _mem_apply
+  # R9: `_mem_apply` has three failure paths (cannot create the store, cannot
+  # back up a source directory, cannot write the new symlink), each of which
+  # already prints its own diagnostic to stderr and `return 1`s. Discarding
+  # that status here — the shape this line had before R9 — would let a
+  # migration that stopped HALFWAY read as a clean exit 0, the exact
+  # "no overloaded null at a seam" defect this whole branch exists to remove:
+  # an operator would see "success" over a box with some pairs converged and
+  # one left broken. The pure census (no `--apply`) is unaffected: it still
+  # exits 0 regardless of how many pairs are `forked`, because finding forked
+  # pairs is not a failure of the census — only a failed UNION is.
+  if [ "$apply" -eq 1 ]; then
+    _mem_apply || return 1
+  fi
   return 0
 }
 
-# `--apply` lands in Task 3; this stub keeps `cmd_memory` callable (and
-# `ccrc memory --apply` a clean exit-1 refusal, not an undefined-function
-# error) until it does.
-_mem_apply() { echo "ccrc memory: --apply is not implemented yet" >&2; return 1; }
+# THE CONFLICT RULE IS: NO SILENT WINNER. A file unique to one home moves
+# across. A same-named file whose content DIFFERS keeps BOTH copies, the
+# incoming one suffixed with the home it came from — a memory file is prose a
+# session wrote once, and choosing between two of them is a judgement no script
+# has the standing to make. A byte-identical collision is one file, not two:
+# deduplicating what is provably the same costs the operator nothing to review.
+#
+# `MEMORY.md` IS EXEMPT BECAUSE IT IS DERIVABLE. It is an index of one line per
+# memory file, and every memory file carries `name` and `description` in its
+# own frontmatter — so it is REBUILT from the union rather than merged. That is
+# also what makes the widened write contention self-healing: a clobbered index
+# regenerates instead of silently losing a line, which is the exact failure
+# that produced this design.
+_mem_index_line() {   # <file> -> "- [name](file) — description", or nothing
+  local f="$1" name desc
+  name=$(sed -n 's/^name:[[:space:]]*//p' "$f" 2>/dev/null | head -n1)
+  desc=$(sed -n 's/^description:[[:space:]]*//p' "$f" 2>/dev/null | head -n1)
+  desc=${desc%\"}; desc=${desc#\"}
+  [ -n "$name" ] || return 0
+  printf -- '- [%s](%s) — %s\n' "$name" "$(basename -- "$f")" "$desc"
+}
+
+_mem_rebuild_index() {   # <store>
+  local store="$1" f tmp="$1/.MEMORY.md.new"
+  { printf '# Memory index\n\n'
+    for f in "$store"/*.md; do
+      [ -f "$f" ] || continue
+      case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
+      _mem_index_line "$f"
+    done
+  } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$store/MEMORY.md"
+}
+
+_mem_absorb() {   # <src-dir> <store> <home-basename>
+  # R6: `tag` strips a leading dot from the home basename (`.claude-corp` ->
+  # `claude-corp`) — every agent home starts with one, so leaving it in would
+  # make a conflict suffix read `same..claude-corp.md` (a double dot). Purely
+  # cosmetic: it changes nothing about which files collide or how.
+  local src="$1" store="$2" tag="${3#.}" f base dest
+  for f in "$src"/*.md; do
+    [ -f "$f" ] || continue
+    base=$(basename -- "$f")
+    case "$base" in MEMORY.md) continue ;; esac   # rebuilt, never merged
+    dest="$store/$base"
+    if [ ! -e "$dest" ]; then cp -p -- "$f" "$dest"; continue; fi
+    cmp -s -- "$f" "$dest" && continue            # byte-identical: one file
+    cp -p -- "$f" "$store/${base%.md}.$tag.md"    # differs: keep BOTH
+  done
+}
+
+_mem_apply() {
+  local h b slug d link store stamp bk
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  for h in $(_mem_homes); do
+    b=$(basename -- "$h")
+    for d in "$h"/projects/*/; do
+      [ -d "$d" ] || continue
+      slug=$(basename -- "${d%/}")
+      case "$slug" in -tmp*) continue ;; esac
+      link="${d}memory"
+      # R10: `[ -e "$link" ]` alone DEREFERENCES, so it is false for a
+      # dangling symlink — exactly the pair `_mem_state` (Task 2, R12) calls
+      # `forked` because its target text is right but nothing is behind it.
+      # Skipping past that pair here would leave the census and `--apply`
+      # disagreeing about the same row, which is worse than either being
+      # wrong alone. `[ -L "$link" ]` catches it without dereferencing.
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      [ "$(_mem_state "$h" "$slug")" = converged ] && continue
+      mkdir -p -- "$store" || { echo "ccrc memory: cannot create $store" >&2; return 1; }
+      if [ -L "$link" ]; then
+        # A link to another HOME: absorb its target, then re-point. The target
+        # itself is some other home's real directory and is left standing —
+        # that home converges on its own pass. (This arm is also how a
+        # DANGLING correct-looking link — R12 — gets repaired: its target
+        # text is the store we just created above, now an empty directory, so
+        # absorbing it moves nothing before the link is dropped and relaid.)
+        _mem_absorb "$(readlink -- "$link")" "$store" "$b"
+        rm -f -- "$link"
+      else
+        _mem_absorb "$link" "$store" "$b"
+        bk="${d}memory.pre-ccrc-$stamp"
+        mv -- "$link" "$bk" || { echo "ccrc memory: cannot back up $link" >&2; return 1; }
+      fi
+      ln -s -- "$store" "$link" || { echo "ccrc memory: cannot link $link" >&2; return 1; }
+      _mem_rebuild_index "$store" || true
+      echo "ccrc memory: converged $b $slug"
+    done
+  done
+  return 0
+}
 
 # cmd_adopt — rediscover this box's accounts from disk. The work is entirely
 # `ccd/ccrc-adopt`'s, and this verb is how it becomes reachable: adopt is a
