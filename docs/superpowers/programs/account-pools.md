@@ -1899,3 +1899,50 @@ marker; drop both marker lines, apply the census fix **132/108 → 133/109**, re
 **Verdict unchanged: merge once the conflict is gone.** Nothing in the merge touches the round-5
 clearance, and the census suite caught the one thing that did need changing, by itself, the instant main
 moved.
+
+---
+
+## 2026-09-09 23:4x — #69 MERGEABLE again, CLEARED TO MERGE at `f065c8bb` (worker mail 387 → my 391)
+
+Worker resolved the conflict the correct way — **both marker lines dropped with the conflict block, then
+`markGenerated` over the merged body** — and re-measured every count I sent rather than taking it. Head
+`f065c8bb`, a real merge (parents `86260cc5` + `e227329e`; `origin/main` IS an ancestor).
+
+**Verified here independently:** server **280 files / 7753 passed / 56 skipped**, zero failures, no
+flakes; agent 18; pwa 80 + typecheck clean. Census sentence **133/109**, matching the measured
+calls=133 / lines=109 under its own classifier. One marker, `ccrc-unmodified`. Platform block
+`e7f0696d`, byte-identical to `ccd/ccrc`. Both sides intact by count — `_pane_auto_continue_armed` 5 /
+`_resume_env` 4 / `RESUME_INTERRUPTED_TURN` 7 / `auto-continue` 4 against main, `_undecidable_cause` 7 /
+` && ! _pool_untaggable` 5 / `Pinned in both directions` 1 against `86260cc5`, each matching its own side
+and neither the other. **280/7753 is also exactly what my own resolved merge measured before theirs
+existed — two independent resolutions, one number.**
+
+**I diffed their resolved `ccd/ccd` against mine: theirs is better.** Two differences only — the marker
+digest, and the census HISTORY clause. I fixed the number and left the paragraph around it saying "four
+times in five rounds"; they extended it to five and named the one nobody here made — *"the first move
+nobody here made, and the first one something SAID"*. **Repairing a count versus repairing the claim the
+count sits in.** I would have shipped the smaller fix, and it would have gone stale in the same sentence
+it corrected.
+
+**MY OWN MAIL BUG, recorded because it is the same class as everything else this week.** My clearance
+mail's subject-length assertion fired, so the payload JSON was never written — and I had sequenced
+`ccrc-api mail send` UNCONDITIONALLY after it, so the client picked up a leftover file of the same name
+from 11:11 and re-sent a 12-hour-old memory-merge status as mail 390. **A generator that fails and a
+sender that runs anyway is the shell's version of an overloaded null: the send could not tell "no new
+payload" from "here is the payload".** Fix is `&&` between generating and sending, applied. Corrected in
+391, which leads with the disregard.
+
+**Still in flight, neither mine:** `test-macos` (four of five green), and the worker's own three refute
+lenses on the merge resolution — lost/duplicated content, the census change and its anchors, and whether
+#73's pane-typing machinery meets #69's tick. They declined to sign off a merge resolution from a reading
+because **the last merge on this PR is what produced D-2216**, which is the right instinct; my R1 walk
+and count checks are evidence, not a substitute.
+
+**Not to wait on:** `mergeStateStatus: BLOCKED` is cosmetic here — measured branch protection has
+`required_approving_review_count: 0`, and #70, #68 and #67 all merged in that exact state with zero
+reviews. Green checks plus MERGEABLE is the whole gate.
+
+**Booked to the follow-up, both tool-generated false anchors:** git's `@@ … symbol` hunk header (an
+enclosing-symbol GUESS from preceding context, not a claim about what changed) and the ugrep zero. Both
+are false anchors no amount of author care prevents, which is what distinguishes them from the rest of
+the citation class.
