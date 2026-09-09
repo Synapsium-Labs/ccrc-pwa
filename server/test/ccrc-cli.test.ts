@@ -95,7 +95,8 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   // would hand `status` a real address and turn the "leaves the box alone" test
   // below red — a flake that depends on who ran the suite. Every CCRC_* input
   // this CLI reads is removed by name, so the fixture decides, never the shell.
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+    'CCRC_ACCOUNT_AUTH_TIMEOUT']) delete env[k];
   return env;
 }
 

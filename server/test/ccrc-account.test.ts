@@ -103,16 +103,24 @@ function env(home: string): NodeJS.ProcessEnv {
   // silent poison from an absent stub. `$HOME/tmux-poison` keeps the two
   // conditions apart, which is the whole claim of the no-rows case.
   poison('tmux', 'ccrc account tests must never reach this box\'s real tmux', true);
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete e[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+    'CCRC_ACCOUNT_AUTH_TIMEOUT']) delete e[k];
   return e;
 }
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** `ccrc <args>` with stdin closed unless a test supplies it. */
-function run(home: string, args: string[], stdin = ''): Result {
+/** `ccrc <args>` with stdin closed unless a test supplies it.
+ *
+ *  `extraEnv` IS APPLIED AFTER `env()`, and the order is the whole of its
+ *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
+ *  depends on the developer's exported shell, so a knob a test wants to set is
+ *  a knob that has just been deleted. `runDoctor`'s shape
+ *  (`ccrc-doctor.test.ts:874`). */
+function run(home: string, args: string[], stdin = '',
+  extraEnv: NodeJS.ProcessEnv = {}): Result {
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
-    { env: env(home), encoding: 'utf8', input: stdin });
+    { env: { ...env(home), ...extraEnv }, encoding: 'utf8', input: stdin });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -5405,5 +5413,426 @@ describe('ccrc account credential', () => {
       expect(String(j['detail'])).toContain('was given an empty value');
     }
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+});
+
+// ── `check`: THE CHEAP QUESTION FIRST, AND ITS EXIT CODE IS NOT THE ANSWER ─
+// §8 splits health into two questions and only one of them costs money:
+// `claude auth status --json` is a local credential read, the `-p` probe bills
+// a real request. So `check` asks the cheap one first and short-circuits — but
+// ONE-SIDEDLY. `loggedIn: false` is a verdict (`auth-dead`, no inference
+// spent); `loggedIn: true` is only the PRECONDITION for asking the expensive
+// one, because §8's `ok` means exit 0 from a real `-p` and a live token says
+// nothing about whether the lane's base URL answers, whether its model map
+// names a model the endpoint serves, or whether the subscription has quota.
+
+/** A `claude`-shaped launcher that answers `auth status` from fixture files and
+ *  logs its argv. `<home>/fixture-auth-out` is stdout, `<home>/fixture-auth-rc`
+ *  the exit code — two files because the whole point of this task is that they
+ *  disagree. Any other argv is a loud failure (exit 90), so a `check` that
+ *  started running something else could not pass unnoticed. */
+function plantClaude(home: string, id: string): void {
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', id), [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/claude-argv"',
+    'if [ "$1" = auth ] && [ "$2" = status ]; then',
+    '  [ -f "$HOME/fixture-auth-out" ] && cat "$HOME/fixture-auth-out"',
+    '  if [ -f "$HOME/fixture-auth-rc" ]; then IFS= read -r rc < "$HOME/fixture-auth-rc"; exit "$rc"; fi',
+    '  exit 0',
+    'fi',
+    'echo "fixture claude: unexpected argv: $*" >&2; exit 90',
+  ].join('\n') + '\n', { mode: 0o755 });
+}
+
+const authFixture = (home: string, out: string, rc: number): void => {
+  writeFileSync(join(home, 'fixture-auth-out'), out);
+  writeFileSync(join(home, 'fixture-auth-rc'), `${rc}\n`);
+};
+
+const claudeArgv = (home: string): string[] => {
+  const p = join(home, 'claude-argv');
+  return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+
+/** The shape MEASURED 2026-09-07 on an unauthenticated scratch config dir
+ *  (spec:667-669), verbatim. */
+const SIGNED_OUT = JSON.stringify({
+  loggedIn: false, authMethod: 'none', apiProvider: 'firstParty',
+  analyticsDisabled: false, projectsDirectory: '/home/fixture/.claude/projects',
+}) + '\n';
+
+/** The same object with `loggedIn` flipped and an `authMethod` beside it. ONLY
+ *  the signed-out shape is measured (spec:667-669) and this suite does not
+ *  pretend otherwise — what IS measured about this one is narrower and enough:
+ *  the classifier touches exactly two fields, `loggedIn` and `authMethod`, so a
+ *  sibling this fixture guesses wrong about cannot change the answer. The
+ *  `authMethod` value is the FIXTURE's, echoed by the assertion below rather
+ *  than pinned as a vendor string. */
+const SIGNED_IN = JSON.stringify({
+  loggedIn: true, authMethod: 'claudeai', apiProvider: 'firstParty',
+  analyticsDisabled: false, projectsDirectory: '/home/fixture/.claude/projects',
+}) + '\n';
+
+/** The one non-anthropic lane this describe needs, and it carries NO
+ *  `exec.baseUrl`: openrouter is the provider whose `baseUrlRequired` is false
+ *  (`shared/providers.ts:135`), so the entry validates without one and nothing
+ *  in this describe ever dials an endpoint — Task 29's probe is a stub that
+ *  runs no subprocess at all. Its id is a bare label for the reason
+ *  `CHECK_DECLARE_LANES` uses `orchard-api`: `topology-clean.test.ts` admits
+ *  only RFC1918, loopback and RFC5737 as IPv4 literals, so a fixture endpoint
+ *  is never anything that could be a real box. */
+const OPENROUTER_LANE = {
+  id: 'orchard-api', label: 'team·shared', hue: 'green',
+  configDirSuffix: '.claude-orchard-api', homeAble: true, telemetry: 'none',
+  exec: { kind: 'generated', provider: 'openrouter',
+    secretsFile: '.cc-secrets/orchard-api-openrouter.env' },
+};
+
+/** A `generated` lane that names NO provider — §4.1's absence-permitting rule,
+ *  which `_acct_lane` resolves to `anthropic` in node (`account-op.mjs`'s `lane`
+ *  arm) and which the openrouter fixture above cannot reach. `check`'s own
+ *  comment claims this resolution; this is what measures it. */
+const NO_PROVIDER_LANE = {
+  id: 'alt-max', label: 'alt·max', hue: 'violet', configDirSuffix: '.claude-alt-max',
+  homeAble: true, telemetry: 'anthropic',
+  exec: { kind: 'generated', secretsFile: '.cc-secrets/alt-max-oauth.env' },
+};
+
+/** The OTHER non-anthropic shape, and it is a different LINE of the roster
+ *  reader than the openrouter one: `lane` answers a null provider for an
+ *  `external` account specifically (`e['kind'] === 'external'`), where
+ *  openrouter answers a provider that simply is not `anthropic`. One guard in
+ *  bash, two ways to arrive at it — D-2145's "the same line measured on one
+ *  fixture shape and unmeasured on another". */
+const EXTERNAL_LANE = {
+  id: 'gpt', label: 'gpt', hue: 'magenta', configDirSuffix: '.claude-gpt',
+  homeAble: false, telemetry: 'none', exec: { kind: 'external' },
+};
+
+/** THE TWO NEW OPS, DRIVEN BY HAND — `declareOp`'s shape at this address, and
+ *  the only way to reach the argv refusals and the exit-2 corner of `classify`'s
+ *  four-code contract. `_acct_auth_status` builds a fixed argv, so bash can
+ *  never spell these wrong; a hand caller can, and a future one will. */
+function opRun(args: string[], stdin = ''): Result {
+  const r = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+    { encoding: 'utf8', input: stdin });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+describe('deploy/account-op.mjs classify: four exit codes, and only two of them print JSON', () => {
+  it('a verdict is exit 0 and one JSON row', () => {
+    const r = opRun(['classify', '--source', 'auth-status', '--exit', '1'], SIGNED_OUT);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject(
+      { verdict: 'auth-dead', source: 'auth-status' });
+  });
+
+  it('no parseable answer is exit 3 with stdout EMPTY — not a row, not a refusal', () => {
+    // A row would be a VERDICT and the caller's `[ -n "$ACCT_HEALTH" ]` would
+    // short-circuit on it; a refusal would say something is wrong with the box.
+    // Neither is true, so the code carries the whole message.
+    const r = opRun(['classify', '--source', 'auth-status', '--exit', '1'],
+      'error: unknown command "auth"\n');
+    expect(r.code).toBe(3);
+    expect(r.stdout, 'exit 3 printed something for the caller to mistake for a row').toBe('');
+  });
+
+  it('a signed-in lane is exit 4 and ONE LINE OF PLAIN TEXT — the only non-JSON stdout here', () => {
+    const r = opRun(['classify', '--source', 'auth-status', '--exit', '0'], SIGNED_IN);
+    expect(r.code).toBe(4);
+    expect(r.stdout.split('\n').length, 'exit 4 printed more than one line').toBe(2);
+    expect(() => JSON.parse(r.stdout)).toThrow();
+    expect(r.stdout).toContain('claudeai');
+  });
+
+  it('bad argv is exit 2 with the envelope, on both fields', () => {
+    for (const args of [['classify', '--source', 'sideways', '--exit', '0'],
+      ['classify', '--source', 'probe', '--exit', 'soon'],
+      ['classify', '--source', 'probe']]) {
+      const r = opRun(args, '{}');
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(JSON.parse(r.stdout)['error']).toBe('bad-argv');
+    }
+  });
+
+  it('health refuses a row it cannot parse rather than half-building the answer', () => {
+    // THE VERB'S OWN STDOUT CANNOT BE HALF-BUILT: an empty `--row` spliced into
+    // a bash string printed `…,"health":`, invalid JSON reaching the caller that
+    // parses it. Here the writer that owns every byte of stdout re-serialises.
+    for (const row of ['', 'not json', '[]', '{"measuredAt":"x"}']) {
+      const r = opRun(['health', '--id', 'claude', '--row', row]);
+      expect(r.code, JSON.stringify(row)).toBe(1);
+      const j = JSON.parse(r.stdout) as Record<string, unknown>;
+      expect(j['error']).toBe('classify-failed');
+      expect(String(j['detail'])).toContain('claude');
+    }
+    expect(opRun(['health', '--row', '{"verdict":"ok"}']).code).toBe(2);
+  });
+});
+
+describe('ccrc account check: auth status', () => {
+  it('reads exit 1 with parseable JSON as an ANSWER, not as a failure', () => {
+    // THE MEASUREMENT THIS TASK IS FOR: all three spellings exit 1 when
+    // loggedIn is false (spec:674-678). A reader that believed the exit code
+    // would turn every signed-out lane into `unknown` — the one verdict §8
+    // says is never reported as ok, and which the UI renders as *nobody could
+    // tell*.
+    const home = box('ccrc-account-check-signedout-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    const h = oneObject(r)['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe('auth-dead');
+    expect(h['source']).toBe('auth-status');
+    expect(h['verdict']).not.toBe('unknown');
+    expect(h['measuredAt']).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // …and it spent NO inference to learn it: one local read, nothing else.
+    expect(claudeArgv(home)).toEqual(['auth status --json']);
+  });
+
+  it('does not spend the probe on a lane that is already known dead', () => {
+    // TWO ASSERTIONS, AND ONLY THE FIRST BITES IN THIS COMMIT. `auth-dead` is a
+    // verdict, so the short-circuit fires and `source` stays `auth-status`;
+    // delete the short-circuit and the stub probe overwrites the row, which is
+    // observable here and now. The argv half cannot be red until Task 30 gives
+    // `_acct_probe` a body — this task's stub runs no subprocess at all — so it
+    // is written now, states that it is dormant, and becomes the real cost
+    // assertion the moment the probe is real.
+    const home = box('ccrc-account-check-noprobe-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    const h = oneObject(run(home, ['account', 'check', '--id', 'claude']))['health'] as
+      Record<string, unknown>;
+    expect(h['source'], 'the probe overwrote a verdict auth status had already given').toBe('auth-status');
+    expect(claudeArgv(home).some((a) => a.includes('-p ')), 'the probe ran anyway').toBe(false);
+  });
+
+  it('a lane that CLAIMS to be signed in still goes on to the probe', () => {
+    // spec:684-686, the half a short-circuit is easiest to get wrong: "Only a
+    // lane that claims to be logged in goes on to the probe." `loggedIn: true`
+    // is the reason to ask the expensive question, not the answer to it. So the
+    // classifier answers exit 4 (a fact, no verdict), `ACCT_HEALTH` stays empty,
+    // and the probe runs.
+    const home = box('ccrc-account-check-signedin-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_IN, 0);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    const h = j['health'] as Record<string, unknown>;
+    expect(h['source'], 'a signed-in lane short-circuited on auth status').toBe('probe');
+    // Task 29's probe is a stub, so the verdict itself is `unknown` here; what
+    // this case pins is WHICH SOURCE answered. Task 30's table pins the rest.
+    expect(h['verdict']).not.toBe('ok');
+    const notes = (j['notes'] as string[]).join(' ');
+    expect(notes).toContain('signed in');
+    expect(notes).toContain('claudeai');
+    // …and NOT the other fall-through's sentence: an older binary that cannot
+    // answer `auth` at all is a different fact from a lane that answered.
+    expect(notes).not.toContain('no parseable answer');
+  });
+
+  it('falls THROUGH to the probe when auth status gives no parseable answer', () => {
+    // An older Claude Code has no `auth` subcommand at all. That is not
+    // evidence about the credential, so the cheap check costs only itself —
+    // and the answer SAYS the cheap question was asked and gave nothing.
+    const home = box('ccrc-account-check-noauthsub-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, 'error: unknown command "auth"\n', 1);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    // THE EXIT CODE FIRST, so a fall-through that became a REFUSAL names itself
+    // rather than arriving as a TypeError on an absent `health` key.
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
+    expect((j['notes'] as string[]).join(' ')).toContain('no parseable answer');
+  });
+
+  it('goes straight to the probe on a non-anthropic lane, and says nothing about auth status', () => {
+    // `auth status` reads Claude Code's own credential store; an OpenRouter
+    // lane authenticates through the settings env block (spec:687-689).
+    const home = box('ccrc-account-check-openrouter-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantClaude(home, 'orchard-api');
+    authFixture(home, SIGNED_OUT, 1);
+    const j = oneObject(run(home, ['account', 'check', '--id', 'orchard-api']));
+    expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
+    expect(j['notes']).toEqual([]);
+    expect(claudeArgv(home).some((a) => a.startsWith('auth status')),
+      'auth status ran on a lane whose credential it cannot see').toBe(false);
+  });
+
+  it('reports a timed-out auth status as timeout, not as unknown', () => {
+    // No `linkReal` is needed and none exists in this file: unlike
+    // `ccrc-doctor.test.ts`, this suite's `env()` KEEPS the real PATH
+    // (`ghContainedEnv` PREPENDS the fixture bin rather than replacing PATH,
+    // ccdWsHelpers.ts:185), so `_plat_timeout` finds the box's own `timeout`
+    // and the stub finds `sleep`. `ccrc-cli.test.ts:80-86` says the same thing
+    // about the same runner, from the other side.
+    const home = box('ccrc-account-check-authslow-');
+    seedRosterJson(home, [UPSTREAM]);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'claude'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
+    const j = oneObject(run(home, ['account', 'check', '--id', 'claude'], '',
+      { CCRC_ACCOUNT_AUTH_TIMEOUT: '1' }));
+    const h = j['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe('timeout');
+    expect(h['source']).toBe('auth-status');
+    expect(String(h['detail'])).toContain('1s');
+  });
+
+  it('refuses an id the roster does not carry', () => {
+    const home = box('ccrc-account-check-unknown-');
+    seedRosterJson(home, [UPSTREAM]);
+    const r = run(home, ['account', 'check', '--id', 'lab-dev0']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('unknown-id');
+  });
+
+  it('refuses --id present with nothing in it, rather than dropping it (D-2148)', () => {
+    // A DEVIATION FROM THIS TASK'S PLAN SNIPPET, which carried no empty-flag
+    // guard at all. `add`, `declare` and `credential` all carry one, and the
+    // sentence downstream is the wrong one for what the operator did: without
+    // this guard `--id ''` reaches `_acct_id_or_refuse`'s "an account id is
+    // required: pass --id", telling somebody who typed an empty value that they
+    // typed no flag. Same class, same exit code, a different mistake.
+    const home = box('ccrc-account-check-emptyflag-');
+    seedRosterJson(home, [UPSTREAM]);
+    const r = run(home, ['account', 'check', '--id', '']);
+    expect(r.code, r.stderr).toBe(2);
+    const j = oneObject(r);
+    expect(j['error']).toBe('missing-value');
+    expect(String(j['detail'])).toContain('was given an empty value');
+    // AND THE OTHER GUARD ON THE SAME FLAG, which is a different sentence for a
+    // different mistake: nothing followed `--id` at all. Under `set -u` its
+    // deletion is not a wrong answer but an `unbound variable` on stderr with
+    // NO JSON on stdout — the one thing this verb's contract forbids.
+    const none = run(home, ['account', 'check', '--id']);
+    expect(none.code, none.stderr).toBe(2);
+    const nj = oneObject(none);
+    expect(nj['error']).toBe('missing-value');
+    expect(String(nj['detail'])).toContain('nothing followed it');
+  });
+
+  it('an account-op.mjs with no `health` op is a refusal WITH a body (D-2051)', () => {
+    // THE SECOND DEVIATION FROM THE PLAN SNIPPET, which spelled this call as
+    // `_acct_node health … || exit $?`. `_acct_add`'s own tail already argues
+    // the general case (ccd/ccrc:4917-4919): "Bare `_acct_node` will not do
+    // either — a half-updated box … answers exit 2 with an EMPTY body, and that
+    // is the seam this whole cluster exists to close." Measured with the bare
+    // call: exit 2 and stdout empty, so `oneObject` fails on a verb whose whole
+    // contract is one JSON object. `_acct_answer` is the right re-emit here and
+    // not at `added`'s address, because its hard-coded "Nothing was written."
+    // clause is TRUE of `check`: this verb reads and never writes.
+    const home = staleAtBox('ccrc-account-check-stale-health-', 'health');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('no-answer');
+    expect(String(j['detail'])).toContain('answer to \'health\'');
+    expect(String(j['detail'])).toContain('exited 2');
+    expect(String(j['detail'])).toMatch(/Nothing was written\.$/);
+  });
+
+  it('a generated lane that names no provider is an anthropic lane (§4.1)', () => {
+    // THE ABSENCE-PERMITTING RULE, MEASURED. `_acct_check`'s guard is on the
+    // PROVIDER, and the provider for this entry is decided by `lane`'s
+    // `e['provider'] ?? (kind === 'external' ? null : 'anthropic')`. The
+    // openrouter case above proves the guard refuses a non-anthropic lane; this
+    // proves what an ABSENT provider resolves to, which is the half the comment
+    // asserts and no fixture reached.
+    const home = box('ccrc-account-check-noprov-');
+    seedRosterJson(home, [UPSTREAM, NO_PROVIDER_LANE]);
+    plantClaude(home, 'alt-max');
+    authFixture(home, SIGNED_OUT, 1);
+    const j = oneObject(run(home, ['account', 'check', '--id', 'alt-max']));
+    const h = j['health'] as Record<string, unknown>;
+    expect(h['source'], 'a lane with no provider was treated as non-anthropic').toBe('auth-status');
+    expect(h['verdict']).toBe('auth-dead');
+    expect(claudeArgv(home)).toEqual(['auth status --json']);
+  });
+
+  it('an external lane is never asked either, and it arrives by the other route', () => {
+    const home = box('ccrc-account-check-external-');
+    seedRosterJson(home, [UPSTREAM, EXTERNAL_LANE]);
+    plantClaude(home, 'gpt');
+    authFixture(home, SIGNED_OUT, 1);
+    const j = oneObject(run(home, ['account', 'check', '--id', 'gpt']));
+    expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
+    expect(j['notes']).toEqual([]);
+    expect(claudeArgv(home), 'somebody else\'s launcher was run').toEqual([]);
+  });
+
+  it('parseable JSON that names no loggedIn field IS a verdict, and stops there', () => {
+    // THE THIRD ARM OF THE CLASSIFIER, and the one the exit-3 design turns on:
+    // something ANSWERED and had no opinion, which is not the same as nothing
+    // answering. So it is a row (`unknown`, source `auth-status`) rather than a
+    // deferral — and because a row is a verdict, the short-circuit fires and the
+    // probe is not spent. Told apart from the probe stub's own `unknown` by
+    // `source` alone, which is why that field is on the row at all.
+    const home = box('ccrc-account-check-noloop-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, '{"apiProvider":"firstParty"}\n', 0);
+    const j = oneObject(run(home, ['account', 'check', '--id', 'claude']));
+    const h = j['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe('unknown');
+    expect(h['source'], 'a verdict from auth status fell through to the probe').toBe('auth-status');
+    expect(String(h['detail'])).toContain('no loggedIn field');
+    expect(j['notes']).toEqual([]);
+  });
+
+  it('a classifier that cannot run is classify-failed, on BOTH halves of the verb', () => {
+    // D-2163: two shipped guards — `_acct_auth_status`'s `[ -n "$row" ]` and
+    // `_acct_probe`'s `||` — and nothing reached either. The input that does is
+    // an `account-op.mjs` with no `classify` op: it exits 2 with an EMPTY
+    // stdout, which is neither 3 nor 4 and carries no envelope to re-emit. Both
+    // lanes are driven on ONE box because the two halves are reached by
+    // different roads: the anthropic lane refuses inside the cheap question,
+    // the openrouter lane inside the probe it fell straight through to.
+    const home = staleAtBox('ccrc-account-check-stale-classify-', 'classify');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    for (const [id, half] of [['claude', 'exited 2 without printing anything'],
+      ['orchard-api', 'could not run']] as const) {
+      const r = run(home, ['account', 'check', '--id', id]);
+      expect(r.code, `${id}: ${r.stderr}`).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('classify-failed');
+      expect(String(j['detail'])).toContain(half);
+      expect(String(j['detail'])).toContain(id);
+    }
+  });
+
+  it('the knob is deleted by BOTH runners, so the answer never depends on the shell', () => {
+    // `ccrc doctor` takes no arguments (ccd/ccrc:2000), so a verb's knob is an
+    // env var — and an env var this suite does not delete is one an operator's
+    // exported shell can set. Two files carry the list; this reads both.
+    //
+    // IT SCANS FOR THE DELETION LOOP, NOT FOR THE NAME — a deviation from this
+    // task's plan snippet, which asserted `src.toContain('CCRC_ACCOUNT_AUTH_
+    // TIMEOUT')` over BOTH files. That is vacuous for the second one: this very
+    // assertion spells the knob, so `ccrc-account.test.ts` contains it whether
+    // or not anything deletes it, and the half of the claim that matters here
+    // went unmeasured. Measured with the name removed from `env()`'s array
+    // only: the snippet's form stayed GREEN.
+    const DELETES = /for \(const k of \[[^\]]*'CCRC_ACCOUNT_AUTH_TIMEOUT'[^\]]*\]\)\s*delete/;
+    const cli = readFileSync(join(REPO, 'server', 'test', 'ccrc-cli.test.ts'), 'utf8');
+    const self = readFileSync(join(REPO, 'server', 'test', 'ccrc-account.test.ts'), 'utf8');
+    for (const [name, src] of [['ccrc-cli.test.ts', cli], ['ccrc-account.test.ts', self]] as const) {
+      expect(DELETES.test(src), `${name} has no deletion array carrying `
+        + 'CCRC_ACCOUNT_AUTH_TIMEOUT, so this suite\'s answer depends on the '
+        + 'developer\'s exported shell').toBe(true);
+    }
   });
 });

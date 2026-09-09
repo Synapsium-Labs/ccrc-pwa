@@ -950,7 +950,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates credential declare roster"
+ACCT_SUBS="add candidates check credential declare roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -1060,6 +1060,18 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # tool, and a test must not wait out a production timeout. The DEFAULT is what
 # an operator gets.
 : "${CCRC_HEALTH_TIMEOUT:=5}"
+
+# ── ccrc account check: how long the CHEAP health question may take ───────
+# `claude auth status` is a LOCAL read — no inference, no network to the model
+# endpoint — so this is a deadline against a hung binary, not a budget.
+# Overridable for `CCRC_DOCTOR_GH_TIMEOUT`'s reason (ccrc-doctor-checks:152-158):
+# a route that hangs must not hang the tool, and a test must not wait out a
+# production timeout. The DEFAULT is what an operator gets. It joins BOTH test
+# runners' deletion arrays in the same commit (ccrc-cli.test.ts's `ccrcEnv` and
+# ccrc-account.test.ts's own copy), or the suite's answer starts depending on
+# the developer's exported shell — the rule `_acct_live`'s "A LITERAL 5, AND NO
+# KNOB" paragraph states from the other side.
+: "${CCRC_ACCOUNT_AUTH_TIMEOUT:=15}"
 
 # Out-parameters for the two readers below. `set -u` makes an unset array fatal
 # on read, so they are declared here rather than at first assignment. `BOX_*`
@@ -5700,6 +5712,167 @@ _acct_credential() {
   printf '%s\n' "$ACCT_OUT"
 }
 
+# ── check, half one: the question that costs nothing ──────────────────────
+# THE EXIT CODE IS NOT THE ANSWER. Measured 2026-09-07 on a scratch config dir:
+# `auth status --json`, `auth status` and `auth status --text` ALL exit 1 when
+# `loggedIn` is false — the command SUCCEEDED and reported a fact. A reader that
+# took rc as the verdict would classify every signed-out lane as `unknown`,
+# which is the one verdict that means "nobody could tell". So: parse stdout, and
+# treat a non-zero exit carrying parseable JSON as an ANSWER.
+#
+# `--json` IS PASSED FOR INTENT, NOT FOR EFFECT. With stdout not a tty the flag
+# and the bare form are byte-identical (same measurement), so nothing here may
+# assume the flag is what makes the output JSON.
+#
+# NO PARSEABLE ANSWER IS NOT A VERDICT, and the classifier says so with EXIT 3
+# and an empty stdout rather than with a verdict word. An `unknown` row would BE
+# a verdict, and the `[ -n "$ACCT_HEALTH" ]` test below would short-circuit on
+# it — which is exactly how a first draft made its own fall-through unreachable.
+#
+# NEITHER IS `loggedIn: true`, AND THAT IS EXIT 4. The short-circuit is
+# ONE-SIDED: only `loggedIn: false` is a verdict. A present credential says
+# nothing about whether the lane's base URL answers, whether its model map names
+# a model the endpoint serves, or whether the subscription has quota, and §8's
+# `ok` is defined as exit 0 from a real `-p`, which this has not run. So the
+# signed-in case is a FACT and not a verdict: exit 4, with the one sentence to
+# carry on stdout, appended to ACCT_NOTES here. Three and four are two
+# conditions the caller phrases differently — "the cheap question gave no
+# parseable answer" versus "the lane says it is signed in" — so they must not
+# share an exit code any more than they may share an empty string (CLAUDE.md,
+# "No overloaded null at a seam").
+#
+# Extra codes on a node HELPER are this file's neighbour's idiom: `_check_wrappers`'
+# roster reader answers 3, 4 and 6 for three unreadable-roster conditions and
+# `ccrc-doctor-checks:2300-2316` branches on each. Nothing propagates 3 or 4 to the
+# operator, so they are invisible to this file's own 0/1/2 table (:24-33).
+#
+# `_acct_node` DIRECTLY, NOT `_acct_read_op`, and the reason is measured rather
+# than asserted: that wrapper is `_acct_run_op`, whose body is
+# `[ "$rc" -eq 0 ] && return 0` / `[ -n "$ACCT_OUT" ] || _acct_no_answer …` /
+# `exit "$rc"`. On exit 3 (empty stdout by contract) it would call
+# `_acct_no_answer` and REFUSE the fall-through this verb exists to have; on
+# exit 4 it would print the plain-text note as though it were the verb's answer
+# and `exit 4`. Both are the "every non-zero is a refusal to re-emit" reading,
+# and this reader has two non-zero codes that are neither.
+#
+# BOTH OUT-PARAMETERS ARE DECLARED HERE, above their first reader. `set -u`
+# makes an unset array fatal on read, and `_acct_check` resets both before every
+# call — the reason `BOX_*`'s two readers declare theirs at file scope too
+# (:1082-1084).
+ACCT_HEALTH=""
+ACCT_NOTES=()
+_acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to ACCT_NOTES
+  local id="$1" out="" rc=0 row="" crc=0
+  ACCT_HEALTH=""
+  out="$(_plat_timeout "$CCRC_ACCOUNT_AUTH_TIMEOUT" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 124 ]; then
+    # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
+    # THIRD thing again: neither an answer nor a parse failure. The body is
+    # whatever the killed launcher had flushed, so it is not offered at all.
+    row="$(printf '' | _acct_node classify --source auth-status --exit 124 \
+      --timed-out true --deadline "$CCRC_ACCOUNT_AUTH_TIMEOUT")" || crc=$?
+  else
+    row="$(printf '%s' "$out" | _acct_node classify --source auth-status --exit "$rc")" || crc=$?
+  fi
+  if [ "$crc" -eq 3 ]; then
+    ACCT_NOTES+=("auth status gave no parseable answer on this box, so the verdict below is the probe's")
+    return 0
+  fi
+  if [ "$crc" -eq 4 ]; then
+    # The classifier's one line of plain text, carried verbatim: it names the
+    # authMethod the lane reported, and the sentence is the classifier's because
+    # that is the half that read the field.
+    ACCT_NOTES+=("$row")
+    return 0
+  fi
+  if [ "$crc" -ne 0 ]; then
+    [ -n "$row" ] \
+      || _acct_refuse 1 classify-failed "the health classifier exited $crc without printing anything, so this box measured nothing about account $id - read the account-op: line above. Nothing was written."
+    printf '%s\n' "$row"
+    exit "$crc"
+  fi
+  ACCT_HEALTH="$row"
+}
+
+# ── check, half two: the question that costs a request ────────────────────
+# STUB. Task 30 replaces this body whole and adds the deadline, the scratch cwd
+# and the `~/.cc-limits` measurement. It answers `unknown` rather than `ok`
+# because §8's table ends "anything else — never reported as ok", and a build
+# that cannot run the probe has measured exactly nothing. The failure arm is not
+# decoration: without it a classifier that could not run would leave
+# `ACCT_HEALTH` empty and the `health` op would refuse an empty `--row`, which
+# is a worse sentence than this one.
+ACCT_LIMITS_TOUCHED=false
+_acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
+  ACCT_LIMITS_TOUCHED=false
+  ACCT_HEALTH="$(printf '%s' '{}' | _acct_node classify --source probe --exit 0)" \
+    || _acct_refuse 1 classify-failed "the health classifier could not run, so this box measured nothing about account $1 - read the account-op: line above. Nothing was written."
+}
+
+_acct_check() {
+  local id="" v="" flag=""
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id)
+        [ $# -ge 2 ] \
+          || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
+        v="$2"; shift ;;
+      --id=*) v="${1#*=}" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account check has no argument \"$1\"" ;;
+    esac
+    # A FLAG GIVEN AN EMPTY VALUE IS NOT A FLAG NOBODY GAVE (D-2144, D-2148) —
+    # the loop `add`, `declare` and `credential` all carry, at this verb's
+    # address, and a DEVIATION from this task's plan snippet, which had none.
+    # This verb's one flag does have a downstream gate, and that gate answers
+    # the wrong sentence: `--id ''` reaches `_acct_id_or_refuse`'s "an account
+    # id is required: pass --id", which tells an operator who typed an empty
+    # value that they typed no flag at all.
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value. A flag present with nothing in it is not the same as a flag nobody passed, so it is refused rather than dropped: give it a value, or leave it off. Nothing was written."
+    case "$flag" in --id) id="$v" ;; esac
+    shift
+  done
+  _acct_id_or_refuse "$id"
+  _acct_lane "$id"
+  ACCT_HEALTH=""
+  ACCT_NOTES=()
+
+  # ANTHROPIC ONLY, AND GATED ON THE PROVIDER, NOT THE KIND. An OpenRouter or
+  # `compatible` lane authenticates through the settings.json env block and the
+  # `openai` lane's credential is its launcher's, so neither has anything for
+  # Claude Code's own credential store to report. The provider comes from
+  # `_acct_lane`, where an `upstream` account resolves to `anthropic` by
+  # construction and a `generated` account with no `provider` resolves to
+  # `anthropic` under §4.1's absence-permitting rule.
+  #
+  # THE NOTE IS THE READER'S, NOT THIS FUNCTION'S. An earlier draft phrased it
+  # here, from `[ -n "$ACCT_HEALTH" ]` — which cannot tell "nothing answered"
+  # from "the lane says it is signed in", the two conditions that both leave
+  # ACCT_HEALTH empty. `_acct_auth_status` branches on the classifier's exit
+  # code and appends the right sentence itself; all this needs to know is
+  # whether a verdict came back.
+  if [ "$ACCT_PROVIDER" = anthropic ]; then
+    _acct_auth_status "$id"
+  fi
+  [ -n "$ACCT_HEALTH" ] || _acct_probe "$id"
+
+  local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
+  local n=""
+  for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$n"); done
+  # `_acct_answer`, NOT BARE `_acct_node` — a DEVIATION from this task's plan
+  # snippet, and D-2051's defect at a new address. `_acct_add`'s own tail states
+  # the general case (:4917-4919): a half-updated box, one whose
+  # `account-op.mjs` has no `health` op, answers exit 2 with an EMPTY body, and
+  # a verb whose whole contract is one JSON object would hand its caller an exit
+  # code and nothing to parse. `_acct_answer` is right HERE and was wrong at
+  # `added`'s address for one reason: it hard-codes "Nothing was written." as
+  # its no-answer clause, and that clause is TRUE of `check`, which reads a
+  # credential store and a roster and writes nothing at all.
+  _acct_answer health "${args[@]}" || exit $?
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -5764,6 +5937,14 @@ cmd_account() {
       # about them. Every failure path inside it `exit`s, so the `return 0`
       # below is reached only when the file was replaced and the report printed.
       _acct_credential "$@"
+      return 0
+      ;;
+    check)
+      # NO `[ $# -eq 0 ]` GATE, `add`'s reason at a fourth address: this
+      # subcommand TAKES arguments and `_acct_check` owns every refusal about
+      # them. Every failure path inside it `exit`s, so the `return 0` below is
+      # reached only when the answer was printed.
+      _acct_check "$@"
       return 0
       ;;
     declare)

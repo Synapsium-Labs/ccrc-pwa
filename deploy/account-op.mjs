@@ -599,7 +599,82 @@ const OPS = {
   // the list itself precisely so an EMPTY list and an UNMEASURED one are two
   // argv shapes rather than one.
   rotated: { keys: ['id', 'measured', 'live'], repeat: ['live'] },
+  // THE ONE OP THAT READS STDIN, and the header's "no secret ever reaches this
+  // file" rule survives intact — what arrives is a LAUNCHER's own diagnostic
+  // JSON (`{"loggedIn":…}`, `{"type":"result",…}`) and never a credential.
+  // `--timed-out` is spelled `--timed-out true` and never as a bare flag:
+  // `readPairs` walks STRICT `--key value` pairs, so a bare one would swallow
+  // the next flag as its value and then refuse the token after it.
+  classify: { keys: ['source', 'exit', 'timed-out', 'deadline'], repeat: [] },
+  // `note` REPEATS — `candidates`' pair at a fourth address and for its reason:
+  // one JSON blob on argv would put a value bash built with `printf` back into
+  // the JSON-shaped position this file owns.
+  health: { keys: ['id', 'row', 'limits-touched', 'note'], repeat: ['note'] },
 };
+
+/** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
+ *  classifier server-side (L1, `accounts/health.ts`, pure over the verb's JSON),
+ *  and wave 2 must DERIVE from this rather than re-spell it:
+ *  `single-definition.test.ts` scans `.tsx?` only (its `sources()` filter) and
+ *  its four ROOTS do not include `deploy/`, so it is structurally blind to this
+ *  file — which is D-1860, and why the scan that keeps the two honest is
+ *  hand-written and lives beside its subject (Task 33 writes the first one).
+ *
+ *  `subtype` is `'success'` on every one of these failures and is NEVER read.
+ *  Neither is the exit code, on its own: `auth status` exits 1 while reporting a
+ *  fact, so `exit` enters only as evidence beside the body.
+ *
+ *  IT RETURNS ONE OF THREE THINGS, AND NEVER A BARE `null` FOR TWO OF THEM. A
+ *  row is a verdict. `defer(null)` is "this source produced no verdict and has
+ *  nothing to say" — the caller turns it into exit 3. `defer('<sentence>')` is
+ *  "no verdict, but here is a fact worth carrying" — exit 4, the sentence on
+ *  stdout. The two deferrals are separate because the bash half phrases them
+ *  differently for the operator, and a shared `null` would be exactly the
+ *  overloaded seam this cluster objects to everywhere else. */
+const defer = (note) => ({ deferred: true, note });
+
+function classify(source, body, exit, timedOut, deadline) {
+  const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const row = (verdict, detail) => ({ verdict, measuredAt: at, detail, source });
+  if (timedOut) return row('timeout', `${source} did not answer within ${deadline}s`);
+  let j = null;
+  try { j = JSON.parse(body); } catch { j = null; }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) {
+    // NOT a verdict for `auth status`: the caller falls through to the probe,
+    // and it has nothing to report except that it asked.
+    return source === 'auth-status'
+      ? defer(null)
+      : row('unknown', `the probe printed no JSON object (exit ${exit})`);
+  }
+  if (source === 'auth-status') {
+    if (j.loggedIn === true) {
+      // NOT `ok`. THE SHORT-CIRCUIT IS ONE-SIDED: only a lane that claims to be
+      // logged in goes ON to the probe — a live credential is the precondition
+      // for the expensive question, not an answer to it. §8's `ok` row is exit 0
+      // and `is_error !== true` from a real `-p`, which this has not run.
+      return defer(`the lane reports itself signed in (${j.authMethod ?? 'method not stated'}); `
+        + 'the verdict below is the probe\'s, which is the question that costs something');
+    }
+    if (j.loggedIn === false) {
+      // The one human line `auth status --text` prints, quoted because the card
+      // quotes it.
+      return row('auth-dead', 'Not logged in. Run claude auth login to authenticate.');
+    }
+    // Parseable JSON that says nothing about login IS a verdict: something
+    // answered and had no opinion, which is not the same as nothing answering.
+    return row('unknown', 'auth status named no loggedIn field');
+  }
+  return classifyProbe(row, j, exit);
+}
+
+/** STUB, replaced whole by Task 30. It exists in THIS commit because
+ *  `classify` calls it on every `--source probe` and an undefined function is a
+ *  ReferenceError, not a verdict: node would exit non-zero, the bash half would
+ *  refuse `classify-failed`, and this task's own fall-through and
+ *  non-anthropic cases could not pass. */
+function classifyProbe(row, _j, _exit) {
+  return row('unknown', 'this build does not run the probe yet');
+}
 
 function out(o) {
   process.stdout.write(`${JSON.stringify(o)}\n`);
@@ -1604,6 +1679,66 @@ function main(argv) {
       // so they are decided once, here, from a flag bash had to set on purpose
       // — never inferred from an empty list.
       live: a['measured'] === 'true' ? (a['live'] ?? []) : null,
+    });
+    return 0;
+  }
+
+  if (op === 'classify') {
+    const source = a['source'];
+    if (source !== 'auth-status' && source !== 'probe') {
+      refuse('bad-argv', 'classify needs --source auth-status|probe'); return 2;
+    }
+    if (a['exit'] === undefined || !/^[0-9]+$/.test(a['exit'])) {
+      refuse('bad-argv', 'classify needs --exit <number>'); return 2;
+    }
+    // THE ONE OP THAT READS STDIN, and the header's rule survives intact: what
+    // arrives here is a LAUNCHER's own diagnostic JSON — `{"loggedIn":…}` or
+    // `{"type":"result",…}` — and never a credential. `--credential -` remains
+    // the only spelling that reads a secret and it is read in bash
+    // (`_acct_read_credential`), which is what keeps this CLI loggable.
+    // `readFileSync(0)` rather than a stream, so `main` stays synchronous.
+    let body = '';
+    try { body = readFileSync(0, 'utf8'); } catch { body = ''; }
+    const row = classify(source, body, Number(a['exit']),
+      a['timed-out'] === 'true', a['deadline'] ?? '?');
+    if (row.deferred === true) {
+      // EXIT 3, EMPTY STDOUT: "this source produced no verdict, and nothing to
+      // say about it". EXIT 4, ONE LINE OF PLAIN TEXT: "no verdict, but carry
+      // this fact". Neither is a refusal — nothing is wrong with the box — and
+      // neither is a row, because a row would be a verdict the caller would
+      // short-circuit on. Exit 4 is the ONLY stdout in this module that is not
+      // a JSON object; it is read by `_acct_auth_status`'s `$( )` and appended
+      // to the answer's `notes`, so the VERB's stdout is still exactly one JSON
+      // object. If a third deferral ever needs a shape richer than a sentence,
+      // it gets its own code and its own reader — not a JSON body on this one.
+      if (row.note === null) return 3;
+      process.stdout.write(`${row.note}\n`);
+      return 4;
+    }
+    out(row);
+    return 0;
+  }
+
+  if (op === 'health') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'health needs --id'); return 2; }
+    let row = null;
+    try { row = JSON.parse(a['row'] ?? ''); } catch { row = null; }
+    if (row === null || typeof row !== 'object' || typeof row.verdict !== 'string') {
+      // THE VERB'S OWN STDOUT CANNOT BE HALF-BUILT. A first draft spliced the
+      // row into a bash string, so an empty `ACCT_HEALTH` printed
+      // `…,"health":` — invalid JSON reaching the caller that parses it. Here
+      // the row is re-serialised by the writer that owns every byte of stdout,
+      // and a row it cannot parse is a sentence rather than a broken body.
+      refuse('classify-failed',
+        `the health classifier produced no readable row for "${a['id']}", so nothing was measured`);
+      return 1;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      health: row,
+      limitsTouched: a['limits-touched'] === 'true',
+      notes: a['note'] ?? [],
     });
     return 0;
   }
