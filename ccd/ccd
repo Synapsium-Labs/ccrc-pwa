@@ -13657,7 +13657,13 @@ _redrive_after_spawn() {   # id tmuxname — D-2231: type the resume prompt when
     echo "$pane" | grep -q "esc to interrupt" && return 0
     sleep 1
   done
+  # Re-measure both loop conditions once more: the loop's own last check was one
+  # second ago, and Claude Code's own re-drive (or the operator) can start a turn
+  # in that gap. Typing into a turn that started here would be exactly the
+  # spurious keystroke the header comment promises never happens (D-TBD-redrive-race).
+  _transcript_stalled_pair "$f"; [[ $? -eq 0 ]] || return 0
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+  echo "$pane" | grep -q "esc to interrupt" && return 0
   _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
   cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")

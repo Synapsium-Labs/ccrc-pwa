@@ -143,6 +143,26 @@ describe('_redrive_after_spawn', () => {
     expect(redrive({ PANE_TEXT: ARMED })).toEqual([]);
     expect(swapLog()).toMatch(/ redrive-skip myid: auto-continue armed/);
   });
+  it('types nothing over a hard-blocked pane, and says so', () => {
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    expect(redrive({ PANE_TEXT: '5-hour limit reached · resets 3pm\n❯ ' })).toEqual([]);
+    expect(swapLog()).toMatch(/ redrive-skip myid: hard-blocked pane/);
+  });
+  it('re-measures after the wait: a turn that starts in the final second is not typed into', () => {
+    // capture-pane answers READY for every call the loop makes, then 'esc to interrupt'
+    // on the one re-measurement call after the loop — the race the loop's own last check
+    // (one second earlier) cannot see.
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    const RACE_STUBS = `sleep() { :; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+        case "\${1:-}" in capture-pane)
+          n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0); echo $((n+1)) > "$HOME/pane-calls";
+          if [[ "$n" -ge 20 ]]; then printf '%s\\n' 'thinking… esc to interrupt'; else printf '%s\\n' "\${PANE_TEXT:-}"; fi ;;
+        esac; return 0; };
+      _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
+    h.sh(`${RACE_STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: READY });
+    expect(sendKeys()).toEqual([]);
+  });
   it('types nothing over a draft in the box, and says so', () => {
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
     expect(redrive({ BOX_DRAFT: 'half-typed' })).toEqual([]);
