@@ -154,15 +154,30 @@ describe('ccrc memory --apply — the union', () => {
     expect(fs.readFileSync(path.join(storeDir(), 'b.md'), 'utf8')).toBe('B');
   });
 
+  // I6 (review round 1): home order is glob-COLLATION order, not a fixed
+  // alphabetical order — `.claude` sorts before `.claude-corp` under
+  // `en_US.UTF-8`, but `-` (0x2D) sorts AFTER `/` (0x2F, the path separator
+  // ending a glob candidate) is irrelevant here; what matters is that under
+  // `LC_ALL=C`, `.claude-corp` sorts BEFORE `.claude` (`-` 0x2D < nothing —
+  // the shorter string is a prefix under byte-order too, but `C` and
+  // `en_US.UTF-8` do not always agree on multi-byte/punctuation ordering in
+  // general, and this suite's own `ccrc-doctor.test.ts` already runs its
+  // `doctorEnv` under `LC_ALL: 'C'`). Measured: the original version of this
+  // test — asserting `n.includes('claude-corp')` on the suffixed name — went
+  // RED under `LC_ALL=C ./node_modules/.bin/vitest run test/ccrc-memory.test.ts
+  // -t 'KEEPS BOTH'`, because under `C` collation `.claude-corp` is absorbed
+  // FIRST and the suffix names `.claude` instead. The RULE (both bodies
+  // survive, never one silently) holds under either order; only the identity
+  // of which home's copy is unsuffixed depends on order. Assert the rule, not
+  // an order this test does not control.
   it('KEEPS BOTH when the same filename differs — never picks a winner', () => {
     seed('.claude', '-p-demo', { 'same.md': 'first' });
     seed('.claude-corp', '-p-demo', { 'same.md': 'second' });
     run(['memory', '--apply']);
-    const names = fs.readdirSync(storeDir()).sort();
-    expect(names).toContain('same.md');
-    expect(names.some((n) => n.startsWith('same.') && n.includes('claude-corp'))).toBe(true);
-    const bodies = names.filter((n) => n.startsWith('same.'))
-      .map((n) => fs.readFileSync(path.join(storeDir(), n), 'utf8')).sort();
+    const names = fs.readdirSync(storeDir()).filter((n) => n.startsWith('same.')).sort();
+    expect(names).toHaveLength(2);
+    expect(names.every((n) => /^same\.(claude|claude-corp)\.md$/.test(n) || n === 'same.md')).toBe(true);
+    const bodies = names.map((n) => fs.readFileSync(path.join(storeDir(), n), 'utf8')).sort();
     expect(bodies).toEqual(['first', 'second']);
   });
 
@@ -194,11 +209,19 @@ describe('ccrc memory --apply — the union', () => {
       .toEqual(['MEMORY.md']);
   });
 
-  it('backs up each source directory before replacing it', () => {
+  // I5 (review round 1): the original assertion here checked for a directory
+  // NAME starting with `memory.pre-ccrc-` and nothing else — it passed
+  // against a mutation that did `mkdir -p "$bk"; rm -rf "$link"` (an EMPTY
+  // backup and a deleted source), because an empty directory still has the
+  // right name. The backup is the sole recovery path for C1, C2 and I3, so
+  // this is the assertion that most needs to check a byte actually arrived.
+  it('backs up each source directory before replacing it, with the bytes intact', () => {
     seed('.claude', '-p-demo', { 'a.md': 'A' });
     run(['memory', '--apply']);
     const parent = path.join(home, '.claude', 'projects', '-p-demo');
-    expect(fs.readdirSync(parent).some((n) => n.startsWith('memory.pre-ccrc-'))).toBe(true);
+    const backupName = fs.readdirSync(parent).find((n) => n.startsWith('memory.pre-ccrc-'));
+    expect(backupName).toBeDefined();
+    expect(fs.readFileSync(path.join(parent, backupName!, 'a.md'), 'utf8')).toBe('A');
   });
 
   it('re-points a symlink that targets another HOME, not the store', () => {
@@ -265,5 +288,113 @@ describe('ccrc memory --apply — the union', () => {
     }
     expect(r.code).not.toBe(0);
     expect(r.out).toContain('cannot create');
+  });
+
+  // C1 (review round 1, Critical): no `cp` inside `_mem_absorb` was checked,
+  // so a copy failure was invisible and `_mem_apply` went on to back up,
+  // relink and print `converged` anyway — measured live: a store at mode
+  // 0500 produced `cp: … Permission denied` on stderr, then `ccrc memory:
+  // converged .claude -p-demo`, exit 0, an EMPTY store, and the only trace
+  // of the original file was a `memory.pre-ccrc-*` backup whose path was
+  // never printed. Pre-create the store (so `mkdir -p` on it is a no-op,
+  // unlike the R9 test above which targets the store's PARENT) and strip
+  // write permission from the store itself, so `mkdir -p` succeeds but every
+  // `cp` into it fails. Restore the mode so `afterEach` can still clean up.
+  it('C1: a failed copy is refused, not reported as a false success', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    fs.mkdirSync(storeDir(), { recursive: true });
+    fs.chmodSync(storeDir(), 0o500);
+    let r: { code: number; out: string };
+    try {
+      r = run(['memory', '--apply']);
+    } finally {
+      fs.chmodSync(storeDir(), 0o700);
+    }
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('could not absorb');
+    // refuse to `mv` the source away when absorb failed: the original
+    // directory must still be a real directory, not a symlink, with its
+    // file still in it — not renamed into an unannounced backup.
+    const link = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(link, 'a.md'), 'utf8')).toBe('A');
+  });
+
+  // C2 (review round 1, Critical): the conflict-suffix `cp` overwrote its
+  // destination unconditionally — M1's forbidden silent winner, one filename
+  // later. This needs to be deterministic regardless of home glob/collation
+  // order (I6's lesson, applied here too), so it deliberately involves only
+  // ONE home: pre-populate the store as if an EARLIER absorption already
+  // happened — a `same.md` from whoever converged first, and a
+  // `same.claude-corp.md` that already occupies the EXACT slot
+  // `.claude-corp`'s own differing `same.md` would compute below. Then let
+  // `.claude-corp` (forked — its `memory` entry is a plain, unconverted
+  // directory) absorb its differing `same.md`. The old code computed that
+  // same destination and clobbered the pre-existing file with no check at
+  // all; the fix must walk to the next free — or byte-identical — numbered
+  // slot instead.
+  it('C2: never overwrites a pre-existing suffixed file — the same rule, one filename later', () => {
+    fs.mkdirSync(storeDir(), { recursive: true });
+    fs.writeFileSync(path.join(storeDir(), 'same.md'), 'already-unioned');
+    fs.writeFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'pre-existing, unrelated');
+    seed('.claude-corp', '-p-demo', { 'same.md': 'from-claude-corp' });
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(storeDir(), 'same.md'), 'utf8')).toBe('already-unioned');
+    // the pre-existing file must survive completely untouched
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'utf8'))
+      .toBe('pre-existing, unrelated');
+    // .claude-corp's differing same.md must still land somewhere — the next free slot
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.2.md'), 'utf8'))
+      .toBe('from-claude-corp');
+  });
+
+  // I3 (review round 1, Important): anything in the source directory that
+  // isn't a top-level `*.md` file is out of scope for the union by design
+  // (a "memory file" is a top-level `.md` file) — but that was previously
+  // silent: the run said `converged` and named nothing. Seed a plain file, a
+  // README with no extension, and a SUBDIRECTORY holding its own `.md` file
+  // (a real memory file, just not a top-level one) — none of the three
+  // should reach the store, but the run must now say how many were left and
+  // where, and the bytes must actually be sitting there.
+  it('I3: leftover non-top-level entries are counted, and the backup path is always named', () => {
+    const dir = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
+    fs.mkdirSync(path.join(dir, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a.md'), 'A');
+    fs.writeFileSync(path.join(dir, 'scratch.txt'), 'not a memory file');
+    fs.writeFileSync(path.join(dir, 'README'), 'not a memory file either');
+    fs.writeFileSync(path.join(dir, 'notes', 'deep.md'), 'a real memory file, just not top-level');
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
+    // three top-level entries were left behind: scratch.txt, README, notes/
+    expect(r.out).toMatch(/NOTE: 3 entries not migrated, left in (\S+)/);
+    const backup = /NOTE: 3 entries not migrated, left in (\S+)/.exec(r.out)?.[1];
+    expect(backup).toBeDefined();
+    expect(fs.readFileSync(path.join(backup!, 'scratch.txt'), 'utf8')).toBe('not a memory file');
+    expect(fs.readFileSync(path.join(backup!, 'notes', 'deep.md'), 'utf8'))
+      .toBe('a real memory file, just not top-level');
+    // the backup path is also named on the plain "converged" line, regardless of NOTE
+    expect(r.out).toMatch(new RegExp(`converged .* \\(backup: ${backup!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
+  });
+
+  // I4 (review round 1, Important): `readlink`'s raw text is meaningless on
+  // its own for a RELATIVE symlink target — it means something different
+  // resolved from the link's own directory than from this process's CWD.
+  // Measured: a link `../../../shared-memory` (relative) holding a real
+  // memory file absorbed NOTHING, the link was still re-pointed and the run
+  // still said `converged`, and the only reference to the real data
+  // vanished. Build a genuinely relative symlink with `path.relative` so
+  // this test does not depend on where the process happens to be run from.
+  it('I4: a RELATIVE symlink target resolves against the link, not the process CWD', () => {
+    const shared = path.join(home, 'shared-memory');
+    fs.mkdirSync(shared, { recursive: true });
+    fs.writeFileSync(path.join(shared, 'shared.md'), 'S');
+    const d = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(path.relative(d, shared), path.join(d, 'memory'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(storeDir(), 'shared.md'), 'utf8')).toBe('S');
   });
 });

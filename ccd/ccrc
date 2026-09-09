@@ -1092,9 +1092,9 @@ already running).
             per pair naming its home, project slug and state — converged,
             forked or absent — then a summary count. Read-only unless
             [--apply] is given, which unions every forked pair into
-            ~/.ccrc/memory/<slug>, backs up each source directory, and
-            symlinks every home to the shared store. Homes are enumerated
-            from the filesystem, never the roster.
+            ~/.ccrc/memory/<slug>, backs up any real directory it replaces,
+            and symlinks every home to the shared store. Homes are
+            enumerated from the filesystem, never the roster.
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -2970,37 +2970,99 @@ _mem_index_line() {   # <file> -> "- [name](file) — description", or nothing
   printf -- '- [%s](%s) — %s\n' "$name" "$(basename -- "$f")" "$desc"
 }
 
-_mem_rebuild_index() {   # <store>
+# m3 (review round 1): the original body was `{ … } > "$tmp" 2>/dev/null`. A
+# `2>/dev/null` on the SAME command as a failing `>` redirect does not catch
+# that redirect's own failure — bash reports "cannot open $tmp" on the real
+# stderr before the command (and its own redirections) ever run, because the
+# `>` is set up first and aborts the whole thing right there. Measured: an
+# unwritable store leaked `ccd/ccrc: line NNNN: …/.MEMORY.md.new: Permission
+# denied` straight past this function. Wrapping the redirecting command in an
+# OUTER group and hanging `2>/dev/null` off THAT outer group does catch it
+# (verified empirically — the inner failure now happens after the outer
+# group's own fd 2 is already /dev/null). The tool must name its own failure
+# from here on; the shell must not be the one naming it for us.
+_mem_rebuild_index() {   # <store> -> 0, or 1 with the tool's own diagnostic
   local store="$1" f tmp="$1/.MEMORY.md.new"
-  { printf '# Memory index\n\n'
-    for f in "$store"/*.md; do
-      [ -f "$f" ] || continue
-      case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
-      _mem_index_line "$f"
-    done
-  } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$store/MEMORY.md"
+  { { printf '# Memory index\n\n'
+      for f in "$store"/*.md; do
+        [ -f "$f" ] || continue
+        case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
+        _mem_index_line "$f"
+      done
+    } > "$tmp"
+  } 2>/dev/null || { rm -f -- "$tmp"; echo "ccrc memory: could not build the index for $store" >&2; return 1; }
+  mv -f -- "$tmp" "$store/MEMORY.md" \
+    || { echo "ccrc memory: could not write $store/MEMORY.md" >&2; return 1; }
 }
 
-_mem_absorb() {   # <src-dir> <store> <home-basename>
+_mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
+                   # stdout; returns 1 (with its own stderr diagnostics) if
+                   # any copy failed, 0 otherwise.
   # R6: `tag` strips a leading dot from the home basename (`.claude-corp` ->
   # `claude-corp`) — every agent home starts with one, so leaving it in would
   # make a conflict suffix read `same..claude-corp.md` (a double dot). Purely
   # cosmetic: it changes nothing about which files collide or how.
-  local src="$1" store="$2" tag="${3#.}" f base dest
-  for f in "$src"/*.md; do
-    [ -f "$f" ] || continue
+  #
+  # I3 (review round 1): this function is deliberately narrow — a "memory
+  # file" is a TOP-LEVEL `*.md` file; nothing recurses into a subdirectory
+  # and nothing that isn't `.md` is touched. That narrowness used to be
+  # silent — measured: a `scratch.txt`, a `README` and a `notes/deep.md`
+  # (itself a real memory file, just not a top-level one) all vanished from
+  # the run's output while the source directory was backed up and replaced
+  # by a symlink out from under them. `left` counts every top-level entry
+  # this pass did NOT take, so the caller can tell the operator how much is
+  # sitting, untouched, in whatever this pair's backup turns out to be — the
+  # bytes were never lost, only unmentioned.
+  #
+  # C1 (review round 1): every `cp` is now checked. A copy failure is a
+  # DIFFERENT fact from "this wasn't a memory file" (the `left` count above)
+  # — it means the union did not fully land, and the caller must refuse to
+  # treat the pair as converged or move anything away. `err` reports that
+  # fact through the exit status; `left` reports its own fact through
+  # stdout — a shell function hands back exactly one exit code, so the two
+  # can't share it without collapsing two conditions a caller must handle
+  # differently onto one value, which is the overloaded-null defect this
+  # branch's own conventions forbid.
+  local src="$1" store="$2" tag="${3#.}" f base dest sdest n left=0 err=0
+  for f in "$src"/*; do
+    [ -e "$f" ] || continue
     base=$(basename -- "$f")
-    case "$base" in MEMORY.md) continue ;; esac   # rebuilt, never merged
+    if [ -d "$f" ]; then left=$((left+1)); continue; fi
+    case "$base" in
+      MEMORY.md) continue ;;               # rebuilt, never merged — not "left behind"
+      *.md) : ;;                           # a memory file — absorbed below
+      *) left=$((left+1)); continue ;;     # I3: not a memory file — left for the operator
+    esac
     dest="$store/$base"
-    if [ ! -e "$dest" ]; then cp -p -- "$f" "$dest"; continue; fi
-    cmp -s -- "$f" "$dest" && continue            # byte-identical: one file
-    cp -p -- "$f" "$store/${base%.md}.$tag.md"    # differs: keep BOTH
+    if [ ! -e "$dest" ]; then
+      cp -p -- "$f" "$dest" \
+        || { echo "ccrc memory: could not copy $f to $dest" >&2; err=$((err+1)); }
+      continue
+    fi
+    cmp -s -- "$f" "$dest" && continue      # byte-identical: one file
+    # C2 (review round 1): differs from what's there — keep BOTH, but the
+    # suffixed slot may ALREADY be taken by an earlier, unrelated absorption
+    # (M1's forbidden silent winner, one filename later — measured: a
+    # pre-existing `same.claude-corp.md` was destroyed, unconditionally
+    # overwritten, by a same-named suffix from a genuinely different file).
+    # Never overwrite it blind: walk forward to the next free — or
+    # byte-identical — numbered slot instead.
+    n=1
+    sdest="$store/${base%.md}.$tag.md"
+    while [ -e "$sdest" ] && ! cmp -s -- "$f" "$sdest"; do
+      n=$((n+1))
+      sdest="$store/${base%.md}.$tag.$n.md"
+    done
+    [ -e "$sdest" ] && continue             # identical to what's already at that slot
+    cp -p -- "$f" "$sdest" \
+      || { echo "ccrc memory: could not copy $f to $sdest" >&2; err=$((err+1)); }
   done
+  printf '%s\n' "$left"
+  [ "$err" -eq 0 ]
 }
 
 _mem_apply() {
-  local h b slug d link store stamp bk
+  local h b slug d link store stamp bk src left plural
   stamp=$(date -u +%Y%m%d-%H%M%S)
   for h in $(_mem_homes); do
     b=$(basename -- "$h")
@@ -3019,23 +3081,58 @@ _mem_apply() {
       store="$HOME/.ccrc/memory/$slug"
       [ "$(_mem_state "$h" "$slug")" = converged ] && continue
       mkdir -p -- "$store" || { echo "ccrc memory: cannot create $store" >&2; return 1; }
+      # `bk` is reset every pair: a plain-directory pair sets it below, but a
+      # SYMLINK pair never does, and `local` lives for the whole function —
+      # without this reset a symlink pair processed right after a
+      # plain-directory one would print the PREVIOUS pair's backup path on
+      # its own "converged" line.
+      bk=""
       if [ -L "$link" ]; then
+        # I4 (review round 1): resolve THROUGH the link to an absolute,
+        # canonical path before handing it to `_mem_absorb`. `readlink`'s raw
+        # text means something different resolved from the link's own
+        # directory than from this process's CWD — a RELATIVE target
+        # (measured: `../../../shared-memory`) silently absorbed nothing,
+        # while the run still reported `converged` and deleted the only link
+        # that named the real data. `readlink -f` is this file's own
+        # already-declared GNU/Linux assumption (ccd/ccrc:72); a target that
+        # cannot be resolved at all (a dangling link to somewhere that isn't
+        # the store either) simply has nothing behind it to absorb — that is
+        # not a failure, there is nothing to take.
+        src=$(readlink -f -- "$link" 2>/dev/null)
+        if [ -n "$src" ]; then
+          left=$(_mem_absorb "$src" "$store" "$b") \
+            || { echo "ccrc memory: could not absorb $src into $store" >&2; return 1; }
+        else
+          left=0
+        fi
         # A link to another HOME: absorb its target, then re-point. The target
         # itself is some other home's real directory and is left standing —
         # that home converges on its own pass. (This arm is also how a
         # DANGLING correct-looking link — R12 — gets repaired: its target
         # text is the store we just created above, now an empty directory, so
         # absorbing it moves nothing before the link is dropped and relaid.)
-        _mem_absorb "$(readlink -- "$link")" "$store" "$b"
         rm -f -- "$link"
       else
-        _mem_absorb "$link" "$store" "$b"
+        # C1 (review round 1): if absorb fails, STOP — do not back the source
+        # away. The `||` short-circuits before the `mv` below ever runs, so a
+        # partially-copied union leaves the original directory exactly where
+        # it was, not renamed into a backup the operator has to go find.
+        left=$(_mem_absorb "$link" "$store" "$b") \
+          || { echo "ccrc memory: could not absorb $link into $store" >&2; return 1; }
         bk="${d}memory.pre-ccrc-$stamp"
         mv -- "$link" "$bk" || { echo "ccrc memory: cannot back up $link" >&2; return 1; }
       fi
       ln -s -- "$store" "$link" || { echo "ccrc memory: cannot link $link" >&2; return 1; }
       _mem_rebuild_index "$store" || true
-      echo "ccrc memory: converged $b $slug"
+      # I3: tell the operator what didn't come across and where it still is.
+      # Only the plain-directory arm has a backup path to name — the
+      # symlink arm's target is some other home's directory, never moved.
+      if [ "$left" -gt 0 ] && [ -n "$bk" ]; then
+        plural=entries; [ "$left" -eq 1 ] && plural=entry
+        echo "ccrc memory: NOTE: $left $plural not migrated, left in $bk"
+      fi
+      echo "ccrc memory: converged $b $slug${bk:+ (backup: $bk)}"
     done
   done
   return 0
