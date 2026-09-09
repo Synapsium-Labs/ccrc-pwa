@@ -773,6 +773,7 @@ describe('a restart that landed idle reads as a stall, not a conversation (D-222
     expect(screen.getByText(/interrupted turn not re-driven/)).toBeTruthy();
     expect(container.querySelector('.msg-user')).toBeNull();
     expect(container.querySelector('.msg-assist')).toBeNull();
+    expect(container.querySelector('.sys-divider--restart')).not.toBeNull();
     expect(container.querySelector('.sys-divider--stalled')).not.toBeNull();
   });
   it('a plain system line (no origin) still renders its own text', () => {
