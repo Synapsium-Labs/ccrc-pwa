@@ -2569,3 +2569,62 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(writers, 'runs.sessionId is written outside bindSession').toHaveLength(1);
   });
 });
+
+describe('the programme filters', () => {
+  /** Two programmes, one mail each, plus one mail and one event that belong to
+   *  no run at all — the population every assertion below turns on. */
+  const seeded = () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = s.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if ('refused' in r) throw new Error('open refused');
+      s.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(s.db, () => {
+        const m = s.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = s.queueDelivery(m.id, 'demo-coordinator', '');
+        s.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');           // programless — no run at all
+    s.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    s.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    s.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+    return s;
+  };
+
+  it('mailForProgram answers this programme only — a programless mail is not in it, nor another programmeial row', () => {
+    const s = seeded();
+    expect(s.mailForProgram('build4', {}).map((m) => m.subject)).toEqual(['ours']);
+    expect(s.mailForProgram('build5', {}).map((m) => m.subject)).toEqual(['theirs']);
+  });
+
+  it('mailForProgram honours `all` exactly as the recipient read does', () => {
+    const s = seeded();
+    // Park the one row this programme has; the default read drops a deliberate
+    // cancel, `all` returns history.
+    s.cancelOutstandingDeliveries(s.runs()[0]!.id);
+    expect(s.mailForProgram('build4', {})).toHaveLength(0);
+    expect(s.mailForProgram('build4', { all: true }).map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('feedEventsForProgram answers this programme only — a programless event is not in it', () => {
+    const s = seeded();
+    expect(s.feedEventsForProgram('build4', 100).map((e) => e.title)).toEqual(['ours']);
+    expect(s.feedEventsForProgram('build5', 100).map((e) => e.title)).toEqual(['theirs']);
+    // …and the unfiltered read still carries all three, which is where a
+    // programless event belongs and the ONLY place it appears.
+    expect(s.feedEvents(100).map((e) => e.title)).toEqual(['ours', 'theirs', 'a question']);
+  });
+});

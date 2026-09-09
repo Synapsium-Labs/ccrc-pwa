@@ -966,13 +966,22 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'GET /api/mail')) return;
     const coord = deps.coord;
 
-    const q = req.query as { to?: unknown; limit?: unknown; all?: unknown };
-    if (typeof q.to !== 'string' || q.to.trim() === '') {
+    const q = req.query as { to?: unknown; program?: unknown; limit?: unknown; all?: unknown };
+    const to = typeof q.to === 'string' && q.to.trim() !== '' ? q.to : null;
+    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // EXACTLY ONE, and neither is a default for the other: `to` is a MAILBOX
+    // (what one session was actually sent) and `program` is a THREAD (what one
+    // programme has said), and a request that named both would be asking two
+    // different questions in one call. Neither is still a bad request, exactly
+    // as it was before `program` existed.
+    if ((to === null) === (program === null)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const limit = typeof q.limit === 'string' ? Number(q.limit) : undefined;
     const all = q.all === '1' || q.all === 'true';
-    const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
+    const mail = program !== null
+      ? coord.mailForProgram(program, { limit, all })
+      : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
     return reply.code(200).send({ ok: true, mail });
   });
 
@@ -1794,19 +1803,28 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/feed?limit=<n>` (Task 10, orchestrator-added scope: PR J
-   * interface 5) — the durable archive behind `NotifyLog`'s in-memory ring,
+   * `GET /api/feed?limit=<n>[&program=<slug>]` (Task 10, orchestrator-added
+   * scope: PR J interface 5; the programme filter is cross-repo programmes' —
+   * design §4) — the durable archive behind `NotifyLog`'s in-memory ring,
    * oldest-first. Survives both a ring eviction (the ring keeps only the
    * newest 200, `notifylog.ts`'s `RING`) and a restart (a fresh `NotifyLog`
    * mints a new epoch and an empty ring; this table is untouched by either).
    * `limit` clamping is `CoordStore.feedEvents`'s own job, not repeated here
    * — same division of labour as `GET /api/runs`'s `closed` flag above.
+   *
+   * `program` filters through `feed_events.runId` (migration 9). An event that
+   * names no run is PROGRAMLESS and appears only in the unfiltered read, which
+   * is this route without the parameter — a `done` or an `ask` is about a
+   * session, not about a programme.
    */
   app.get('/api/feed', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const q = req.query as { limit?: string };
+    const q = req.query as { limit?: string; program?: string };
     const limit = Number(q.limit);
-    return { events: deps.coord.feedEvents(limit) };
+    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    return { events: program === null
+      ? deps.coord.feedEvents(limit)
+      : deps.coord.feedEventsForProgram(program, limit) };
   });
 
   /**

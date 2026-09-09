@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -2425,5 +2425,89 @@ describe('the hold reason', () => {
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+  });
+});
+
+describe('the programme filters on the two GET routes', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** Two programmes, one mail and one event each, plus one mail and one event
+   *  that belong to no run at all. Written against `w.coord` directly: this
+   *  suite has no fixture for mail rows, and the four statements are the whole
+   *  population every assertion below turns on. */
+  const seedTwoProgrammes = (coord: CoordStore): void => {
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = coord.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if ('refused' in r) throw new Error('open refused');
+      coord.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(coord.db, () => {
+        const m = coord.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = coord.queueDelivery(m.id, 'demo-coordinator', '');
+        coord.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');
+    coord.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    coord.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    coord.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+  };
+
+  it('GET /api/mail?program= answers that programme, and `to` is no longer required', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await app.inject({ method: 'GET', url: '/api/mail?program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('GET /api/mail?to= is unchanged, and still sees the programless mail', async () => {
+    // The anti-vacuity half: a filter that answered nothing would pass the case
+    // above only if this one caught it. `peer chatter` has no run and is
+    // therefore in NO programme's list and in every mailbox it was sent to.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await getMail(app, 'demo-coordinator');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject).sort())
+      .toEqual(['ours', 'peer chatter', 'theirs']);
+  });
+
+  it('GET /api/mail with neither `to` nor `program` is still a bad request', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail', headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/feed?program= answers that programme, and the unfiltered read is unchanged', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const filtered = await app.inject({ method: 'GET', url: '/api/feed?program=build4' });
+    expect((filtered.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
+    const all = await app.inject({ method: 'GET', url: '/api/feed' });
+    expect((all.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours', 'theirs', 'a question']);
   });
 });

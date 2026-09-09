@@ -2476,6 +2476,38 @@ export class CoordStore {
     return this.hydrateMail(rows);
   }
 
+  /**
+   * Every delivery of a mail belonging to THIS PROGRAMME (design §4), newest
+   * first — the read side of `GET /api/mail?program=<slug>`.
+   *
+   * The join is the one `resolveCoordinator` already walks: `mail.runId` →
+   * `runs.program`. An INNER join, deliberately, and it is the whole filter: a
+   * mail with no `runId` cannot be PROVEN to belong to any programme — the
+   * resolution that placed it is spent, and no column records which programme
+   * the sender meant (D-1142's own measurement on `repointCoordinatorMail`) —
+   * so it drops out here and appears only in the unfiltered reads. Guessing it
+   * into a programme would be this store deciding a thing it cannot measure.
+   *
+   * `all` mirrors `GET /api/mail?to=`'s own flag exactly, so one word means one
+   * thing on both filters: default is "still needs a human's attention"
+   * (`OUTSTANDING_OR_ABANDONED_SQL`), `all` is the unfiltered history. The
+   * `LEFT JOIN runs rr` the predicate needs is the SAME join the filter uses —
+   * `ABANDONED_PARK_SQL` reads `COALESCE(rr.state, '')` precisely so it is
+   * indifferent to the join kind its caller brings — so this query needs one
+   * join, not two.
+   */
+  mailForProgram(program: string, opts: { limit?: number; all?: boolean }): MailSummary[] {
+    const n = clampMailLimit(opts.limit ?? 100);
+    const where = opts.all === true
+      ? 'rr.program = ?' : `rr.program = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`;
+    const rows = this.db.prepare(
+      `SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +
+      'JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE ${where} ORDER BY d.id DESC LIMIT ?`,
+    ).all(program, n) as unknown as MailRowDb[];
+    return this.hydrateMail(rows);
+  }
+
   /** Who sent a mail, under which run, and about what — the three fields a
    *  SENDER-SIDE notification needs and `dueDeliveries` deliberately does not
    *  select. A dedicated one-row read rather than a JOIN widening
@@ -3091,6 +3123,35 @@ export class CoordStore {
       // column with no vocabulary has nothing to read it through, and NULL from
       // a row written before migration 9 means exactly what NULL means for a row
       // written after it — this event is about no run.
+      title: r.title, body: r.body, runId: r.runId,
+    }));
+  }
+
+  /**
+   * `GET /api/feed?program=<slug>`'s reader — the events of one programme,
+   * oldest-first and clamped exactly as `feedEvents` clamps its own, through
+   * the `feed_events.runId` migration 9 added.
+   *
+   * The INNER join to `runs` is the filter, and it is why a programless event —
+   * an `ask`, a `done`, a `merged`, a `coord`, every kind that is about a
+   * SESSION rather than a run — never appears here. That is not a gap: those
+   * events belong to no programme, and the unfiltered `feedEvents` above is
+   * where they live. A row whose `runId` names a run that has since been
+   * deleted would drop too; nothing in this tree deletes a run.
+   */
+  feedEventsForProgram(program: string, limit: number): NotifyEvent[] {
+    const n = Number.isFinite(limit) && limit > 0
+      ? Math.min(Math.floor(limit), CoordStore.FEED_RETENTION)
+      : CoordStore.FEED_RETENTION;
+    const rows = this.db.prepare(
+      'SELECT f.seq AS seq, f.at AS at, f.kind AS kind, f.sessionId AS sessionId, ' +
+      'f.title AS title, f.body AS body, f.runId AS runId FROM (' +
+      'SELECT * FROM feed_events WHERE runId IN (SELECT id FROM runs WHERE program = ?) ' +
+      'ORDER BY id DESC LIMIT ?) f ORDER BY f.id ASC',
+    ).all(program, n) as { seq: number; at: number; kind: string; sessionId: string;
+                           title: string; body: string; runId: number | null }[];
+    return rows.map((r) => ({
+      seq: r.seq, at: r.at, kind: isNotifyKind(r.kind) ? r.kind : 'unknown', sessionId: r.sessionId,
       title: r.title, body: r.body, runId: r.runId,
     }));
   }
