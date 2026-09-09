@@ -2138,3 +2138,81 @@ describe('the R7 counters', () => {
     expect(readState().ccrcPeerReads).toBe(0);
   });
 });
+
+describe('memory convergence (spec 2026-09-08 §2)', () => {
+  const SLUG = '-mnt-projects-demo';
+  const projDir = (): string => path.join(home, '.claude-x', 'projects', SLUG);
+  const link = (): string => path.join(projDir(), 'memory');
+  const store = (): string => path.join(home, '.ccrc', 'memory', SLUG);
+  // NOTE (task-1 ruling, deviating from the brief verbatim): `cwd` is set to
+  // `/mnt/projects/other` — deliberately DIFFERENT from the project directory
+  // named by `SLUG`/`transcript_path` (`/mnt/projects/demo`). A slug derived
+  // from `cwd` would otherwise coincide with the slug read from
+  // `transcript_path`, so M4 (computing the slug from `.cwd`) could not be
+  // measured to red — the two derivations would silently agree. Nothing else
+  // in the hook reads `.cwd` in a way this affects for these tests: the graph
+  // card returns early for a cwd that is not a git tree, and neither
+  // `/mnt/projects/demo` nor `/mnt/projects/other` is one.
+  const payload = (): object => ({
+    hook_event_name: 'SessionStart',
+    source: 'startup',
+    cwd: '/mnt/projects/other',
+    transcript_path: path.join(projDir(), 'abc-123.jsonl'),
+  });
+
+  beforeEach(() => { fs.mkdirSync(projDir(), { recursive: true }); });
+
+  it('creates the store and the symlink when no memory directory exists', () => {
+    run(payload());
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.statSync(store()).isDirectory()).toBe(true);
+  });
+
+  it('replaces an EMPTY plain directory — there is nothing to lose', () => {
+    fs.mkdirSync(link(), { recursive: true });
+    run(payload());
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+  });
+
+  it('LEAVES a non-empty plain directory alone — the hook never merges data', () => {
+    fs.mkdirSync(link(), { recursive: true });
+    fs.writeFileSync(path.join(link(), 'a.md'), 'keep me');
+    run(payload());
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(link(), 'a.md'), 'utf8')).toBe('keep me');
+  });
+
+  it('LEAVES a symlink pointing elsewhere alone — its target holds data', () => {
+    const other = path.join(home, 'elsewhere');
+    fs.mkdirSync(other, { recursive: true });
+    fs.symlinkSync(other, link());
+    run(payload());
+    expect(fs.readlinkSync(link())).toBe(other);
+  });
+
+  it('is a no-op once converged — the steady state costs one test', () => {
+    run(payload());
+    const before = fs.lstatSync(link()).mtimeMs;
+    run(payload());
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.lstatSync(link()).mtimeMs).toBe(before);
+  });
+
+  it('does nothing at all when the payload carries no transcript_path', () => {
+    const p: Record<string, unknown> = { ...payload() };
+    delete p['transcript_path'];
+    run(p);
+    expect(fs.existsSync(link())).toBe(false);
+  });
+
+  it('skips a scratch slug — /tmp work accumulates no durable memory', () => {
+    const tmpSlug = '-tmp-scratch';
+    const d = path.join(home, '.claude-x', 'projects', tmpSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run({ hook_event_name: 'SessionStart', source: 'startup',
+          transcript_path: path.join(d, 'x.jsonl') });
+    expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
+  });
+});

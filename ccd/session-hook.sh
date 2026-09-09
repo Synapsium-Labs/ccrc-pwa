@@ -553,6 +553,62 @@ _hook_ccrc_card() {
   return 0
 }
 
+# ── memory convergence ────────────────────────────────────────────────────
+# One memory store per PROJECT (`~/.ccrc/memory/<slug>`), not one per agent
+# home. `$CLAUDE_CONFIG_DIR/projects/<slug>/memory` is per-home, so a session
+# that swaps accounts mid-run keeps its transcript, workspace, hold and branch
+# and silently changes memory stores — the one continuity ccrc exists to
+# provide, missing. Measured 2026-09-08: 40 real memory directories across 8
+# homes, and a session that read its own superseded record after a swap.
+#
+# THE SLUG IS READ, NEVER COMPUTED. `<slug>` is a pure function of the project
+# path, and a second implementation of it disagrees SILENTLY: a slug that
+# misses names a directory that does not exist, so the caller finds nothing,
+# exits 0, and converges nothing (the `remember` plugin's own #294). The
+# harness has already told us the answer — `transcript_path` is
+# `<config dir>/projects/<slug>/<uuid>.jsonl` — so its DIRECTORY is the pair
+# being converged. Match, never derive.
+#
+# THIS FUNCTION NEVER MERGES. It acts only where there is nothing to lose: an
+# absent link, or a plain directory that is EMPTY. A directory with content and
+# a symlink pointing somewhere else are both LEFT EXACTLY AS FOUND and reported
+# by `ccrc doctor` instead — a hook that fires on every session start, ~20
+# times over on this box, must never be the thing that merges data. `ccrc
+# memory` owns that, as an explicit operator act.
+#
+# `rmdir` IS the emptiness test: it succeeds only on an empty directory, so its
+# own failure is the answer and there is no check-then-act window between
+# asking and acting.
+#
+# Silent and total: every failure path returns 0. A box where this cannot work
+# still gets its cards, its hookstate and its nudges.
+_hook_memory_converge() {   # -> converge this (home, project) pair; prints nothing; always 0
+  local tp d slug link store
+  tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
+  [ -n "$tp" ] || return 0
+  d=$(dirname -- "$tp") || return 0
+  [ -d "$d" ] || return 0
+  slug=$(basename -- "$d") || return 0
+  # A scratch cwd accumulates no durable memory. The harness mints a slug for
+  # every directory a session is started in, including throwaway temp dirs
+  # (measured: a dozen `-tmp-*` slugs in one home), and converging those would
+  # fill the store with empty directories nobody will ever read.
+  case "$slug" in -tmp*) return 0 ;; esac
+  link="$d/memory"
+  store="$HOME/.ccrc/memory/$slug"
+  # Steady state first, and it is the whole cost on a converged box.
+  if [ -L "$link" ]; then
+    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && return 0
+    return 0   # points elsewhere: its target holds data — doctor reports it
+  fi
+  if [ -e "$link" ]; then
+    rmdir -- "$link" 2>/dev/null || return 0   # non-empty: leave it, doctor reports it
+  fi
+  mkdir -p -- "$store" 2>/dev/null || return 0
+  ln -s -- "$store" "$link" 2>/dev/null || return 0
+  return 0
+}
+
 # ── THE PROGRAM SUBJECT (R7) ────────────────────────────────────────────
 # QUOTE THE BYTES, NEVER NARRATE THE PROGRAM. `rundefs.ts` declares the reason
 # string is never parsed back anywhere in this tree; `wave-lifecycle.md` forbids
@@ -992,6 +1048,10 @@ case "$event" in
     # appends it only when a prior subject already put text in `$CARD`, so a
     # lone subject carries no leading or trailing space and a third subject
     # (Task 5) joins the same way, on the same separator, without re-deriving it.
+    # Convergence is independent of the cards and of the hookstate write, and
+    # must happen even for `source == compact` (which returns early below):
+    # a compacted session is still a session whose home may be unconverged.
+    _hook_memory_converge || true
     CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD=""
     _hook_graph_card || true
     _hook_hold_card  || true
