@@ -818,9 +818,11 @@ button.metachip:active {
   overflow-wrap: anywhere;
 }
 /* D-2228 — the harness's resume pair: the prompt line is neutral, the padding
-   line is a stall and wears the warning ink so an idle landing is visible. */
+   line is a stall and wears the tree's real "waiting on you" ink
+   (--status-attention-text) so an idle landing is visible — --ink-warning and
+   --edge-warning are not tokens this tree defines. */
 .sys-divider--restart { color: var(--ink-secondary); }
-.sys-divider--stalled { color: var(--ink-warning, var(--ink-primary)); border-color: var(--edge-warning, var(--edge-subtle)); }
+.sys-divider--stalled { color: var(--status-attention-text); border-color: var(--status-attention-text); }
 
 /* ------------------------------------------------------------------ *
  *  User turns — input: right-aligned raised bubbles + mono receipts.  *
