@@ -1532,3 +1532,33 @@ Eleven methodology memories from these review rounds all say a version of *measu
 actually making*. Propagated whole that is 55 copies of one overlapping cluster. Consolidating them is a
 judgment call about the fleet's doctrine, not a cleanup, so it goes to the operator rather than being
 taken unilaterally.
+
+### The open question closed, by a peer, with a measurement I should have taken
+
+I left one judgment call for the operator: eleven methodology memories from these review rounds all say
+a version of *measure the claim you are actually making*, and propagated whole that is "55 copies of an
+overlapping cluster". `claude-ccrc-pwa` answered it better than I framed it, and the measurement settles
+it:
+
+    MEMORY.md                 60 lines, 14,258 bytes   <- what loads every session
+    the methodology cluster   11 lines,  2,688 bytes   = 19% of the index
+
+**File copies cost nothing — they are not loaded. The index is what loads.** So consolidating eleven
+files into one saves ~2.4 KB of per-session index and destroys eleven distinct pieces of evidence. Their
+argument for why that trade is bad: each memory records its own instance — a file, a line, a wrong
+number — and **the instance is what makes the rule land on recall; a merged file keeps the rule and
+loses the evidence.**
+
+**I measured the store when the cost lives in the index.** That is `measure-the-loop-not-the-function`
+applied at the wrong boundary, by the session that wrote that memory two hours earlier — the cluster
+defended itself against the coordinator proposing to compress it.
+
+**Disposition: keep all eleven, do not rewrite.** If the index ever needs to shrink, the shape the peer
+named — one index line pointing at a cluster file that `[[name]]` links the eleven, bodies untouched —
+is additive, reversible, and any session can do it later. Not doing it now: 19% of 14 KB is not worth
+spending evidence on.
+
+Union re-verified after the peer's own post-merge write (they stamped one file in all five roots,
+byte-identical): five roots, one md5, 60 files each. **The union survived its first concurrent write,
+which is the property that actually matters** — reconciliation that decays on the next write would have
+bought nothing.
