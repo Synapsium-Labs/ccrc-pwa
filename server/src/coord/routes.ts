@@ -2607,6 +2607,16 @@ export function registerCoordRoutes(
    * being asked about IS the identity under proof). A missing or mismatched
    * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
    *
+   * THIS IS FRESHNESS, NOT FORGERY-PROOFNESS — `requireAttribution`'s own
+   * honesty, `POST /api/mail`'s docstring above (:427-433), applies unchanged
+   * here: every session on the box can read every `.uuid` file under the one
+   * UNIX user this fleet runs as, including the parent's, so a determined
+   * caller can satisfy this check for a parent it is not. What it closes is
+   * an ACCIDENTAL cross-parent read — the box token alone, with no `parent`
+   * check at all — not a deliberate one; a session willing to go read its
+   * neighbour's `.uuid` file already has read access to that neighbour's
+   * live pane by the same fact (single UNIX user, no caller auth, `CLAUDE.md`).
+   *
    * This scoping sits ONLY inside the box-token branch of the `authEnabled`
    * block, deliberately: on a DARK box (`CCRC_AUTH` off, the shipped
    * default) this route stays unauthenticated end to end, byte-identical to

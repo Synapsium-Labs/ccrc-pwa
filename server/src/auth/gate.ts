@@ -248,7 +248,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "box, so the handler additionally requires a box-token caller to ATTRIBUTE itself as the " +
     "parent it names (`?fromUuid=` against `?parent=`, the same registry check `POST /api/claims` " +
     "and both ask-mutation routes already run) — a cookie caller (the operator) reads across " +
-    'parents with no such check. The handler requires a live session OR a valid box token ' +
+    'parents with no such check. THIS IS FRESHNESS, NOT FORGERY-PROOFNESS (the same honesty ' +
+    "`requireAttribution`'s own docstring states, coord/routes.ts:427-433): every session on the " +
+    "box can read every `.uuid` file, so it closes an ACCIDENTAL cross-parent read, not a " +
+    'deliberate one — and on a DARK box (`CCRC_AUTH` off) this check does not run at all, exactly ' +
+    'like its four siblings. The handler requires a live session OR a valid box token ' +
     '(coord/routes.ts)'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
