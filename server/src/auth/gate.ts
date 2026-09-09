@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 68 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 69 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,9 +72,9 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The eighteen box-token machine lanes plus `/api/notify` — the fleet
+ *  2. The nineteen box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All nineteen
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
@@ -253,6 +253,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/claims/:id/release',
     'the claimant releases on the final merge — box-token gated, same attribution as the claim; ' +
     'the ownership check is the route\'s own, against the live claim table'],
+  ['POST /api/asks/:id/answer',
+    'a parent presses a digit into its child\'s live menu (Task 9, the ask pre-emption lane) — ' +
+    'box-token gated, same registry attribution as the claim lanes, plus its own ' +
+    "`ask.parentId === fromId` check: only this child's derived parent may pre-empt its question. " +
+    'The caller has no cookie jar — it is a fleet-host session answering mail, not a browser'],
   ['POST /api/ledger/deviations',
     'the coordinator allocates a D-number block at run-open — box-token gated; a session that ' +
     'cannot reach the allocator must not invent a number, so the allocator must be reachable ' +
@@ -672,8 +677,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighteen box-token machine
- * lanes plus `/api/notify` — nineteen in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the nineteen box-token machine
+ * lanes plus `/api/notify` — twenty in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

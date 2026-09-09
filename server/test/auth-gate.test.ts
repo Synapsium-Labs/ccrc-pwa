@@ -200,8 +200,11 @@ describe('the scanner is looking at something', () => {
     // 25 since `GET`/`POST /api/coord/caps` — the operator dial on the two
     // coordination caps, and the first pair in this file that is neither
     // box-token gated nor one of the D-282 ungated doors (D-1240).
-    expect(scanRoutes('coord/routes.ts').length).toBe(25);
-    expect(ROUTES.length).toBe(71);
+    // 26 since `POST /api/asks/:id/answer` (Task 9, the ask pre-emption lane) —
+    // the parent presses a digit into its child's live menu, box-token gated
+    // plus registry attribution, exactly the `POST /api/claims` shape.
+    expect(scanRoutes('coord/routes.ts').length).toBe(26);
+    expect(ROUTES.length).toBe(72);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -397,6 +400,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/runs',
       'GET /api/runs/:id/items',
       'GET /health',
+      'POST /api/asks/:id/answer',
       'POST /api/auth/login',
       'POST /api/auth/passkey/assert/finish',
       'POST /api/auth/passkey/assert/start',
@@ -425,7 +429,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the eighteen box-token lanes in EXEMPT are those coord routes, and nineteen with notify', () => {
+  it('the nineteen box-token lanes in EXEMPT are those coord routes, and twenty with notify', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -461,15 +465,17 @@ describe('EXEMPT is complete in both directions', () => {
     expect(gated.sort()).toEqual([
       'GET /api/claims', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
       'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items',
+      'POST /api/asks/:id/answer',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the nineteenth lane, which lives in server.ts (D-1242:
+    // …and `/api/notify`, the twentieth lane, which lives in server.ts (D-1242:
     // this comment used to call it the eighteenth, double-counting the coord
-    // routes' own eighteen).
+    // routes' own eighteen — since corrected once already for `POST
+    // /api/asks/:id/answer` joining the nineteen).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });
@@ -702,7 +708,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 68 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 69 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -766,7 +772,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 68, not the 24 exempt.
+          //    is not itself flag-aware — the assertion that covers all 69, not the 25 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

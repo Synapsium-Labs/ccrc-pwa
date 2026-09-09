@@ -2,7 +2,9 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from '../registry.js';
+import { readHookState } from '../hookstate.js';
+import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -268,6 +270,16 @@ export function registerCoordRoutes(
    * the box token rather than on nothing.
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
+  /**
+   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * which is serialized per-session through `askDeps.queue` — the SAME
+   * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
+   * threaded in here rather than rebuilt, so a parent's pre-emption and a
+   * child's own in-flight prompt/dialog/ask answer can never race the same
+   * tmux pane through two independent locks. Built in `server.ts`, ahead of
+   * this call, for the identical reason.
+   */
+  askDeps: AskDeps,
 ): void {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
@@ -2260,5 +2272,148 @@ export function registerCoordRoutes(
       allocations: rows.map((a) => ({ ...a,
         stale: a.state === 'allocated' && a.allocatedAt <= now - LEDGER_STALE_MS })),
     });
+  });
+
+  /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
+
+  /**
+   * The child's live hookstate, re-read NOW rather than trusted from the
+   * mint — `askKey` hashes CONTENT, so a child looping over N structurally
+   * identical questions regenerates the same key for instance 2 that it did
+   * for instance 1, and the grace window is exactly the gap in which one
+   * becomes the other. `updatedAt` is what actually moves between them, and
+   * `takeAskForAnswer`'s CAS refuses `ask-moved` unless this still matches
+   * the row's own `askAt` (D-2170).
+   *
+   * `-1` on anything unmeasurable — no session record, no measured identity,
+   * no readable hookstate — because `-1` can never equal a stored `askAt`
+   * (`insertAsk` always takes it from a REAL hookstate's `updatedAt`, and
+   * `Date.now()` values are never negative), so an unmeasurable read refuses
+   * rather than proceeds. The same "an unmeasurable answer is not a
+   * permissive one" posture the reclaim guard takes: a spurious refusal
+   * costs the parent one retry, a false pass presses a digit into a question
+   * nobody actually re-read.
+   */
+  const freshAskAt = async (childId: string): Promise<number> => {
+    const read = await readSessionRecord(deps.io, deps.cfg, childId);
+    if (!read.found) return -1;
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return -1;
+    const hs = await readHookState(deps.io, deps.cfg.registryDir, childId, identity.uuid, Date.now());
+    return hs === null ? -1 : hs.updatedAt;
+  };
+
+  /**
+   * `POST /api/asks/:id/answer` — the parent presses the digit into its
+   * child's live menu. The most safety-sensitive route in the lane: unlike
+   * every other coordination write, this one ends in a KEYSTROKE into
+   * another session's pane, so every gate below runs BEFORE `answerAsk` is
+   * ever called, in the order the risk falls.
+   *
+   * Box token (`requireMailToken`) proves only "a process on this box" — one
+   * shared secret, identical for every session on the fleet host. It can
+   * never prove WHICH session is calling, so `requireAttribution` layers the
+   * registry pair on top, exactly as the claims lanes and the mail ingress
+   * already do. Then, and only then, `ask.parentId === fromId`: only this
+   * child's OWN derived parent may pre-empt its question — attribution alone
+   * would let any live session on the box answer any other session's ask.
+   *
+   * The CAS precedes the keystroke: `takeAskForAnswer` is the row acting as
+   * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
+   * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
+   * ever touches the pane. A refused press (`answerAsk` returning
+   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: every one of
+   * `answerAsk`'s twelve guards returns BEFORE its `sendKey` loop, so a
+   * refusal here means no digit was pressed and the question is still live
+   * and still pre-emptible — `releaseAsk`'s CAS source is `'held'`, and this
+   * row sits in `'answering'`, so it cannot even reach it (it would silently
+   * strand the row forever, `changes: 0` and all). `untakeAsk` is the exact
+   * CAS built for this rollback (`store.ts`'s own docstring on it).
+   */
+  app.post('/api/asks/:id/answer', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid, optionIndexes } = body;
+    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
+    // eligibility only single-select asks are ever held, so this array
+    // carries one element today — and that is the point. A singular field is
+    // what re-opens the multi-select commit hazard, silently, on the day
+    // someone widens eligibility. The wire shape must not be the thing to
+    // remember.
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
+        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as the mail ingress and the claims lanes do.
+    if (!(await requireAttribution(reply, fromId, fromUuid))) return;
+
+    // The same `Number.isInteger` shape guard every other `:id` route in
+    // this file uses (dispatch/close/advance/claims/ledger above) — a
+    // non-numeric id must 400 before it ever reaches `node:sqlite`, not
+    // throw a 500 out of a bound `NaN`.
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const ask = coord.askById(id);
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+
+    // D-2170: re-read the child's hookstate and prove the menu on screen is
+    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
+    const taken = coord.takeAskForAnswer(id, await freshAskAt(ask.childId));
+    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
+
+    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
+    if (!res.ok) {
+      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
+      // route's own docstring. `answerAsk` never pressed a digit on this
+      // path, so the row goes back to `'held'` rather than being abandoned
+      // in `'answering'` with no exit.
+      coord.untakeAsk(id);
+      return reply.code(409).send(res);
+    }
+    coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
+
+    // D-2172's SECOND record: the mint-time record (`watch.ts`'s `hold()`)
+    // is the question; this one is the answer, naming the parent and what it
+    // chose — the operator's only durable trace of a decision made in their
+    // name over a question that never reached their phone. Same pattern
+    // `POST /api/coord/caps` uses just above: `deps.notifyLog` and
+    // `coord.recordFeedEvent` are independently optional (a box with neither
+    // configured still answers the request), `recordFeedEvent` throws
+    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
+    // turn a successful press into a 500, and the flush is unconditional in
+    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
+    // `record()` mints the seq before this route can fail, so its
+    // persistence must follow regardless.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: ask.childId,
+          title: 'question answered',
+          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+                `${ask.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    return { ok: true };
   });
 }

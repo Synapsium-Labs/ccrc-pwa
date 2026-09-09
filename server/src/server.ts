@@ -1308,6 +1308,34 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true };
   });
 
+  // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
+  // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
+  // routes further down this file (where they used to live) — Task 9's
+  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
+  // both routes agree on the one per-session lock. `knownId` stays where it
+  // was: nothing here depends on it.
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
+  // serialize through the ONE per-session lock, not independent ones.
+  const askDeps: AskDeps = {
+    ...sendDeps,
+    // C0.3: one session's own row, not the whole registry — see
+    // `registry.ts`'s `readSessionRecord`.
+    readAsk: async (id: string) => {
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return null;
+      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
+      // look up hookstate under a value that matches no real file, reading
+      // as "no ask" rather than "we don't know" — null here is the honest
+      // answer and this route is polled, so it heals on the next read.
+      const identity = measuredIdentity(read.record);
+      if (identity === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
+      return hs === null ? null : { ask: hs.ask, state: hs.state };
+    },
+  };
+
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
   // sharing one token+attribution gate inline here would be a second copy of
@@ -1317,7 +1345,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // and authenticates for itself, because the coordinator skill reads it
   // cookieless from the fleet host with the box token. The session half of that
   // decision can only be made here, where `authStore` lives.
-  registerCoordRoutes(app, deps, bus, sessionAuth);
+  //
+  // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
+  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
+  // independent queues would let a parent's pre-emption race a child's own
+  // in-flight prompt against the identical tmux pane.
+  registerCoordRoutes(app, deps, bus, sessionAuth, askDeps);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -1377,7 +1411,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
-  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
+  // `registerCoordRoutes` — see that call site's own comment.
+  //
   // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) and previously called
   // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
@@ -1399,26 +1435,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const knownId = async (id: string): Promise<boolean> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     return names !== null && names.includes(`${id}.uuid`);
-  };
-
-  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
-  // serialize through the ONE per-session lock, not independent ones.
-  const askDeps: AskDeps = {
-    ...sendDeps,
-    // C0.3: one session's own row, not the whole registry — see
-    // `registry.ts`'s `readSessionRecord`.
-    readAsk: async (id: string) => {
-      const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) return null;
-      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
-      // look up hookstate under a value that matches no real file, reading
-      // as "no ask" rather than "we don't know" — null here is the honest
-      // answer and this route is polled, so it heals on the next read.
-      const identity = measuredIdentity(read.record);
-      if (identity === null) return null;
-      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
-      return hs === null ? null : { ask: hs.ask, state: hs.state };
-    },
   };
 
   app.post('/api/sessions/:id/prompt', async (req, reply) => {

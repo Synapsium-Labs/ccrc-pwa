@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -426,6 +426,22 @@ describe('the rejection table is total, in both directions', () => {
     // untyped string a route happened to send.
     const src = sources();
     for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+  });
+
+  it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
+    // RULING F7: `AskRefuseCode` had no reverse scan — only two of the seven
+    // vocabularies sharing the kebab scanner below get both directions —
+    // so nothing would red if a route forgot one of the four route-level
+    // codes (`unknown-ask`/`not-held`/`ask-moved`/`not-parent`, Task 9) or
+    // typo'd it. `answerAsk`'s own ten live in `server/src/inject/ask.ts`,
+    // OUTSIDE `server/src/coord` entirely, so a coord-only scan (the
+    // `RunRefuseCode` shape just above) could never cover them — this reads
+    // BOTH directories, unlike every other reverse scan in this file.
+    const injectDir = path.resolve(here, '../src/inject');
+    const src = sources() + '\n' +
+      readdirSync(injectDir).filter((f) => f.endsWith('.ts'))
+        .map((f) => readFileSync(path.join(injectDir, f), 'utf8')).join('\n');
+    for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
   });
 
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {

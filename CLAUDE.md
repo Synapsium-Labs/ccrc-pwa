@@ -168,12 +168,12 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
-  `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
-  argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
-  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
-  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
-  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  /api/asks/:id/answer`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
+  `GET /api/ledger` all call `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by
+  route, each with its own argument — are the census, not this bullet. What does need saying here are the
+  coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST
+  /api/coord/caps` (wave 6) are session-gated only — armed, they sit behind the auth gate like every other
+  PWA-surface write. The first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
