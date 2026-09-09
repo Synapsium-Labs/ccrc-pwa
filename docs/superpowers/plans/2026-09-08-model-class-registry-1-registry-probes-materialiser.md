@@ -69,8 +69,9 @@ happening after it. Plan 1 does not touch that file.
 account-connections branch's. So this design's node half is simply a new file. It
 still copies, and cites, the idioms `main` already uses for a node helper `ccrc`
 shells out to: `deploy/gen-accounts.mjs`'s "print the remedy on stderr, exit
-non-zero" contract (`ccd/ccrc:3955-3962` reads it verbatim) and `ccrc-adopt`'s
-`--out PATH` / unknown-flag-is-exit-2 argument loop (`ccd/ccrc-adopt:139-146`).
+non-zero" contract (`ccd/ccrc`'s `_inst_accounts_sh` reads it that way) and
+`ccrc-adopt`'s `--out PATH` / unknown-flag-is-exit-2 argument loop
+(`ccd/ccrc-adopt:139-146`).
 
 **B-1 — an UNSEEDED registry is legal on disk.** (owned by Plan 1)
 Spec §10 says `init <probe>` "creates the registry file" for all three probe
@@ -992,10 +993,10 @@ export interface CatalogueModel {
  *  takes `Catalogue | null` rather than defaulting one. `stale: true` means the
  *  last probe failed and this is the previous catalogue (§11).
  *
- *  `probe`, not `provider`: spec §4.2's example predates round-2 ruling 10,
- *  and `openai` is an account-connections `ProviderId` this branch has no
- *  access to. The field records WHICH PROBE PRODUCED THIS FILE (deviation
- *  B-2), which is the only thing any reader here asks of it. */
+ *  `probe`, not `provider`: spec §4.2's own example already uses `probe`
+ *  (round-2 ruling 10), and `openai` is an account-connections `ProviderId`
+ *  this branch has no access to. The field records WHICH PROBE PRODUCED THIS
+ *  FILE (deviation B-2), which is the only thing any reader here asks of it. */
 export interface Catalogue {
   probe: ProbeKind;
   fetchedAt: number;
@@ -2584,7 +2585,11 @@ export interface ModelEnv {
   ANTHROPIC_SMALL_FAST_MODEL: string;
   CLAUDE_CODE_SUBAGENT_MODEL: string;
   // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
-  // stale, and names ANTHROPIC_MODEL's resolved model with a numeric context.
+  // stale, and names ANTHROPIC_MODEL's resolved model with a POSITIVE
+  // INTEGER context (modelenv.mjs: `typeof row.context === 'number' &&
+  // Number.isInteger(row.context) && row.context > 0`, pinned by
+  // modelenv.test.ts over 0, -1 and a fraction) — not merely "a numeric
+  // context", which admits all three.
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
 }
 export declare class ModelEnvInvalid extends Error {}
@@ -5065,7 +5070,7 @@ Expected: FAIL — `spawnSync` cannot find `deploy/models-op.mjs`, so `stdout` i
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
-// verbatim" contract (`ccd/ccrc:3955-3962` reads it that way), and
+// verbatim" contract (`ccd/ccrc`'s `_inst_accounts_sh` reads it that way), and
 // `ccd/ccrc-adopt:139-146`'s argument loop, where an unknown flag is exit 2.
 //
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
@@ -6297,8 +6302,9 @@ closing sentinel instead, the bridge:
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
-# `$CCRC_HERE/..` is `cmd_wrappers`' idiom (:2276): true in a checkout and at
-# ~/ccrc on a deployed box, because both deploy lanes land `deploy/` there.
+# `$CCRC_HERE/..` is `cmd_wrappers`' own idiom (its `local gen=`): true in a
+# checkout and at ~/ccrc on a deployed box, because both deploy lanes land
+# `deploy/` there.
 #
 # NOTHING IS RE-WORDED HERE: stdout is the caller's answer and stderr is the
 # caller's remedy.
@@ -6351,9 +6357,9 @@ In `ccd/ccrc`, immediately before `cmd_install` (`:3681`), add:
 # `$MODELS_RESERVED` is what makes that decidable; an account whose id is one of
 # those words is refused by name rather than silently unreachable.
 _models_deps() {
-  # `cmd_install`'s guard (:3734), for this verb: node runs the JSON emitter, so
-  # its absence is the ONE refusal this verb cannot phrase as JSON. jq is
-  # checked second, with node already proven present.
+  # `cmd_install`'s own `command -v node` guard, for this verb: node runs the
+  # JSON emitter, so its absence is the ONE refusal this verb cannot phrase as
+  # JSON. jq is checked second, with node already proven present.
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc models' — it runs ${CCRC_HERE%/*}/deploy/models-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON."
   command -v jq >/dev/null 2>&1 \
@@ -6361,8 +6367,9 @@ _models_deps() {
 }
 
 # `$HOME/.ccrc/accounts.json`, spelled the way every other reader in this file
-# spells it (`cmd_wrappers` at :2362, `cmd_install` at :3960) — a helper rather
-# than eleven copies, because five functions below need it and `models-op.mjs`
+# spells it (`cmd_wrappers`' own manifest-generator call; `cmd_install`'s
+# `_inst_roster`/`_inst_accounts_sh`) — a helper rather than eleven copies,
+# because five functions below need it and `models-op.mjs`
 # is handed it as `--file`. No override: this file has no `CCRC_ROSTER` idiom,
 # and inventing one here would be a second way to name the roster.
 _models_roster_path() { printf '%s' "$HOME/.ccrc/accounts.json"; }
@@ -7591,10 +7598,13 @@ export class LitellmTemplateInvalid extends Error {
 /** A model id safe to write as an UNQUOTED YAML scalar. `: ` opens a mapping,
  *  ` #` opens a comment and a leading `-` opens a sequence item — a catalogue
  *  carrying any of them would produce a config LiteLLM parses into something
- *  else, silently. Narrower than `shared/models.ts`'s MODEL_ID_RE, which every
- *  id in a catalogue already satisfies; this is the second gate, on the
- *  writer's side, because the catalogue is a generated file and a probe bug
- *  must not become a config bug. */
+ *  else, silently. Narrower than `shared/models.ts`'s MODEL_ID_RE — but the
+ *  catalogue does NOT enforce MODEL_ID_RE on its own ids (`parseCatalogue`'s
+ *  only check is "has an id"; the probe's normaliser only checks
+ *  `isinstance(mid, str) and mid`), so this is not a second gate behind a
+ *  first one. It is the ONLY thing standing between a probe bug and a
+ *  silently-misparsed LiteLLM config, on the writer's side, because the
+ *  catalogue is a generated file. */
 const YAML_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
 
 /**
@@ -7910,9 +7920,11 @@ _models_litellm_path()     { printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm
 _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
 
 # "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
-# starts it with (`infra/handoff/ccgpt:95`: `litellm --config "$CONFIG" …`).
-# NOT a port check: the port answering says something is listening, not that it
-# is listening on THESE bytes, and the question here is exactly whether the
+# starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
+# "$CONFIG" …` — cited by shape, not by line number, because it lives in the
+# monorepo branch and drifts independently of this one). NOT a port check:
+# the port answering says something is listening, not that it is listening on
+# THESE bytes, and the question here is exactly whether the
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
 
