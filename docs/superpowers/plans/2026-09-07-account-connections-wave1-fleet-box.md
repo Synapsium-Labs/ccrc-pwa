@@ -17243,3 +17243,123 @@ second caller.
 `providers.test.ts` is a **seventh load flake** — `trackedFiles()` timed out under a loaded run (that
 trio took 115s of test time against 14s clean) and was green on re-run and in the full package. Like
 `boot` (D-2150) it is a deadline rather than a race. `CLAUDE.md`'s list now understates the set by two.
+
+### D-2183 — D-2166's deletion ruling is REVERSED: the guard is reachable, and I confirmed a deletion on an untested premise
+
+D-2166 confirmed deleting `_acct_lane`'s control-character loop, on the argument that it is unreachable
+because `rosterFromJson` refuses control bytes in the validated fields and *"`new URL()` strips them
+from `baseUrl`"*.
+
+**Measured, and I reproduced it myself before accepting the reversal.** `rosterFromJson` parses
+`exec.baseUrl` with `new URL()` **to validate it** — and the roster keeps the **original string**. The
+`lane` op emits `e['baseUrl']`, the raw value, not the normalised one. A roster carrying
+`https://x.example/<CR>tail` validates, and `lane` answers exit 0 with the byte intact:
+
+```
+.claude-x$
+https://x.example/^Mtail$
+1$
+END$
+```
+
+Eight lines, `END` in slot 7 — **the count and sentinel guard both pass, and the control-character loop
+is the only thing that refuses.** Reproduced on `CR`, `TAB`, `VT`, `SOH` and `DEL`; `LF` splits the
+field and is caught by the count instead.
+
+**Why the deletion looked safe, and this is the part to keep.** The round that proposed it asked
+*"what reds when I delete it?"*, got 187/187 green, and stopped. It never asked *"on which input would
+it fire?"* — which is **D-2145's own rule**, the rule that round was invoking. A guard is unmeasured
+until a fixture drives the input that reaches it, and "no test reds" is evidence about the fixtures, not
+about the guard.
+
+And I ratified it. **D-2163 says a ruling that keeps a gate must delete it and record what reds; this is
+the mirror case, and it needs the mirror rule: a ruling that DELETES a gate must first construct the
+input that would reach it, and record that nothing does.** An unreachability claim is a claim about the
+whole input space, and it cannot be established by a suite going green.
+
+Scope, measured: `add` cannot write such a roster — `check-add` normalises through `new URL()` on the
+way out. This is the **hand-written-roster path**, the fifth this cluster has closed. The guard stays,
+now with a six-byte table test, and the source comment claiming it is "not kept because a test reds"
+becomes false and must be corrected.
+
+### D-2184 — the `lane` protocol's guard has two predicates, one lying sentence, and neither half was measured
+
+`_acct_lane`'s reader checks the field **count** and the `END` **sentinel**. Deleting either alone is
+**190 green**; only their conjunction was measured, and only after this round's LF case landed. Before
+that, **the whole guard — four paragraphs of plan prose — measured nothing.** That is the thirteenth
+unmeasured mechanism of the wave, again with a measured neighbour.
+
+Worse, the two predicates share **one sentence that describes only the count half**. Driven with a stub
+that replaces `END` with a ninth field — the one shape only the sentinel catches — the refusal reads:
+
+> *the account helper described account "alt-max" in 8 lines instead of 8 — this is a bug in ccrc …*
+
+A self-contradicting refusal. It fails closed (exit 1, nothing written), so no operator is endangered;
+what is damaged is the next maintainer, who is told a number equals itself. **Two predicates, two
+sentences.**
+
+**The plan's own mutation credits the wrong predicate.** Its row vi deletes `END` from the node array to
+prove *"the sentinel is the guard"*. It does not: dropping `END` leaves seven lines and the **count**
+fires. The sentinel's own check has no data-reachable shape at all — only a stubbed helper reaches it.
+Fourth instance of a prescribed mutation that cannot demonstrate its stated property (D-2019, D-2123
+faces 1 and 3, now this).
+
+All four protocol shapes do fail closed at exit 1 with nothing written: truncated write, a ninth field,
+a replaced sentinel, and an rc-0 empty body. The behaviour was right; only the evidence and the sentence
+were missing.
+
+### D-2185 — `_acct_live` folds an unreadable registry into "no session is running"
+
+The function's own comment says two conditions a caller handles differently must not collapse. Its
+`measured=false` path is reachable **only from tmux**; the registry read has no such path. Measured:
+
+- `~/.cc-sessions` mode 000 with a row for the lane inside → `{"ok":true,"live":[]}`, tmux never asked.
+- the row's `.wrapper` mode 000 → the row is silently `continue`d → `{"ok":true,"live":[]}`.
+
+In both, an operator with a live pane reads **"no session is running on this lane"** and restarts
+nothing — after rotating a credential, which is exactly when they need to know which panes are stale.
+The second is sharper: `[ -r "$reg/$sid.wrapper" ] || continue` folds *"this row records no lane"* into
+*"this row could not be read"*.
+
+**RULING: close it.** An unreadable registry must answer `measured=false` — the state the wire already
+carries as `null` and the PWA already renders — not `measured=true` with an empty list. The two
+`continue` conditions must be told apart at the read, not at the seam.
+
+Noted: `_box_sessions` (`ccd/ccrc:1775`) has the same glob shape, so this is a house idiom rather than a
+Task-28 regression. That makes it worth fixing here and worth **not** fixing there in the same diff —
+`_box_sessions` has its own callers and its own task.
+
+### D-2186 — the citation debt is far larger than `D-2053` records, and one shape cannot be swept at all
+
+A mechanical census of every citation token whose target is at or below `c92cb366`'s insertion point
+found **34 affected by the shift; the commit updated none.** Three findings change what the eventual
+sweep has to be.
+
+**1. Twenty of the thirty-four are `ccd/ccrc`'s OWN self-citations.** Every census in this wave counted
+*cross-file* citers, a category that structurally cannot see them. They are not D-2053's "unrelated
+files" — they are inside the file this task's subject owns. Spot-checked: `:4223`→`:6150-6155`,
+`:4439`→`:7413-7416`, `:4565`→`:7287-7293`, `:4075`→`:5923`.
+
+**2. The bare form was missed a THIRD time.** `ccrc-doctor-checks:2678` cites `ccrc:4205-4208` with no
+`ccd/` prefix, invisible to the prefixed grep — D-2053's own named blind spot, fallen into again, by a
+census that had read the entry. (Its referent is wrong too: that range is `_acct_write_secret`'s
+`mkdir`, not `cmd_update`'s `CCRC_ROLE` read.)
+
+**3. A new class: an insertion landed INSIDE a cited range, and no shift can repair it.**
+`ccd/ccrc:4303` cites `:5303-5313`; the 238-line block went in between old `5311` and `5312`. The range
+is now `5340-5348` **plus** `5587-5588`, with 238 lines between them. **The thing it named is no longer
+contiguous**, so every previous face of this class — coverage, shift, referent, existence — assumed a
+repair that here does not exist. Such a citation must be re-expressed (by symbol, or as two ranges), not
+shifted. `ccd/ccrc:3726` and `:4306` sit one line from the same insertion and are the next candidates.
+
+**And the referent face is far worse than recorded.** Reading each claimed referent against the BASE
+text: **12 of the 14 cross-file citers are wrong on the referent**, not the two previously noted. Only
+one was right at BASE and broken by this commit.
+
+**RULING: the sweep becomes its own task, before the PR.** It has outgrown "a thing to do at the end":
+it needs a mechanical census over the pair (citer form × cited file) including self-citations, a
+referent check per site, and a decision per non-contiguous range. Deferring it further means every
+remaining task adds sites to a list nobody can execute from, and the list's own numbers are stale by
+construction. One citation must be **excluded by name**: `ccrc-install-graphify.test.ts:1188` quotes a
+plan's line numbers as *history* under D-1343, and a mechanical sweep would "fix" a sentence whose
+entire point is what the plan once said.
