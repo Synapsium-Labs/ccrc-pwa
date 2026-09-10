@@ -657,9 +657,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 9 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(9);
-    expect(MIGRATIONS.length).toBe(9);
+  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(10);
+    expect(MIGRATIONS.length).toBe(10);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -755,24 +755,29 @@ describe('coord.db: migration 8 — un-landing the two rows a CITATION stamped',
   });
 });
 
-describe('coord.db: migration 9 — the programme knows its home, the feed row names its run', () => {
+// D-2410: main's ask lane owns migration 9; this wave must prove its columns
+// arrive from the next entry against a file on which that lane already ran.
+describe('coord.db: migration 10 — the programme knows its home, the feed row names its run', () => {
   interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
   const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
       .find((c) => c.name === name);
 
-  it('reaches a database ALREADY at user_version 8 — it cannot be an amendment to any earlier migration', () => {
-    // The guard migrations 2..8 each earned, for migration 9. A file left by a
-    // wave-8 server is at 8; db.ts's loop runs
-    // `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so anything amended
-    // INTO entries 0..7 can never run against it again. The two columns must
-    // therefore arrive as their own entry, and this is what proves they do.
+  it('reaches a database ALREADY at user_version 9 — it cannot amend the ask migration it rebased over', () => {
+    // Migrations 2..9 are already frozen. A file left by the ask-lane server is
+    // at 9; db.ts's loop starts at `current`, so anything amended INTO entries
+    // 0..8 can never run against it again. The two columns must therefore arrive
+    // as their own entry, and this proves they do without weakening the ask lane.
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
     tx(raw, () => {
-      for (let i = 0; i <= 7; i++) raw.exec(MIGRATIONS[i]!);
-      raw.exec('PRAGMA user_version = 8');
+      for (let i = 0; i <= 8; i++) raw.exec(MIGRATIONS[i]!);
+      raw.prepare(
+        'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+        "VALUES (1, 'child', 'parent', NULL, 'key', 1, 'dialog', 'question', '[\"answer\"]', 'held')",
+      ).run();
+      raw.exec('PRAGMA user_version = 9');
     });
     raw.close();
 
@@ -781,7 +786,8 @@ describe('coord.db: migration 9 — the programme knows its home, the feed row n
       .toBe(COORD_SCHEMA_VERSION);
     expect(columnOf(db, 'programs', 'homeProject'), 'programs.homeProject is absent').toBeDefined();
     expect(columnOf(db, 'feed_events', 'runId'), 'feed_events.runId is absent').toBeDefined();
-    // READABLE, not merely present: a v-8 row written before the column existed
+    expect((db.prepare('SELECT count(*) AS n FROM asks').get() as { n: number }).n).toBe(1);
+    // READABLE, not merely present: a v-9 row written before the columns existed
     // reads back NULL rather than throwing.
     db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')").run();
     expect((db.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as

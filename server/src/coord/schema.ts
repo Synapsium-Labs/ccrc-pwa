@@ -834,6 +834,8 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 10: user_version 9 -> 10 ──────────────────────────────────────────────
+  // D-2410: main took migration 9 for the ask lane while this wave was in
+  // flight, so the cross-repo columns move intact to the next additive entry.
   // Cross-repo programmes: the ONE migration that build has (design 2026-09-08
   // §8). MIGRATIONS[0..8] ARE FROZEN, for the reason every entry above states:
   // db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so an

@@ -3150,7 +3150,7 @@ export class CoordStore {
       seq: r.seq, at: r.at, kind: isNotifyKind(r.kind) ? r.kind : 'unknown', sessionId: r.sessionId,
       // Straight through, on `claimedBy`'s idiom in `hydrateRun`: an integer
       // column with no vocabulary has nothing to read it through, and NULL from
-      // a row written before migration 9 means exactly what NULL means for a row
+      // a row written before migration 10 means exactly what NULL means for a row
       // written after it — this event is about no run.
       title: r.title, body: r.body, runId: r.runId,
     }));
@@ -3159,7 +3159,7 @@ export class CoordStore {
   /**
    * `GET /api/feed?program=<slug>`'s reader — the events of one programme,
    * oldest-first and clamped exactly as `feedEvents` clamps its own, through
-   * the `feed_events.runId` migration 9 added.
+   * the `feed_events.runId` migration 10 added.
    *
    * The subquery against `runs` — `runId IN (SELECT id FROM runs WHERE program
    * = ?)` — is the filter, and it is why a programless event —

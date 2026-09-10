@@ -1892,7 +1892,7 @@ export function registerCoordRoutes(
    * `limit` clamping is `CoordStore.feedEvents`'s own job, not repeated here
    * — same division of labour as `GET /api/runs`'s `closed` flag above.
    *
-   * `program` filters through `feed_events.runId` (migration 9). An event that
+   * `program` filters through `feed_events.runId` (migration 10). An event that
    * names no run is PROGRAMLESS and appears only in the unfiltered read, which
    * is this route without the parameter — a `done` or an `ask` is about a
    * session, not about a programme.
@@ -2696,7 +2696,7 @@ export function registerCoordRoutes(
     if (log) {
       try {
         const ev = log.record({
-          kind: 'ask', sessionId: ask.childId,
+          kind: 'ask', sessionId: ask.childId, runId: null,
           title: 'question answered',
           body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
                 `${ask.options[optionIndexes[0]!] ?? '?'}`,

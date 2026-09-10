@@ -326,7 +326,7 @@ describe('the reconstruction drill', () => {
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(16);
+    expect(UNRECOVERABLE.length).toBe(17);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {
