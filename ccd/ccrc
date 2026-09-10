@@ -5951,8 +5951,9 @@ _acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
 # is this file's own stated convention one function up - the triage is one
 # function, not two - so the two caller-specific halves become arguments:
 #
-#   $3, THE QUESTION'S NAME, which opens every branch. Each sentence is about a
-#   launcher that never ran, and which question it was not asked for is the
+#   $3, THE QUESTION'S NAME, which opens every branch. Four of the five
+#   sentences are about a launcher that never ran and the fifth about one that
+#   ran and answered unreadably; which question it was, either way, is the
 #   caller's fact, not this function's.
 #
 #   $4, WHAT THE VERDICT BESIDE THE NOTE IS. `auth status` has a probe below it
@@ -5981,10 +5982,28 @@ _acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
 # the one it had just been given. What holds each branch now is the deep-HOME
 # case, which drives ALL FOUR at a HOME past the cap and asserts each keeps
 # its own next step - a budget nobody measures is a budget that has already
-# been spent. Measured at that fixture's depth, every branch's next step ends
-# by character 213 of the constant part, and the branch with NO $HOME in it at
-# all - the KILLED arm - is the one no depth can truncate, which the case pins
-# by length rather than assuming.
+# been spent. Measured at that fixture's depth, every next step that CAN be
+# truncated ends by character 213 of the constant part.
+#
+# AND THAT CASE DRIVES FOUR OF THE FIVE ARMS, NOT ALL OF THEM (D-2437). `_acct_probe` gates its call here on 125, 126, 127
+# and a signal death, so the `else` arm is unreachable on the lane that case
+# uses and cannot be a row in it - it has a sibling case of its own, on the
+# cheap question. TWO arms now carry NO $HOME at all, the KILLED one and that
+# `else`, and neither can be truncated at any depth; each is pinned against a
+# shallow run rather than assumed - the KILLED arm by length, the `else` arm
+# byte for byte. That is why the 213 above is a statement about the TRUNCATABLE
+# arms only.
+#
+# THE TWO FIGURES THIS PARAGRAPH USED TO QUOTE ARE GONE, AND THE REASON IS THIS
+# PARAGRAPH'S OWN THESIS (D-2440, D-2441). It said their next steps end at
+# characters 181 and 233. The first was WRONG - the KILLED arm's step ends at
+# 169, measured by running this function - and the second was true only for one
+# account id: that arm interpolates $id, so its step ends anywhere from 226 to
+# 252 across ids this fleet actually carries. A paragraph arguing that an
+# unmeasured budget gets spent had two unmeasured numbers in it, and nothing
+# pinned either. What is load-bearing is the PROPERTY, which the cases below do
+# pin: no $HOME reaches these two arms, so no depth truncates them. If a later
+# author needs a figure, they must measure it against the id they mean.
 _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> one note
   local rc="$1" id="$2" asked="$3" verdict="$4"
   if [ "$rc" -eq 127 ]; then
@@ -6020,7 +6039,45 @@ _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> o
   elif [ "$rc" -gt 128 ]; then
     printf '%s' "$asked did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. $verdict"
   else
-    printf '%s' "$asked gave no parseable answer on this box. $verdict"
+    # THE FIFTH ARM HAS A NEXT STEP AT LAST (D-2436,
+    # to be minted by the orchestrator). It is D-2331's defect at its last
+    # address: this arm ended at the diagnosis while its four siblings each
+    # named something to do, and the banner in `ccrc-account.test.ts` that
+    # claims EVERY arm of EVERY rc-triage table pins a slice of its own REMEDY
+    # was simply false about this one. Two ways to make that banner true were
+    # available - write the exception into the rule, or give the arm a step -
+    # and a rule with one honest exception is worse than a rule the code
+    # satisfies, so this is the step.
+    #
+    # AND IT IS A TRUTHFUL ONE, WHICH IS WHY IT IS THIS STEP AND NOT ANOTHER.
+    # This is the arm reached when the launcher RAN and printed something the
+    # classifier could not read - `classify` answers `defer(null)` for exactly
+    # one condition, a body that is not a JSON object (`account-op.mjs`'s
+    # `j === null || typeof j !== 'object' || Array.isArray(j)` arm) - so the
+    # operator's real next move is to look at what it printed. They cannot look
+    # at it here: the call site captures the launcher's stdout into `$out`,
+    # hands it to the classifier and keeps no copy, and its stderr went to
+    # /dev/null. So the step is to ask the same question again by hand, and the
+    # sentence says why that is necessary rather than only what to type.
+    #
+    # NO PATH IS INTERPOLATED, AND THAT IS THE BUDGET (D-2354, D-2330). Naming
+    # `$WRAPPER_BIN_DIR/$id` would put $HOME in front of the next step and make
+    # this arm's remedy the first thing `_acct_note_cap` eats on a deep home -
+    # and the two callers do not even share a cap headroom, since
+    # `ACCT_WHY_AUTH` is 33 characters where `ACCT_WHY_PROBE` is 220 - the 221
+    # the note-cap banner names, counting the space that separates it. `$id` and
+    # `$rc` are bounded and carry no home in them, so this note is a CONSTANT
+    # the way the KILLED arm's is: no depth can truncate it. That is measured
+    # rather than argued - the sibling case to the note-cap table drives this
+    # arm at two depths and asserts the note is byte-identical, so the first
+    # edit that interpolates a path in here reds instead of shipping.
+    #
+    # THE QUESTION IS NOT NAMED IN ARGV, for the reason `$asked` is a parameter
+    # and not a substitution (D-2268): this helper serves both callers, and
+    # "run it with `auth status --json`" would be a lie the day `_acct_probe`'s
+    # gate widens to reach this arm. "Put the same question to that launcher"
+    # is true whichever question was asked.
+    printf '%s' "$asked gave no parseable answer on this box: the launcher for account $id ran and exited $rc, and what it printed is not the JSON object this build reads. Put the same question to that launcher by hand and read what it prints - this run showed that output to the classifier and kept no copy of it. $verdict"
   fi
 }
 

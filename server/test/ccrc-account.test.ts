@@ -765,7 +765,25 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     expect(j['ok']).toBe(false);
     expect(j['error']).toBe('no-answer');
     // The measured fact, not a guess about the cause: the exit code it gave.
+    // It belongs to `_acct_no_answer`'s LEADING sentence, which every arm
+    // shares, so it is not this arm's cause and cannot stand in for it.
     expect(String(j['detail'])).toContain('exited 2');
+    // THE ARM'S OWN CAUSE, UNDER AN EXPECTATION THAT MEANS CAUSE, AT THE CASE
+    // THAT IS ABOUT THIS ARM (D-2435). It was
+    // already pinned — and NOT here: `ccrc account add`'s *the check-add call
+    // answers at exit 1 with a body* (:2496), a different describe about a
+    // different call site, carried the only `half-updated box` assertion in the
+    // file, as a bare `toMatch` under no message at all.
+    // MEASURED at round 5 on a golden-restored copy: rewriting this arm's cause
+    // to name a kill instead of a half-updated box, remedy left intact, reds
+    // ONE test on the pre-round-5 tree — that distant one — and TWO on this
+    // tree. So this line buys no new coverage of the code; what it buys is that
+    // the rule the twin table's banner states is true where a reader checks it,
+    // and that the red names the arm instead of naming an unrelated verb. The
+    // first draft of this comment claimed the mutation was green; it was not,
+    // and the measurement is what said so.
+    expect(String(j['detail']), 'the half-updated-box arm names no cause of its own')
+      .toContain('half-updated box');
     // THE REMEDY, UNDER AN EXPECTATION THAT MEANS REMEDY. This arm was already
     // the one row of its table asserting its own next step, which is what made
     // it the RED CONTROL that turned its two siblings' greens into findings
@@ -799,6 +817,18 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     // another — the trap round 3 hit at the other two addresses.
     expect(String(j['detail']), 'the cause no longer derives the signal from the exit code')
       .toContain('signal 9');
+    // AND THE OTHER HALF OF THE SAME CAUSE, WHICH THAT KEPT COLUMN DID NOT
+    // COVER (D-2434). `signal 9` is the ARITHMETIC;
+    // the clause that says this was a KILL rather than an answer is the half an
+    // operator acts on, and it was unpinned here for the same reason it became
+    // unpinned in the two `_acct_auth_why` tables — nobody asserted it.
+    // MEASURED at round 5 on a golden-restored copy: rewriting this arm to say
+    // the process "answered badly rather than one that was killed", arithmetic
+    // and remedy intact, left the file 251/251 GREEN. Unpinned, not
+    // unreachable: the two expectations either side of this one are green in
+    // that same run, on this same note.
+    expect(String(j['detail']), 'the killed arm no longer says this was a kill rather than an answer')
+      .toContain('KILLED rather than one that answered');
     // AND THE REMEDY, THE HALF NOTHING ASSERTED (D-2396). THIS IS
     // THE THIRD TABLE OF D-2356'S SHAPE, and that banner said there were two.
     // `_acct_no_answer` (ccd/ccrc:3972-3978) is an if/elif on `$rc` with a
@@ -5973,14 +6003,14 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     //
     // EVERY ROW STILL ENDS AT THE PROBE — the routing did not change, the
     // sentence did — so each asserts `source: 'probe'` as well as its own words.
-    const cases: Array<[string, (home: string) => void, string, string]> = [
+    const cases: Array<[string, (home: string) => void, readonly string[], string]> = [
       ['absent', () => { /* no launcher at all: timeout(1) exits 127 */ },
-        'there is no launcher at', 'ccrc wrappers'],
+        ['there is no launcher at'], 'ccrc wrappers'],
       ['not-executable', (home) => {
         mkdirSync(join(home, '.local', 'bin'), { recursive: true });
         writeFileSync(join(home, '.local', 'bin', 'claude'),
           '#!/bin/sh\necho \'{"loggedIn":false}\'\n', { mode: 0o644 });
-      }, 'could not be executed', 'mode bits'],
+      }, ['could not be executed'], 'mode bits'],
       // THE SECOND ADDRESS OF D-2331'S OWN DEFECT (D-2356). `alsoSays` is
       // asserted below under a message reading *names no remedy*, and this row
       // used to expect `'signal 9'` — a slice of its own CAUSE sentence
@@ -5999,11 +6029,30 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       // census is re-taken rather than remembered — `grep -n 'elif \[ "$rc"'
       // ccd/ccrc` names the tables — because a count in prose is what let this
       // one hide behind a shape nobody was counting.
+      //
+      // AND A COLUMN THAT IS HOLDING SOMETHING IS WIDENED, NEVER SWAPPED
+      // (D-2433).
+      // Round 4 wrote that warning at `_acct_no_answer`'s killed case — *kept
+      // rather than replaced … swapping it for the remedy would have closed one
+      // gap by opening another* — and then made exactly that swap here and in
+      // the twin table below, in the same commit: `says` moved off the clause
+      // naming the KILL and onto the arithmetic, so the arithmetic became
+      // pinned and the clause became unpinned. MEASURED at round 5 on a
+      // golden-restored copy: rewriting this arm's opening clause in `ccd/ccrc`
+      // to claim the lane ANSWERED — arithmetic and remedy left intact — left
+      // the file 251/251 GREEN, while the operator-facing note read "auth
+      // status answered badly rather than being killed …" for a launcher that
+      // was killed, which is precisely the false statement D-2220 exists to
+      // prevent. RED CONTROL on the identical guard: restoring the pre-round-4
+      // `says` in both tables reds that same mutation twice, by name. So `says`
+      // is a LIST — an arm may pin as many slices of its own cause as it has —
+      // and this row pins both halves rather than choosing between them.
       ['killed', (home) => {
         mkdirSync(join(home, '.local', 'bin'), { recursive: true });
         writeFileSync(join(home, '.local', 'bin', 'claude'),
           '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
-      }, 'exit 137 is signal 9', 'Look for an OOM kill on this box'],
+      }, ['was KILLED rather than because it replied badly', 'exit 137 is signal 9'],
+        'Look for an OOM kill on this box'],
       ['timeout-refused', (home) => {
         plantClaude(home, 'claude');
         authFixture(home, SIGNED_OUT, 1);
@@ -6016,7 +6065,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
         // unmeasured, which is the thing this wave is counting.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),
           '#!/bin/sh\nexit 125\n', { mode: 0o755 });
-      }, 'timeout(1) refused to run', 'command -v timeout gtimeout'],
+      }, ['timeout(1) refused to run'], 'command -v timeout gtimeout'],
     ];
     for (const [name, plant, says, alsoSays] of cases) {
       const home = box(`ccrc-account-check-why-${name}-`);
@@ -6027,8 +6076,8 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       const j = oneObject(r);
       expect((j['health'] as Record<string, unknown>)['source'], name).toBe('probe');
       const notes = (j['notes'] as string[]).join(' ');
-      expect(notes, name).toContain(says);
-      expect(notes, name).toContain(alsoSays);
+      for (const slice of says) expect(notes, `${name}: cause`).toContain(slice);
+      expect(notes, `${name}: remedy`).toContain(alsoSays);
       // THE FALSE SENTENCE, ABSENT. This is the half that bites: a lane nobody
       // could ask reported as a lane that answered badly sends an operator to
       // read a launcher that is not there.
@@ -6037,12 +6086,35 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     }
     // …and the ONE condition the old sentence was true about keeps it: a
     // launcher that ran, answered, and said something unparseable.
+    //
+    // AND THIS IS THE FIFTH ARM, WHICH IS WHERE THE BANNER ABOVE WAS FALSE
+    // (D-2436). `_acct_auth_why`'s `else` used to be
+    // `"$asked gave no parseable answer on this box. $verdict"` — a diagnosis
+    // and nothing else — so the rule two paragraphs up, that EVERY arm pins a
+    // slice of its own REMEDY, could not be satisfied here by any expectation:
+    // there was no remedy in the code to pin. It is D-2331's defect at its
+    // fifth and last address, and it is closed the way D-2331 closed the 125
+    // branch — by giving the arm a truthful step, not by writing an exception
+    // into the rule. The step is "look at what it printed", because this is the
+    // arm reached when the launcher RAN and printed something the classifier
+    // could not read; the caller kept no copy of that output, which is why the
+    // note says to ask again rather than pointing at a file.
     const ok = box('ccrc-account-check-why-usage-');
     seedRosterJson(ok, [UPSTREAM]);
     plantClaude(ok, 'claude');
     authFixture(ok, 'error: unknown command "auth"\n', 1);
-    expect((oneObject(run(ok, ['account', 'check', '--id', 'claude']))['notes'] as string[])
-      .join(' ')).toContain('no parseable answer');
+    const okNotes = (oneObject(run(ok, ['account', 'check', '--id', 'claude']))['notes'] as string[])
+      .join(' ');
+    expect(okNotes).toContain('no parseable answer');
+    // ITS CAUSE, and it is the half that separates this arm from the four
+    // above: the launcher RAN, and the code it exited with is carried rather
+    // than dropped — `authFixture` planted 1.
+    expect(okNotes, 'the arm no longer says the launcher ran, nor what it exited with')
+      .toContain('ran and exited 1');
+    // ITS REMEDY, under an expectation that means remedy. Delete the sentence
+    // from `ccd/ccrc`'s `else` arm and this is where the file reds.
+    expect(okNotes, 'the unparseable-answer arm names no next step')
+      .toContain('Put the same question to that launcher by hand');
   });
 
   it('refuses a deadline it cannot honour, rather than reporting the consequence as a fact about the launcher (D-2221)', () => {
@@ -6649,7 +6721,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     //
     // COMMENT LINES ARE DROPPED FIRST, and that is load-bearing rather than
     // tidy: `_acct_limits_moved`'s banner quotes the sentence in order to argue
-    // about it (`ccd/ccrc:6164`), so a scan that could not tell a quotation
+    // about it (`ccd/ccrc:6213`), so a scan that could not tell a quotation
     // from a clause would red on the documentation of its own rule. A line
     // whose first non-space character is `#` is a comment; no clause in this
     // region is written across two lines, so nothing real is dropped with them.
@@ -6919,23 +6991,32 @@ describe('ccrc account check: the probe', () => {
     // were precisely the ones that also had a second question to inherit it
     // from. Driven on an OPENROUTER lane for that reason: `auth status` is never
     // asked there at all, so every note below is the probe's own.
-    const cases: Array<[string, (home: string) => void, string, string]> = [
+    const cases: Array<[string, (home: string) => void, readonly string[], string]> = [
       ['absent', () => { /* no launcher at all: the deadline shim reports 127 */ },
-        'there is no launcher at', 'ccrc wrappers'],
+        ['there is no launcher at'], 'ccrc wrappers'],
       ['not-executable', (home) => {
         writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
           '#!/bin/sh\necho \'{}\'\n', { mode: 0o644 });
-      }, 'could not be executed', 'mode bits'],
+      }, ['could not be executed'], 'mode bits'],
       // `alsoSays` NAMES THE ACTION HERE TOO (D-2356) — see the twin table
       // above for the argument. MEASURED before the change: deleting this
       // arm's remedy outright left this file green, while deleting the 127
       // arm's remedy reds at the same line with the same expectation shape,
       // which is what says the green was an unpinned guard rather than an
       // unreachable one.
+      //
+      // AND `says` IS A LIST, BECAUSE ROUND 4 SWAPPED THIS COLUMN RATHER THAN
+      // WIDENING IT (D-2433) — the same edit, at the
+      // same row, as the twin table above, where the argument and the two
+      // measurements are written out. Both halves of this arm's cause are
+      // pinned here: the clause that says the launcher was KILLED rather than
+      // that it answered badly, and the arithmetic that derives the signal from
+      // the exit code.
       ['killed', (home) => {
         writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
           '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
-      }, 'exit 137 is signal 9', 'Look for an OOM kill on this box'],
+      }, ['was KILLED rather than because it replied badly', 'exit 137 is signal 9'],
+        'Look for an OOM kill on this box'],
       ['deadline-refused', (home) => {
         plantProbe(home, 'orchard-api');
         probeFixture(home, PROBE_OK, 0);
@@ -6945,7 +7026,7 @@ describe('ccrc account check: the probe', () => {
         // for by a stub on the fixture PATH, which `ghContainedEnv` PREPENDS.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),
           '#!/bin/sh\nexit 125\n', { mode: 0o755 });
-      }, 'refused to run', 'command -v timeout gtimeout'],
+      }, ['refused to run'], 'command -v timeout gtimeout'],
     ];
     for (const [name, plant, says, alsoSays] of cases) {
       const home = box(`ccrc-account-probe-why-${name}-`);
@@ -6957,7 +7038,7 @@ describe('ccrc account check: the probe', () => {
       expect((j['health'] as Record<string, unknown>)['source'], name).toBe('probe');
       const notes = (j['notes'] as string[]).join(' ');
       expect(notes, `${name}: no note at all`).not.toBe('');
-      expect(notes, name).toContain(says);
+      for (const slice of says) expect(notes, `${name}: cause`).toContain(slice);
       // THE REMEDY, which is the half an operator acts on: a verdict with no
       // next step is the shrug this deviation is about.
       //
@@ -7035,7 +7116,20 @@ describe('ccrc account check: the probe', () => {
     // just been given. Neither entry was wrong on its own terms; ordering
     // protects a next step only while the next step is short, and nothing was
     // measuring the length. So the table below is every branch of
-    // `_acct_auth_why`, each asserting ITS OWN next step survives.
+    // `_acct_auth_why` THAT THIS LANE CAN REACH, each asserting ITS OWN next
+    // step survives.
+    //
+    // FOUR OF FIVE, AND THE FIFTH IS THE CASE BELOW (D-2437
+    // pending). `_acct_probe` only calls `_acct_auth_why` for 125, 126, 127 and
+    // a signal death, so its `else` arm — the one reached when a launcher RAN
+    // and printed something unparseable — is unreachable on an openrouter lane
+    // and cannot be a row here: it exists only on the cheap question, whose
+    // closing clause is `ACCT_WHY_AUTH` (33 characters) where every row below
+    // carries `ACCT_WHY_PROBE` (220, or the 221 this file names elsewhere with
+    // the space that separates it). Two callers with different headroom is a
+    // different measurement, not a fifth row, so it has its own case directly
+    // after this one — and this sentence is what keeps the claim above from
+    // reading as "every branch" when it is not.
     //
     // THE FOURTH ROW IS A DIFFERENT SHAPE AND SAYS SO. The KILLED branch names
     // no path at all — no `$WRAPPER_BIN_DIR`, no `$id` — so its note is a
@@ -7127,6 +7221,118 @@ describe('ccrc account check: the probe', () => {
       expect(note, `${name}: nothing was actually cut from the editorial clause`)
         .not.toContain(TAIL);
     }
+  });
+
+  it('keeps the FIFTH branch\'s next step at every depth, because its note carries no $HOME (round 5)', () => {
+    // THE BRANCH THE TABLE ABOVE CANNOT REACH, MEASURED THE ONLY WAY IT CAN BE.
+    // `_acct_probe` gates its call to `_acct_auth_why` on 125, 126, 127 and a
+    // signal death, so the `else` arm — the one reached when a launcher RAN and
+    // printed something the classifier could not read — exists only on the
+    // cheap question. That is a different measurement from the table above and
+    // not a fifth row in it: the closing clause here is `ACCT_WHY_AUTH`, 33
+    // characters, where every row up there carries `ACCT_WHY_PROBE`'s 220 — the
+    // 221 the note-cap banner names, counting the space that separates it — so
+    // the two callers do not share a cap headroom.
+    //
+    // WHY THE ANSWER IS "IT CANNOT BE TRUNCATED" RATHER THAN "IT FITS AT THIS
+    // DEPTH". Round 5 gave this arm a next step, and D-2354's lesson is that a
+    // reorder plus a cap is a BUDGET nobody has measured. The budget is avoided
+    // instead of spent: the sentence interpolates `$id` and `$rc` and no path,
+    // so its length does not move with HOME at all — the shape the KILLED arm
+    // already has, and the reason the note-cap table pins that one by length.
+    //
+    // A PAIR, NOT A CLAIM. An equal-length assertion on its own is green on a
+    // fixture whose depth never reached a note at all, so the 127 branch runs
+    // beside it — same lane, same caller, same two depths — and ITS note grows
+    // by exactly the extra HOME. One branch scales and one does not, measured
+    // against each other rather than against a number.
+    const DEEP = 700;
+    const REMEDY = 'Put the same question to that launcher by hand';
+    const CLAUSE = 'The verdict below is the probe\'s.';
+    const MARKER = '… (this note was truncated by ccrc at 1024 characters)';
+
+    const notesFrom = (home: string, plant: (h: string) => void): string[] => {
+      seedRosterJson(home, [UPSTREAM]);
+      plant(home);
+      const r = run(home, ['account', 'check', '--id', 'claude']);
+      expect(r.code, `${home}: ${r.stderr}`).toBe(0);
+      return (oneObject(r)['notes'] as string[]) ?? [];
+    };
+
+    /** The arm under test. `classify` returns `defer(null)` — the exit 3 that
+     *  reaches `_acct_auth_why` — for exactly one condition, a body that is not
+     *  a JSON object, so an older Claude Code with no `auth` subcommand is the
+     *  whole of it. The probe that follows answers this fixture's exit 90 and
+     *  writes NO note of its own (90 is outside `_acct_probe`'s 125/126/127/
+     *  >128 gate), which is why one note is the right count here. */
+    const unparseable = (home: string): void => {
+      plantClaude(home, 'claude');
+      authFixture(home, 'error: unknown command "auth"\n', 1);
+    };
+
+    const shallow = box('ccrc-account-unparseable-shallow-');
+    const deep = deepBox('ccrc-account-unparseable-deep-', DEEP);
+    expect(deep.length, 'the deep fixture is not deep').toBeGreaterThanOrEqual(DEEP);
+    const shallowNotes = notesFrom(shallow, unparseable);
+    const deepNotes = notesFrom(deep, unparseable);
+    for (const [what, ns] of [['shallow', shallowNotes], ['deep', deepNotes]] as const) {
+      expect(ns.length, `${what}: expected one note, got ${ns.join(' | ')}`).toBe(1);
+    }
+    const whole = shallowNotes[0]!;
+    const note = deepNotes[0]!;
+
+    // THE WHOLE NOTE, ON AN ORDINARY HOME: the next step is there, and it is
+    // written BEFORE the editorial clause — D-2330's order rule, which is what
+    // decides which half a truncated reader keeps.
+    expect(whole, 'the unparseable-answer arm names no next step').toContain(REMEDY);
+    expect(whole, 'the cheap question\'s closing clause is not the one that arrived')
+      .toContain(CLAUSE);
+    expect(whole.indexOf(REMEDY), 'the remedy is written after the editorial clause')
+      .toBeLessThan(whole.indexOf(CLAUSE));
+    expect(whole, 'the shallow control was truncated').not.toContain(MARKER);
+
+    // AND AT DEPTH IT IS THE SAME NOTE, BYTE FOR BYTE. Stronger than the length
+    // equality the KILLED row uses, and it says the same thing: nothing in this
+    // sentence moved with HOME, so there is no depth at which the cap can reach
+    // it. The first edit that interpolates a path in here reds HERE rather than
+    // shipping a next step that a real fleet path eats.
+    expect(note, 'a note with no $HOME in it was truncated').not.toContain(MARKER);
+    expect(note, 'the note moved with HOME, so this branch DOES scale and needs a budget')
+      .toBe(whole);
+
+    // THE CONTROL, and it is what makes the line above a discrimination: the
+    // 127 branch on this same lane and these same two homes names
+    // `$WRAPPER_BIN_DIR/$id`, so its note grows by exactly the extra depth. A
+    // fixture that never reached a note at all would fail this and pass the
+    // one above.
+    const ctlShallow = box('ccrc-account-unparseable-ctl-shallow-');
+    const ctlDeep = deepBox('ccrc-account-unparseable-ctl-deep-', DEEP);
+    const shallowAbsent = notesFrom(ctlShallow, () => {});
+    const deepAbsent = notesFrom(ctlDeep, () => {});
+    // Two notes on this shape — no launcher fails the cheap question and the
+    // expensive one — and it is the FIRST, the cheap question's, that pairs
+    // with the note under test.
+    expect(shallowAbsent.length, shallowAbsent.join(' | ')).toBe(2);
+    expect(deepAbsent.length, deepAbsent.join(' | ')).toBe(2);
+    // …and the control is compared WHOLE. On this caller the 127 note is HOME
+    // plus 210 characters, so the cap starts biting at a HOME past 814 and a
+    // tmpdir deep enough to truncate it would make the arithmetic below false
+    // for a reason that has nothing to do with the branch under test. MEASURED
+    // at round 5: 210, and `deepBox(…, 700)` lands at 700.
+    expect(deepAbsent[0]!, 'the control note was itself truncated, so the delta below is not a delta')
+      .not.toContain(MARKER);
+    expect(deepAbsent[0]!.length - shallowAbsent[0]!.length,
+      'a note that DOES carry $HOME did not grow with it, so this depth reaches no note '
+      + 'and the equality above measures nothing')
+      // AGAINST THE CONTROL'S OWN TWO HOMES, never the pair above: `box`
+      // spells the prefix into the path, so two fixtures built for two
+      // different purposes differ in length by their NAMES as well as their
+      // depth. Measured the wrong way this read 652 against 656 — a red with
+      // nothing wrong in the tree, and it stayed invisible for one whole run
+      // because an earlier assertion in this case aborted before reaching it,
+      // which is D-2402's lesson arriving a second time in the round that
+      // wrote it down.
+      .toBe(ctlDeep.length - ctlShallow.length);
   });
 
   it('bounds a launcher-controlled row detail AT THE SOURCE, in EVERY slot the factory covers (D-2266, D-2267, D-2328)', () => {
