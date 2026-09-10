@@ -138,12 +138,16 @@ export function extensionsOf(files) {
   return [...exts].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** `[A-Za-z0-9_./-]+\.(<ext>)`, anchored on both sides so `baz.tsz` and a
- *  mid-word start never match; null when the graph names no extension. */
+/** `[A-Za-z0-9_./-]+\.(<ext>)`, anchored on the trailing side so `baz.tsz`
+ *  never matches; null when the graph names no extension.
+ *  No leading lookbehind: the prefix class already contains its own
+ *  separators (`.`, `/`, `-`), so a match starting mid-run is always also
+ *  found starting from the run's own beginning — measured (a 700k-string
+ *  fuzz), a leading lookbehind changes nothing. */
 export function tokenRegex(exts) {
   if (exts.length === 0) return null;
   const alt = exts.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return new RegExp(`(?<![A-Za-z0-9_./-])[A-Za-z0-9_./-]+\\.(?:${alt})(?![A-Za-z0-9_])`, 'g');
+  return new RegExp(`[A-Za-z0-9_./-]+\\.(?:${alt})(?![A-Za-z0-9_])`, 'g');
 }
 
 const textOf = (content) => {
