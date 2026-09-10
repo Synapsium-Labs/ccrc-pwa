@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
+import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -56,7 +57,7 @@ const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
  *  the one deciding, and so the only shape that measures it. */
 const plantGraph = (dir: string, opts: {
   built?: string; nodes?: number; engine?: string | null; report?: boolean;
-  pad?: number;
+  pad?: number; content?: GraphContent;
 } = {}): void => {
   const out = path.join(dir, 'graphify-out');
   fs.mkdirSync(out, { recursive: true });
@@ -64,8 +65,17 @@ const plantGraph = (dir: string, opts: {
   const pad = opts.pad ?? 9000;
   const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
   const filler = pad > 0 ? `  "pad": "${'x'.repeat(pad)}",\n` : '';
+  // A REAL-SHAPED body when a test needs the helper to parse the graph: the
+  // node-link keys graphify writes, between the decoy and the real stamp, so
+  // the same file exercises the hook's tail read AND the helper's JSON.parse
+  // (which takes the LAST duplicate key — the real one).
+  const body = opts.content
+    ? `  "directed": false,\n  "multigraph": false,\n  "graph": {},\n`
+      + `  "nodes": ${JSON.stringify(opts.content.nodes)},\n  "links": ${JSON.stringify(opts.content.links)},\n`
+    : '';
   fs.writeFileSync(path.join(out, 'graph.json'),
-    `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+    `{\n${decoy}${filler}${body}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+  if (opts.content) fs.writeFileSync(path.join(out, '.graphify_labels.json'), JSON.stringify(opts.content.labels));
   if (opts.report !== false) {
     fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
       `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
@@ -133,6 +143,113 @@ const gatedTree = (commits = 1): string => {
   plantGraph(tree, { built: first, nodes: NODES });
   return tree;
 };
+
+// ── The compaction-card fixtures (spec §3.0–§3.4). Module scope, the same
+// reason as `plantGraph`: four describes ask one mechanism of one hook.
+const HELPER_SRC = path.resolve(__dirname, '../../ccd/compact-card.mjs');
+/** The helper lands beside the hook, where deploy.sh's agent lane and `ccrc
+ *  install` put it (Task 10). A test that wants "no helper" simply does not
+ *  call this. */
+const plantHelper = (): void =>
+  fs.copyFileSync(HELPER_SRC, path.join(home, '.cc-sessions', 'compact-card.mjs'));
+
+/** The liveness rule (spec §3.0) reads mtimes against `COMPACT_LIVE_S` =
+ *  120 s: a transcript written inside the window is a LIVE context. These two
+ *  ages sit well on either side of it. */
+const LIVE = 5;
+const DEAD = 600;
+/** A session's transcripts under a fixture `~/.claude/projects/<slug>/`: the
+ *  parent at `<sid>.jsonl`, each subagent at
+ *  `<sid>/subagents/[<under>/]agent-<id>.jsonl` — the layout measured on the
+ *  fleet box (Agent-tool subagents directly in `subagents/`, Workflow agents
+ *  under `subagents/workflows/<run>/`). mtimes are SET, never inherited from
+ *  the write order, because the scope rule IS an mtime rule: each file's
+ *  `age` is seconds before now. The parent defaults to DEAD — quiet, the
+ *  shape measured while it waits on a subagent — which is also harmless for
+ *  a main-thread test with no agents (no live agent → main). */
+const plantSession = (opts: {
+  sid?: string; lines: string[]; parentAge?: number;
+  subagents?: { id: string; lines: string[]; age: number; under?: string }[];
+}): { transcript: string; agents: Record<string, string> } => {
+  const sid = opts.sid ?? 'sess-1';
+  const proj = path.join(home, '.claude', 'projects', '-home-u-tree');
+  fs.mkdirSync(proj, { recursive: true });
+  const transcript = path.join(proj, `${sid}.jsonl`);
+  fs.writeFileSync(transcript, opts.lines.join('\n') + '\n');
+  const now = Math.floor(Date.now() / 1000);
+  const pt = now - (opts.parentAge ?? DEAD);
+  fs.utimesSync(transcript, pt, pt);
+  const agents: Record<string, string> = {};
+  for (const a of opts.subagents ?? []) {
+    const dir = path.join(proj, sid, 'subagents', ...(a.under ? [a.under] : []));
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `agent-${a.id}.jsonl`);
+    fs.writeFileSync(f, a.lines.join('\n') + '\n');
+    fs.utimesSync(f, now - a.age, now - a.age);
+    agents[a.id] = f;
+  }
+  return { transcript, agents };
+};
+
+/** A tree whose graph is fresh at HEAD and carries the twelve-file GRAPH. */
+const cardTree = (): string => {
+  const tree = path.join(home, 'tree');
+  const first = gitTree(tree, 1);
+  plantGraph(tree, { built: first, nodes: NODES, content: GRAPH });
+  return tree;
+};
+/** A PATH of symlinks to the real tools the hook forks — everything except
+ *  the ones named — so a test can make ONE command genuinely absent (the
+ *  `command -v` guard is about absence; a stub that exits 127 is not absence).
+ *  `tmux` stays the fixture stub. */
+const minimalPath = (omit: string[]): string => {
+  const bin = path.join(home, 'binmin');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const t of ['bash', 'jq', 'git', 'tail', 'head', 'grep', 'tr', 'cat', 'mv', 'rm', 'wc', 'sort', 'date',
+    'find', 'timeout', 'node', 'sed', 'mkdir']) {
+    if (omit.includes(t)) continue;
+    const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
+    if (real) fs.symlinkSync(real, path.join(bin, t));
+  }
+  fs.copyFileSync(path.join(home, 'bin', 'tmux'), path.join(bin, 'tmux'));
+  fs.chmodSync(path.join(bin, 'tmux'), 0o755);
+  return bin;
+};
+/** A stub on the fixture PATH: `timeout` that records its argv and execs the
+ *  rest, or `node` that fails / prints garbage. */
+const stub = (name: string, body: string): void =>
+  fs.writeFileSync(path.join(home, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+/** The three compaction payloads, with the keys 2.1.266 sends (measured
+ *  2026-09-09: PreCompact `custom_instructions|cwd|hook_event_name|prompt_id|
+ *  session_id|transcript_path|trigger`; PostCompact the same with
+ *  `compact_summary` for `custom_instructions`; SessionStart(compact)
+ *  `cwd|hook_event_name|model|prompt_id|session_id|source|transcript_path`). */
+const preCompact = (tree: string, transcript: string, trigger = 'manual'): object =>
+  ({ hook_event_name: 'PreCompact', trigger, cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', custom_instructions: null });
+const compactStart = (tree: string, transcript: string): object =>
+  ({ hook_event_name: 'SessionStart', source: 'compact', cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', model: 'claude-opus-5' });
+const postCompact = (tree: string, transcript: string, summary: string, trigger = 'manual'): object =>
+  ({ hook_event_name: 'PostCompact', trigger, cwd: tree, transcript_path: transcript,
+    session_id: 'sess-1', prompt_id: 'p1', compact_summary: summary });
+const setFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactset');
+const cardFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactcard');
+const journalFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions');
+const readSet = (): any => JSON.parse(fs.readFileSync(setFile(), 'utf8'));
+/** The card file: line 1 is the set's `at` (the nonce, spec §3.2), the rest the text. */
+const readCard = (): { nonce: string; text: string } => {
+  const raw = fs.readFileSync(cardFile(), 'utf8');
+  const nl = raw.indexOf('\n');
+  return { nonce: raw.slice(0, nl), text: raw.slice(nl + 1) };
+};
+/** Tool calls that name files of GRAPH: an absolute Read under the tree and
+ *  a view-shaped shell line (bypass-permissions sessions read through `sed`). */
+const workLines = (tree: string): string[] => [
+  tl.toolUse('Read', { file_path: path.join(tree, 'server/src/pane/statusline.ts') }),
+  tl.toolUse('Bash', { command: 'sed -n 1,40p server/src/watch.ts' }),
+];
+
 const pre = (tool: string, input: object, cwd: string): object =>
   ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
 const query = (cwd: string): object =>
