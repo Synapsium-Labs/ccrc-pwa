@@ -212,6 +212,24 @@ describe('remote FleetIO — readFileMeasured against a stub FleetClient (no rea
     expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
   });
 
+  it('forwards consumer-owned read and directory timeouts to FleetClient', async () => {
+    const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
+    const client = ({
+      request: async (req: { op: string }, timeoutMs?: number) => {
+        seen.push({ op: req.op, timeoutMs });
+        return req.op === 'readdir' ? { names: ['one'] } : { data: 'hello' };
+      },
+    }) as unknown as FleetClient;
+    const io = createIo(client);
+    expect(await io.readFileMeasured('/whatever/file.txt', 1_000))
+      .toEqual({ ok: true, content: 'hello' });
+    expect(await io.readdir('/whatever', 750)).toEqual(['one']);
+    expect(seen).toEqual([
+      { op: 'read', timeoutMs: 1_000 },
+      { op: 'readdir', timeoutMs: 750 },
+    ]);
+  });
+
   it('an OLDER AGENT — {missing:true} with no `absent` key — reads as "unreadable", NEVER "absent"', async () => {
     const io = createIo(clientAnswering({ missing: true }));
     expect(await io.statMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'unreadable' });

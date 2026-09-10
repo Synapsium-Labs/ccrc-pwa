@@ -298,13 +298,13 @@ export interface FleetSession {
    *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
    *  hard-blocked and no account in the project's pool can take it (spec §5.8,
    *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
-   *  like `swapBlocked`) and the reason VERBATIM — the reason is the display on
-   *  every surface, never parsed. Null when no strand stands.
+   *  like `swapBlocked`) and the reason carried VERBATIM through REST/WebSocket
+   *  for wave 4's renderer, never parsed. Null when no strand stands.
    *
    *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
    *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
-   *  the "marker listed but unreadable" degrade from the registry read;
-   *  renderers show the text without fabricating a 1970 timestamp.
+   *  the "marker listed but unreadable" degrade from the registry read; a
+   *  renderer must show the text without fabricating a 1970 timestamp.
    *
    *  `reviveFleetSession` below: absent → null (an older snapshot predates the
    *  axis), present-but-malformed → reject the WHOLE session — the
@@ -2328,10 +2328,10 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
   return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
 };
 
-/** `reviveSwapBlocked`'s contract exactly, for the same reason: the reason is
- *  free prose the supervisor wrote and it IS the display, so a malformed value
- *  has no vocabulary to degrade onto. Absent → null (an older snapshot
- *  predates the axis); present-but-malformed rejects the session. */
+/** `reviveSwapBlocked`'s contract exactly: the reason is free prose the
+ *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
+ *  Absent → null (an older snapshot predates the axis); present-but-malformed
+ *  rejects the session. */
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;

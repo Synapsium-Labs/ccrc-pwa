@@ -2200,12 +2200,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // ONE queued invocation for both arms (D-2177, below). The two arms
-    // differ only in WHICH argv they choose; every refusal — the 501, the
-    // 404/503 ladder, the pool verdict — is decided BEFORE the queued call.
-    // `swap-route-pool.test.ts` pins both halves separately: one block proves
-    // both arms enqueue, and the "every refusal" block proves a refusal still
-    // answers while this session's queue slot is already held.
+    // ONE queued invocation for both arms (D-2177, below), but that is the only
+    // server-side preflight they share. A declared crossing gets the 501 skew
+    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // ccd re-measures session and tag on the fleet box. The ordinary arm owns
+    // the early 404/503 ladder and pool refusal. Every applicable refusal is
+    // decided BEFORE queue entry. `swap-route-pool.test.ts` pins both enqueue
+    // paths and each arm's held-slot refusals separately (D-1684, D-2468).
     let argv: CcdArgv;
     if (body.crossPool === true) {
       // The declared crossing skips the verdict entirely — that IS the

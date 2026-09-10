@@ -1192,10 +1192,9 @@ describe('the lifecycle stamps (D3)', () => {
     });
   });
 
-  it('gives a strand with no reason a sentence, never an empty display string', async () => {
-    // The same ruling as SWAP_BLOCKED_NO_REASON and for the same reason: the
-    // reason string IS the display on the fleet card, and `reason: ''` renders
-    // as a cell visible enough to alarm and empty enough to ignore.
+  it('gives a strand with no reason a sentence, never empty wire text', async () => {
+    // The same ruling as SWAP_BLOCKED_NO_REASON: preserve an actionable reason
+    // for wave 4's renderer instead of carrying `reason: ''` through the wire.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000' });
     expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000    ' });
@@ -1204,8 +1203,8 @@ describe('the lifecycle stamps (D3)', () => {
 
   it('a LISTED but unreadable strand marker fails SHUT — never null', async () => {
     // "Not stranded" over a flagged row is the destructive direction (spec
-    // §5.8.3): the cell is the loud one, and a misread that blanks it teaches
-    // the operator that the fleet is fine while a session waits on nobody.
+    // §5.8.3): a misread must not make the wire assert that the fleet is fine
+    // while a session waits on nobody.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
     const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
     expect(r.stranded).toEqual({ at: 0, reason: STRANDED_UNREADABLE });

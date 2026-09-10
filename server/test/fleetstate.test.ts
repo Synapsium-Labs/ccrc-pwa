@@ -582,9 +582,9 @@ describe('loadSnapshot revives a cache written by an older build', () => {
   });
 
   it('rejects a malformed stranded rather than laundering it into null', async () => {
-    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote
-    // and it IS the display, so there is no vocabulary to degrade onto — and
-    // null would read "no strand recorded" over a row a supervisor flagged.
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
+    // so there is no vocabulary to degrade onto — and null would read "no
+    // strand recorded" over a row a supervisor flagged.
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     for (const bad of [
       { stranded: 'nowhere' },

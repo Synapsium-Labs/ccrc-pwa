@@ -82,8 +82,10 @@ export type MeasuredRangeRead =
  */
 export interface FleetIO {
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
-   *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this. */
-  readFileMeasured(path: string): Promise<MeasuredRead>;
+   *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
+   *  `timeoutMs` lets a consumer bound its own aggregate operation remotely;
+   *  local IO preserves its native filesystem behavior and ignores it. */
+  readFileMeasured(path: string, timeoutMs?: number): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
   /** Distinguishes absence from unreadability for a range read; the EOF arm
    *  is a positive answer. `readFileFrom` derives from this. */
@@ -93,7 +95,7 @@ export interface FleetIO {
    *  from this. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
   readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
-  readdir(path: string): Promise<string[] | null>;
+  readdir(path: string, timeoutMs?: number): Promise<string[] | null>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
    *  own absence marker could not be trusted before this existed. */

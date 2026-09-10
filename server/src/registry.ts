@@ -338,8 +338,8 @@ export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
  * nothing after it. Same ruling as `SWAP_BLOCKED_NO_REASON`: `_strand_mark`
  * always writes a reason (`_strand_why` synthesizes one), so the only ways in
  * are the residual empty-field routes `BranchEvidence`'s `'empty'` rung sets
- * out — and a strand cell with nothing in its tooltip is visible enough to
- * alarm and empty enough to ignore.
+ * out. Carry a sentence instead of empty text so the wire preserves an
+ * actionable reason for wave 4's renderer.
  */
 export const STRANDED_NO_REASON = '<strand recorded no reason>';
 
@@ -347,8 +347,8 @@ export const STRANDED_NO_REASON = '<strand recorded no reason>';
  * The reason a strand carries when the marker is LISTED in the registry
  * directory but its bytes could not be read. `SUBSTRATE_UNREADABLE`'s ruling
  * applied to ruling 6's marker: presence comes from the LISTING, never from a
- * non-null read, because "no strand recorded" is what every surface renders as
- * a healthy fleet.
+ * non-null read, because collapsing an unreadable marker to null would make the
+ * wire assert "no strand recorded" over a supervisor-flagged row.
  */
 export const STRANDED_UNREADABLE = '<strand marker unreadable>';
 

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import {
   POOLS_DIR_NAME, poolFor, poolsEnforcement, poolsWire, readProjectPools,
@@ -210,6 +210,53 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(read.listed).toBe(true);
     expect(ops).toEqual(['readdir', 'readFileMeasured', 'readFileMeasured']);
   });
+
+  it.each([
+    ['unfinished', () => new Promise<string[] | null>(() => {})],
+    ['rejected', () => Promise.reject(new Error('transport failed'))],
+  ])('maps an %s pools-directory listing to listed:false inside the sweep bound', async (_case, listing) => {
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? listing() : localIO.readdir(p),
+    };
+
+    const read = await Promise.race([
+      readProjectPools(io, cfg(), names),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('pool sweep exceeded its deadline')), 2_500)),
+    ]);
+
+    expect(read).toEqual({ listed: false });
+  }, 3_000);
+
+  it('bounds the whole marker sweep and maps every unfinished entry to unreadable', async () => {
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const started: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo', 'quiet-basin', 'acct-a-demo'] : localIO.readdir(p),
+      readFileMeasured: async (p) => {
+        const name = path.basename(p);
+        started.push(name);
+        if (name === 'demo') return { ok: true, content: 'pool-a' };
+        if (name === 'acct-a-demo') throw new Error('transport failed');
+        return new Promise(() => {});
+      },
+    };
+
+    const read = await Promise.race([
+      readProjectPools(io, cfg(), names),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('pool sweep exceeded its deadline')), 2_500)),
+    ]);
+
+    expect(started).toEqual(['demo', 'quiet-basin', 'acct-a-demo']);
+    expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
+    expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
+    expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'unreadable' });
+    expect(read.listed && [...read.tags.keys()]).toEqual(['demo', 'quiet-basin', 'acct-a-demo']);
+  }, 3_000);
 });
 
 describe('L3 may not narrow — four states in, four states out', () => {

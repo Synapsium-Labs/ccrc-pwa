@@ -703,6 +703,9 @@ import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../
 
 // (wave 2a's `export const POOLS_DIR_NAME = 'pools';` stays exactly where it is)
 
+/** One pool snapshot must finish inside the watcher's two-second cadence. */
+const PROJECT_POOLS_SWEEP_BUDGET_MS = 1_000;
+
 /**
  * One sweep of `$REG/pools/`, ring L3 (spec §5.4.4).
  *
@@ -742,7 +745,10 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * read in that file with no measured sibling), and the parent listing can.
  *
  * Cost: ZERO extra root readdirs for a caller that has a listing, then one
- * `pools/` readdir and one measured read per tagged project.
+ * `pools/` readdir and concurrent measured reads for the listed projects. A
+ * shared one-second deadline bounds the whole listing-and-marker decision,
+ * rather than multiplying the remote client's per-request timeout by that
+ * population.
  */
 export async function readProjectPools(
   io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
@@ -750,21 +756,38 @@ export async function readProjectPools(
   if (rootNames === null) return { listed: false };
   if (!rootNames.includes(POOLS_DIR_NAME)) return { listed: true, tags: new Map() };
   const dir = path.join(cfg.registryDir, POOLS_DIR_NAME);
-  const names = await io.readdir(dir);
+  const deadlineAt = Date.now() + PROJECT_POOLS_SWEEP_BUDGET_MS;
+  const deadline = new Promise<null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), PROJECT_POOLS_SWEEP_BUDGET_MS);
+    timer.unref?.();
+  });
+  const names = await Promise.race([
+    io.readdir(dir, PROJECT_POOLS_SWEEP_BUDGET_MS)
+      .catch(() => null),
+    deadline,
+  ]);
   if (names === null) return { listed: false };
+  const projectNames = names.filter((name) => !name.startsWith('.'));
+  // Launch the whole listed population together. One deadline covers the
+  // listing and every marker; serial per-request waits would multiply the
+  // remote timeout and stall every watcher lane after `emitPools` (D-2465).
+  const remainingMs = Math.max(0, deadlineAt - Date.now());
+  const reads = await Promise.all(projectNames.map(async (name) => ({
+    name,
+    read: await Promise.race([
+      io.readFileMeasured(path.join(dir, name), remainingMs)
+        .catch(() => null),
+      deadline,
+    ]),
+  })));
   const tags = new Map<string, ProjectPoolWire>();
-  for (const name of names) {
-    // Dot-leading is ccd's private namespace and the disclosed tmp-leak shape
-    // (`$REG/pools/.<p>.$BASHPID.tmp`). Exact, since no project may lead with
-    // a dot (`_ws_project_valid`).
-    if (name.startsWith('.')) continue;
-    const read = await io.readFileMeasured(path.join(dir, name));
-    if (!read.ok) {
+  for (const { name, read } of reads) {
+    if (read === null || !read.ok) {
       // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
       // landed between the listing and this read. Anything else is the file
       // being there and this box not being able to read it, which is a state
       // of its own and must never read as absence (D-114's rule).
-      if (read.reason === 'absent') continue;
+      if (read !== null && read.reason === 'absent') continue;
       tags.set(name, { state: 'unreadable' });
       continue;
     }
@@ -906,10 +929,9 @@ Append to `server/test/registry.test.ts`, inside the same describe that holds th
     });
   });
 
-  it('gives a strand with no reason a sentence, never an empty display string', async () => {
-    // The same ruling as SWAP_BLOCKED_NO_REASON and for the same reason: the
-    // reason string IS the display on the fleet card, and `reason: ''` renders
-    // as a cell visible enough to alarm and empty enough to ignore.
+  it('gives a strand with no reason a sentence, never empty wire text', async () => {
+    // The same ruling as SWAP_BLOCKED_NO_REASON: preserve an actionable reason
+    // for wave 4's renderer instead of carrying `reason: ''` through the wire.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000' });
     expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000    ' });
@@ -918,8 +940,8 @@ Append to `server/test/registry.test.ts`, inside the same describe that holds th
 
   it('a LISTED but unreadable strand marker fails SHUT — never null', async () => {
     // "Not stranded" over a flagged row is the destructive direction (spec
-    // §5.8.3): the cell is the loud one, and a misread that blanks it teaches
-    // the operator that the fleet is fine while a session waits on nobody.
+    // §5.8.3): a misread must not make the wire assert that the fleet is fine
+    // while a session waits on nobody.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
     const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
     expect(r.stranded).toEqual({ at: 0, reason: STRANDED_UNREADABLE });
@@ -985,9 +1007,9 @@ Append to `server/test/fleetstate.test.ts`, inside the same describe as the revi
   });
 
   it('rejects a malformed stranded rather than laundering it into null', async () => {
-    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote
-    // and it IS the display, so there is no vocabulary to degrade onto — and
-    // null would read "no strand recorded" over a row a supervisor flagged.
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
+    // so there is no vocabulary to degrade onto — and null would read "no
+    // strand recorded" over a row a supervisor flagged.
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     for (const bad of [
       { stranded: 'nowhere' },
@@ -1007,8 +1029,8 @@ Append to `server/test/fleet-lifecycle.test.ts`, beside its `swapBlocked` cases 
   it('carries the strand marker onto the wire in epoch MS, with its reason verbatim', async () => {
     // Seconds on disk (registry-native, the `swapblocked` shape), MS on the
     // wire — the conversion happens at THIS seam only, like `stoppedBy` and
-    // `swapBlocked` beside it. The reason is `_strand_why`'s sentence and it IS
-    // the display, so it rides untouched.
+    // `swapBlocked` beside it. Preserve `_strand_why`'s sentence untouched for
+    // wave 4's renderer.
     const s = await one({ stranded: `${NOW_SEC - 300} claude:pool=pool-b claude-a:limit` }, false);
     expect(s.stranded).toEqual({
       at: (NOW_SEC - 300) * 1000, reason: 'claude:pool=pool-b claude-a:limit',
@@ -1023,7 +1045,7 @@ Append to `server/test/fleet-lifecycle.test.ts`, beside its `swapBlocked` cases 
 
   it('a LISTED but unreadable strand marker reaches the wire at 0 with the sentence, never as null', async () => {
     // The fail-shut arm, end to end: `at: 0` is the "listed but unreadable"
-    // degrade and renderers show the text without fabricating a 1970 stamp.
+    // wire contract; a future renderer must not fabricate a 1970 stamp.
     const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
@@ -1071,8 +1093,8 @@ Add the two constants immediately after `SWAP_BLOCKED_NO_REASON` (`:308`):
  * nothing after it. Same ruling as `SWAP_BLOCKED_NO_REASON`: `_strand_mark`
  * always writes a reason (`_strand_why` synthesizes one), so the only ways in
  * are the residual empty-field routes `BranchEvidence`'s `'empty'` rung sets
- * out — and a strand cell with nothing in its tooltip is visible enough to
- * alarm and empty enough to ignore.
+ * out. Carry a sentence instead of empty text so the wire preserves an
+ * actionable reason for wave 4's renderer.
  */
 export const STRANDED_NO_REASON = '<strand recorded no reason>';
 
@@ -1080,8 +1102,8 @@ export const STRANDED_NO_REASON = '<strand recorded no reason>';
  * The reason a strand carries when the marker is LISTED in the registry
  * directory but its bytes could not be read. `SUBSTRATE_UNREADABLE`'s ruling
  * applied to ruling 6's marker: presence comes from the LISTING, never from a
- * non-null read, because "no strand recorded" is what every surface renders as
- * a healthy fleet.
+ * non-null read, because collapsing an unreadable marker to null would make the
+ * wire assert "no strand recorded" over a supervisor-flagged row.
  */
 export const STRANDED_UNREADABLE = '<strand marker unreadable>';
 ```
@@ -1131,13 +1153,13 @@ In the returned literal, immediately after the `swapBlocked` entry (`:753-755`):
    *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
    *  hard-blocked and no account in the project's pool can take it (spec §5.8,
    *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
-   *  like `swapBlocked`) and the reason VERBATIM — the reason is the display on
-   *  every surface, never parsed. Null when no strand stands.
+   *  like `swapBlocked`) and the reason carried VERBATIM through REST/WebSocket
+   *  for wave 4's renderer, never parsed. Null when no strand stands.
    *
    *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
    *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
-   *  the "marker listed but unreadable" degrade from the registry read;
-   *  renderers show the text without fabricating a 1970 timestamp.
+   *  the "marker listed but unreadable" degrade from the registry read; a
+   *  renderer must show the text without fabricating a 1970 timestamp.
    *
    *  `reviveFleetSession` below: absent → null (an older snapshot predates the
    *  axis), present-but-malformed → reject the WHOLE session — the
@@ -1150,9 +1172,9 @@ In the returned literal, immediately after the `swapBlocked` entry (`:753-755`):
 Add the reviver immediately after `reviveSubstrate` (`:1888`):
 
 ```ts
-/** `reviveSwapBlocked`'s contract exactly, for the same reason: the reason is
- *  free prose the supervisor wrote and it IS the display, so a malformed value
- *  has no vocabulary to degrade onto. Absent → null (an older snapshot
+/** `reviveSwapBlocked`'s contract exactly: the reason is free prose the
+ *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
+ *  Absent → null (an older snapshot
  *  predates the axis); present-but-malformed rejects the session. */
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
   const v = o[k];
@@ -3662,8 +3684,9 @@ block above.
   returned `runCcdOr502(reply, CCD_ARGV.swapCross(...))` outside any queue; on `origin/main` there was
   no `crossPool` arm and the ordinary swap went straight into `sendDeps.queue.run` (D-2177). Composing
   them required a decision no reviewer of either PR ever made: **both arms behind ONE queued call**,
-  with every refusal — the 501, the 404/503 ladder, the pool verdict — hoisted in front of it. That is
-  a new guard, so by this repo's own doctrine it ships with a test that reds when it is deleted.
+  with each arm's applicable refusals hoisted in front of it — the 501 on the crossing arm, the
+  404/503 ladder and pool verdict on the ordinary arm (D-1684). That is a new guard, so by this repo's
+  own doctrine it ships with a test that reds when it is deleted.
   `server/test/swap-route-pool.test.ts` now pins it WITHOUT a timeout, by observing the enqueue.
   MEASURED RED with the `crossPool` arm reverted to a direct `runCcdOr502`: `Error: waitFor timed out:
   the swap route to enqueue`; GREEN 14/14 restored. **A conflict resolution is authorship, not
@@ -3810,3 +3833,62 @@ block above.
   discover the next residual absence claim. **A review that finds a merge-authored falsehood must
   search for the claim class, then distrust any surviving absence statement until the composed tree
   proves it.**
+
+- **D-2465 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **A per-request timeout does not bound a sweep that awaits an unbounded number of
+  requests serially.** `server/src/pools.ts` reads every non-dot project marker one after another;
+  in remote mode each `readFileMeasured` can consume the client's 15-second request timeout. Because
+  `watch.ts` awaits the pool snapshot before hook-state and dialog work, K stalled markers can delay
+  every later watcher lane by about `15s * K`, while overlapping two-second ticks are dropped and the
+  WebSocket can remain healthy. The specification requires one awaited, ordered snapshot, not serial
+  I/O. Bound the total pool-sweep time: let the consumer pass a per-operation timeout through
+  `FleetIO` and its remote adapter, race the `pools/` listing and concurrent marker reads against one
+  shared deadline, and map every unfinished or failed marker to `unreadable`, preserving local behavior
+  and all four pool states. Separate deterministic `project-pools-read` cases prove that a never-resolving
+  listing finishes as `listed:false` and several never-resolving markers finish as `unreadable`; each
+  watchdog is longer than the production bound. The listing case first failed on the unbounded listing,
+  and removing the marker race made the marker case red without hanging the suite; exact restoration is
+  green. **A bounded member operation multiplied by an unbounded serial population is not a bounded
+  aggregate; put the deadline around the decision's whole input set.**
+
+- **D-2466 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **Source history that describes a staged rollout in future tense becomes an
+  authoritative lie once the later stage lands in the same tree.** `server/src/ccdargv.ts` still says
+  no route calls `projectPoolSet`/`projectPoolClear`, yet `server/src/server.ts`'s project-pool route
+  selects those builders at its current call sites. The `POOLS_CAP` history says its cross-pool argv
+  decision, tag route, 409 pre-check and placement forecast do not exist, while current create/swap,
+  tag and projects routes implement all four. `server/src/pools.ts` likewise says
+  `readProjectPools`, `poolFor`, `poolsEnforcement` and `poolsWire` are future wave-3 work even though
+  this module defines them and `server.ts`/`watch.ts` call them. Leaving these claims in current source
+  sends the next maintainer toward duplicate or wrongly gated machinery. Correct the rollout
+  docstrings in `server/src/ccdargv.ts` and `server/src/pools.ts` to preserve why wave 2a introduced
+  the seams while stating what wave 3 now ships. **A staged-rollout comment must graduate when its
+  stage does; history can name the old boundary without presenting it as the current tree.**
+
+- **D-2467 (2026-09-10)** (the #81 coordinator acceptance review of exact
+  head `be44395b`) — **A wire field being display-ready is not evidence that a production renderer
+  consumes it.** `shared/api.ts` says `FleetSession.stranded.reason` is displayed on every surface and
+  renderers suppress a fabricated 1970 timestamp, but a production census finds no
+  `FleetSession.stranded` consumer under `pwa/src`; those `strandedAccount` symbols describe transcript
+  history, a separate axis. The wave-3 plan repeats the premature renderer claims in its Task 3 code
+  and test excerpts, while D-2422 already records the actual state: the server carries `stranded` on
+  REST and WebSocket now and wave 4 consumes it later. The false claims can make a wire-only test read
+  as end-to-end visibility and conceal the still-open PWA work. Correct `shared/api.ts`,
+  `server/src/registry.ts`, `server/test/registry.test.ts`, `server/test/fleet-lifecycle.test.ts`,
+  `server/test/fleetstate.test.ts` and the plan's mirrored excerpts to say the reason is carried
+  verbatim for a future renderer and that `at: 0` is the wire contract a renderer must treat as timestamp-less;
+  keep D-2422 and D-2464's server-carriage wording intact. **A transport contract may prescribe how a
+  renderer must behave without claiming that renderer exists.**
+
+- **D-2468 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **Two control-flow arms sharing a serialized execution seam does not mean they share
+  the preflight decisions before it.** The swap-route preamble said ordinary and `crossPool` swaps
+  differed only in which argv they choose and that the 501, 404/503 ladder and pool verdict all run
+  before either arm queues. The implementation and D-1684's explicit override contract disagree:
+  `crossPool: true` checks only the 501 capability skew gate, then skips `readSessionRecord` and the
+  server pool verdict; `cmd_swap` re-measures session and tag on the fleet box and returns the
+  authoritative refusal. Only the ordinary arm owns the early 404/503 and pool verdict. Adding those
+  reads to the crossing arm would erase the specified bypass merely to satisfy prose, so the preamble
+  in `server/src/server.ts` now says the arms share only the queued invocation and enumerates their
+  distinct preflights. **A shared sink does not imply shared upstream guards; describe each arm at
+  the branch where the decision actually runs.**

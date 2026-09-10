@@ -1185,14 +1185,16 @@ export class FleetWatcher {
    *  sweeps could finish out of order and latch an older snapshot until the
    *  tags changed again. `tick()`'s re-entrancy guard provides that ordering.
    *
-   *  The cost in front of `detectDialogs` is explicit and bounded by project
-   *  tags, not fleet sessions: zero io when names is null or does not contain
-   *  `pools`, otherwise one `pools/` readdir plus one measured read per non-dot
-   *  entry. `project-pools-read.test.ts` pins that function. This is unlike the
-   *  untimed or queue-blocked lanes dispatched below the dialog sweep; it is
-   *  also smaller than the awaited whole-registry read already above it. Both
-   *  FleetIO implementations fold read failures into measured return values,
-   *  so no catch is needed around the reads. */
+   *  The work in front of `detectDialogs` is explicit and bounded once for the
+   *  whole listed population: zero io when names is null or does not contain
+   *  `pools`, otherwise one `pools/` readdir plus concurrent measured reads for
+   *  every non-dot entry under `readProjectPools`'s shared one-second deadline.
+   *  That total bound matters more than the operation count — serial remote
+   *  requests would multiply the client's 15-second default by the number of
+   *  projects and suppress later watcher lanes (D-2465). Both FleetIO
+   *  implementations fold read failures into measured return values, so no
+   *  catch is needed around the reads. `project-pools-read.test.ts` pins the
+   *  cost arms, concurrency and deadline. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
     const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
     const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));

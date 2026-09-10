@@ -8,15 +8,19 @@ import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../
 /**
  * L3 — the server's view of the fleet box's project pool tags.
  *
- * WAVE 2a SHIPS ONE LINE OF IT, DELIBERATELY. `readProjectPools`, `poolFor`,
- * `poolsEnforcement` and `poolsWire` are wave 3's; what has to exist NOW is a
- * TypeScript spelling of the directory name for `pool-name-parity.test.ts` to
- * compare `ccd/ccd`'s `POOLS_DIR=` against. The alternative — waiting for wave
- * 3 — would mean the bash constant shipped to the fleet with nothing holding
- * it equal to anything, which is the state `ccd/ccrc-wrapper-shape:67` is
- * already in and discloses.
+ * Wave 2a first shipped `POOLS_DIR_NAME` so `pool-name-parity.test.ts` could
+ * compare `ccd/ccd`'s `POOLS_DIR=` against a TypeScript spelling before any
+ * server reader existed. Wave 3 completes that seam in this module:
+ * `readProjectPools`, `poolFor`, `poolsEnforcement` and `poolsWire` now carry
+ * the measured tags into watcher and route decisions. The staged history
+ * matters because waiting for the reader would have left the fleet's Bash
+ * constant unpinned during wave 2a — the state `ccd/ccrc-wrapper-shape:67`
+ * already has to disclose for another constant.
  */
 export const POOLS_DIR_NAME = 'pools';
+
+/** One pool snapshot must finish inside the watcher's two-second cadence. */
+const PROJECT_POOLS_SWEEP_BUDGET_MS = 1_000;
 
 /**
  * One sweep of `$REG/pools/`, ring L3 (spec §5.4.4).
@@ -57,7 +61,10 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * read in that file with no measured sibling), and the parent listing can.
  *
  * Cost: ZERO extra root readdirs for a caller that has a listing, then one
- * `pools/` readdir and one measured read per tagged project.
+ * `pools/` readdir and concurrent measured reads for the listed projects. A
+ * shared one-second deadline bounds the whole listing-and-marker decision,
+ * rather than multiplying the remote client's per-request timeout by that
+ * population.
  */
 export async function readProjectPools(
   io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
@@ -65,21 +72,38 @@ export async function readProjectPools(
   if (rootNames === null) return { listed: false };
   if (!rootNames.includes(POOLS_DIR_NAME)) return { listed: true, tags: new Map() };
   const dir = path.join(cfg.registryDir, POOLS_DIR_NAME);
-  const names = await io.readdir(dir);
+  const deadlineAt = Date.now() + PROJECT_POOLS_SWEEP_BUDGET_MS;
+  const deadline = new Promise<null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), PROJECT_POOLS_SWEEP_BUDGET_MS);
+    timer.unref?.();
+  });
+  const names = await Promise.race([
+    io.readdir(dir, PROJECT_POOLS_SWEEP_BUDGET_MS)
+      .catch(() => null),
+    deadline,
+  ]);
   if (names === null) return { listed: false };
+  const projectNames = names.filter((name) => !name.startsWith('.'));
+  // Launch the whole listed population together. One deadline covers the
+  // listing and every marker; serial per-request waits would multiply the
+  // remote timeout and stall every watcher lane after `emitPools` (D-2465).
+  const remainingMs = Math.max(0, deadlineAt - Date.now());
+  const reads = await Promise.all(projectNames.map(async (name) => ({
+    name,
+    read: await Promise.race([
+      io.readFileMeasured(path.join(dir, name), remainingMs)
+        .catch(() => null),
+      deadline,
+    ]),
+  })));
   const tags = new Map<string, ProjectPoolWire>();
-  for (const name of names) {
-    // Dot-leading is ccd's private namespace and the disclosed tmp-leak shape
-    // (`$REG/pools/.<p>.$BASHPID.tmp`). Exact, since no project may lead with
-    // a dot (`_ws_project_valid`).
-    if (name.startsWith('.')) continue;
-    const read = await io.readFileMeasured(path.join(dir, name));
-    if (!read.ok) {
+  for (const { name, read } of reads) {
+    if (read === null || !read.ok) {
       // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
       // landed between the listing and this read. Anything else is the file
       // being there and this box not being able to read it, which is a state
       // of its own and must never read as absence (D-114's rule).
-      if (read.reason === 'absent') continue;
+      if (read !== null && read.reason === 'absent') continue;
       tags.set(name, { state: 'unreadable' });
       continue;
     }

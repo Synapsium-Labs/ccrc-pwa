@@ -333,11 +333,10 @@ export const CCD_ARGV = {
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
-   *  `enable` rule above: a route picks between two words rather than
-   *  parameterising one builder. No route calls either of these yet (wave
-   *  3's); the agent grants the one prefix that covers both, and
-   *  `whitelist-subset` enumerates each separately so a shape nothing builds
-   *  cannot hide behind its sibling.
+   *  `enable` rule above: the project-pool route picks between two words rather
+   *  than parameterising one builder. The agent grants the one prefix that
+   *  covers both, and `whitelist-subset` enumerates each separately so one
+   *  route-built shape cannot hide behind its sibling.
    *
    *  `project` reaches ccd UNVALIDATED, exactly as `/api/projects/:project/
    *  workspaces` sends it: `_ws_project_valid` on the box is the authority,
@@ -388,16 +387,13 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  spellings, and that test's `toContain` assertion is what keeps THIS one
  *  equal to them.
  *
- *  It gates ONE decision, and only one, and that decision does not exist
- *  yet: whether the server may build a `--cross-pool` argv, wave 3's. None
- *  of the following exists today either — this names what each will be,
- *  not what any is. The tag route (wave 3) will be gated on the VERB's
- *  presence instead of on this token, and wave 3's 409 pre-check and its
- *  placement forecast will be the server's own decisions over data they
- *  read — gated by neither this token nor any other. Fix round 1 (Finding
- *  2c): a prior version of this docstring stated the pre-check and the
- *  forecast in the present tense, as if they already existed ungated;
- *  they do not exist at all yet. */
+ *  It gates ONE decision, and only one: whether the server may build a
+ *  `--cross-pool` argv for create or swap. The project-pool tag route is gated
+ *  on the VERB's presence instead of on this token, while the ordinary-swap
+ *  409 pre-check and project placement forecast are the server's own decisions
+ *  over measured pool data — gated by neither this token nor any other. Wave 2a
+ *  introduced the token before those wave-3 consumers; this paragraph describes
+ *  their composed contract now that both stages are present. */
 export const POOLS_CAP = 'pools-v1';
 
 /**

@@ -132,8 +132,8 @@ describe('assembleFleet ships the lifecycle', () => {
   it('carries the strand marker onto the wire in epoch MS, with its reason verbatim', async () => {
     // Seconds on disk (registry-native, the `swapblocked` shape), MS on the
     // wire — the conversion happens at THIS seam only, like `stoppedBy` and
-    // `swapBlocked` beside it. The reason is `_strand_why`'s sentence and it IS
-    // the display, so it rides untouched.
+    // `swapBlocked` beside it. Preserve `_strand_why`'s sentence untouched for
+    // wave 4's renderer.
     const s = await one({ stranded: `${NOW_SEC - 300} claude:pool=pool-b claude-a:limit` }, false);
     expect(s.stranded).toEqual({
       at: (NOW_SEC - 300) * 1000, reason: 'claude:pool=pool-b claude-a:limit',
@@ -148,7 +148,7 @@ describe('assembleFleet ships the lifecycle', () => {
 
   it('a LISTED but unreadable strand marker reaches the wire at 0 with the sentence, never as null', async () => {
     // The fail-shut arm, end to end: `at: 0` is the "listed but unreadable"
-    // degrade and renderers show the text without fabricating a 1970 stamp.
+    // wire contract; a future renderer must not fabricate a 1970 stamp.
     const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);

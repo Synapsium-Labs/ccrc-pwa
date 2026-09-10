@@ -350,7 +350,7 @@ const refusalAnswersWhileHeld = async (
   }
 };
 
-describe('POST /api/sessions/:id/swap — every refusal is decided before the queued call', () => {
+describe('POST /api/sessions/:id/swap — each arm refuses before the queued call', () => {
   it('answers the crossPool 501 while the slot is held', async () => {
     tag('demo', 'pool-a');
     const queue = new RecordingQueue();
