@@ -3206,8 +3206,10 @@ export interface SlashCommand {
  *  without CLAUDE_CODE_RESUME_INTERRUPTED_TURN it submits nothing. Rendered as
  *  a user bubble and a reply, that stall read as "someone sent resume and it
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
- *  ignores it, an older writer omits it. */
-export type SystemOrigin = 'resume-prompt' | 'no-response';
+ *  ignores it, an older writer omits it.
+ *  'limit' — the assistant row Claude Code appends on a 429
+ *  (`isApiErrorMessage:true, error:"rate_limit"`). */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
@@ -3246,7 +3248,11 @@ export type ChatEvent =
   | { kind: 'assistant'; uuid: string; ts: string; text: string }
   | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
-  | { kind: 'system'; uuid: string; ts: string; text: string; origin?: SystemOrigin };
+  | { kind: 'system'; uuid: string; ts: string; text: string; origin?: SystemOrigin;
+      /** With `origin: 'limit'` only: Claude Code's `quotaLimits.resetsAt`, epoch
+       *  SECONDS, copied — never converted — from the banner row (D-2365).
+       *  Absent when the row carried none; absence-permits. */
+      resetsAt?: number };
 
 export interface AskOption { label: string; description?: string; preview?: string }
 export interface AskQuestion {

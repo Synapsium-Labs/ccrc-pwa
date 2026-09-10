@@ -258,3 +258,33 @@ describe('the harness resume pair is system, not a conversation (D-2228)', () =>
     expect(parseTranscriptLine(human).map((e) => e.kind)).toEqual(['user']);
   });
 });
+
+describe('the limit banner is a system event, not the model speaking (D-2365)', () => {
+  const banner = (over: Record<string, unknown> = {}) => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: 'b1', timestamp: '2026-09-10T10:12:21.199Z',
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your weekly limit · resets Sep 15, 12am (UTC)" }] },
+    isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
+    quotaLimits: { status: 'rejected', resetsAt: 1789430400, rateLimitType: 'seven_day' },
+    ...over,
+  });
+  it('origin limit, the sentence as text, resetsAt in epoch seconds exactly as written', () => {
+    expect(parseTranscriptLine(banner())).toEqual([
+      { kind: 'system', uuid: 'b1', ts: '2026-09-10T10:12:21.199Z', text: "You've hit your weekly limit · resets Sep 15, 12am (UTC)", origin: 'limit', resetsAt: 1789430400 },
+    ]);
+  });
+  it('no quotaLimits: origin limit with no resetsAt key at all (absence-permits)', () => {
+    const [e] = parseTranscriptLine(banner({ quotaLimits: undefined }));
+    expect(e).toMatchObject({ kind: 'system', origin: 'limit' });
+    expect(e).not.toHaveProperty('resetsAt');
+  });
+  it('a resetsAt that is not a number is dropped, not coerced', () => {
+    const [e] = parseTranscriptLine(banner({ quotaLimits: { resetsAt: '1789430400' } }));
+    expect(e).not.toHaveProperty('resetsAt');
+  });
+  it('an API error that is not a rate limit stays an assistant event', () => {
+    expect(parseTranscriptLine(banner({ error: 'overloaded' })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+  it('the sentence on an ordinary assistant row stays an assistant event — the field decides', () => {
+    expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined, error: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+});
