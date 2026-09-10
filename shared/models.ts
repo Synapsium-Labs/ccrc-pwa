@@ -93,9 +93,15 @@ export type Discovery = 'catalogue' | readonly string[];
 export interface Registry {
   probe: ProbeKind;
   classes: ClassMap;
-  /** A CLASS NAME, default `sonnet`: what `CLAUDE_CODE_SUBAGENT_MODEL`
-   *  resolves to on this lane (§6.1). It is a routing destination the operator
-   *  SETS — a class-to-slot map — and never a derivation (ruling 5c). */
+  /** A CLASS NAME, default `sonnet`, settable to `haiku`: the class
+   *  `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as on this lane, which
+   *  Claude Code resolves to that class's own slot on a materialised lane —
+   *  `haiku` follows the haiku slot only while that model is also
+   *  `ANTHROPIC_SMALL_FAST_MODEL`, which the materialiser guarantees (§6.1,
+   *  amended 2026-09-09). `opus` and `fable` are refused — measured on
+   *  Claude Code 2.1.267, a subagent set to either runs on the sonnet slot's
+   *  model regardless. It is a routing destination the operator SETS — a
+   *  class-to-slot map — and never a derivation (ruling 5c). */
   subagent: ModelClass;
   discovery: Discovery;
   effort?: EffortMap;
@@ -168,4 +174,5 @@ export {
   familyClassOf,
   classOfModel,
   UNAVAILABLE_PREFIX,
+  SUBAGENT_CLASSES,
 } from './models.mjs';

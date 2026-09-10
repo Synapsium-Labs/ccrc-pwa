@@ -200,11 +200,45 @@ describe('parseRegistry (§4.1)', () => {
     expect(() => parseRegistry(r)).toThrow(/subagent/);
   });
 
+  it.each(['opus', 'fable'] as const)(
+    'reads a legacy subagent %s as written (the renderer refuses it)',
+    (cls) => {
+      // Fix round 2A (N1): `subagent: 'opus'`/`'fable'` was legal before the
+      // 2026-09-09 narrowing (measured on Claude Code 2.1.267: it runs on the
+      // sonnet slot's model regardless) and is still LEGAL ON DISK —
+      // `parseRegistry`'s `subagent` gate is `CLASSES` membership alone,
+      // exactly as before that narrowing, precisely so a registry already on
+      // disk with either value stays READABLE. Refusing it HERE would brick
+      // every verb on that lane, including the one that repairs it, the
+      // moment this ships (see this function's own doc comment). The refusal
+      // lives where a value is about to be ACTED on instead:
+      // `shared/modelenv.mjs`'s `modelEnvBlock` (see `modelenv.test.ts`) and
+      // `deploy/models-op.mjs`'s `set-subagent`.
+      const r = good(); r['subagent'] = cls;
+      // SEEDED's `fable` slot is null — give it a model so this case
+      // exercises ONLY the `CLASSES`-membership gate, not the separate
+      // null-slot gate below (fable's own slot being unassigned is a
+      // different condition, covered by its own test).
+      if (cls === 'fable') (r['classes'] as Record<string, unknown>)['fable'] = 'gpt-6-astra';
+      expect(parseRegistry(r).subagent).toBe(cls);
+    },
+  );
+
+  it.each(['haiku', 'sonnet'] as const)('accepts a subagent set to %s', (cls) => {
+    const r = good(); r['subagent'] = cls;
+    expect(() => parseRegistry(r)).not.toThrow();
+  });
+
   it('refuses a subagent naming a NULL slot on a seeded registry (§4.1)', () => {
-    // The env block resolves CLAUDE_CODE_SUBAGENT_MODEL to classes[subagent]
-    // (§6.1). A subagent pointing at a null slot is a lane whose subagents run
-    // on a sentinel.
-    const r = good(); r['subagent'] = 'fable';
+    // The env block writes CLAUDE_CODE_SUBAGENT_MODEL as the alias `subagent`
+    // itself (§6.1). A subagent pointing at a null slot is a lane whose alias
+    // would resolve to a sentinel, and every subagent on it would run there.
+    // `haiku` here, not `fable`: fix round 1, v2 (2026-09-09) restricts
+    // `subagent` to haiku/sonnet, so a null-slot case has to null one of
+    // those two rather than the class the earlier draft used.
+    const r = good();
+    r['subagent'] = 'haiku';
+    (r['classes'] as Record<string, unknown>)['haiku'] = null;
     expect(() => parseRegistry(r)).toThrow(/subagent/);
   });
 
@@ -303,7 +337,9 @@ describe('parseRegistry (§4.1)', () => {
     // The verbs answer "refuses, with the field named" (§10); a machine-readable
     // field is what lets the PATCH route in Plan 3a point at the right control.
     try {
-      const r = good(); r['subagent'] = 'fable';
+      const r = good();
+      r['subagent'] = 'haiku';
+      (r['classes'] as Record<string, unknown>)['haiku'] = null;
       parseRegistry(r);
       expect.unreachable('parseRegistry accepted a subagent on a null slot');
     } catch (e) {

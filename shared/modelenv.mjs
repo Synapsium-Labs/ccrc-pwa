@@ -31,7 +31,7 @@
 // hitting the provider's 400 ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
+import { CLASSES, SUBAGENT_CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
@@ -81,13 +81,52 @@ const slot = (registry, cls) => {
  * small-fast ones — on the most expensive model it has. That lane is refused
  * instead, by the same guard that refuses an all-null registry.
  *
- * `CLAUDE_CODE_SUBAGENT_MODEL` is `classes[registry.subagent]` — the operator's
- * explicit class-to-slot choice (§4.1, ruling 5c), never `classes.sonnet` by
- * derivation. A subagent naming a null slot is REFUSED rather than sentinelled:
- * a sentinel there fails one subagent turn at a time, at the provider, with
- * nothing having said so when the lane was configured. `parseRegistry` refuses
- * the same shape; this is the second gate, for a caller that built a registry
- * object in memory rather than reading one off disk.
+ * `CLAUDE_CODE_SUBAGENT_MODEL` is written as `registry.subagent` itself — the
+ * class ALIAS, `haiku` or `sonnet` only — never `classes[registry.subagent]`,
+ * the model id that alias resolves to, and never `opus` or `fable`. Measured
+ * 2026-09-09 on a fleet host running Claude Code 2.1.267, on the gpt lane, in
+ * headless `-p` turns that call the Agent tool with the env overridden per
+ * run (`--settings` on top of the materialised block; "ran on" read from the
+ * result's `modelUsage`):
+ *   - A model id in this key is ignored; the subagent runs on
+ *     `ANTHROPIC_SMALL_FAST_MODEL` instead.
+ *   - `sonnet` runs the subagent on the sonnet slot's model, following that
+ *     slot when it moves.
+ *   - `haiku` runs the subagent on the haiku slot's model when that model is
+ *     also `ANTHROPIC_SMALL_FAST_MODEL` — which this materialiser guarantees,
+ *     since `ANTHROPIC_SMALL_FAST_MODEL` is written as the haiku slot
+ *     whenever that slot is non-null — and on the sonnet slot's model when
+ *     the haiku default is pointed elsewhere.
+ *   - `opus` and `fable` run the subagent on the sonnet slot's model
+ *     regardless of their own default.
+ *   - Mechanism, from the client's own strings only (not measured further):
+ *     an `availableModels` allowlist with a family step-down.
+ * Writing the id, as this function used to, meant every subagent on the gpt
+ * lane ran on the haiku-class model regardless of the operator's `subagent`
+ * choice. Writing `opus` or `fable` would silently run every subagent on the
+ * sonnet-class model regardless of the operator's choice instead — a choice
+ * Claude Code would silently override, the same shape as the null-slot case
+ * below — so this function gates on `SUBAGENT_CLASSES` (`shared/models.mjs`,
+ * `haiku` and `sonnet` only) and REFUSES TO MATERIALISE an env block naming
+ * `opus` or `fable`, rather than letting an operator discover the override
+ * one subagent turn at a time. This ruling is tied to Claude Code 2.1.267;
+ * lifting it needs a re-measurement of the opus/fable rows.
+ * Fix round 2A (N1): this is a RENDER-time refusal, not a parse-time one —
+ * `parseRegistry` (`shared/models.mjs`) gates `subagent` on `CLASSES` alone,
+ * so a registry already on disk with `subagent: 'opus'`/`'fable'` (legal
+ * before 2026-09-09) still PARSES; it is this function, and
+ * `deploy/models-op.mjs`'s `set-subagent`, that refuse it, each naming
+ * `ccrc models <accountId> set-subagent <haiku|sonnet>` as the remedy. Two
+ * gates guard the field in order: a value outside `CLASSES` entirely (a
+ * typo, or garbage) is refused first, with the vocabulary; a value that IS a
+ * class but not one `SUBAGENT_CLASSES` allows gets the measured sentence
+ * above — so a typo is never answered with an explanation about opus/fable.
+ * A subagent naming a null slot is still REFUSED rather than sentinelled: an
+ * alias resolving through a sentinel would fail one subagent turn at a time,
+ * at the provider, with nothing having said so when the lane was configured.
+ * `parseRegistry` refuses the same shape; this is the second gate, for a
+ * caller that built a registry object in memory rather than reading one off
+ * disk.
  *
  * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
  * a 200k window for any model id it does not know, and compacts proactively at
@@ -134,11 +173,17 @@ export function modelEnvBlock(registry, catalogue) {
     throw new ModelEnvInvalid(
       `subagent is ${JSON.stringify(subagentClass)}, which is not one of ${CLASSES.join(', ')}`);
   }
+  if (!SUBAGENT_CLASSES.includes(subagentClass)) {
+    throw new ModelEnvInvalid(
+      `subagent is ${JSON.stringify(subagentClass)}: it must be haiku or sonnet. Measured 2026-09-09 on `
+      + `Claude Code 2.1.267, a subagent set to opus or fable runs on the sonnet slot's model `
+      + `regardless. Run 'ccrc models <accountId> set-subagent <haiku|sonnet>'.`);
+  }
   const subagentId = slot(registry, subagentClass);
   if (subagentId === null) {
     throw new ModelEnvInvalid(
-      `subagent names "${subagentClass}", whose slot is null: CLAUDE_CODE_SUBAGENT_MODEL would be a `
-      + 'sentinel and every subagent on this lane would fail at the provider, one turn at a time. '
+      `subagent names "${subagentClass}", whose slot is null: CLAUDE_CODE_SUBAGENT_MODEL would resolve `
+      + 'to a sentinel and every subagent on this lane would fail at the provider, one turn at a time. '
       + `Assign ${subagentClass} a model, or point subagent at a class that has one.`);
   }
   const sentinel = (cls) => `${UNAVAILABLE_PREFIX}${cls}`;
@@ -149,7 +194,7 @@ export function modelEnvBlock(registry, catalogue) {
     ANTHROPIC_DEFAULT_FABLE_MODEL: fable ?? sentinel('fable'),
     ANTHROPIC_MODEL: primary,
     ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),
-    CLAUDE_CODE_SUBAGENT_MODEL: subagentId,
+    CLAUDE_CODE_SUBAGENT_MODEL: subagentClass,
   };
   if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
     const row = catalogue.models.find((m) => m.id === primary);

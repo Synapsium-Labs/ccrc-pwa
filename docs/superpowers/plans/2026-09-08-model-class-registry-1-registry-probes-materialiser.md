@@ -402,14 +402,24 @@ export const modelCases: readonly ModelCase[] = [
     expect: { classified: [], unclassified: [], retired: [], available: [] },
   },
   {
+    // Fix round 2A (N9): this case is FOR `deriveModels`, which never reads
+    // `subagent` — the point being tested is a hidden catalogue model
+    // explicitly discovered, not which class holds it. It used to name
+    // `fable`, with every other class null and `subagent: 'fable'` — a
+    // registry `parseRegistry` would have refused since the 2026-09-09
+    // narrowing (round 2A's own N1 fix reopened READING such a value, but a
+    // fixture corpus should describe a lane a normal write path can still
+    // PRODUCE, not lean on the legacy-read exception). `haiku`, with
+    // `subagent` pointing at it, is a lane every ordinary verb — `init`,
+    // `set-class`, `set-subagent` — can actually write.
     why: 'a hidden model that is EXPLICITLY discovered is offered, and is not retired',
     reg: {
       probe: 'codex',
-      classes: { haiku: null, sonnet: null, opus: null, fable: 'gpt-reserve' },
-      subagent: 'fable', discovery: ['gpt-reserve'],
+      classes: { haiku: 'gpt-reserve', sonnet: null, opus: null, fable: null },
+      subagent: 'haiku', discovery: ['gpt-reserve'],
     },
     catalogue: CODEX,
-    expect: { classified: ['gpt-reserve'], unclassified: [], retired: [], available: ['fable'] },
+    expect: { classified: ['gpt-reserve'], unclassified: [], retired: [], available: ['haiku'] },
   },
   {
     why: 'every class retired leaves available EMPTY without nulling a single slot',
@@ -615,9 +625,9 @@ describe('parseRegistry (§4.1)', () => {
   });
 
   it('refuses a subagent naming a NULL slot on a seeded registry (§4.1)', () => {
-    // The env block resolves CLAUDE_CODE_SUBAGENT_MODEL to classes[subagent]
-    // (§6.1). A subagent pointing at a null slot is a lane whose subagents run
-    // on a sentinel.
+    // The env block writes CLAUDE_CODE_SUBAGENT_MODEL as the alias `subagent`
+    // itself (§6.1). A subagent pointing at a null slot is a lane whose alias
+    // would resolve to a sentinel, and every subagent on it would run there.
     const r = good(); r['subagent'] = 'fable';
     expect(() => parseRegistry(r)).toThrow(/subagent/);
   });
@@ -898,6 +908,11 @@ Expected: FAIL with `Failed to resolve import "../../shared/models.js"` (and the
 export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 export type ModelClass = (typeof CLASSES)[number];
 
+/** The subset of `CLASSES` a lane's `subagent` field may name — see
+ *  `shared/models.mjs`'s `SUBAGENT_CLASSES` for the full measurement this
+ *  narrowing rests on (fix round 1, v2). */
+export const SUBAGENT_CLASSES = ['haiku', 'sonnet'] as const;
+
 /** The four slots, ALWAYS all four keys. `null` means *this class is
  *  unavailable on this lane by nature*, never "use a default" and never
  *  "retired" — retirement is its own derived list (§4.3). The materialiser
@@ -949,9 +964,15 @@ export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 export interface Registry {
   probe: ProbeKind;
   classes: ClassMap;
-  /** A CLASS NAME, default `sonnet`: what `CLAUDE_CODE_SUBAGENT_MODEL`
-   *  resolves to on this lane (§6.1). It is a routing destination the operator
-   *  SETS — a class-to-slot map — and never a derivation (ruling 5c). */
+  /** A CLASS NAME, default `sonnet`, settable to `haiku`: the class
+   *  `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as on this lane, which
+   *  Claude Code resolves to that class's own slot on a materialised lane —
+   *  `haiku` follows the haiku slot only while that model is also
+   *  `ANTHROPIC_SMALL_FAST_MODEL`, which the materialiser guarantees (§6.1,
+   *  amended 2026-09-09). `opus` and `fable` are refused — measured on
+   *  Claude Code 2.1.267, a subagent set to either runs on the sonnet slot's
+   *  model regardless. It is a routing destination the operator SETS — a
+   *  class-to-slot map — and never a derivation (ruling 5c). */
   subagent: ModelClass;
   discovery: Discovery;
   effort?: EffortMap;
@@ -1080,6 +1101,20 @@ const REGISTRY_KEYS: readonly string[] = ['probe', 'classes', 'subagent', 'disco
  * there is nothing yet to point at. Both apply in full the moment any slot is
  * filled, and the materialiser refuses to write an env block for such a lane
  * anyway ("a lane needs at least one class"), so nothing routes to it meanwhile.
+ *
+ * READING IS NOT WRITING (fix round 2A, N1): `subagent` here is gated on
+ * `CLASSES` alone, exactly as before the 2026-09-09 `SUBAGENT_CLASSES`
+ * narrowing — a registry written under the earlier contract, with `subagent`
+ * set to `opus` or `fable`, parses today exactly as it did then. Refusing it
+ * HERE would brick every verb on that lane, including the one that repairs
+ * it, the moment this file ships: `readRegistry` runs before any op dispatch
+ * (`deploy/models-op.mjs`), so a parse-time refusal leaves no path forward but
+ * a destructive `rm` or a hand edit. The narrowing is enforced only where a
+ * value is about to be ACTED on: `shared/modelenv.mjs`'s `modelEnvBlock`
+ * refuses to materialise an env block for `opus`/`fable`, and
+ * `deploy/models-op.mjs`'s `set-subagent` refuses to WRITE one — both naming
+ * `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy, a command the
+ * gate below lets run because it only ever writes `haiku` or `sonnet`.
  */
 export function parseRegistry(json: unknown, catalogue?: Catalogue | null): Registry {
   if (!isObj(json)) {
@@ -1381,6 +1416,36 @@ export const UNAVAILABLE_PREFIX = 'ccrc-unavailable-';
 /** Mirrors `shared/models.ts`'s `CLASSES`, in the same order. */
 const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
 
+/** Fix round 1, v2 (2026-09-09 measurement): the subset of `CLASSES` a lane's
+ *  `subagent` field, and so `CLAUDE_CODE_SUBAGENT_MODEL`, may name. Measured
+ *  on a fleet host running Claude Code 2.1.267, on the gpt lane, in headless
+ *  `-p` turns that call the Agent tool, with the env overridden per run:
+ *   - `sonnet` runs the subagent on the sonnet slot's model, following that
+ *     slot when it moves.
+ *   - `haiku` runs the subagent on the haiku slot's model when that model is
+ *     also `ANTHROPIC_SMALL_FAST_MODEL` — which the materialiser guarantees,
+ *     since it writes `ANTHROPIC_SMALL_FAST_MODEL` as the haiku slot whenever
+ *     that slot is non-null — and on the sonnet slot's model when the haiku
+ *     default is pointed elsewhere.
+ *   - `opus` and `fable` run the subagent on the sonnet slot's model
+ *     regardless of their own slot's value.
+ *   - Mechanism, from the client's own strings only (not measured further):
+ *     an `availableModels` allowlist with a family step-down.
+ *  Writing `opus` or `fable` would be a choice Claude Code silently overrides
+ *  — the same shape as the null-slot refusal below — so this list carries
+ *  only the two classes that are honoured. Fix round 2A (N1): `parseRegistry`
+ *  does NOT gate on this list — a registry already on disk with `subagent`
+ *  set to `opus`/`fable` (legal before this ruling) must stay READABLE, or
+ *  every verb on that lane bricks the moment this ships. The refusal lives
+ *  where a value is about to be ACTED on instead: `shared/modelenv.mjs`'s
+ *  `modelEnvBlock` (the renderer) and `deploy/models-op.mjs`'s
+ *  `set-subagent` (the verb) both gate on `SUBAGENT_CLASSES` and both name
+ *  `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy — a command
+ *  the parse gate above lets run, since it only ever writes `haiku` or
+ *  `sonnet`. This ruling is tied to Claude Code 2.1.267; lifting it needs a
+ *  re-measurement of the opus/fable rows. */
+export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);
+
 /** Mirrors `shared/models.ts`'s `PROBE_KINDS`, in the same order. */
 const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
 
@@ -1471,7 +1536,8 @@ export function parseRegistry(json, catalogue) {
     if (!CLASSES.includes(key)) {
       throw new RegistryInvalid(`classes.${key}`,
         `classes has an unknown key "${key}" — the four are ${CLASSES.join(', ')}. "subagent" is not `
-        + 'one of them: it is a sibling field naming which of those four the subagents run as.');
+        + "one of them: it is a FIELD naming which class subagents run as — haiku or sonnet; run "
+        + "'ccrc models <id> set-subagent <haiku|sonnet>' to change it.");
     }
   }
   const classes = {};
@@ -1802,6 +1868,7 @@ import { mkTmp } from './tmpHelpers.js';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../../shared/modelenv.mjs';
+import { CLASSES, parseRegistry } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
 
 let home: string;
@@ -1820,7 +1887,7 @@ describe('modelEnvBlock', () => {
       ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
       ANTHROPIC_MODEL: 'gpt-5.6-sol',
       ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
-      CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
     });
   });
 
@@ -1828,31 +1895,95 @@ describe('modelEnvBlock', () => {
     // Unset, the alias falls through to Anthropic's own id and the proxied
     // backend answers with an opaque 404 — today's Fable-on-gpt failure. The
     // sentinel makes `/model fable` fail with a name that says what is missing.
-    const only = reg({ classes: { haiku: null, sonnet: null, opus: 'x', fable: null },
-      subagent: 'opus', discovery: ['x'], effort: {} });
-    const b = modelEnvBlock(only, null);
-    expect(b.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ccrc-unavailable-haiku');
-    expect(b.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ccrc-unavailable-sonnet');
-    expect(b.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
-    expect(Object.keys(b)).toHaveLength(7);
+    // Two sub-cases, not one: fix round 1, v2 (2026-09-09) restricts
+    // `subagent` to haiku/sonnet, and each needs its OWN slot non-null to be
+    // a legal choice — so no single registry here can leave both haiku and
+    // sonnet null while still naming a valid subagent, the way the original
+    // one-shot version of this test did with `subagent: 'opus'`.
+    const subagentOnHaiku = reg({ classes: { haiku: 'h', sonnet: null, opus: 'x', fable: null },
+      subagent: 'haiku', discovery: ['x', 'h'], effort: {} });
+    const b1 = modelEnvBlock(subagentOnHaiku, null);
+    expect(b1.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ccrc-unavailable-sonnet');
+    expect(b1.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+    expect(Object.keys(b1)).toHaveLength(7);
+
+    const subagentOnSonnet = reg({ classes: { haiku: null, sonnet: 's', opus: 'x', fable: null },
+      subagent: 'sonnet', discovery: ['x', 's'], effort: {} });
+    const b2 = modelEnvBlock(subagentOnSonnet, null);
+    expect(b2.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ccrc-unavailable-haiku');
+    expect(b2.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+    expect(Object.keys(b2)).toHaveLength(7);
   });
 
-  it('CLAUDE_CODE_SUBAGENT_MODEL is classes[subagent] — the registry\'s explicit choice', () => {
+  it('CLAUDE_CODE_SUBAGENT_MODEL is the alias `subagent` — the registry\'s explicit choice', () => {
     // Round-2 ruling 3: `subagent` is a class name the operator sets, never a
-    // derivation. Pointing it at opus must move the variable, with no other
-    // key changing.
-    const onOpus = reg({ subagent: 'opus' });
-    expect(modelEnvBlock(onOpus, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    // derivation. Pointing it at sonnet must move the variable, with no other
+    // key changing. Measured 2026-09-09 on Claude Code 2.1.267: the value
+    // must be the alias itself, not the id it resolves to — a model id in
+    // this key is silently ignored and the subagent falls back to
+    // ANTHROPIC_SMALL_FAST_MODEL instead. `opus`, not tested here: fix round
+    // 1, v2 (2026-09-09) measured that it and `fable` both run the subagent
+    // on the sonnet slot's model regardless, so `modelEnvBlock` refuses them
+    // (see the REFUSES cases below) rather than writing them.
+    const onSonnet = reg({ subagent: 'sonnet' });
+    expect(modelEnvBlock(onSonnet, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
     const onHaiku = reg({ subagent: 'haiku' });
-    expect(modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-luna');
+    expect(modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
     expect(modelEnvBlock(onHaiku, null).ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
   });
+
+  it('pins the alias form against both the classes[subagent] mutant and a hardcoded alias', () => {
+    // Two mutants this guard must catch: (1) reverting the renderer to
+    // `classes[registry.subagent]` (the old, id-valued code), and (2) a
+    // renderer that writes back some fixed alias regardless of the
+    // registry's own `subagent` field. Two different `subagent` choices,
+    // each checked against both the written value and CLASSES membership,
+    // catch both: mutant 1 would return a model id here, which is never a
+    // member of CLASSES; mutant 2 would return the same alias for both.
+    const onSonnet = reg({ subagent: 'sonnet' });
+    const sonnetValue = modelEnvBlock(onSonnet, null).CLAUDE_CODE_SUBAGENT_MODEL;
+    expect(sonnetValue).toBe('sonnet');
+    expect(CLASSES).toContain(sonnetValue);
+    const onHaiku = reg({ subagent: 'haiku' });
+    const haikuValue = modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL;
+    expect(haikuValue).toBe('haiku');
+    expect(CLASSES).toContain(haikuValue);
+    expect(haikuValue).not.toBe(sonnetValue);
+  });
+
+  it.each(['opus', 'fable'] as const)(
+    'reads a legacy subagent %s as written (the renderer refuses it)',
+    (cls) => {
+      // Fix round 2A (N1): `subagent: 'opus'`/`'fable'` was legal before the
+      // 2026-09-09 narrowing and is still LEGAL ON DISK — `parseRegistry`
+      // (`shared/models.mjs`) gates `subagent` on `CLASSES` alone, exactly as
+      // before that narrowing, so a registry carrying either value still
+      // PARSES unchanged. Refusing it there would brick every verb on that
+      // lane, including the one that repairs it, the moment this ships (see
+      // `parseRegistry`'s doc comment). It is `modelEnvBlock` — the RENDERER
+      // — that refuses to materialise an env block for it, naming the same
+      // remedy `deploy/models-op.mjs`'s `set-subagent` does.
+      const json = { ...JSON.parse(JSON.stringify(SEEDED)), subagent: cls };
+      // SEEDED's `fable` slot is null — give it a model so this case
+      // exercises ONLY the `SUBAGENT_CLASSES` gate, not the separate
+      // null-slot gate `parseRegistry` runs first (that is its own test).
+      if (cls === 'fable') (json.classes as Record<string, unknown>)['fable'] = 'gpt-6-astra';
+      const parsed = parseRegistry(json);
+      expect(parsed.subagent).toBe(cls);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(ModelEnvInvalid);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(/set-subagent <haiku\|sonnet>/);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(/sonnet slot/);
+    },
+  );
 
   it('REFUSES when subagent names a null slot, rather than writing a sentinel there', () => {
     // §6.1: "refused if that slot is null". A sentinel in this one variable
     // would make every subagent on the lane fail at the provider, one turn at a
-    // time, with nothing having said so at materialise time.
-    const bad = reg({ subagent: 'fable' });
+    // time, with nothing having said so at materialise time. `sonnet`, not
+    // `fable`: fix round 1, v2 (2026-09-09) restricts `subagent` to
+    // haiku/sonnet, so this case has to null one of those two rather than the
+    // class the earlier draft used.
+    const bad = reg({ classes: { ...SEEDED.classes, sonnet: null }, subagent: 'sonnet' });
     expect(() => modelEnvBlock(bad, null)).toThrow(ModelEnvInvalid);
     expect(() => modelEnvBlock(bad, null)).toThrow(/subagent/);
   });
@@ -1872,11 +2003,40 @@ describe('modelEnvBlock', () => {
     expect(modelEnvBlock(noHaiku, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('s');
   });
 
-  it('neither fallback chain ever reaches `fable`, and a fable-only lane is refused', () => {
-    // The two chains are spelled in §6.1 and STOP where they stop, deliberately:
-    // a lane whose only class is Fable would otherwise silently run every
+  // C1, narrowed by fix round 1, v2 (2026-09-09): this used to be the ONE
+  // case that could tell the sentinel apart from a fall-through to `fable` —
+  // both haiku and sonnet null, with BOTH opus and fable non-null, subagent
+  // pointed at opus so the registry stayed otherwise legal. That registry no
+  // longer exists: `subagent` now accepts only haiku or sonnet, and both are
+  // null here, so `modelEnvBlock`'s own subagent gate refuses this shape
+  // before ANTHROPIC_SMALL_FAST_MODEL is ever computed — there is no longer a
+  // way to reach the SMALL_FAST line with both haiku and sonnet null, because
+  // a valid subagent now REQUIRES one of the two to be non-null. The
+  // SMALL_FAST chain's own sentinel fallback (`?? sentinel('haiku')`) is
+  // consequently unreachable through any registry this function accepts; the
+  // regression this pinned — a `?? fable` silently added to that chain — can
+  // no longer be exercised through `modelEnvBlock`, only reasoned about from
+  // the source, so this test now pins the refusal instead.
+  it('a lane with both haiku and sonnet null is refused before ANTHROPIC_SMALL_FAST_MODEL is ever computed (C1, narrowed 2026-09-09)', () => {
+    const noHaikuNoSonnet = reg({ classes: { haiku: null, sonnet: null, opus: 'o', fable: 'f' },
+      subagent: 'sonnet', discovery: ['o', 'f'], effort: {} });
+    expect(() => modelEnvBlock(noHaikuNoSonnet, null)).toThrow(ModelEnvInvalid);
+    expect(() => modelEnvBlock(noHaikuNoSonnet, null)).toThrow(/subagent/);
+  });
+
+  it('ANTHROPIC_MODEL never reaches `fable`, and a fable-only lane is refused', () => {
+    // §6.1 spells TWO chains that stop short of `fable`, deliberately: a lane
+    // whose only class is Fable would otherwise silently run every
     // unqualified request — including the small-fast ones — on the most
-    // expensive model it has.
+    // expensive model it has. This case only exercises the ONE chain a
+    // registry can still reach through `modelEnvBlock`, `ANTHROPIC_MODEL`
+    // (opus ?? sonnet ?? haiku): a fable-only registry has no primary class,
+    // so it is refused before `ANTHROPIC_MODEL` is even computed. Fix round
+    // 2A (N4): the sibling case for `ANTHROPIC_SMALL_FAST_MODEL` (haiku ??
+    // sonnet) no longer has a registry that can reach it either — every
+    // shape that used to (haiku and sonnet both null) is refused earlier now,
+    // by the narrowed `subagent` gate — so that chain is pinned in SOURCE
+    // instead, in `single-definition.test.ts`'s "the model files" describe.
     const fableOnly = reg({ classes: { haiku: null, sonnet: null, opus: null, fable: 'f' },
       subagent: 'fable', discovery: ['f'], effort: {} });
     expect(() => modelEnvBlock(fableOnly, null)).toThrow(ModelEnvInvalid);
@@ -1904,8 +2064,15 @@ describe('modelEnvBlock', () => {
 
   it('is the row\'s OWN context when it is below the client default — a 128k model must compact '
     + 'at 128k, not 200k (§6.1, amended 2026-09-08, Task 16c)', () => {
-    const narrow = reg({ classes: { haiku: null, sonnet: null, opus: 'gpt-5.3-codex-spark', fable: null },
-      subagent: 'opus', discovery: ['gpt-5.3-codex-spark'], effort: {} });
+    // subagent is `sonnet`, not `opus`: fix round 1, v2 (2026-09-09) restricts
+    // `subagent` to haiku/sonnet. `opus` stays the PRIMARY class (ANTHROPIC_MODEL
+    // resolves opus ?? sonnet ?? haiku, so opus still wins the narrow-context
+    // model this case is testing) — sonnet is assigned only so the registry
+    // can legally name a subagent at all.
+    const narrow = reg({
+      classes: { haiku: null, sonnet: 'gpt-5.6-terra', opus: 'gpt-5.3-codex-spark', fable: null },
+      subagent: 'sonnet', discovery: ['gpt-5.3-codex-spark', 'gpt-5.6-terra'], effort: {},
+    });
     const b = modelEnvBlock(narrow, CODEX);
     expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
@@ -2223,7 +2390,7 @@ Expected: FAIL with `Failed to resolve import "../../shared/modelenv.mjs"`.
 // hitting the provider's 400 ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
+import { CLASSES, SUBAGENT_CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
@@ -2274,13 +2441,52 @@ const slot = (registry, cls) => {
  * small-fast ones — on the most expensive model it has. That lane is refused
  * instead, by the same guard that refuses an all-null registry.
  *
- * `CLAUDE_CODE_SUBAGENT_MODEL` is `classes[registry.subagent]` — the operator's
- * explicit class-to-slot choice (§4.1, ruling 5c), never `classes.sonnet` by
- * derivation. A subagent naming a null slot is REFUSED rather than sentinelled:
- * a sentinel there fails one subagent turn at a time, at the provider, with
- * nothing having said so when the lane was configured. `parseRegistry` refuses
- * the same shape; this is the second gate, for a caller that built a registry
- * object in memory rather than reading one off disk.
+ * `CLAUDE_CODE_SUBAGENT_MODEL` is written as `registry.subagent` itself — the
+ * class ALIAS, `haiku` or `sonnet` only — never `classes[registry.subagent]`,
+ * the model id that alias resolves to, and never `opus` or `fable`. Measured
+ * 2026-09-09 on a fleet host running Claude Code 2.1.267, on the gpt lane, in
+ * headless `-p` turns that call the Agent tool with the env overridden per
+ * run (`--settings` on top of the materialised block; "ran on" read from the
+ * result's `modelUsage`):
+ *   - A model id in this key is ignored; the subagent runs on
+ *     `ANTHROPIC_SMALL_FAST_MODEL` instead.
+ *   - `sonnet` runs the subagent on the sonnet slot's model, following that
+ *     slot when it moves.
+ *   - `haiku` runs the subagent on the haiku slot's model when that model is
+ *     also `ANTHROPIC_SMALL_FAST_MODEL` — which this materialiser guarantees,
+ *     since `ANTHROPIC_SMALL_FAST_MODEL` is written as the haiku slot
+ *     whenever that slot is non-null — and on the sonnet slot's model when
+ *     the haiku default is pointed elsewhere.
+ *   - `opus` and `fable` run the subagent on the sonnet slot's model
+ *     regardless of their own default.
+ *   - Mechanism, from the client's own strings only (not measured further):
+ *     an `availableModels` allowlist with a family step-down.
+ * Writing the id, as this function used to, meant every subagent on the gpt
+ * lane ran on the haiku-class model regardless of the operator's `subagent`
+ * choice. Writing `opus` or `fable` would silently run every subagent on the
+ * sonnet-class model regardless of the operator's choice instead — a choice
+ * Claude Code would silently override, the same shape as the null-slot case
+ * below — so this function gates on `SUBAGENT_CLASSES` (`shared/models.mjs`,
+ * `haiku` and `sonnet` only) and REFUSES TO MATERIALISE an env block naming
+ * `opus` or `fable`, rather than letting an operator discover the override
+ * one subagent turn at a time. This ruling is tied to Claude Code 2.1.267;
+ * lifting it needs a re-measurement of the opus/fable rows.
+ * Fix round 2A (N1): this is a RENDER-time refusal, not a parse-time one —
+ * `parseRegistry` (`shared/models.mjs`) gates `subagent` on `CLASSES` alone,
+ * so a registry already on disk with `subagent: 'opus'`/`'fable'` (legal
+ * before 2026-09-09) still PARSES; it is this function, and
+ * `deploy/models-op.mjs`'s `set-subagent`, that refuse it, each naming
+ * `ccrc models <accountId> set-subagent <haiku|sonnet>` as the remedy. Two
+ * gates guard the field in order: a value outside `CLASSES` entirely (a
+ * typo, or garbage) is refused first, with the vocabulary; a value that IS a
+ * class but not one `SUBAGENT_CLASSES` allows gets the measured sentence
+ * above — so a typo is never answered with an explanation about opus/fable.
+ * A subagent naming a null slot is still REFUSED rather than sentinelled: an
+ * alias resolving through a sentinel would fail one subagent turn at a time,
+ * at the provider, with nothing having said so when the lane was configured.
+ * `parseRegistry` refuses the same shape; this is the second gate, for a
+ * caller that built a registry object in memory rather than reading one off
+ * disk.
  *
  * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
  * a 200k window for any model id it does not know, and compacts proactively at
@@ -2327,11 +2533,17 @@ export function modelEnvBlock(registry, catalogue) {
     throw new ModelEnvInvalid(
       `subagent is ${JSON.stringify(subagentClass)}, which is not one of ${CLASSES.join(', ')}`);
   }
+  if (!SUBAGENT_CLASSES.includes(subagentClass)) {
+    throw new ModelEnvInvalid(
+      `subagent is ${JSON.stringify(subagentClass)}: it must be haiku or sonnet. Measured 2026-09-09 on `
+      + `Claude Code 2.1.267, a subagent set to opus or fable runs on the sonnet slot's model `
+      + `regardless. Run 'ccrc models <accountId> set-subagent <haiku|sonnet>'.`);
+  }
   const subagentId = slot(registry, subagentClass);
   if (subagentId === null) {
     throw new ModelEnvInvalid(
-      `subagent names "${subagentClass}", whose slot is null: CLAUDE_CODE_SUBAGENT_MODEL would be a `
-      + 'sentinel and every subagent on this lane would fail at the provider, one turn at a time. '
+      `subagent names "${subagentClass}", whose slot is null: CLAUDE_CODE_SUBAGENT_MODEL would resolve `
+      + 'to a sentinel and every subagent on this lane would fail at the provider, one turn at a time. '
       + `Assign ${subagentClass} a model, or point subagent at a class that has one.`);
   }
   const sentinel = (cls) => `${UNAVAILABLE_PREFIX}${cls}`;
@@ -2342,7 +2554,7 @@ export function modelEnvBlock(registry, catalogue) {
     ANTHROPIC_DEFAULT_FABLE_MODEL: fable ?? sentinel('fable'),
     ANTHROPIC_MODEL: primary,
     ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),
-    CLAUDE_CODE_SUBAGENT_MODEL: subagentId,
+    CLAUDE_CODE_SUBAGENT_MODEL: subagentClass,
   };
   if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
     const row = catalogue.models.find((m) => m.id === primary);
@@ -2583,6 +2795,14 @@ export interface ModelEnv {
   ANTHROPIC_DEFAULT_FABLE_MODEL: string;
   ANTHROPIC_MODEL: string;
   ANTHROPIC_SMALL_FAST_MODEL: string;
+  // The class ALIAS `registry.subagent` names — ALIAS ONLY, `haiku` or
+  // `sonnet`, measured 2026-09-09 on Claude Code 2.1.267 (SUBAGENT_CLASSES,
+  // shared/models.mjs). The other two classes are refused at WRITE
+  // (`deploy/models-op.mjs`'s `set-subagent`) and at RENDER (this module's
+  // `modelEnvBlock`, which is what produces a `ModelEnv` value at all) — NOT
+  // at read: a registry already on disk naming either, from before this
+  // narrowing, still parses (fix round 2A, N1), it just cannot reach this
+  // type.
   CLAUDE_CODE_SUBAGENT_MODEL: string;
   // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
   // stale, and names ANTHROPIC_MODEL's resolved model with a POSITIVE
@@ -2888,8 +3108,8 @@ Expected: one case red — `is ABSENT when the catalogue is stale — a stale wi
 
 - [ ] **Step 13: Measured mutation check — the subagent is read from the registry, not derived**
 
-Change `CLAUDE_CODE_SUBAGENT_MODEL: subagentId` to `CLAUDE_CODE_SUBAGENT_MODEL: sonnet ?? sentinel('sonnet')` and delete the two guards above it. Run `cd server && npx vitest run test/modelenv.test.ts`.
-Expected: two cases red — `CLAUDE_CODE_SUBAGENT_MODEL is classes[subagent] — the registry's explicit choice` and `REFUSES when subagent names a null slot, rather than writing a sentinel there`. Restore and re-run; expected PASS. (This is the mutation that makes ruling 5c load-bearing: the pre-round-2 code derived this variable from the sonnet slot, and the two spellings agree on the seeded gpt lane and nowhere else.)
+Change `CLAUDE_CODE_SUBAGENT_MODEL: subagentClass` to `CLAUDE_CODE_SUBAGENT_MODEL: sonnet ?? sentinel('sonnet')`, and delete the `SUBAGENT_CLASSES` and null-slot guards immediately above it (the `!CLASSES.includes(subagentClass)` guard fix round 2A added stays in place — it never fires here, every fixture below names a real class). Run `cd server && npx vitest run test/modelenv.test.ts`.
+Expected: seven cases red (measured 2026-09-10, fix round 2B) — `is the seven variables, byte for byte, for the seeded gpt registry (§6.1)`, ``CLAUDE_CODE_SUBAGENT_MODEL is the alias `subagent` — the registry's explicit choice``, `pins the alias form against both the classes[subagent] mutant and a hardcoded alias`, `reads a legacy subagent opus as written (the renderer refuses it)`, `reads a legacy subagent fable as written (the renderer refuses it)`, `REFUSES when subagent names a null slot, rather than writing a sentinel there`, and `a lane with both haiku and sonnet null is refused before ANTHROPIC_SMALL_FAST_MODEL is ever computed (C1, narrowed 2026-09-09)` — 7 failed, 46 passed (53). Restore and re-run; expected PASS, 53/53. (This is the mutation that makes ruling 5c load-bearing: the pre-round-2 code derived this variable from the sonnet slot, and the mutant writes that same derivation, the model id, where the block must instead carry the class alias — the two spellings agree NOWHERE, including on the seeded gpt lane (`'gpt-5.6-terra'` where `'sonnet'` is expected), which reds the first three cases above; deleting the SUBAGENT_CLASSES and null-slot guards along with it reds the remaining four, by removing both the SUBAGENT_CLASSES refusal and the null-slot refusal the round-1-v2 ruling added — round 2A's own `CLASSES` guard stays and stays green throughout, since it gates a different, narrower failure than this mutation touches.)
 
 - [ ] **Step 14: Measured mutation check — the TSV's third column is computed, not constant**
 
@@ -2936,10 +3156,12 @@ opaquely, which is exactly today's Fable-on-gpt failure. The two fallback chains
 stop short of `fable` on purpose, and a lane with nothing but Fable is refused
 rather than silently run on its most expensive model.
 
-CLAUDE_CODE_SUBAGENT_MODEL is classes[subagent] — the registry's explicit
-class-to-slot choice, never the sonnet slot by derivation — and a subagent naming
-a null slot is refused rather than sentinelled: a sentinel there fails one
-subagent turn at a time, at the provider, with nothing having said so.
+CLAUDE_CODE_SUBAGENT_MODEL is written as the class alias `subagent` names —
+the registry's explicit class-to-slot choice, never the sonnet slot by
+derivation, and never the model id that alias resolves to — and a subagent
+naming a null slot is refused rather than sentinelled: an alias resolving
+through a sentinel fails one subagent turn at a time, at the provider, with
+nothing having said so.
 
 The bash projection gains a third column: assigned | unassigned | retired, so
 availability is a positive marker rather than an inference from an empty field,
@@ -4529,7 +4751,7 @@ describe('init (§10, §13.1)', () => {
     const s = settingsOf('.claude-gpt');
     expect(s.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
     expect(s.env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
-    expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-terra');
+    expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
     expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
       .toBe('haiku\tgpt-5.6-luna\tassigned\nsonnet\tgpt-5.6-terra\tassigned\n'
         + 'opus\tgpt-5.6-sol\tassigned\nfable\t\tunassigned\n');
@@ -4717,18 +4939,40 @@ describe('set-subagent (§10, ruling 5c)', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
   });
 
-  it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s model', () => {
-    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+  it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s alias', () => {
+    // `haiku`, not `opus`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet — opus is refused (see below).
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     expect(r.code).toBe(0);
-    expect(registryOf('gpt')['subagent']).toBe('opus');
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(registryOf('gpt')['subagent']).toBe('haiku');
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
   });
 
+  it.each(['opus', 'fable'] as const)(
+    'refuses --class %s: measured 2026-09-09 on Claude Code 2.1.267, it runs on the sonnet slot regardless',
+    (cls) => {
+      const before = registryOf('gpt');
+      const beforeSettings = settingsOf('.claude-gpt');
+      const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', cls);
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('subagent-class-unsupported');
+      expect(String(r.body['detail'])).toMatch(/haiku or sonnet/);
+      // Nothing was written — registry AND settings unchanged.
+      expect(registryOf('gpt')).toEqual(before);
+      expect(settingsOf('.claude-gpt')).toEqual(beforeSettings);
+    },
+  );
+
   it('refuses a class whose slot is null, naming set-class as the remedy', () => {
-    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable');
+    // `haiku`, not `fable`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet, so a null-slot case has to be a class the new gate
+    // still lets through — haiku, nulled first, rather than fable (which is
+    // now refused before this check is ever reached).
+    op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku', '--model', 'none');
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     expect(r.code).toBe(1);
     expect(r.body['field']).toBe('subagent');
-    expect(String(r.body['detail'])).toMatch(/set-class fable/);
+    expect(String(r.body['detail'])).toMatch(/set-class haiku/);
     expect(registryOf('gpt')['subagent']).toBe('sonnet');
   });
 
@@ -4736,6 +4980,62 @@ describe('set-subagent (§10, ruling 5c)', () => {
     const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('unknown-class');
+  });
+});
+
+describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () => {
+  // `subagent: 'opus'` was a legal, verb-writable registry under the base
+  // this branch narrowed (`ee1d6228`) — an operator could have run
+  // `ccrc models gpt set-subagent opus` before this fix shipped. That value
+  // must stay MANAGEABLE, not brick the lane: `parseRegistry` reads it
+  // faithfully; only rendering (`show`'s `renderRefusal`, `materialise`) and
+  // writing (`set-subagent`) refuse it, each naming
+  // `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy — a command
+  // the parse gate lets run.
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    // Hand-edit past every verb's own validation, the way a registry written
+    // under the earlier contract would already be on disk.
+    const p = regPath('gpt');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.subagent = 'opus';
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+  });
+
+  it('(i) show exits 0, names the render failure as renderRefusal, and settingsDrift is empty', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['subagent']).toBe('opus');
+    expect(String(r.body['renderRefusal'])).toMatch(/must be haiku or sonnet/);
+    expect(String(r.body['renderRefusal'])).toMatch(/set-subagent <haiku\|sonnet>/);
+    expect(r.body['settingsDrift']).toEqual([]);
+  });
+
+  it('(ii) set-subagent --class haiku repairs the lane, and a following show clears renderRefusal', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['subagent']).toBe('haiku');
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
+    const r2 = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r2.code).toBe(0);
+    expect(r2.body['renderRefusal']).toBeNull();
+  });
+
+  it('(iii) materialise exits 1 settings-unwritable, with the remedy', () => {
+    const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toMatch(/must be haiku or sonnet/);
+    expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+  });
+
+  it('(iv) set-subagent --class opus is still refused subagent-class-unsupported', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('subagent-class-unsupported');
+    // Refused, nothing changed — the legacy value survives untouched.
+    expect(registryOf('gpt')['subagent']).toBe('opus');
   });
 });
 
@@ -5080,7 +5380,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CatalogueInvalid, MODEL_ID_RE, RegistryInvalid, availableFor, deriveModels,
+  CatalogueInvalid, MODEL_ID_RE, RegistryInvalid, SUBAGENT_CLASSES, availableFor, deriveModels,
   parseCatalogue, parseRegistry,
 } from '../shared/models.mjs';
 import {
@@ -5149,7 +5449,13 @@ function refuse(code, error, detail, field) {
 /** A `RegistryInvalid` turned into a refusal, with the ONE verb-level remedy
  *  the validator cannot know: which subcommand fixes this field. */
 const FIELD_REMEDY = {
-  subagent: "Run 'ccrc models <id> set-subagent <class>' to point it at a class that has a model.",
+  // Fix round 2A (N1): this text fires only from `RegistryInvalid` — a value
+  // outside `CLASSES` entirely, or one whose slot is null — never for
+  // `opus`/`fable`, which `parseRegistry` no longer refuses (it READS a
+  // legacy value; only the renderer and this verb refuse to ACT on it). Its
+  // own remedy is therefore always runnable: `set-subagent` only ever
+  // writes `haiku` or `sonnet`.
+  subagent: "Run 'ccrc models <id> set-subagent <haiku|sonnet>' to point it at a class that has a model.",
   discovery: "Run 'ccrc models <id> discovery add <modelId>' or 'discovery catalogue'.",
 };
 function refuseRegistry(e, id) {
@@ -5363,6 +5669,32 @@ function settingsDrift(account, registry, catalogue) {
 
 /** The `show` answer, which every mutation also returns so a caller sees the
  *  state it produced without a second call. */
+/** Fix round 2A (N1): the message `modelEnvBlock` would throw rendering this
+ *  registry's env block, or null when it would succeed. `settingsDrift`
+ *  above hits the same throw and silently reports `[]` — correct for a drift
+ *  LIST (there is nothing to compare against), wrong for `show`, which must
+ *  NAME the reason nothing can be materialised rather than answer as if the
+ *  lane were fine. A registry with NOTHING assigned across all four classes
+ *  is the legitimate unseeded state (deviation B-1) and reports null too —
+ *  there is nothing yet to render, not a refusal of something the operator
+ *  asked for. Any other throw (a fable-only lane with no primary class, or —
+ *  the case this round exists for — a legacy `subagent: opus`/`fable` left
+ *  on disk from before the 2026-09-09 narrowing, or one naming a null slot)
+ *  is a real, operator-actionable problem. */
+function renderRefusal(registry, catalogue) {
+  if (registry === null) return null;
+  if (!CLASSES.some((c) => registry.classes[c] !== null)) return null;
+  try {
+    modelEnvBlock(registry, catalogue);
+    return null;
+  } catch (e) {
+    if (!(e instanceof ModelEnvInvalid)) throw e;
+    return e.message;
+  }
+}
+
+/** The `show` answer, which every mutation also returns so a caller sees the
+ *  state it produced without a second call. */
 function describe(account, registry, catalogue) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
@@ -5375,6 +5707,7 @@ function describe(account, registry, catalogue) {
       ? null
       : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
     settingsDrift: settingsDrift(account, registry, catalogue),
+    renderRefusal: renderRefusal(registry, catalogue),
   };
 }
 
@@ -5652,7 +5985,7 @@ function main(argv) {
     if (!CLASSES.includes(a.class)) {
       return refuse(1, 'unknown-class',
         `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}. "subagent" is not one of `
-        + `them — run 'ccrc models ${a.id} set-subagent <class>' to choose which class subagents `
+        + `them — run 'ccrc models ${a.id} set-subagent <haiku|sonnet>' to choose which class subagents `
         + 'run as.');
     }
     if (a.model === 'none') {
@@ -5691,12 +6024,23 @@ function main(argv) {
       return refuse(1, 'unknown-class',
         `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
     }
+    if (!SUBAGENT_CLASSES.includes(a.class)) {
+      // Measured 2026-09-09 on Claude Code 2.1.267: a subagent set to opus or
+      // fable runs on the sonnet slot's model regardless of either class's
+      // own slot, so writing either would be a choice the client silently
+      // overrides. Refused HERE, at configuration time, the same principle
+      // as the null-slot refusal below.
+      return refuse(1, 'subagent-class-unsupported',
+        `account "${a.id}": subagent must be haiku or sonnet, not ${a.class}. Measured 2026-09-09 on `
+        + `Claude Code 2.1.267, a subagent set to opus or fable runs on the sonnet slot's model `
+        + 'regardless, so it is refused rather than written. Nothing was written.', 'subagent');
+    }
     if (next.classes[a.class] === null) {
       // Refused HERE, with the remedy that names the class the caller asked
       // for — the validator's own sentence cannot know which class was meant.
       return refuse(1, 'class-unassigned',
         `account "${a.id}" routes ${a.class} to nothing, so subagents cannot run as it: `
-        + 'CLAUDE_CODE_SUBAGENT_MODEL would be a sentinel and every subagent on this lane would '
+        + 'CLAUDE_CODE_SUBAGENT_MODEL would resolve to a sentinel and every subagent on this lane would '
         + `fail. Run 'ccrc models ${a.id} set-class ${a.class} <modelId>' first.`, 'subagent');
     }
     next.subagent = a.class;
@@ -6681,19 +7025,36 @@ describe('ccrc models <id> set-subagent', () => {
   });
 
   it('moves CLAUDE_CODE_SUBAGENT_MODEL, and nothing else in the block', () => {
+    // `haiku`, not `opus`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet — opus is refused (see below).
     const before = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
-    const r = run(['models', 'gpt', 'set-subagent', 'opus']);
+    const r = run(['models', 'gpt', 'set-subagent', 'haiku']);
     expect(r.code).toBe(0);
     const after = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
-    expect(after.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(after.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
     expect(after.env.ANTHROPIC_MODEL).toBe(before.env.ANTHROPIC_MODEL);
     expect(after.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(before.env.ANTHROPIC_DEFAULT_SONNET_MODEL);
   });
 
+  it.each(['opus', 'fable'])(
+    'refuses %s: measured 2026-09-09 on Claude Code 2.1.267, it runs on the sonnet slot regardless',
+    (cls) => {
+      const r = run(['models', 'gpt', 'set-subagent', cls]);
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('subagent-class-unsupported');
+      expect(String(oneObject(r)['detail'])).toMatch(/haiku or sonnet/);
+    },
+  );
+
   it('refuses a class whose slot is null, naming set-class', () => {
-    const r = run(['models', 'gpt', 'set-subagent', 'fable']);
+    // `haiku`, not `fable`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet, so a null-slot case has to be a class the new gate
+    // still lets through — haiku, nulled first, rather than fable (which is
+    // now refused before this check is ever reached).
+    run(['models', 'gpt', 'set-class', 'haiku', 'none']);
+    const r = run(['models', 'gpt', 'set-subagent', 'haiku']);
     expect(r.code).toBe(1);
-    expect(String(oneObject(r)['detail'])).toMatch(/set-class fable/);
+    expect(String(oneObject(r)['detail'])).toMatch(/set-class haiku/);
   });
 
   it('refuses a word that is not a class, at exit 2', () => {
@@ -6900,7 +7261,7 @@ _models_class_ok() {   # <class>
   local c
   for c in $MODELS_CLASSES; do [ "$c" = "$1" ] && return 0; done
   [ "$1" != "subagent" ] \
-    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which of those four subagents run as — run 'ccrc models <id> set-subagent <class>' to change it."
+    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which class subagents run as — ${MODELS_SUBAGENT_CLASSES// / or }; run 'ccrc models <id> set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>' to change it."
   _models_refuse unknown-class 2 "\"$1\" is not a class: the four are ${MODELS_CLASSES// /, }."
 }
 
@@ -9602,19 +9963,20 @@ Run it on the FLEET HOST first, then the server box (§13.5, deploy agent-first)
 - [ ] **R1. Deploy the agent lane.** `deploy/deploy.sh agent <box>`. This ships `ccd/ccrc`, `ccd/ccrc-models-probe`, the rsync'd `deploy/` and `shared/` trees, and enables `ccrc-models.timer`.
 - [ ] **R2. Prove the verb is there.** `ccrc models refresh --all` — expect one JSON object. On a box where no lane has a registry yet this is an EMPTY, successful run: refresh walks the lanes that have a registry, and the registry is what carries the probe kind.
 - [ ] **R3. Seed the gpt lane's registry.** `ccrc models gpt init codex`. This writes `~/.ccrc/models/gpt.classes.json` with today's mapping — luna/terra/sol, `fable: null`, `subagent: sonnet`, `discovery: "catalogue"` — so behaviour is unchanged, and materialises it. §13.1.
-- [ ] **R4. Probe, and check the catalogue landed.** `ccrc models refresh gpt`, then `jq '.probe, .stale, (.models|length)' ~/.ccrc/models/gpt.json` — expect `"codex"`, `false`, and the count the backend advertises (nine on 2026-09-08). A `true` for stale means the probe failed; read `.lastError` before going further, and do not continue until it is `false`.
-- [ ] **R5. Verify the block landed in the lane's own settings.** `~/.claude-gpt/settings.json` on the fleet host already carries a hand-placed SEVEN-key `env` block, measured 2026-09-08 (the four alias defaults incl. `ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-6-astra`, plus `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; no `CLAUDE_CODE_MAX_CONTEXT_TOKENS`). The materialiser REPLACES it (`mergeSettingsEnv` prunes omitted keys) — after R3, the lane's Fable routing goes from Astra to the `ccrc-unavailable-fable` sentinel until R11 assigns it, so `/model fable` is EXPECTED to stop answering between R3 and R11; that is not a regression. `jq '.env' ~/.claude-gpt/settings.json` — expect the SEVEN mandatory keys: `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL` (reading `ccrc-unavailable-fable`), `ANTHROPIC_MODEL` (reading `gpt-5.6-sol`), `ANTHROPIC_SMALL_FAST_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` (reading `gpt-5.6-terra`). The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, is CONDITIONAL, not a gate (Task 16 review; measured on this box: seven keys today) — it is written only when a fresh catalogue names the primary model's context, and only as a positive integer never above 200000 (Task 16c/67bf5b65); its absence here is not a failure. **The seven mandatory keys are the gate for R8. Do not install the wrappers until this shows them.**
+- [ ] **R4. Probe, and check the catalogue landed.** `ccrc models refresh gpt`, then `jq '.probe, .stale, (.models|length)' ~/.ccrc/models/gpt.json` — expect `"codex"`, `false`, and the count the backend advertises (nine on 2026-09-08). A `true` for stale means the probe failed; read `.lastError` before going further, and do not continue until it is `false`. Run this from a shell whose own command line names neither the shim nor LiteLLM's config path: on a codex lane this verb reaches the LiteLLM step, which stops a running proxy first, and `stop` uses `pkill -f`, which matches against the full command line, including the invoking shell's own (measured 2026-09-09: the operator's shell was killed, exit 144).
+- [ ] **R5. Verify the block landed in the lane's own settings.** `~/.claude-gpt/settings.json` on the fleet host already carries a hand-placed SEVEN-key `env` block, measured 2026-09-08 (the four alias defaults incl. `ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-6-astra`, plus `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; no `CLAUDE_CODE_MAX_CONTEXT_TOKENS`). The materialiser REPLACES it (`mergeSettingsEnv` prunes omitted keys) — after R3, the lane's Fable routing goes from Astra to the `ccrc-unavailable-fable` sentinel until R11 assigns it, so `/model fable` is EXPECTED to stop answering between R3 and R11; that is not a regression. `jq '.env' ~/.claude-gpt/settings.json` — expect the SEVEN mandatory keys: `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL` (reading `ccrc-unavailable-fable`), `ANTHROPIC_MODEL` (reading `gpt-5.6-sol`), `ANTHROPIC_SMALL_FAST_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` (reading `sonnet` — the class alias; Claude Code resolves it through `ANTHROPIC_DEFAULT_SONNET_MODEL`). The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, is CONDITIONAL, not a gate (Task 16 review; measured on this box: seven keys today) — it is written only when a fresh catalogue names the primary model's context, and only as a positive integer never above 200000 (Task 16c/67bf5b65); its absence here is not a failure. **The seven mandatory keys are the gate for R8. Do not install the wrappers until this shows them.**
 - [ ] **R6. Verify the two generated side files.** `cat ~/.ccrc/models/gpt.classes.tsv` — four lines, three columns; `fable` reads `fable<TAB><TAB>unassigned`. `jq . ~/.ccrc/models/gpt.effort.json` — `byModel` with three entries.
-- [ ] **R7. Install the shim and regenerate LiteLLM's config.** From a checkout of `feat/ccgpt-effort-shim`, follow `infra/handoff/INSTALL-model-class-registry.md` steps 2 and 3: install `ccgpt-proxy`, then `ccrc models litellm gpt`. Check with `grep -c reasoning ~/.handoff/litellm-config.yaml` — expect `0`. **Never run `ccrc models litellm gpt` on a box before `ccgpt-proxy` (Task 13) is installed there.** The generated config carries no `reasoning` key at all (spec §6.4) — it is the shim, not the config, that decides effort per request — so a box still running the OLD shim against the NEW config would send every gpt request at the provider's default effort, with nothing deciding it. Shim first, config second, in that order, every time.
+- [ ] **R7. Install the shim and regenerate LiteLLM's config.** From a checkout of `feat/ccgpt-effort-shim`, follow `infra/handoff/INSTALL-model-class-registry.md` steps 2 and 3: install `ccgpt-proxy`, then `ccrc models litellm gpt`. Check with `grep -c 'reasoning:' ~/.handoff/litellm-config.yaml` — expect `0`. The bare word, `grep -c reasoning`, is not the check: the template's own comments carry the word "reasoning" three times (measured 2026-09-09, a correct file reads `3` on the bare grep), and it is the KEY, `reasoning:`, that must be absent. Run this from a shell whose own command line names neither the shim nor LiteLLM's config path: this verb's own arm stops a running proxy before it writes (`ccgpt stop`, chosen when `pgrep -f` finds LiteLLM on the current config), and `stop` uses `pkill -f`, which matches against the full command line, including the invoking shell's own (measured 2026-09-09: the operator's shell was killed, exit 144). **Never run `ccrc models litellm gpt` on a box before `ccgpt-proxy` (Task 13) is installed there.** The generated config carries no `reasoning` key at all (spec §6.4) — it is the shim, not the config, that decides effort per request — so a box still running the OLD shim against the NEW config would send every gpt request at the provider's default effort, with nothing deciding it. Shim first, config second, in that order, every time.
 - [ ] **R8. Install the two wrappers.** `INSTALL-model-class-registry.md` step 4. Only after R5 showed the block.
-- [ ] **R9. Restart the proxies.** `ccgpt stop`. The next gpt session starts both on the new bytes.
-- [ ] **R10. Smoke-test the lane end to end.** Start a gpt session and check four things: an unqualified turn answers (the `ANTHROPIC_MODEL` path); `/model sonnet` answers (the alias path through the env block); a subagent runs (the `CLAUDE_CODE_SUBAGENT_MODEL` path, now Terra); `/model fable` fails with a message naming `ccrc-unavailable-fable` (the sentinel, doing exactly its job — this is a PASS, not a regression).
-- [ ] **R11. Classify Astra, and watch Fable become routable.** `ccrc models gpt set-class fable gpt-6-astra`, then `jq '.env.ANTHROPIC_DEFAULT_FABLE_MODEL' ~/.claude-gpt/settings.json` — expect `"gpt-6-astra"`. Re-run R10's fourth check: `/model fable` now answers. §13.2. Then, in the SAME step: `ccrc models gpt set-effort fable high` — not `max`. Measured 2026-09-08: effort `max` costs 2.78–2.84 ms per input token on this backend (508s for a routine ~183k-token compaction, 568s for 200k), which is what caused the compaction-timeout incident Task 16a's TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`) exists to survive; `~/.handoff/litellm-config.yaml`'s generated `gpt-6-astra` route carries `reasoning: {effort: high}` for the same reason. Promote to `max` only after re-measuring compaction cost on this backend.
-- [ ] **R12. Choose the subagent class, if Sonnet is not what you want.** `ccrc models gpt set-subagent haiku` — then `jq '.env.CLAUDE_CODE_SUBAGENT_MODEL' ~/.claude-gpt/settings.json` reads Luna. It is an explicit choice per lane and is never derived (§4.1, ruling 5c); pointing it at a class with no model is refused by name.
+- [ ] **R9. Restart the proxies.** `ccgpt stop`. The next gpt session starts both on the new bytes. Run this from a shell whose own command line names neither the shim nor LiteLLM's config path: `stop` uses `pkill -f`, which matches against the full command line, including the invoking shell's own (measured 2026-09-09: the operator's shell was killed, exit 144).
+- [ ] **R10. Smoke-test the lane end to end.** Start a gpt session and check four things: an unqualified turn answers (the `ANTHROPIC_MODEL` path); `/model sonnet` answers (the alias path through the env block); a subagent's answering model — VERIFY, not assert: `cd /tmp && ccgpt --allowedTools Agent -p 'Use the Agent tool with subagent_type general-purpose and the prompt "Reply with exactly the number 4". Then reply with exactly what the subagent returned.' --output-format json | jq '.modelUsage | keys'` and expect the sonnet slot's model (Terra) beside Sol — the `CLAUDE_CODE_SUBAGENT_MODEL` path: the alias `sonnet`, resolved through `ANTHROPIC_DEFAULT_SONNET_MODEL` (measured 2026-09-09 on Claude Code 2.1.267: a model id in that key is ignored and the subagent runs on `ANTHROPIC_SMALL_FAST_MODEL`); `/model fable` fails with a message naming `ccrc-unavailable-fable` (the sentinel, doing exactly its job — this is a PASS, not a regression).
+- [ ] **R11. Classify Astra, and watch Fable become routable.** `ccrc models gpt set-class fable gpt-6-astra`, then `jq '.env.ANTHROPIC_DEFAULT_FABLE_MODEL' ~/.claude-gpt/settings.json` — expect `"gpt-6-astra"`. Re-run R10's fourth check: `/model fable` now answers. §13.2. Then, in the SAME step: `ccrc models gpt set-effort fable high` — not `max`. Measured 2026-09-08: effort `max` costs 2.78–2.84 ms per input token on this backend (508s for a routine ~183k-token compaction, 568s for 200k), which is what caused the compaction-timeout incident Task 16a's TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`) exists to survive; the lane default is what the shim reads for an Astra request that names no effort — the generated `~/.handoff/litellm-config.yaml` carries no `reasoning` key for Astra or any other model (R7's `grep -c 'reasoning:'` is `0`, and stays `0`), because effort has exactly one owner, `ccgpt-proxy` (§6.4). Promote to `max` only after re-measuring compaction cost on this backend.
+- [ ] **R12. Choose the subagent class, if Sonnet is not what you want.** `ccrc models gpt set-subagent haiku` — then `jq '.env.CLAUDE_CODE_SUBAGENT_MODEL' ~/.claude-gpt/settings.json` reads `haiku`. VERIFY, not assert, that a subagent then runs on Luna: the same check as R10's third — `cd /tmp && ccgpt --allowedTools Agent -p 'Use the Agent tool with subagent_type general-purpose and the prompt "Reply with exactly the number 4". Then reply with exactly what the subagent returned.' --output-format json | jq '.modelUsage | keys'` — now expecting Luna beside Sol. It is an explicit choice per lane and is never derived (§4.1, ruling 5c); pointing it at a class with no model is refused by name, and `ccrc models gpt set-subagent opus` is refused by name too: exit 1, `subagent-class-unsupported`.
 - [ ] **R13. Set the lane defaults you want.** `ccrc models gpt set-effort <class> <level>` per class (Astra offers levels Luna does not, and the verb refuses a level a model does not offer, by name). Check `jq . ~/.ccrc/models/gpt.effort.json`. **This example no longer sets `ultra` for Fable** — R11 already set Astra to `high` for a measured reason (the compaction-timeout incident); setting `ultra` here would undo that without re-measuring, so the runbook warns instead of demonstrating it: only raise Astra past `high` after a fresh compaction-cost measurement on this backend, the same gate R11 states.
 - [ ] **R14. Confirm `/effort` now does something.** In a gpt session, `/effort xhigh`, then one turn. The shim sets `reasoning.effort: xhigh`; before this change LiteLLM's static config decided and the picker was decorative (§1).
 - [ ] **R15. Confirm the timer is live.** `systemctl --user list-timers ccrc-models.timer` — expect a next-elapse within the hour. `systemctl --user status ccrc-models.service` after it first fires — expect a clean oneshot exit.
 - [ ] **R16. Confirm `ccgpt-usage.timer` is untouched.** `systemctl --user list-timers ccgpt-usage.timer` — still every 20 minutes. Telemetry and catalogue are different questions on different cadences (§5). Measured 2026-09-08 on the fleet host: `~/.config/systemd/user/ccgpt-usage.service.d/path.conf` (hand-made 2026-07-22, 84 bytes) supplies `Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin`, because the repo's `infra/handoff/ccgpt-usage.service` `[Service]` block carries no PATH line — its `ExecStart=%h/.local/bin/ccgpt-usage` itself calls tools out of `~/.local/bin`. This program does not touch that unit (spec §5: out of scope; Task 16 Step 6 asserts it unchanged). Keep the drop-in: a fresh box needs it, or the unit's own `Environment=PATH=%h/.local/bin:…` line (as `ccrc-models.service` already carries — `deploy/systemd/ccrc-models.service`). File the repatriation — folding a PATH line into `ccgpt-usage.service` itself — as a follow-up in the monorepo, outside this branch.
 - [ ] **R17. Rollback, if any gate fails.** The registry file is the operator's and is never rewritten by a deploy: `ccrc models gpt set-class fable none` undoes R11, and the wrappers roll back with the command at the bottom of `INSTALL-model-class-registry.md`. Deleting `~/.ccrc/models/gpt.classes.json` returns the lane to "no registry" — every class unavailable, and the wrapper's own exports are what it had before R8, so roll the wrappers back too if you do that. The catalogue and the two side files are generated and safe to delete; the next `ccrc models refresh gpt` rebuilds them. The one thing to restore by hand is `~/.handoff/litellm-config.yaml`, whose previous bytes are at `~/.handoff/litellm-config.yaml.prev`. A WRAPPER-ONLY rollback (rolling back R8 without touching the registry) does not hand routing back to the wrappers' own exports: the settings `env` block BEATS the shell env for the same variable (probed, §6.2), so it goes on governing model selection regardless of what the wrappers export. The registry has to be deleted (or the settings file restored by hand) before rolling the wrappers back actually changes what a session runs.
+- [ ] **R18. Deploying a materialiser change to an already-seeded box.** `init` returns `created:false` before it materialises and no `materialise` verb exists (code-review I1), so after deploying a change to what the block renders — this fix included — the lane's `settings.json` keeps its OLD bytes until something re-materialises it. Run `ccrc models gpt set-subagent sonnet` (a no-op mutation that re-materialises unconditionally; `ccrc models refresh gpt` also does, but only after a successful probe), then `jq '.env.CLAUDE_CODE_SUBAGENT_MODEL' ~/.claude-gpt/settings.json` reads `sonnet` and `ccrc models gpt show` reports `settingsDrift: []`. A lane whose registry still names `opus` or `fable` for `subagent` (writable under Plan 1 as first merged, before this branch narrowed it) is READ as written but not materialised: `ccrc models <id> show` names it under `renderRefusal` rather than the fabricated `gpt-5.6-sol`/Astra id the pre-narrowing render would have written, the hourly refresh reports the lane's reason instead of silently re-writing a stale key, and `ccrc models <id> set-subagent sonnet` (the class it measurably ran on — rows 4, 6, 7, 8 of the §6.1 amendment's table) repairs it, the same command R18's own no-op case above uses. Run `set-subagent` FIRST on such a lane — `set-class`, `set-effort` and `discovery` are each refused `unroutable-lane` while `subagent` still names `opus` or `fable`.
 
 Plans 2, 3a and 3b have their own runbooks: Plan 2's covers the ccd class carry (the statusline writer, the registry `class` field, rotation), Plan 3a's the server routes and the Accounts screen's Models section, and Plan 3b's the SwapSheet downgrade choice.

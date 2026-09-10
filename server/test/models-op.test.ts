@@ -182,7 +182,7 @@ describe('the roster read', () => {
     writeCatalogue('gpt');
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-6-astra');
-    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--level', 'xhigh');
     op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'catalogue');
     expect(fs.readFileSync(rosterPath(), 'utf8')).toBe(before);
@@ -369,7 +369,7 @@ describe('init (§10, §13.1)', () => {
     const s = settingsOf('.claude-gpt');
     expect(s.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
     expect(s.env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
-    expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-terra');
+    expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
     expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
       .toBe('haiku\tgpt-5.6-luna\tassigned\nsonnet\tgpt-5.6-terra\tassigned\n'
         + 'opus\tgpt-5.6-sol\tassigned\nfable\t\tunassigned\n');
@@ -474,8 +474,10 @@ describe('set-class', () => {
     // to isolate the radio rule from the SEPARATE "subagent's slot went null"
     // refusal (measured: without this, `set-class opus gpt-5.6-terra` refuses
     // `registry-invalid`/`subagent`, not because of anything this test means
-    // to exercise).
-    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    // to exercise). Moved to `haiku`, not `opus`: fix round 1, v2 (2026-09-09)
+    // restricts `subagent` to haiku/sonnet, and opus is what this test is
+    // about to reassign anyway.
+    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-terra');
     expect(r.code).toBe(0);
     expect(classesOf('gpt')['opus']).toBe('gpt-5.6-terra');
@@ -499,6 +501,10 @@ describe('set-class', () => {
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent', '--model', 'gpt-5.5');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('unknown-class');
+    // NEW-3 (round 3): the remedy names the two classes `set-subagent` accepts,
+    // not the four `set-class` does — `<class>` would send an operator to
+    // `set-subagent opus`, which is refused `subagent-class-unsupported`.
+    expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
   });
 
   it('refuses a model the CATALOGUE does not list, naming it', () => {
@@ -615,18 +621,40 @@ describe('set-subagent (§10, ruling 5c)', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
   });
 
-  it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s model', () => {
-    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+  it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s alias', () => {
+    // `haiku`, not `opus`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet — opus is refused (see below).
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     expect(r.code).toBe(0);
-    expect(registryOf('gpt')['subagent']).toBe('opus');
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(registryOf('gpt')['subagent']).toBe('haiku');
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
   });
 
+  it.each(['opus', 'fable'] as const)(
+    'refuses --class %s: measured 2026-09-09 on Claude Code 2.1.267, it runs on the sonnet slot regardless',
+    (cls) => {
+      const before = registryOf('gpt');
+      const beforeSettings = settingsOf('.claude-gpt');
+      const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', cls);
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('subagent-class-unsupported');
+      expect(String(r.body['detail'])).toMatch(/haiku or sonnet/);
+      // Nothing was written — registry AND settings unchanged.
+      expect(registryOf('gpt')).toEqual(before);
+      expect(settingsOf('.claude-gpt')).toEqual(beforeSettings);
+    },
+  );
+
   it('refuses a class whose slot is null, naming set-class as the remedy', () => {
-    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable');
+    // `haiku`, not `fable`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet, so a null-slot case has to be a class the new gate
+    // still lets through — haiku, nulled first, rather than fable (which is
+    // now refused before this check is ever reached).
+    op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku', '--model', 'none');
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
     expect(r.code).toBe(1);
     expect(r.body['field']).toBe('subagent');
-    expect(String(r.body['detail'])).toMatch(/set-class fable/);
+    expect(String(r.body['detail'])).toMatch(/set-class haiku/);
     expect(registryOf('gpt')['subagent']).toBe('sonnet');
   });
 
@@ -634,6 +662,62 @@ describe('set-subagent (§10, ruling 5c)', () => {
     const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent');
     expect(r.code).toBe(1);
     expect(r.body['error']).toBe('unknown-class');
+  });
+});
+
+describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () => {
+  // `subagent: 'opus'` was a legal, verb-writable registry under the base
+  // this branch narrowed (`ee1d6228`) — an operator could have run
+  // `ccrc models gpt set-subagent opus` before this fix shipped. That value
+  // must stay MANAGEABLE, not brick the lane: `parseRegistry` reads it
+  // faithfully; only rendering (`show`'s `renderRefusal`, `materialise`) and
+  // writing (`set-subagent`) refuse it, each naming
+  // `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy — a command
+  // the parse gate lets run.
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    // Hand-edit past every verb's own validation, the way a registry written
+    // under the earlier contract would already be on disk.
+    const p = regPath('gpt');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.subagent = 'opus';
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+  });
+
+  it('(i) show exits 0, names the render failure as renderRefusal, and settingsDrift is empty', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['subagent']).toBe('opus');
+    expect(String(r.body['renderRefusal'])).toMatch(/must be haiku or sonnet/);
+    expect(String(r.body['renderRefusal'])).toMatch(/set-subagent <haiku\|sonnet>/);
+    expect(r.body['settingsDrift']).toEqual([]);
+  });
+
+  it('(ii) set-subagent --class haiku repairs the lane, and a following show clears renderRefusal', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['subagent']).toBe('haiku');
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
+    const r2 = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r2.code).toBe(0);
+    expect(r2.body['renderRefusal']).toBeNull();
+  });
+
+  it('(iii) materialise exits 1 settings-unwritable, with the remedy', () => {
+    const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toMatch(/must be haiku or sonnet/);
+    expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+  });
+
+  it('(iv) set-subagent --class opus is still refused subagent-class-unsupported', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('subagent-class-unsupported');
+    // Refused, nothing changed — the legacy value survives untouched.
+    expect(registryOf('gpt')['subagent']).toBe('opus');
   });
 });
 
