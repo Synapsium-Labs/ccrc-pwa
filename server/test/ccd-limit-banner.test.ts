@@ -194,6 +194,11 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     h.sh(`${STUBS(PROMPT)} _strand_clear ${ID}; _tick_strand_undecidable ${ID} wrapper claude`, { BOX_DRAFT: 'typing' });
     expect(stranded()).toBe(false);
   });
+  it('a BLANK pane no longer blinds the strand half either: the transcript still strands it (D-2363)', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS('')} _tick_strand_undecidable ${ID} wrapper claude`);
+    expect(stranded()).toBe(true);
+  });
   it('both call sites go through _session_hard_blocked (source pin)', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     expect(src).toContain('_session_hard_blocked "$id" "$pane" && hard_blocked=1');
