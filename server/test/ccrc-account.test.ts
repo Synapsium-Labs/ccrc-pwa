@@ -766,7 +766,13 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     expect(j['error']).toBe('no-answer');
     // The measured fact, not a guess about the cause: the exit code it gave.
     expect(String(j['detail'])).toContain('exited 2');
-    expect(String(j['detail'])).toMatch(/re-run the install|redeploy/);
+    // THE REMEDY, UNDER AN EXPECTATION THAT MEANS REMEDY. This arm was already
+    // the one row of its table asserting its own next step, which is what made
+    // it the RED CONTROL that turned its two siblings' greens into findings
+    // (D-2396): delete this sentence from ccd/ccrc and this line is
+    // where the file reds.
+    expect(String(j['detail']), 'the half-updated-box arm names no next step')
+      .toMatch(/re-run the install|redeploy/);
   });
 
   it('names the cause from the exit code, and does not blame a stale build for a kill', () => {
@@ -787,7 +793,24 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     // The measured fact is still carried verbatim, exactly as the rc=2 case
     // above asserts it — what changes is only the sentence that follows.
     expect(String(j['detail'])).toContain('exited 137');
-    expect(String(j['detail'])).toContain('signal 9');
+    // THE CAUSE, UNDER AN EXPECTATION THAT MEANS CAUSE. Kept rather than
+    // replaced: it is the only thing in this tree that pins `$((rc - 128))`,
+    // and swapping it for the remedy would have closed one gap by opening
+    // another — the trap round 3 hit at the other two addresses.
+    expect(String(j['detail']), 'the cause no longer derives the signal from the exit code')
+      .toContain('signal 9');
+    // AND THE REMEDY, THE HALF NOTHING ASSERTED (D-2396). THIS IS
+    // THE THIRD TABLE OF D-2356'S SHAPE, and that banner said there were two.
+    // `_acct_no_answer` (ccd/ccrc:3972-3978) is an if/elif on `$rc` with a
+    // cause and a next step per arm, exactly like `_acct_auth_why`'s — it is
+    // pinned by three separate cases rather than by one `it.each`-shaped
+    // table, which is why a reader counting tables did not see it. MEASURED at
+    // round 4 on a golden-restored copy: deleting this arm's whole remedy left
+    // the file 251/251 green, while deleting the rc=2 arm's remedy instead
+    // reds the case above on the identical guard shape. Unpinned, not
+    // unreachable.
+    expect(String(j['detail']), 'the killed arm names no next step')
+      .toContain('Look for an OOM kill or a timeout on this box');
     expect(String(j['detail'])).not.toContain('half-updated box');
   });
 
@@ -4180,6 +4203,19 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       const j = oneObject(r);
       expect(j['error']).toBe('no-answer');
       expect(String(j['detail'])).toContain('exited 0');
+      // THE THIRD ARM OF THAT SAME TABLE, AND IT HAD NEITHER HALF ASSERTED
+      // (D-2396). This case is the only one in the file that
+      // reaches `_acct_no_answer`'s `else`, and it measured the leading
+      // sentence and the caller's clause and nothing the branch itself writes:
+      // the comment above claims the branch "says exactly that rather than
+      // inventing a cause" and nothing held it to that, while the next step —
+      // go read what the callee put on stderr — was unasserted the way the
+      // killed arm's was. MEASURED at round 4: deleting that sentence outright
+      // left the file 251/251 green.
+      expect(String(j['detail']), 'the arm invented a cause instead of declining to')
+        .toContain('cannot name a cause');
+      expect(String(j['detail']), 'the arm that can name no cause names no next step either')
+        .toContain('is the only evidence there is');
       // The clause is this site's, and by this line everything stands.
       expect(String(j['detail'])).toContain('fully declared');
     });
@@ -5945,11 +5981,29 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
         writeFileSync(join(home, '.local', 'bin', 'claude'),
           '#!/bin/sh\necho \'{"loggedIn":false}\'\n', { mode: 0o644 });
       }, 'could not be executed', 'mode bits'],
+      // THE SECOND ADDRESS OF D-2331'S OWN DEFECT (D-2356). `alsoSays` is
+      // asserted below under a message reading *names no remedy*, and this row
+      // used to expect `'signal 9'` — a slice of its own CAUSE sentence
+      // (`exit 137 is signal 9`), which is what the row already asserts as
+      // `says`. It could not fail on the condition it is named for. The cause
+      // half is not dropped: it moves into `says`, which is where it belongs
+      // and which keeps `$((rc - 128))` pinned, and `alsoSays` now names the
+      // ACTION. THE RULE, NOT A COUNT (D-2396, correcting this
+      // banner's own claim). D-2356 said "both triage tables in this file
+      // carried the identical row and both are fixed here" — and there was a
+      // THIRD, `_acct_no_answer`, whose killed arm and whose else arm were
+      // both unpinned on their remedies and are repaired in round 4. So the
+      // sentence that belongs here is the rule: EVERY arm of EVERY rc-triage
+      // table asserts a slice of its own CAUSE under an expectation that means
+      // cause and a slice of its own REMEDY under one that means remedy. The
+      // census is re-taken rather than remembered — `grep -n 'elif \[ "$rc"'
+      // ccd/ccrc` names the tables — because a count in prose is what let this
+      // one hide behind a shape nobody was counting.
       ['killed', (home) => {
         mkdirSync(join(home, '.local', 'bin'), { recursive: true });
         writeFileSync(join(home, '.local', 'bin', 'claude'),
           '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
-      }, 'was KILLED rather than', 'signal 9'],
+      }, 'exit 137 is signal 9', 'Look for an OOM kill on this box'],
       ['timeout-refused', (home) => {
         plantClaude(home, 'claude');
         authFixture(home, SIGNED_OUT, 1);
@@ -6421,6 +6475,275 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       .toContain('D-2334');
   });
 
+  it('says what a run that never reached the probe left behind at EVERY site past the cheap question, on the lane that can reach the seam (D-2355, D-2358)', () => {
+    // D-2333 REPAIRED TWO SITES AND ITS OWN BANNER SAID TWO WAS ALL. Four more
+    // clauses are composed AFTER `_acct_check` has already put the cheap
+    // question to the lane's own launcher: `_acct_probe`'s `probe-cwd`, and the
+    // deadline validator's three `bad-timeout` refusals, which are reached a
+    // SECOND time through `_acct_probe_deadline`. Each said "Nothing was
+    // written." with the telemetry file on disk.
+    //
+    // AND THE EXISTING COVERAGE COULD NOT SEE IT — THE FIXTURE AXIS IS THE LANE
+    // (D-2358). Both of those cases drive their refusal through an OPENROUTER
+    // lane, where `_acct_check`'s provider gate means the cheap question is
+    // never asked at all. On that path nothing has run, so "Nothing was
+    // written." is TRUE — a green assertion pinning a sentence that is false on
+    // the path the case does not take. Which of two seams a run reaches is
+    // decided by the lane's PROVIDER, so a case about this clause has to name a
+    // lane as deliberately as it names an input. Every row below is anthropic,
+    // and every row has a non-moving control beside it so the clause is a
+    // discrimination and not a sentence that always appends.
+    const MOVED = 'One thing did change while the question was being asked';
+
+    /** An anthropic launcher that MOVES `~/.cc-limits` on the cheap question,
+     *  answering whatever `authFixture` planted. Fed `SIGNED_IN`, the classifier
+     *  DEFERS — `loggedIn: true` is not a verdict (a live credential is the
+     *  precondition for the probe, not an answer to it) — so `ACCT_HEALTH` comes
+     *  back empty and the run goes on to the probe. That is the only shape that
+     *  reaches these four sites on this lane. Its argv log is what proves the
+     *  cheap question ran and the billed one did not. */
+    const deferAndMove = (home: string): void => {
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(home, '.local', 'bin', 'claude'), [
+        '#!/bin/sh',
+        'printf \'%s\\n\' "$*" >> "$HOME/claude-argv"',
+        'if [ "$1" = auth ] && [ "$2" = status ]; then',
+        '  mkdir -p "$HOME/.cc-limits"',
+        '  printf \'{"five":7,"seven":0,"ts":1}\' > "$HOME/.cc-limits/claude.json"',
+        '  cat "$HOME/fixture-auth-out"',
+        '  IFS= read -r rc < "$HOME/fixture-auth-rc"; exit "$rc"',
+        'fi',
+        'echo "fixture claude: unexpected argv: $*" >&2; exit 90',
+      ].join('\n') + '\n', { mode: 0o755 });
+    };
+
+    /** Each site, the box it needs and the exit class it answers in. `probe-cwd`
+     *  plants a regular FILE where the scratch cwd must go; the three
+     *  `bad-timeout` arms are the validator's three refusals, driven through the
+     *  PROBE knob because that is the caller reached after the cheap question. */
+    const SITES: Array<[string, string, number, NodeJS.ProcessEnv, (home: string) => void]> = [
+      ['probe-cwd', 'probe-cwd', 1, {}, (home) => {
+        writeFileSync(join(home, '.ccrc', 'probe'), 'not a directory\n');
+      }],
+      ['bad-timeout/not-a-number', 'bad-timeout', 2,
+        { CCRC_ACCOUNT_PROBE_TIMEOUT: 'abc' }, () => { /* the knob is the input */ }],
+      ['bad-timeout/zero', 'bad-timeout', 2,
+        { CCRC_ACCOUNT_PROBE_TIMEOUT: '0' }, () => { /* … */ }],
+      ['bad-timeout/ceiling', 'bad-timeout', 2,
+        { CCRC_ACCOUNT_PROBE_TIMEOUT: '3601' }, () => { /* … */ }],
+    ];
+
+    for (const [name, code, exit, extraEnv, plant] of SITES) {
+      const moved = box(`ccrc-account-past-cheap-${code}-moved-`);
+      seedRosterJson(moved, [UPSTREAM]);
+      deferAndMove(moved);
+      authFixture(moved, SIGNED_IN, 0);
+      plant(moved);
+      const r = run(moved, ['account', 'check', '--id', 'claude'], '', extraEnv);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(exit);
+      const j = oneObject(r);
+      expect(j['error'], `${name}: ${JSON.stringify(j)}`).toBe(code);
+      const d = String(j['detail']);
+
+      // THE CONTRADICTION, CONSTRUCTED RATHER THAN ARGUED: the file is on disk
+      // and the prose beside it used to say nothing was written.
+      expect(existsSync(join(moved, '.cc-limits', 'claude.json')),
+        `${name}: the fixture launcher wrote no telemetry`).toBe(true);
+      expect(d, `${name}: the clause still claims nothing was written`).toContain(MOVED);
+      expect(d, name).toContain('.cc-limits');
+      expect(d, `${name}: the clause attributes a shared file's change to this run`)
+        .toContain('without claiming to be what caused it');
+      expect(d, `${name}: the flat sentence is still the whole clause`)
+        .not.toMatch(/Nothing was written\.$/);
+
+      // AND THE CHEAP QUESTION IS WHAT MOVED IT — the billed one never ran, so
+      // this is the seam the openrouter fixture cannot reach rather than a
+      // second probe by another name.
+      const argv = claudeArgv(moved);
+      expect(argv, `${name}: the cheap question was not asked`)
+        .toEqual(['auth status --json']);
+      expect(argv.join(' '), `${name}: the probe spent a request`).not.toContain('-p');
+
+      // THE CONTROL, at the same site with a launcher that moves nothing: the
+      // simple true sentence, and nothing appended. This is also the assertion
+      // the rest of the suite still expects verbatim on these paths.
+      const still = box(`ccrc-account-past-cheap-${code}-still-`);
+      seedRosterJson(still, [UPSTREAM]);
+      plantClaude(still, 'claude');
+      authFixture(still, SIGNED_IN, 0);
+      plant(still);
+      const c = run(still, ['account', 'check', '--id', 'claude'], '', extraEnv);
+      expect(c.code, `${name} control: ${c.stderr}`).toBe(exit);
+      expect(String(oneObject(c)['detail']), `${name}: the control appended a clause`)
+        .toMatch(/Nothing was written\.$/);
+    }
+
+    // THE OTHER SIDE OF THE DEADLINE VALIDATOR, which is why its three lines
+    // are shared rather than duplicated: reached from `_acct_auth_deadline`,
+    // IN FRONT of the cheap question, the same helper prints the flat sentence
+    // because nothing has run yet. One clause, two paths, and the difference is
+    // measured by the run rather than decided by the call site.
+    const front = box('ccrc-account-past-cheap-auth-knob-');
+    seedRosterJson(front, [UPSTREAM]);
+    deferAndMove(front);
+    authFixture(front, SIGNED_IN, 0);
+    const f = run(front, ['account', 'check', '--id', 'claude'], '',
+      { CCRC_ACCOUNT_AUTH_TIMEOUT: '0' });
+    expect(f.code, f.stderr).toBe(2);
+    expect(oneObject(f)['error']).toBe('bad-timeout');
+    expect(String(oneObject(f)['detail']),
+      'a refusal in front of the cheap question grew a clause about a launcher that never ran')
+      .toMatch(/Nothing was written\.$/);
+    expect(claudeArgv(front), 'the auth knob was validated after the launcher ran').toEqual([]);
+
+    // ── THE CENSUS ITSELF, AS A MECHANISM (D-2355, D-2395) ──
+    // ROUND 3 ADDED ONE, AND IT POINTED THE WRONG WAY. It counted the two
+    // helpers' CALL SITES and held them against the prose beside them, over a
+    // comment claiming a new site would then be "a DECISION someone records in
+    // that banner rather than a gap nobody sees". Measured as a pair at round
+    // 4, same insertion point, scratch copy, golden restored before each run:
+    //   * a seventh refusal past the cheap question written CORRECTLY, as
+    //     `$(_acct_quick_stands)` — RED, 7 !== 6;
+    //   * the IDENTICAL insertion spelling the flat sentence BY HAND — GREEN,
+    //     the whole file.
+    // The one mechanism this rule had fired on the REPAIR and was silent on
+    // the DEFECT — the exact shape D-2333 and D-2355 are both about. So the
+    // scan below comes FIRST and is the load-bearing one, and the counts keep
+    // their place underneath it as a banner ratchet. The order is deliberate:
+    // with the counts first, a tree carrying BOTH a stale banner and a
+    // hand-written clause reports only the banner, and the defect rides in
+    // behind the bookkeeping.
+    const src = readFileSync(CCRC_SRC, 'utf8');
+
+    // ── FIRST, THE DIRECTION THAT CATCHES THE DEFECT ───────────────────────
+    // A fixed-string scan for the hard-coded sentence in the region past the
+    // seam. MEASURED, because a negative claim is only as good as the search
+    // behind it: before this round nothing in this tree read `ccd/ccrc`'s own
+    // TEXT looking for that sentence. Four assertions do carry it negatively —
+    // two `not.toContain` in the `add` cluster, two `not.toMatch` in this one
+    // — and every one of them is about ONE RUN'S OUTPUT, which is a different
+    // question. They say the clause was right on the path a fixture took; they
+    // say nothing about a site no fixture reaches, which is the gap that let
+    // four sites ship with the flat sentence and is what this scan closes.
+    //
+    // HOW THE REGION IS DELIMITED, AND WHY IT IS NOT A LINE RANGE. The rule is
+    // about EXECUTION order — "at or after `_acct_check`'s call to
+    // `_acct_auth_status`", a site being inside it if ANY path reaches it after
+    // that call, not if every path does — and file order disagrees with that in
+    // BOTH directions:
+    //   * `_acct_deadline` sits ~500 lines ABOVE the seam and is INSIDE the
+    //     rule, because `_acct_probe_deadline` reaches it after the cheap
+    //     question has already run a launcher. It is reached on the early path
+    //     too, from `_acct_auth_deadline`, where the flat sentence is exactly
+    //     true — which is why the repair there was a HELPER call rather than a
+    //     second literal, and why including it here does not red on a
+    //     legitimate early use.
+    //   * `_acct_check`'s own argv loop sits BELOW that function's first line
+    //     and is OUTSIDE the rule: it refuses before anything has run, and it
+    //     spells the flat sentence twice, correctly.
+    // So the region is two spans anchored on CODE rather than on numbers —
+    // everything from `_acct_deadline`'s definition down to `_acct_check`'s,
+    // and `_acct_check` again from the `_acct_auth_status` call to its closing
+    // brace — with `_acct_quick_stands`'s own body carved out, since that is
+    // the helper which OWNS the sentence.
+    //
+    // COMMENT LINES ARE DROPPED FIRST, and that is load-bearing rather than
+    // tidy: `_acct_limits_moved`'s banner quotes the sentence in order to argue
+    // about it (`ccd/ccrc:6164`), so a scan that could not tell a quotation
+    // from a clause would red on the documentation of its own rule. A line
+    // whose first non-space character is `#` is a comment; no clause in this
+    // region is written across two lines, so nothing real is dropped with them.
+    const FLAT = 'Nothing was written.';
+    const lines = src.split('\n');
+    // COUNTED OVER CODE, NOT OVER THE FILE (D-2395). Round 3
+    // counted `$(…)` across the raw text and wrote down the fragility it left:
+    // a future COMMENT quoting the call form would inflate the number and red
+    // for nothing. Both mechanisms below drop comment lines first, so that
+    // failure mode is gone rather than documented. Measured at round 4: raw
+    // and code-only counts agree today, 6 and 3, so this narrows nothing.
+    const isComment = (l: string): boolean => /^\s*#/.test(l);
+    const occurrences = (ls: readonly string[], tok: string): number =>
+      ls.reduce((n, l) => n + (l.split(tok).length - 1), 0);
+    const callSites = (name: string): number =>
+      occurrences(lines.filter((l) => !isComment(l)), `$(${name})`);
+    const anchor = (re: RegExp, what: string): number => {
+      const hits = lines.map((l, i) => (re.test(l) ? i : -1)).filter((i) => i >= 0);
+      // AN ANCHOR THAT MOVED IS NOT A GREEN SCAN, IT IS NO SCAN: a rename that
+      // silently emptied the region would leave this passing for the one reason
+      // a mechanism must never pass for.
+      expect(hits.length, `${what}: the scan's anchor matched ${hits.length} lines, not one`).toBe(1);
+      return hits[0]!;
+    };
+    const closes = (open: number): number => {
+      const end = lines.findIndex((l, i) => i > open && l === '}');
+      expect(end, 'a top-level function in ccd/ccrc no longer closes on a bare `}`')
+        .toBeGreaterThan(open);
+      return end;
+    };
+    const deadline = anchor(/^_acct_deadline\(\) \{/, '_acct_deadline');
+    const checkAt = anchor(/^_acct_check\(\) \{/, '_acct_check');
+    const quickAt = anchor(/^_acct_quick_stands\(\) \{/, '_acct_quick_stands');
+    const quickEnd = closes(quickAt);
+    const seam = anchor(/^\s+_acct_auth_status "\$id"$/, "_acct_check's call to _acct_auth_status");
+    const checkEnd = closes(checkAt);
+    expect(seam > checkAt && seam < checkEnd,
+      'the seam is no longer inside `_acct_check`, so the second span is not the one argued for')
+      .toBe(true);
+    const inRegion = (i: number): boolean =>
+      (i >= deadline && i < checkAt && !(i >= quickAt && i <= quickEnd))
+      || (i >= seam && i <= checkEnd);
+    const region = lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ i }) => inRegion(i))
+      .filter(({ l }) => !isComment(l));
+    // NOT VACUOUS, TWO WAYS. A region scan that quietly empties itself is green
+    // for the worst reason there is, so its size has a floor; and every call
+    // site the counts below measure is re-found INSIDE it, which is the claim
+    // that this region really is drawn around the paths the rule names. Let a
+    // site land outside it and that equality reds, so the argument gets re-made
+    // rather than the coverage silently shrinking.
+    expect(region.length, 'the region past the seam is empty or tiny, so the scan asserts nothing')
+      .toBeGreaterThan(100);
+    for (const helper of ['_acct_quick_stands', '_acct_probe_stands'] as const) {
+      const inside = occurrences(region.map(({ l }) => l), `$(${helper})`);
+      expect(inside, `not one $(${helper}) site is inside the region this scan calls "past the seam"`)
+        .toBeGreaterThan(0);
+      // AGAINST THE WHOLE FILE, NEVER AGAINST A LITERAL. A hard-coded number
+      // here would red on a CORRECTLY written new site, which is the very
+      // inversion this round is undoing.
+      expect(inside, `a $(${helper}) call site sits OUTSIDE that region: either the region is drawn `
+        + 'too narrowly for the rule it states, or a clause that cannot yet know what still stands '
+        + 'is being composed before anything has run')
+        .toBe(callSites(helper));
+    }
+    // THE ASSERTION ITSELF. Reported as the offending LINES rather than as a
+    // count, so the red names the address instead of a number.
+    expect(region.filter(({ l }) => l.includes(FLAT)).map(({ i, l }) => `ccd/ccrc:${i + 1}: ${l.trim()}`),
+      `a clause at or after \`_acct_check\`'s call to \`_acct_auth_status\` spells ${JSON.stringify(FLAT)} `
+      + 'by hand. From that line on a launcher may already have run, so what still stands is a thing '
+      + 'this run MEASURED: end the refusal in `$(_acct_quick_stands)` or `$(_acct_probe_stands)`, '
+      + 'whichever the run can prove')
+      .toEqual([]);
+
+    // ── AND THEN THE COUNTS, WHICH ARE A BANNER RATCHET AND NOT THIS RULE ──
+    // What they still buy, which is why they are kept: a site that STOPS
+    // ending in a helper drops the count and reds, and the prose beside them
+    // cannot go stale on its own arithmetic. What they do NOT buy is the
+    // paragraph above. Counted on the CALL form, `$(…)`, so the definitions
+    // and the dozen mentions in comments do not enter the number — a future
+    // COMMENT quoting that call form no longer inflates them: `callSites`
+    // drops comment lines, which is the fragility round 3 wrote down and left.
+    expect(callSites('_acct_quick_stands'),
+      'the count of `_acct_quick_stands` sites moved. UP is a new site: record it in the banner. '
+      + 'DOWN is a site that stopped ending in the helper, which is the defect the scan above names')
+      .toBe(6);
+    expect(callSites('_acct_probe_stands'),
+      'the count of `_acct_probe_stands` sites moved — the same two readings as above')
+      .toBe(3);
+    expect(src, 'the banner no longer records the count it was measured at')
+      .toContain('NINE clause sites sit');
+  });
+
   it('resets ACCT_LIMITS_TOUCHED before every check, not only inside the probe (D-2223 F8)', () => {
     // THE ONE DEFECT IN THIS ROUND THAT ONE PROCESS PER INVOCATION CANNOT SHOW.
     // `_acct_check` reset `ACCT_HEALTH` and `ACCT_NOTES` and not this, so on the
@@ -6603,10 +6926,16 @@ describe('ccrc account check: the probe', () => {
         writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
           '#!/bin/sh\necho \'{}\'\n', { mode: 0o644 });
       }, 'could not be executed', 'mode bits'],
+      // `alsoSays` NAMES THE ACTION HERE TOO (D-2356) — see the twin table
+      // above for the argument. MEASURED before the change: deleting this
+      // arm's remedy outright left this file green, while deleting the 127
+      // arm's remedy reds at the same line with the same expectation shape,
+      // which is what says the green was an unpinned guard rather than an
+      // unreachable one.
       ['killed', (home) => {
         writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
           '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
-      }, 'was KILLED rather than', 'signal 9'],
+      }, 'exit 137 is signal 9', 'Look for an OOM kill on this box'],
       ['deadline-refused', (home) => {
         plantProbe(home, 'orchard-api');
         probeFixture(home, PROBE_OK, 0);
@@ -6680,7 +7009,7 @@ describe('ccrc account check: the probe', () => {
     expect(notes[1]!).toContain('the LAST question about this account');
   });
 
-  it('keeps the REMEDY when the note cap bites, and loses the editorial clause instead (D-2330)', () => {
+  it('keeps EVERY branch\'s remedy when the note cap bites, and loses the editorial clause instead (D-2330, D-2354)', () => {
     // THE FIX FOR D-2268 CUT THE HEADROOM ON THE PATH THAT HAD NONE. Giving the
     // probe its own closing clause put 221 characters between the diagnosis and
     // the next step, and `_acct_note_cap` truncates from the RIGHT at 1024 — so
@@ -6696,45 +7025,108 @@ describe('ccrc account check: the probe', () => {
     // the input the first landing was written against. Real fleet paths are in
     // this range — the account id, the launcher directory and the home all ride
     // in the same sentence.
-    const REMEDY = 'Run \'ccrc wrappers\' to write the missing launcher.';
+    //
+    // ONE BRANCH DEEP WAS A BUDGET, NOT A MECHANISM (D-2354). This case used to
+    // drive the 127 branch alone, whose remedy is 50 characters — so the ONE
+    // branch whose remedy could not fit was the one branch never measured at
+    // depth. D-2331 gave the 125 branch a ~490-character action IN THE SAME
+    // ROUND that D-2330 fixed the order here, and at this very fixture's depth
+    // 127 kept its remedy, 126 kept its remedy, and 125 lost the one it had
+    // just been given. Neither entry was wrong on its own terms; ordering
+    // protects a next step only while the next step is short, and nothing was
+    // measuring the length. So the table below is every branch of
+    // `_acct_auth_why`, each asserting ITS OWN next step survives.
+    //
+    // THE FOURTH ROW IS A DIFFERENT SHAPE AND SAYS SO. The KILLED branch names
+    // no path at all — no `$WRAPPER_BIN_DIR`, no `$id` — so its note is a
+    // CONSTANT and no HOME can truncate it. That is pinned by LENGTH against
+    // the shallow run rather than assumed, so a future edit that interpolates
+    // the launcher path into that sentence reds here instead of shipping the
+    // one branch this case cannot see.
     const CLAUSE = 'the LAST question about this account';
+    const TAIL = 'rather than anything measured about the lane';
     const MARKER = '… (this note was truncated by ccrc at 1024 characters)';
+    const DEPTH = 700;
 
-    const deep = deepBox('ccrc-account-note-cap-deep-', 700);
-    seedRosterJson(deep, [UPSTREAM, OPENROUTER_LANE]);   // no launcher: the probe sees 127
-    const r = run(deep, ['account', 'check', '--id', 'orchard-api']);
-    expect(r.code, r.stderr).toBe(0);
-    const note = ((oneObject(r)['notes'] as string[]) ?? [])[0] ?? '';
-    // THE CAP REALLY BIT, so what follows is a statement about truncation and
-    // not about a note that happened to fit. Without this the case would be
-    // green on any HOME at all.
-    expect(note, `the cap never fired: ${note.length} characters`).toContain(MARKER);
-    expect(note.length).toBe(1024 + MARKER.length);
-    // …AND THE OPERATOR KEPT THE HALF THEY CAN ACT ON. This is the assertion
-    // that reds if anyone puts the editorial clause back in front of the
-    // remedy: at this depth the old order loses the whole 50-character remedy
-    // and 31 characters of the clause besides.
-    expect(note, 'the truncation ate the next step').toContain(REMEDY);
-    // AND WHAT WAS DROPPED IS THE EDITORIAL TAIL, which is the other half of
-    // the same claim — there is no depth at which the clause vanishes and the
-    // remedy survives WHOLE, because the two are adjacent: the honest form is
-    // that the cut lands inside the clause rather than inside the next step.
-    expect(note, 'nothing was actually cut from the editorial clause')
-      .not.toContain('rather than anything measured about the lane');
+    const firstNote = (r: Result): string =>
+      ((oneObject(r)['notes'] as string[]) ?? [])[0] ?? '';
+    const noteAt = (home: string): string =>
+      firstNote(run(home, ['account', 'check', '--id', 'orchard-api']));
 
-    // THE SHALLOW CONTROL, which is what makes the pair a discrimination rather
-    // than a claim about one depth: the same lane on an ordinary HOME loses
-    // nothing at all, so the deep case above is measuring the CAP and not a
-    // sentence this branch simply never writes.
-    const shallow = box('ccrc-account-note-cap-shallow-');
-    seedRosterJson(shallow, [UPSTREAM, OPENROUTER_LANE]);
-    const whole = ((oneObject(run(shallow, ['account', 'check', '--id', 'orchard-api']))[
-      'notes'] as string[]) ?? [])[0] ?? '';
-    expect(whole).not.toContain(MARKER);
-    expect(whole).toContain(REMEDY);
-    expect(whole).toContain(CLAUSE);
-    expect(whole.indexOf(REMEDY), 'the remedy is written after the editorial clause')
-      .toBeLessThan(whole.indexOf(CLAUSE));
+    /** Each branch of `_acct_auth_why`, its planting, its OWN next step, and
+     *  whether its sentence carries `$HOME` — which is what decides whether any
+     *  depth can truncate it at all. */
+    const BRANCHES: Array<[string, (home: string) => void, string, boolean]> = [
+      ['absent', () => { /* no launcher: the deadline shim reports 127 */ },
+        'Run \'ccrc wrappers\' to write the missing launcher.', true],
+      ['not-executable', (home) => {
+        writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
+          '#!/bin/sh\necho \'{}\'\n', { mode: 0o644 });
+      }, 'Check its mode bits and that its interpreter line names a shell this box has.', true],
+      ['deadline-refused', (home) => {
+        plantProbe(home, 'orchard-api');
+        probeFixture(home, PROBE_OK, 0);
+        writeFileSync(join(home, '.local', 'bin', 'timeout'),
+          '#!/bin/sh\nexit 125\n', { mode: 0o755 });
+      }, 'command -v timeout gtimeout', true],
+      ['killed', (home) => {
+        writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
+          '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
+      }, 'Look for an OOM kill on this box, not for a broken launcher.', false],
+    ];
+
+    for (const [name, plant, REMEDY, scales] of BRANCHES) {
+      const deep = deepBox(`ccrc-account-note-cap-deep-${name}-`, DEPTH);
+      seedRosterJson(deep, [UPSTREAM, OPENROUTER_LANE]);
+      plant(deep);
+      const note = noteAt(deep);
+
+      // THE SHALLOW CONTROL, PER BRANCH, and it is what makes each pair a
+      // discrimination rather than a claim about one depth: the same lane on an
+      // ordinary HOME loses nothing at all, so the deep row is measuring the
+      // CAP and not a sentence this branch simply never writes.
+      const shallow = box(`ccrc-account-note-cap-shallow-${name}-`);
+      seedRosterJson(shallow, [UPSTREAM, OPENROUTER_LANE]);
+      plant(shallow);
+      const whole = noteAt(shallow);
+      expect(whole, `${name}: the shallow control was truncated`).not.toContain(MARKER);
+      expect(whole, `${name}: no next step at all`).toContain(REMEDY);
+      expect(whole, name).toContain(CLAUSE);
+      expect(whole.indexOf(REMEDY),
+        `${name}: the remedy is written after the editorial clause`)
+        .toBeLessThan(whole.indexOf(CLAUSE));
+
+      if (!scales) {
+        // THE CONSTANT BRANCH. No depth truncates it, and the reason is
+        // MEASURED — the same note, to the character, at both depths — rather
+        // than argued from reading the sentence.
+        expect(note, `${name}: a note with no $HOME in it was truncated`)
+          .not.toContain(MARKER);
+        expect(note.length,
+          `${name}: the note's length moved with HOME, so this branch DOES scale`)
+          .toBe(whole.length);
+        expect(note, `${name}: the next step is gone`).toContain(REMEDY);
+        continue;
+      }
+
+      // THE CAP REALLY BIT, so what follows is a statement about truncation and
+      // not about a note that happened to fit. Without this the row would be
+      // green on any HOME at all.
+      expect(note, `${name}: the cap never fired: ${note.length} characters`)
+        .toContain(MARKER);
+      expect(note.length, name).toBe(1024 + MARKER.length);
+      // …AND THE OPERATOR KEPT THE HALF THEY CAN ACT ON. This is the assertion
+      // that reds if anyone puts the editorial clause back in front of the next
+      // step — or lets a next step grow past the room this depth leaves it,
+      // which is the failure D-2331 and D-2330 produced between them.
+      expect(note, `${name}: the truncation ate the next step`).toContain(REMEDY);
+      // AND WHAT WAS DROPPED IS THE EDITORIAL TAIL, which is the other half of
+      // the same claim — there is no depth at which the clause vanishes and the
+      // remedy survives WHOLE, because the two are adjacent: the honest form is
+      // that the cut lands inside the clause rather than inside the next step.
+      expect(note, `${name}: nothing was actually cut from the editorial clause`)
+        .not.toContain(TAIL);
+    }
   });
 
   it('bounds a launcher-controlled row detail AT THE SOURCE, in EVERY slot the factory covers (D-2266, D-2267, D-2328)', () => {

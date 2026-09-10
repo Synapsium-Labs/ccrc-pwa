@@ -5870,6 +5870,18 @@ ACCT_NOTES=()
 # validator's address: one helper ending both paths with one sentence would say
 # "a lane whose provider is not anthropic is never asked at all" about the probe,
 # which is asked of every lane there is.
+#
+# AND THE CLOSING CLAUSE IS THE SITUATIONAL ONE, NOT THE FLAT SENTENCE
+# (D-2355). All three refusals below used to end in a hard-coded "Nothing was
+# written.", which is true on THIS function's own path from `_acct_auth_deadline`
+# - nothing has run yet - and false on its other one: `_acct_probe_deadline` is
+# called from `_acct_probe`, i.e. AFTER `_acct_check` has already put the cheap
+# question to the lane's own launcher, so `$CCRC_LIMITS_DIR` may already have
+# moved. MEASURED whole-verb on an anthropic lane: `CCRC_ACCOUNT_PROBE_TIMEOUT=0`
+# answered exit 2 saying nothing was written with the telemetry file on disk.
+# `_acct_quick_stands` is right for all three because none of them reaches the
+# probe: it says the flat sentence when the stamp saw nothing, and names what
+# moved when it did. The rule this is an instance of is stated at that helper.
 ACCT_DEADLINE=""
 _acct_deadline() {   # <env-name> <value> <default> <zero-clause> <ceiling-clause> -> ACCT_DEADLINE, or refuses at 2
   local name="$1" v="$2" def="$3" zero="$4" cap="$5" n=""
@@ -5878,16 +5890,16 @@ _acct_deadline() {   # <env-name> <value> <default> <zero-clause> <ceiling-claus
   # the same class `--id ''` is refused in, one function down.
   case "$v" in
     ''|*[!0-9]*)
-      _acct_refuse 2 bad-timeout "$name is \"$v\", which is not a whole number of seconds. This verb passes it to timeout(1), which refuses a value like this by exiting 125 without ever running the launcher - and a box with no coreutils would instead run the launcher with no deadline at all. Give it a positive whole number of seconds, or leave it unset for the default of $def. Nothing was written." ;;
+      _acct_refuse 2 bad-timeout "$name is \"$v\", which is not a whole number of seconds. This verb passes it to timeout(1), which refuses a value like this by exiting 125 without ever running the launcher - and a box with no coreutils would instead run the launcher with no deadline at all. Give it a positive whole number of seconds, or leave it unset for the default of $def. $(_acct_quick_stands)" ;;
   esac
   # Leading zeros stripped by pattern rather than by `$(( 10#$v ))`, which
   # OVERFLOWS SILENTLY on a 20-digit value and would hand the comparisons below
   # a wrapped negative number.
   n="${v#"${v%%[!0]*}"}"; [ -n "$n" ] || n=0
   [ "$n" = 0 ] \
-    && _acct_refuse 2 bad-timeout "$name is \"$v\", and zero is refused rather than given a meaning: GNU timeout(1) reads a duration of zero as NO deadline at all - measured on this fleet, a zero-second call sat through a two-second sleep in full - while a box with no coreutils falls back to a shell sleep that returns at once and reports the deadline as already expired. One value cannot mean both. If you want to bound this call, give it a positive whole number of seconds. $zero Nothing was written."
+    && _acct_refuse 2 bad-timeout "$name is \"$v\", and zero is refused rather than given a meaning: GNU timeout(1) reads a duration of zero as NO deadline at all - measured on this fleet, a zero-second call sat through a two-second sleep in full - while a box with no coreutils falls back to a shell sleep that returns at once and reports the deadline as already expired. One value cannot mean both. If you want to bound this call, give it a positive whole number of seconds. $zero $(_acct_quick_stands)"
   { [ "${#n}" -gt 4 ] || [ "$n" -gt 3600 ]; } \
-    && _acct_refuse 2 bad-timeout "$name is \"$v\", which is above the 3600-second ceiling this verb will honour. $cap A value this large does not bound one: timeout(1) accepts it and clamps it, which is the same unbounded call zero asks for. Give it a positive whole number of seconds up to 3600. Nothing was written."
+    && _acct_refuse 2 bad-timeout "$name is \"$v\", which is above the 3600-second ceiling this verb will honour. $cap A value this large does not bound one: timeout(1) accepts it and clamps it, which is the same unbounded call zero asks for. Give it a positive whole number of seconds up to 3600. $(_acct_quick_stands)"
   ACCT_DEADLINE="$n"
 }
 
@@ -5961,6 +5973,18 @@ _acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
 # loss begins around a 718-character HOME, which is well inside a real fleet
 # path. Diagnosis, then the ACTION, then the editorial clause: if anything is
 # dropped it is the half an operator cannot act on.
+#
+# AND THE ORDER IS NOT THE MECHANISM - THE MEASUREMENT IS (D-2354). Ordering
+# protects a next step only while the next step is SHORT, and the round that
+# ruled the order is the round that gave the 125 branch a ~490-character
+# action: at one depth three branches kept their remedy and the fourth lost
+# the one it had just been given. What holds each branch now is the deep-HOME
+# case, which drives ALL FOUR at a HOME past the cap and asserts each keeps
+# its own next step - a budget nobody measures is a budget that has already
+# been spent. Measured at that fixture's depth, every branch's next step ends
+# by character 213 of the constant part, and the branch with NO $HOME in it at
+# all - the KILLED arm - is the one no depth can truncate, which the case pins
+# by length rather than assuming.
 _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> one note
   local rc="$1" id="$2" asked="$3" verdict="$4"
   if [ "$rc" -eq 127 ]; then
@@ -5976,7 +6000,23 @@ _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> o
     # pass that would earn a 125: the value is a whole number of seconds inside
     # a stated range before the call is built, so a refusal of it is evidence
     # about what answers to that name here, not about what was typed.
-    printf '%s' "$asked was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. This verb only ever hands it a whole number of seconds between 1 and 3600, so the argument it refused is not one you typed: find out what the deadline name resolves to on this box - run: command -v timeout gtimeout - and whether that is coreutils' own program rather than something else of the same name earlier on PATH. $verdict"
+    #
+    # THE COMMAND COMES FIRST, AND THE REASONING BEHIND IT (D-2354). D-2331's
+    # first landing put the action at the END of a ~490-character sentence,
+    # with the runnable half about 330 characters in - and D-2330, IN THE SAME
+    # ROUND, had just ruled that the cap eats from the right. Both rulings are
+    # right and together they reproduced the defect D-2331 closed: MEASURED at
+    # the very 772-character HOME D-2330 was argued at, 127 and 126 kept their
+    # remedies and 125 lost the one it had just been given. A REORDER PLUS A
+    # CAP IS A BUDGET, NOT A MECHANISM: what makes it one is the deep-HOME
+    # case, which now runs every branch and asserts each keeps ITS OWN next
+    # step. The reasoning is kept because it is what makes this a measurement
+    # rather than a guess, and it is kept BEHIND the command because it is the
+    # half a truncated reader can least afford to be holding. Budget after this
+    # edit, measured: the runnable half ends 209 characters into the constant
+    # part, so it survives to a HOME of about 815 - and the tightest branch of
+    # the four is no longer this one but 126, at 213.
+    printf '%s' "$asked was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. Run: command -v timeout gtimeout - the argument it refused is not one you typed, since this verb only ever passes a whole number of seconds between 1 and 3600, so what answers to that name on this box is not coreutils' own program. $verdict"
   elif [ "$rc" -gt 128 ]; then
     printf '%s' "$asked did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. $verdict"
   else
@@ -6138,17 +6178,44 @@ _acct_limits_moved() {   # -> "" or the sentence naming what moved
   printf '%s' " One thing did change while the question was being asked: $CCRC_LIMITS_DIR moved. That directory is shared account-scoped telemetry any session on this account can rewrite, so this run reports the change without claiming to be what caused it."
 }
 
-# THE CLAUSE FOR A RUN THAT NEVER REACHED THE PROBE (D-2333). "Nothing was
-# written." was hard-coded at two sites - `_acct_auth_status`'s classify-failed
-# refusal and `_acct_check`'s short-circuit clause - and D-2273 falsified both
-# in the same commit that wrote the bracket: the cheap question runs the LANE'S
-# OWN launcher with the lane's own config dir, so a run whose probe never ran
-# can still have moved the shared telemetry directory. The wire said
-# `limitsTouched: true` while the prose beside it said nothing was written, with
-# the file on disk. Same treatment as the probe's clause, and the SAME
-# qualifier, so the two paths cannot drift apart in what they claim about
-# `~/.cc-limits`. The leading sentence stays exact for what this path really
-# does: it reads a credential store and a roster and creates nothing.
+# THE CLAUSE FOR A RUN THAT NEVER REACHED THE PROBE (D-2333, D-2355). D-2273
+# falsified it in the same commit that wrote the bracket: the cheap question
+# runs the LANE'S OWN launcher with the lane's own config dir, so a run whose
+# probe never ran can still have moved the shared telemetry directory. The wire
+# said `limitsTouched: true` while the prose beside it said nothing was written,
+# with the file on disk.
+#
+# THE RULE, WHICH IS WHAT A NEW REFUSAL IS HELD TO. No clause composed at or
+# after `_acct_check`'s call to `_acct_auth_status` may spell that sentence
+# itself: from that line on, a launcher may already have run, so what still
+# stands is a thing this run MEASURED rather than a thing this file knows.
+# Every such refusal ends in this helper or in `_acct_probe_stands`, whichever
+# the run can prove - the first for a run that never reached the probe, the
+# second for one that did.
+#
+# THE COUNT IS A MEASUREMENT AND IT IS NOT THE RULE (D-2355). D-2333 repaired
+# two sites and its own banner here said two was all there was, which is how a
+# count fails: it was taken over this section rather than over the paths the
+# rule names. Counted whole-file at Task 30 fix round 3, NINE clause sites sit
+# at or after that call - SIX ending in this helper (`_acct_deadline`'s three
+# `bad-timeout` refusals, `_acct_auth_status`'s classify-failed,
+# `_acct_probe`'s `probe-cwd`, and `_acct_check`'s short-circuit clause) and
+# THREE in `_acct_probe_stands` (`_acct_probe`'s two classify-failed refusals
+# and `_acct_check`'s probe-path clause). Four of the six were the hard-coded
+# sentence until this round.
+#
+# AND THE DEADLINE VALIDATOR IS WHY THE FIRST COUNT MISSED THEM. It is not in
+# this section, and on its OWN path - `_acct_auth_deadline`, in front of the
+# cheap question - the flat sentence is exactly true, which is why it reads as
+# correct wherever a reader opens it. It is reached a SECOND time from
+# `_acct_probe_deadline`, after the cheap question has already run a launcher,
+# and it is the same three lines both times. A site is inside the rule if any
+# path reaches it after that call, not if every path does.
+#
+# Same qualifier as the probe's clause, so the two paths cannot drift apart in
+# what they claim about `~/.cc-limits`. The leading sentence stays exact for
+# what this path really does: it reads a credential store and a roster and
+# creates nothing.
 _acct_quick_stands() {   # -> what still stands after a run that did NOT reach the probe
   printf '%s' "Nothing was written.$(_acct_limits_moved)"
 }
@@ -6190,8 +6257,15 @@ _acct_probe() {   # <id> -> sets ACCT_HEALTH; may raise ACCT_LIMITS_TOUCHED
   # `~/.ccrc` FIRST AND IN THE SAME CALL: it is not guaranteed to exist either.
   # The refusal names the CONSEQUENCE rather than the syscall, because what an
   # operator needs to hear is where the transcript would otherwise land.
+  #
+  # ITS CLAUSE IS `_acct_quick_stands` AND NOT `_acct_probe_stands` (D-2355).
+  # This line is inside `_acct_probe` and past the cheap question, so the flat
+  # sentence is unsafe - but the mkdir FAILED, so the probe did not run and
+  # `$CCRC_PROBE_DIR` does not exist. The probe's own clause asserts both, which
+  # would be the same defect pointing the other way. Which of the two a site
+  # takes is decided by what the run reached, never by which function it is in.
   mkdir -p "$CCRC_PROBE_DIR" \
-    || _acct_refuse 1 probe-cwd "cannot create $CCRC_PROBE_DIR, and the probe must not run in a real project's directory - the transcript it writes would land in that project's history. Nothing was written."
+    || _acct_refuse 1 probe-cwd "cannot create $CCRC_PROBE_DIR, and the probe must not run in a real project's directory - the transcript it writes would land in that project's history. $(_acct_quick_stands)"
   before="$(_acct_limits_stamp "$id")"
 
   # `--bare` and CLAUDE_CODE_SIMPLE are never passed: bare mode reads neither the
