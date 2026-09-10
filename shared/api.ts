@@ -3213,6 +3213,12 @@ export type SystemOrigin = 'resume-prompt' | 'no-response';
 export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
 export const NO_RESPONSE_TEXT = 'No response requested.';
 export const SYNTHETIC_MODEL = '<synthetic>';
+/** The `error` Claude Code writes on the assistant row it appends for a 429
+ *  (`isApiErrorMessage:true, apiErrorStatus:429, quotaLimits:{resetsAt,…}`;
+ *  measured 2026-09-10). ccd's `_transcript_limit_banner` holds the same
+ *  literal in bash — it cannot import this — and `ccd-limit-banner.test.ts`
+ *  reads that line from source and fails on drift (D-2362). */
+export const RATE_LIMIT_ERROR = 'rate_limit';
 /**
  * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
  * is optional (Build 4, spec §2.2/§2.4):

@@ -14313,7 +14313,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   # substring inside quoted content can only break the pair, i.e. read "not
   # stalled" — the status quo, never a spurious keystroke.
   local f="$1" line state=0
-  [[ -r "$f" ]] || return 2
+  [[ -f "$f" && -r "$f" ]] || return 2   # D-2370: -r alone admits a FIFO (D-2347)
   while IFS= read -r line; do
     [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
     if [[ "$line" == *'"isMeta":true'* && "$line" == *'Continue from where you left off.'* ]]; then state=1; continue; fi
@@ -14324,6 +14324,34 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
     state=0
   done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
   [[ "$state" -eq 2 ]]
+}
+
+_transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>") | 1 not | 2 unreadable (D-2362)
+  # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
+  # `"isApiErrorMessage":true` and `"error":"rate_limit"` (measured 2026-09-10:
+  # `quotaLimits:{status:"rejected",resetsAt:<epoch s>,rateLimitType:"seven_day"}`).
+  # Its TEXT — "You've hit your weekly limit · resets Sep 15, 12am (UTC)" — is the
+  # part `_pane_hard_blocked` has twice failed to match (D-2364), so nothing here
+  # reads it: `shared/api.ts`'s RATE_LIMIT_ERROR is the same literal, and
+  # `ccd-limit-banner.test.ts` reads this line from source to keep them equal.
+  # Same window and the same chatter rule as `_transcript_stalled_pair`:
+  # local-command rows are not turns; any other user/assistant row after the
+  # banner means the session moved on (a re-drive, a human message, a new turn).
+  # `-f && -r`, never `-r` alone — D-2347's class: `-r` is true for a FIFO and an
+  # unbounded character device, and `tail` on either blocks for ever (D-2370).
+  local f="$1" line found="" reset type
+  [[ -f "$f" && -r "$f" ]] || return 2
+  while IFS= read -r line; do
+    [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
+    if [[ "$line" == *'"type":"assistant"'* && "$line" == *'"isApiErrorMessage":true'* && "$line" == *'"error":"rate_limit"'* ]]; then found="$line"; continue; fi
+    case "$line" in *'<local-command-caveat>'*|*'<command-name>'*|*'<local-command-stdout>'*) continue ;; esac
+    found=""
+  done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
+  [[ -n "$found" ]] || return 1
+  reset=$(grep -oE '"resetsAt":[0-9]+' <<<"$found" | head -1 | cut -d: -f2)
+  type=$(grep -oE '"rateLimitType":"[a-z_]+"' <<<"$found" | head -1 | cut -d'"' -f4)
+  printf '%s\t%s\n' "$reset" "$type"
+  return 0
 }
 
 _redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
