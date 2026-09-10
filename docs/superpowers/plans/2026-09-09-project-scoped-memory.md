@@ -1296,26 +1296,44 @@ blocks say.
   `_mem_apply` guard and its describe are changed too, and D-2181's own "Tasks 1, 2 and 4" carries
   the same undercount for the same reason.
 
-  **THE MUTATION TABLE, as measured on Linux 2026-09-10** (mutations applied to a committed tree and
-  reverted with `git checkout -- <path>`; each row is one run, and the mutation was applied at ALL
-  THREE sites at once except where the row says otherwise):
+  **THE MUTATION TABLE, as measured on Linux 2026-09-10.** Mutations applied to a committed tree and
+  restored from copies **outside the repository** — the first run of this measurement restored with
+  `git checkout -- <path>` and destroyed this session's uncommitted edits to all three shell files,
+  which is the hazard the project already records for subagents and applies just as well to the hand
+  that wrote the note. Each row is one run; the mutation is applied at all three sites at once except
+  where the row says otherwise.
 
   | mutation | behaviour controls | source pin |
   |---|---|---|
-  | narrow `_mem_is_scratch` to `-tmp*` | `ccrc-memory` 6 failed | `single-definition` 2 failed |
-  | narrow `_check_memory` to `-tmp*` | `ccrc-doctor` 3 failed | `single-definition` 2 failed |
-  | narrow the HOOK to `-tmp*` | **`session-hook` GREEN** — by construction, on Linux | `single-definition` 2 failed |
-  | append `-var-tmp-*` (all three) | `ccrc-memory` 2, `ccrc-doctor` 1 failed | 1 failed — *only after the needle was un-anchored; it was GREEN first, which is why the second commit exists* |
-  | append `-private-var-*` to the HOOK alone | **all GREEN on Linux** | **GREEN before the equality row existed; red after** |
+  | narrow `_mem_is_scratch` to `-tmp*` | `ccrc-memory` **6 failed** | `single-definition` **3 failed** |
+  | narrow `_check_memory` to `-tmp*` | `ccrc-doctor` **3 failed** | `single-definition` **3 failed** |
+  | narrow the HOOK to `-tmp*` | `session-hook` **GREEN** — by construction, on Linux | `single-definition` **3 failed** |
+  | append `-var-tmp-*` | `ccrc-memory` **1+1 failed**, `ccrc-doctor` **1 failed** | `single-definition` **2 failed** |
+  | append `-private-var-tmp-*` (the Darwin spelling) | `ccrc-memory` **1 failed**, `ccrc-doctor` **1 failed** | `single-definition` **2 failed** |
+  | append `-private-var-*` to the HOOK alone | `session-hook` **18 passed, GREEN** | `single-definition` **1 failed** |
+  | delete `_mem_is_scratch "$slug" && continue` from `_mem_apply` (M6) | `ccrc-memory` **4 failed** | — |
 
-  The third row is the finding, not a gap: it MEASURES the asymmetry the entry argues, rather than
-  asserting it. The fifth is the review round's own: containment could not see an append, so the pin
-  now captures each site's whole alternation and compares it for equality.
+  Three rows are the point rather than the coverage. **Row 3** measures the asymmetry this entry
+  argues instead of asserting it: on Linux the hook's Darwin arm has no behavioural mechanism at all,
+  and the pin is the only thing that covers it. **Row 5** is the one that was invisible before this
+  review round — the Darwin spelling of the excluded path, which no Linux-only control can see.
+  **Row 6** is the last row, `-private-var-*` appended to the hook alone: every behaviour control on
+  Linux stays green and only the equality row catches it, which is exactly why containment was
+  replaced by equality.
 
-  **KNOWN BOUND.** A FOURTH site, written in some other shell shape (a `[[ ]]` test, a helper of its
-  own), is caught by neither the equality row (which reads three named sites) nor the narrowing row
-  (which looks for the old `case` spelling). Nothing scans for an arbitrary re-implementation, and
-  nothing pretends to.
+  **A GREEN FROM A SELECTOR THAT MATCHES NOTHING IS NOT A GREEN.** Measured in the same session:
+  `vitest -t "var/tmp"` reported green over `ccrc-doctor.test.ts` in both the mutated and the
+  unmutated tree — because this round had renamed that row's title to carry the slug, so the filter
+  selected **0 of 374** tests and the run passed by vacuum. Every row above was re-taken after
+  proving its selector selects something on the unmutated tree first.
+
+  **THE ADDED ARMS COST 2 MICROSECONDS**, and that is measured rather than argued, because
+  `session-hook.test.ts`'s SessionStart cost budget went red once during this round (ratio 4.29
+  against a limit of 4, in a 23-suite run that also threw an EPIPE) and `_hook_memory_converge` IS on
+  the SessionStart path, so the flake list alone was not an answer. 200k iterations of the shipped
+  `case`: 3.8 us/call at one arm, 5.8 us/call at four. The SessionStart path forks `jq` twice, `git
+  rev-parse` once and a `cd`/`pwd -P` subshell — each about a thousand times that — and the budget
+  row is green 3/3 in isolation. Load, with the arithmetic to say so.
 
   **NOT VERIFIED ON DARWIN AT THE TIME OF WRITING.** Both fix commits were unpushed when this entry
   was written, so the branch's only `test-macos` run is the red one that found the defect. The
