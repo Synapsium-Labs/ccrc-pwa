@@ -4389,9 +4389,12 @@ export interface RunHealth {
   /** Deliveries of this run's mail still `queued` or `delivered`. */
   readonly mailOutstanding: number;
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
-   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
-   *  working as designed and is excluded, because reporting it would announce a
-   *  chair that has already changed hands. */
+   *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
+   *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  `recipient rebound` park (a worker was re-bound to a new session,
+   *  cross-repo §4) are all the machinery working as designed, and reporting
+   *  any of them would announce a change that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -4663,9 +4666,11 @@ export interface MailSummary {
   /**
    * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
    *
-   * FREE TEXT, and it has to be treated as such: four writers put four
-   * different kinds of thing here — a typed `sendPrompt` error code,
-   * `'recipient not in registry'`, `'run closed'`, and a whole English
+   * FREE TEXT, and it has to be treated as such: five writers put five
+   * different kinds of thing here (PR #75 review round 1, store-7) — a typed
+   * `sendPrompt` error code, `'recipient not in registry'`, `'run closed'`,
+   * `'recipient rebound'` (`MAIL_REBIND_SUPERSEDED_ERROR`, a deliberate-cancel
+   * sentence for a worker re-bound to a new session), and a whole English
    * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
    * target, not a vocabulary, and it has never been validated on the way in.
    *

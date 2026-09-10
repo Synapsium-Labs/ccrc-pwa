@@ -263,6 +263,15 @@ describe('the reconstruction drill', () => {
                                          // names the session that opened the run, and the registry has no
                                          // field for it at all. So a DB loss forgets who owned the
                                          // programme, and the recovery is a human saying so, not a parse.
+      'homeProject',                     // the programme's home repo (cross-repo §3 F2). The
+                                         // ledger TEMPLATE has no home line and neither the
+                                         // registry nor `.prhistory` names one, so `reconstruct`
+                                         // rebuilds every programme with a NULL home — and the
+                                         // NEXT open backfills whatever it is told
+                                         // (`setProgramHome` is `WHERE homeProject IS NULL`),
+                                         // so `home-mismatch` cannot fire until then. A DB loss
+                                         // forgets the home; the recovery is the coordinator
+                                         // sending the right one on the next open, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'health',                          // F7's per-run health facts. Every one of the eight is a

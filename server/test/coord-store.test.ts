@@ -2558,15 +2558,62 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(s.outstandingMailFor('demo-worker')).toHaveLength(1);
   });
 
-  it('runs.sessionId has exactly ONE writer in the store, and it is bindSession', () => {
+  it('scopes the predecessor park to the mails it actually re-issued — a session-addressed mail to the same predecessor stays OUTSTANDING', () => {
+    // MUT-2 (PR #75 review round 1). `parkSupersededDeliveries` is `AND mailId
+    // IN (…)` for a reason: the predecessor may hold a `to:'worker'` brief AND
+    // a mail sent to it BY NAME, and only the first is re-issued to the heir.
+    // Without the scope the second is parked `recipient rebound` too — lost to
+    // both sessions. The literal-session case above drives `reissued: 0`, so
+    // the park never RUNS there and could never observe its own scope.
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');   // to:'worker', delivered to demo-worker
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    expect(s.outstandingMailFor('demo-heir').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(s.outstandingMailFor('demo-worker').map((m) => m.subject)).toEqual(['personal']);
+  });
+
+  it('runs.sessionId has exactly ONE re-binding writer in the store, and it is bindSession', () => {
     // The funnel as a MECHANISM. `setSession` and `markDispatched` both wrote
     // this column directly before this wave, and either one restored would keep
     // every behavioural case above green while silently reopening the hole the
     // funnel exists to close: a re-bind that hands nobody the mail.
+    //
+    // ANY `UPDATE runs SET …` that mentions the column before its WHERE — not
+    // one spelling of it (PR #75 review round 1, MUT-3): the old scan matched
+    // `UPDATE runs SET sessionId` only, and a restored write with the column
+    // LAST in its SET list walked straight past it, measured green.
     const here = path.dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
-    const writers = [...src.matchAll(/UPDATE runs SET sessionId\b/g)];
-    expect(writers, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    const updates = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    // The one that remains sits inside bindSession — the funnel, not a caller.
+    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
+    const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
+    expect(bindAt).toBeGreaterThan(-1);
+    expect(updates[0]!.index!).toBeGreaterThan(bindAt);
+    expect(updates[0]!.index!).toBeLessThan(nextMethodAt);
+    // The OTHER writer, named and argued rather than hidden (store-4):
+    // `reconstruct`'s `INSERT INTO runs (…, sessionId, …)` makes a FRESH row
+    // from the registry — there is no predecessor to inherit mail from, so it
+    // is not a re-bind and the funnel has nothing to do for it. Exactly one
+    // such INSERT, and it lives in `reconstruct`.
+    const inserts = [...src.matchAll(/INSERT INTO runs \(([^)]*)\)/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(inserts, 'a second INSERT names runs.sessionId — argue it here or route it through bindSession').toHaveLength(1);
+    expect(inserts[0]!.index!).toBeGreaterThan(src.indexOf('  reconstruct(input: {'));
+    // Premise: the widened regex recognises what it forbids — it finds the
+    // funnel's own statement.
+    expect(updates[0]![0]).toContain('sessionId');
   });
 });
 

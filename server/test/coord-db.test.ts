@@ -819,17 +819,21 @@ describe('coord.db: migration 9 — the programme knows its home, the feed row n
   it('a database from a NEWER build still READS both columns — rollback is real', () => {
     // spec:78-81 and `db.ts:105`: an older build meeting a higher user_version
     // may refuse to MIGRATE, never to READ. This is that promise for THESE two
-    // columns specifically, since a rollback across this migration is the exact
-    // window the design's §8 rollback paragraph is about.
+    // columns specifically — `programs.homeProject` and `feed_events.runId` —
+    // since a rollback across this migration is the exact window the design's
+    // §8 rollback paragraph is about, and both are read back below.
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     const a = openCoordDb(p);
     a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
     a.prepare("INSERT INTO programs (slug,title,createdAt,state,homeProject) VALUES ('p','P',1,'active','demo')").run();
+    a.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'run', 's', 't', 'b', 7)").run();
     a.close();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const b = openCoordDb(p);
     expect((b.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as
       { homeProject: string | null }).homeProject).toBe('demo');
+    expect((b.prepare('SELECT runId FROM feed_events WHERE seq = 1').get() as
+      { runId: number | null }).runId).toBe(7);
     expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION + 3);
     warnSpy.mockRestore();

@@ -1460,33 +1460,46 @@ export class CoordStore {
   }
 
   /**
-   * THE ONE WRITER OF `runs.sessionId` (design 2026-09-08 §4).
+   * THE ONE WRITER that can RE-BIND `runs.sessionId` (design 2026-09-08 §4).
    *
-   * Two writers existed before this: `setSession` (the open route's wave-N>=2
-   * reclaim, and the fresh-spawn arm of dispatch) and `markDispatched`. Each
-   * was an unconditional UPDATE, so the day a recovery re-binds a live run — a
-   * held workspace reaped, a fresh `ws-add` into the same run — the mail
-   * already addressed to the outgoing occupant would sit in a mailbox nobody
-   * reads, and `sweepMail` would go on injecting it there.
+   * The other writer of this column, named honestly rather than hidden:
+   * `reconstruct`'s `INSERT INTO` statement for `runs` lists `sessionId` and
+   * makes a FRESH row off the registry, with no predecessor and no mail to
+   * inherit, so it is not a
+   * re-bind and the funnel has nothing to do for it. `coord-store.test.ts`'s
+   * one-writer scan counts BOTH shapes and argues the second. Two writers
+   * existed before this method: `setSession`
+   * (the open route's wave-N>=2 reclaim, and the fresh-spawn arm of dispatch)
+   * and `markDispatched`. Each was an unconditional UPDATE, so the day a
+   * recovery re-binds a live run — a held workspace reaped, a fresh `ws-add`
+   * into the same run — the mail already addressed to the outgoing occupant
+   * would sit in a mailbox nobody reads, and `sweepMail` would go on
+   * injecting it there.
    *
-   * MEASURED, NOT ASSUMED: a route DOES re-bind a live run today. `routes.ts`
-   * (the open route, :1123) calls `setSession` unconditionally whenever the
-   * request names a `sessionId`, and `openRun`'s dup arm (store.ts:592-599)
-   * keys its reuse on `(program, wave, waveOf, claimedBy, state = 'planned')`
-   * — NOT on `sessionId`. So a second open of the same still-`planned` wave,
-   * naming a DIFFERENT sessionId than the first, finds the dup row, returns
-   * it unchanged, and the open route's unconditional `setSession` call then
-   * re-binds it — re-issuing (or parking) whatever worker mail the
-   * predecessor session was owed. The `rebound` branch below is reached by
-   * this live path, not only by the store test that drives it directly.
+   * MEASURED, NOT ASSUMED: a route DOES re-bind a live run today. The open
+   * route (`routes.ts`, `POST /api/runs`) calls `setSession` whenever the
+   * request names a `sessionId` AND its `ws-hold` has succeeded, and
+   * `openRun`'s dup arm keys its reuse on `(program, wave, waveOf, claimedBy,
+   * state = 'planned')` — NOT on `sessionId`. So a second
+   * open of the same still-`planned` wave, naming a DIFFERENT sessionId than
+   * the first, finds the dup row, returns it unchanged, and — once the hold
+   * on the new session's workspace holds — the open route's `setSession` call
+   * re-binds it, re-issuing (or parking) whatever worker mail the predecessor
+   * session was owed, and records a `session-rebound: <predecessor> ->
+   * <heir>, <n> re-issued` event naming both occupants. The `rebound` branch
+   * below is reached by this live path, not only by the store test that
+   * drives it directly.
    *
    * NO `tx()` OF ITS OWN. `DatabaseSync` transactions do not nest, so whether
    * a call here sits inside a transaction depends entirely on the caller:
-   * `markDispatched` reaches this from inside `commitDispatch`'s own `tx()`,
-   * so its re-issue is part of that transaction. The open route's
-   * `setSession` call above is NOT wrapped in any `tx()` of its own, so the
-   * re-bind and re-issue it triggers run OUTSIDE any transaction — nothing
-   * rolls them back if a later statement on that request fails.
+   * `markDispatched` reaches this from inside the `tx()` of the store method
+   * whose docstring opens "The WHOLE dispatch commit, as ONE transaction"
+   * (`dispatchRun` — there is no `commitDispatch` in this file), so its
+   * re-issue is part of that transaction. The open route's `setSession` call
+   * runs in autocommit, AFTER its `ws-hold` has already succeeded, so a later
+   * failure on that request cannot undo the re-issue — which is exactly why
+   * the bind runs after the hold rather than before it: a refused hold now
+   * leaves the occupant unchanged.
    */
   bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
@@ -1631,8 +1644,8 @@ export class CoordStore {
    *  `RunSummary.dispatchStartedAt`, which names both conditions, and the pin
    *  in `run-routes.test.ts` that makes the scope cost a test to change.
    *
-   *  `bindSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
-   *  and deliberately touching NOTHING else — least of all `state`, which is a
+   *  `setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`, and
+   *  deliberately touching NOTHING else — least of all `state`, which is a
    *  separate write with its own `run_events` attribution. Takes `at` rather
    *  than reading a clock, on `markDispatched`'s precedent: the caller owns the
    *  moment being recorded. */
@@ -2681,14 +2694,21 @@ export class CoordStore {
    * never re-derives its argument — it only stores what the caller already
    * computed.
    *
-   * GUARDED, and the guard is a no-op on every reachable path — deliberately.
-   * EVERY call site runs inside the SAME `tx()` as the `queueDelivery` above
-   * it, and `tx` is `BEGIN IMMEDIATE` over a synchronous `DatabaseSync`, so
-   * the row this stamps is provably `'queued'` and no concurrent writer can see
-   * it. The clause is here anyway because a writer whose safety rests on its
-   * callers' shape is a writer that breaks silently the day a third one
-   * appears — and one does, in Task 61 of this same wave — and because an
-   * audit with one exception in it is an audit nobody
+   * GUARDED, and the guard is a no-op on three reachable paths — deliberately.
+   * The mail route's send `tx`, `dispatchRun`'s dispatch `tx` through
+   * `markDispatched` → `bindSession` → `requeueAbandonedMail`, and
+   * `reclaimProgram`'s `tx` each call this alongside the `queueDelivery` above
+   * it. `tx` is `BEGIN IMMEDIATE` over a synchronous `DatabaseSync`, so those
+   * callers see no concurrent writer and the row this stamps is provably
+   * `'queued'`. The fourth path — `requeueAbandonedMail` reached from the open
+   * route's `setSession` → `bindSession` — runs in autocommit after its
+   * `ws-hold` succeeds. The guard below is exactly what protects that path:
+   * the `AND state = 'queued'` clause is a no-op for the transactional callers
+   * and load-bearing for the open-route path. The clause is here
+   * anyway because a writer whose safety rests on its callers' shape is a
+   * writer that breaks silently the day an unguarded path appears — and one
+   * does, in this same wave — and because an audit with one exception in it
+   * is an audit nobody
    * finishes. DO NOT "simplify" it away: it costs one `AND`, and it is what
    * lets `mail-hardening.test.ts`'s writer scan say EVERY with no carve-out
    * (D-1409).
@@ -3312,6 +3332,17 @@ export class CoordStore {
    * `dispatchedAt = null`: it holds no live session for the cap to count,
    * and stamping the reconstruction time on a wave that in reality
    * dispatched long ago would falsify `dispatchedIn24h` for it too.
+   *
+   * A FIFTH thing this does NOT carry: `programs.homeProject`. None of the
+   * three artefacts this rebuilds from names a
+   * home — the ledger header carries the slug and title, the registry a
+   * project, `.prhistory` a branch — so the programme row this INSERT writes
+   * stores a NULL home, exactly like a programme that never had one.
+   * `setProgramHome`'s `WHERE homeProject IS NULL` then backfills whatever the
+   * NEXT open is told, and `home-mismatch` cannot fire until then: a DB loss
+   * forgets the home, and the recovery is the coordinator naming the right one
+   * on that next open, not something this procedure can parse from what
+   * survives. Named in `reconstruction-drill.test.ts`'s `UNRECOVERABLE`.
    */
   reconstruct(input: {
     ledger: { slug: string; title: string;
