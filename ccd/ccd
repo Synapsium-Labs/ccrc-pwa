@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3e8860d2bf2456284ddcdaf00c68e4f0d281740df0702dfc426f27b58660296c
+# ccrc:generated 1 sha256=bb2073849202b0dc1630dbc028473a6a55f2760a38009a6a913eb26b08ed1966
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1174,8 +1174,8 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # inside ACCOUNT loops (`_swap_target`, `_ws_least_loaded`): one bad file wedges
 # the tick of EVERY row that reaches the loop, not just the row on that account.
 # MEASURED on the shipped body: a FIFO with no writer and a symlink to
-# `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, 17 inputs
-# all answer in under 0.05 s.
+# `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, every
+# input below answers in under 0.05 s.
 #
 # IT NARROWS NOTHING, measured across those 14 inputs: absent, empty, garbage, a
 # leading space, `chmod 000`, a directory, a dangling symlink, a symlink loop and
@@ -1245,8 +1245,9 @@ _pool_untaggable() {   # rc 0 = no project can be in any pool, whatever its name
 # there is none". Round 2 retracted that closing sentence and left its premise
 # standing — "its own two direct `_pool_ok` calls … each test only `-eq 1`" —
 # so the paragraph asserted P three lines above ¬P. Both halves were false:
-# `_auto_swap_check` tests `-eq 2` twice, and the `prc` it tests is the one
-# assigned by the `aff_verb` call the sentence named as testing only `-eq 1`.
+# `_auto_swap_check` DOES test `-eq 2` — the census command above counts
+# them — and the `prc` it tests is the one assigned by the `aff_verb` call the
+# sentence named as testing only `-eq 1`.
 # A correction that leaves the falsehood in place is not a correction; it is
 # two claims and no way to pick. That is no longer an
 # obligation on a later wave; it landed at every site named above. The two
@@ -1757,8 +1758,11 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # overstated a hang surface this paragraph exists to bound honestly;
 # `_strand_mark`, itself on the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
 # rather than three — and it included `wrapper`, the very field the strand arm
-# exists to report on. `project` has since left this list entirely: it reads
-# through `_reg_read` now, because there the fold decided something (R3).
+# exists to report on. `project` left this list at both DECIDERS — they read
+# through `_reg_read` now, because there the fold decided something (R3) —
+# but not at `_tick_strand_undecidable`, which still reads it through
+# `_reg_get` (`grep -n '_reg_get "\$1" project' ccd/ccd`) for a value that
+# only names a file in a sentence.
 #
 # THIS IS NOT THE WIDENING THE PARAGRAPH BELOW WARNS ABOUT, and the two must not
 # be confused. That warning is about turning `_reg_get` into a THREE-ANSWER read,
@@ -5794,9 +5798,10 @@ PY
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
-  # workspace for an active program. The ONE input the merge-gated auto-archive
-  # was missing: an idle agent between waves is indistinguishable from a
-  # finished one, so the claim is DECLARED, never inferred. Non-destructive and
+  # workspace for an active program. The ONE input nothing on this box can
+  # measure: an idle agent between waves is indistinguishable from a finished
+  # one, so the claim is DECLARED, never inferred — and it is what `ws-rm`,
+  # `ws-rename`, `ws-reap` and `forget` each refuse on. Non-destructive and
   # idempotent: re-hold updates the reason. The reason string is the display
   # everywhere — write it verbatim, parse it nowhere.
   # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
@@ -5872,15 +5877,17 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # ordinary reason (`program:x wave:1/4`) still has plenty left after it.
   [[ -n "${reason//[[:space:]]/}" ]] || die "empty reason — say which program holds this"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
-    || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
+    || die "$id is not a workspace — a hold gates workspace verbs, so a hold on a main checkout gates nothing and is a lie waiting to confuse someone"
   [[ -f "$REG/$id.archived" ]] \
     && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
   # CHECKED, unlike every other `_reg_set` in this file, because this is the one
   # field whose silent absence is destructive. ccd runs `set -uo pipefail` with
   # NO `-e`, so an unchecked failed write would fall straight through to the
   # echo below. Left unprotected, the orchestrator protocol reads exit code +
-  # stdout, records the workspace as claimed, and dispatches the next wave; the
-  # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
+  # stdout, records the workspace as claimed, and dispatches the next wave;
+  # every rung that reads `.hold` straight off disk — `ws-rm`, `ws-rename`,
+  # `ws-reap`, `forget` — then sees none and treats a mid-wave workspace as
+  # free the moment anyone reaches for one of them.
   # So the ONE verb whose failure means UNPROTECTED refuses like every other
   # doubt path in this function rather than announcing a success it did not have.
   #
@@ -5916,10 +5923,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
 }
 
 cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
-  # A release ends THIS file's claim and nothing else. It does NOT necessarily
-  # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
-  # asks the server's coord.db whether an OPEN RUN still names this session,
-  # and skips if one does — an absent hold is no longer sufficient. Idempotent.
+  # A release ends THIS file's claim and nothing else. It does NOT mean nobody
+  # still considers this workspace claimed: since Build 8 Wave 2 the server's
+  # coord.db separately records whether an OPEN RUN still names this session,
+  # and `POST /api/sessions/:id/archive` refuses on that alone — an absent hold
+  # has never been sufficient there. Idempotent.
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
@@ -5993,9 +6001,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # `Is a directory`, same false success. Downstream, `runCcdOr502` keys on
     # the exit code, so `POST /release` answered 200 `{ok:true}` and the PWA's
     # fire-and-forget confirm closed with no toast: the operator is told the
-    # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
-    # keep refusing. Fail-shut in the safe direction, but a lie either way, and
-    # the sibling verb's own guard is the standard this file set.
+    # claim is gone while `ws-rm`/`ws-rename`/`ws-reap`/`forget` keep refusing
+    # and the server's merged push keeps naming the hold. Fail-shut in the safe
+    # direction, but a lie either way, and the sibling verb's own guard is the
+    # standard this file set.
     # INSIDE the `-e` arm (ccd:3431), so a `not held` answer writes nothing: an
     # idempotent no-op is not an act, and recording one would make the record
     # disagree with what happened. Read BEFORE the unlink, which is the only
@@ -6583,8 +6592,9 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   #     described, and the DESTRUCTIVE verb refuses on them at the instant of
   #     deletion (Task 5/6: `registry-branch-drift`, `detached-head`,
   #     `branch-missing`) where a refusal costs nothing but a deferred cleanup.
-  # Archive is lossless and runs unattended — Task 14 fires it every 120 s and
-  # discards the exit code — so a refusal it cannot converge out of strands the
+  # Archive is lossless and is still fired with no human watching — the
+  # server's run-close lane does it (`coord/close.ts`, `{state:'failed',
+  # archive:true}`) — so a refusal it cannot converge out of strands the
   # workspace in the live fleet forever with nothing on screen to say why. Same
   # argument Task 2's Context already makes for a dirty tree ("refusing would
   # strand merged-but-dirty workspaces in the live fleet permanently"), and the
@@ -13001,9 +13011,10 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
 # round 4, B5). `_tick_undecidable` writes the WORD into `.tickstuck` and into
-# swap.log; `_strand_mark` writes the SENTENCE into `.stranded`, read TODAY by
-# the banner and, once account-pools wave 3 lands its reader, carried verbatim
-# as `SessionRecord.stranded.reason` to every ccrc surface. SAID IN TWO HALVES
+# swap.log; `_strand_mark` writes the SENTENCE into `.stranded` AND fires the
+# SAME sentence at `notify.sh`; the marker itself has no reader until
+# account-pools wave 3 lands one, when it is carried verbatim as
+# `SessionRecord.stranded.reason` to every ccrc surface. SAID IN TWO HALVES
 # ON PURPOSE (#69 review round 4 gate): the sentence that stood here put that
 # reader in the PRESENT tense, and `git grep -c stranded server/src/registry.ts`
 # answers 0 on `origin/main` and on this branch — the third instance of exactly
@@ -13030,8 +13041,9 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 # review round 5, caught by its own refute pass). It cited
 # `grep -n 'could not be computed' ccd/ccd`, which returns exactly ONE line —
 # itself — because every arm below ends "so no destination could BE computed",
-# never "could NOT be". A self-counting anchor offered as proof, 118 lines from
-# the entry that corrects one. The census that measures is
+# never "could NOT be". A self-counting anchor offered as proof, in the same
+# file that books the same trap at `_pool_ok`'s census and at `_reg_get`'s
+# (`grep -n "counting itself" ccd/ccd`). The census that measures is
 # `grep -n '_undecidable_cause "' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`,
 # which answers TWO: the tick's late arm and `_tick_strand_undecidable`.
 #
@@ -13406,9 +13418,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # residue means the verdict and the refusal exchanging their words, and no
     # measured case asks for that yet.
     # The sentence that stood here said "measured, not guessed" and was false:
-    # `_swap_target` refuses for FOUR conditions, not three, it does not test
-    # `hrc` at all, and the caller re-derived the word from `hrc` and `prc` —
-    # two measurements of two DIFFERENT moments than the one that refused. So a
+    # `_swap_target` refuses for FOUR conditions, not three, and NONE of those
+    # refusals keys on `hrc` — it tests `hrc` only to pick the home arm
+    # (`grep -n 'hrc" -eq 0' ccd/ccd`) — and the caller re-derived the word from
+    # `hrc` and `prc`, two measurements of two DIFFERENT moments than the one
+    # that refused. So a
     # `.project` that turned unreadable inside the tick, which is precisely the
     # race round 3 added the inner read for, stranded the row naming
     # `.crosspool` — a file that in the fixture did not even exist — and stamped
@@ -14083,8 +14097,11 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
     # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
-    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryHigh=20G /
-    # MemoryMax=24G) hangs one level in, on `app-claude\x2dsession.slice`.
+    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryMax=24G;
+    # MemoryHigh deliberately `infinity` since 2026-09-09 — an aggregate
+    # MemoryHigh throttles the whole slice, while an unreclaimable MemoryMax
+    # breach invokes the cgroup-local OOM killer) hangs one level in, on
+    # `app-claude\x2dsession.slice`.
     # Ubuntu's tmux is built with systemd support: it mints a transient
     # `tmux-spawn-<uuid>.scope` per pane and DERIVES that scope's slice from
     # its own, so placing the server placed all seventeen panes with it. This
@@ -14827,9 +14844,10 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # same reason ruling 5 gives the mismatch one — a revival must not be refused
   # for a placement the auto-swapper moves at the next idle boundary.
   #
-  # AND `-z "$regw"` IS NOT A FORM TEST, which the paragraph below calls it and
-  # this one used to (#69 review round 5, its own refute pass). `regw` comes
-  # from `_reg_get`, so it is EMPTY for a row whose `.wrapper` is absent,
+  # AND `-z "$regw"` IS NOT A FORM TEST, which this paragraph and the one below
+  # both used to call it (both corrected in the same edit — #69 review round 5,
+  # its own refute pass). `regw` comes from `_reg_get`, so it is EMPTY for a
+  # row whose `.wrapper` is absent,
   # unreadable OR blank — the overloaded null this whole PR is about. Saying
   # "creation-only" turns a measured claim about ONE path into a false claim
   # about the branch. The narrow statement above is the one that holds, and
@@ -15800,11 +15818,12 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # banner recomputes its sentence from a freshly measured reason on every
   # firing, so it already tells the truth. WHEN account-pools wave 3 lands its
   # reader, the marker's reason becomes `SessionRecord.stranded.reason` and is
-  # carried VERBATIM to every ccrc surface — measured,
-  # `git grep -c stranded server/src/registry.ts` is 0 on `origin/main` and on
-  # this branch, 17 on the wave-3 branch. The fix earns its place on the first
-  # half alone; claiming the second in the present tense is the exact defect
-  # this round keeps booking.
+  # carried VERBATIM to every ccrc surface — measured: `git grep -c stranded
+  # server/src/registry.ts` is 0 on `origin/main` and on this branch; non-zero
+  # only on the wave-3 branch, where that reader lands (`git grep -c stranded
+  # ws/clear-meadow -- server/src/registry.ts`). The fix earns its place on
+  # the first half alone; claiming the second in the present tense is the
+  # exact defect this round keeps booking.
   #
   # A MARKER REWRITE CANNOT STORM, which is why it takes no floor of its own:
   # `_reg_set` is one tmp-plus-rename over one file. The reason string CAN
@@ -16302,8 +16321,9 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # `<unmeasured>` literal (grepped), so no assertion moves.
   # THE SENTENCE COMES FROM `_undecidable_cause`, NOT FROM HERE (#69 review
   # round 4 gate, finding 3). This line built its own string — `"$2 could not be
-  # measured, …"` — while the LATE path, 900 lines down, rendered the same
-  # condition through `_undecidable_cause`. Measured: an unreadable `.project`
+  # measured, …"` — while the LATE path — `_auto_swap_check`'s rc>=2 arm,
+  # `grep -n '_undecidable_cause "' ccd/ccd` — rendered the same condition
+  # through `_undecidable_cause`. Measured: an unreadable `.project`
   # caught here said "project could not be measured" and caught there said "the
   # project's own registry field could not be read ($REG/<id>.project)", and
   # these two call sites are the EARLY RETURNS, so the common case was the one

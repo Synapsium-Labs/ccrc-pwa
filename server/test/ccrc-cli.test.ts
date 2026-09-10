@@ -176,7 +176,7 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|models\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|memory\|models\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);

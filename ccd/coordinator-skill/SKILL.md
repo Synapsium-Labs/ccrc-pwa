@@ -291,8 +291,10 @@ not after.
    lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
    the same workspace**.
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
-   and, *if no other open run names this workspace*, releases the hold so the
-   ordinary sweep can archive it. Read `released` in the response: `false`
+   and, *if no other open run names this workspace*, releases the hold. Nothing
+   archives the workspace on its own after that: the merged sweep only pushes
+   a notification, so the workspace stays live and supervised until a human
+   archives it. Read `released` in the response: `false`
    means the run closed but the workspace is **still claimed** — another open
    run owns it, which is exactly the state step 5's open-before-close creates.
    The program is not done; close the other run. Do not archive the workspace

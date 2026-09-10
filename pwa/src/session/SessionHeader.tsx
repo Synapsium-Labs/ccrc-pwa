@@ -259,8 +259,9 @@ export function SessionHeader({
               {accountLabel(roster, wrapper)}
             </span>
           )}
-          {/* Derived from archivedAt, never from pr.phase — a merged PR whose
-              archive was deferred must not claim it was archived. */}
+          {/* Derived from archivedAt, never from pr.phase — merging archives
+              nothing, so a merged PR sits on a live workspace until a human
+              archives it, and must not claim the chip meanwhile. */}
           {session?.archivedAt != null && (
             <span className="chip chip--archived">
               archived{session.pr?.number != null ? ` · merged #${session.pr.number}` : ''}

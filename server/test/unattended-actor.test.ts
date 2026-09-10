@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the ten pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the nine pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -125,18 +125,22 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Ten sites, five distinct labels, each site identified by the code AROUND
+ * Nine sites, four distinct labels, each site identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five sites share one identical label
  * (`` `run:${id} close` `` — `id` is `closeRun`'s own parameter at every one
  * of them, so there is no textual difference between "the right label" and
- * "the same label copied from a sibling site" to catch there); what a
- * cross-FILE or cross-VERB swap into `close.ts` WOULD change is caught here
- * because every anchor also carries the surrounding call, not just the
- * label — a foreign label pasted in changes the captured text and reds
- * against the hardcoded expectation below, exactly as the reviewer's mutant
- * (a foreign label pasted into `archiveMerged`) does for `watch.ts`.
+ * "the same label copied from a sibling site" to catch there); `watch.ts`'s
+ * own two `sweepNames` sites share their identical label (`'sweep:names'`)
+ * for the same reason. What a cross-FILE or cross-VERB swap WOULD change is
+ * caught here because every anchor also carries the surrounding call, not
+ * just the label — a foreign label pasted in changes the captured text and
+ * reds against the hardcoded expectation below, exactly as the reviewer's
+ * mutant (a foreign label pasted into what was then `archiveMerged`) proved
+ * for `watch.ts` before that site was retired — the merged lane announces
+ * now and no longer calls `ccd` at all, so `watch.ts` pins down to these two
+ * `sweepNames` sites (operator ruling, 2026-09-10).
  */
 interface Site { file: string; what: string; find: RegExp; label: string }
 const SITES: readonly Site[] = [
@@ -146,9 +150,6 @@ const SITES: readonly Site[] = [
   { file: 'watch.ts', what: 'sweepNames real rename (the queued `runCcd` call)',
     find: /CCD_ARGV\.wsRename\(r\.id, branch, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\)\)\);/,
     label: "'sweep:names'" },
-  { file: 'watch.ts', what: 'archiveMerged',
-    find: /CCD_ARGV\.wsArchive\(r\.id, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\);/,
-    label: "'sweep:archive-merged'" },
   { file: 'coord/close.ts', what: 'abandon-arm hold (a surviving sibling claims the workspace)',
     find: /CCD_ARGV\.wsHold\(run\.sessionId,\n\s+holdReason\(survivor\.program, survivor\.wave, survivor\.waveOf, survivor\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
     label: '`run:${id} close`' },

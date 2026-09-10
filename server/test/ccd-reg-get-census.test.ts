@@ -10,18 +10,17 @@ import { CCD } from './ccdWsHelpers.js';
  * `_reg_get`'s header argues that widening it to a three-answer read is a
  * fleet-wide change, and the argument is a COUNT: how many call sites would
  * inherit the duty of deciding what to do with rc 2. A count is a claim about
- * the file, and this one has been wrong in four of the five review rounds that
- * touched it — 133 at C1, 135 once this branch and the #70 merge had added
- * sites, 133 when round 3 converted the two tick `.project` reads, 132 when
- * rounds 4 and 5 converted the three verb readers. Each move left the previous
- * figure standing somewhere in the same comment block, and round 4's gate found
- * four stale cardinals sitting ABOVE the corrected one, where a reader hits
- * them first.
+ * the file, and this one has gone stale in most of the rounds that touched it.
+ * The moves are enumerated once, each with the ref it was measured at, in
+ * `ccd/ccd`'s own `_reg_get` header (`grep -n 'It has moved six times' ccd/ccd`);
+ * they are not restated here. Each move left the previous figure standing
+ * somewhere in the same comment block, and round 4's gate found four stale
+ * cardinals sitting ABOVE the corrected one, where a reader hits them first.
  *
  * The header's instruction was "re-measure it". That is a request. This is the
  * mechanism: it reads the two numbers out of the sentence that states them and
  * compares each to the thing that sentence says it counted. `ccd-pool-ok.test.ts`
- * carries the identical pin for the `_pool_ok` header one function away, and
+ * carries the identical pin for the `_pool_ok` header in the same file, and
  * that pin is why the `_pool_ok` census never went stale through the same five
  * rounds.
  *

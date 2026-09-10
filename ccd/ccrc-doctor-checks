@@ -194,6 +194,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify-path
   build
   fleet
+  memory
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -3973,4 +3974,247 @@ _check_fleet() {
     return "$rc"
   fi
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
+}
+
+# ── memory convergence ────────────────────────────────────────────────────
+# THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
+# reported that two homes disagreed about a project's memory, so a session read
+# its own superseded record after an account swap and acted on it. A
+# convergence mechanism without a detector only moves the silence one layer
+# down: the next unconverged home forks exactly as `.claude-dev0` did.
+#
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
+# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# roster-driven check would report PASS while the homes most likely to fork
+# went unexamined.
+#
+# THE GLOB ITSELF IS STILL A NARROWER PROMISE THAN "every agent home", AND
+# THAT IS A DOCUMENTED LIMIT, NOT FIXED HERE (whole-branch review, Important).
+# It is `"$HOME"/.claude*/`, so a config dir whose suffix does not start with
+# `.claude` — legal by `shared/roster.ts`'s own validator
+# (`/^\.[A-Za-z0-9._-]+$/`, whose own error text suggests `.${id}`, e.g.
+# `.kimi` for account id "kimi") — is invisible to this check exactly as it is
+# invisible to `_mem_homes` (ccd/ccrc), while the hook
+# (`_hook_memory_converge`) takes the home from the transcript path with no
+# name filter at all and WOULD converge such a home regardless. Left alone
+# deliberately: `_mem_homes` and the hook are owned by other work in this same
+# review wave, and widening only THIS copy's glob (say, by reading
+# `~/.ccrc/accounts.json` for `configDirSuffix`, which no other enumerator
+# does) would make doctor report — and hand a `ccrc memory --apply` remedy
+# for — a home the census and `--apply` still cannot see or migrate, which is
+# a worse lie than today's shared blind spot. A real fix has to land in
+# `_mem_homes`, this check and the hook together (D-2181's four-site parity),
+# or not at all.
+#
+# THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
+# remedies: the first is `ccrc memory --apply`, the second is wiring the home
+# into `install-session-hooks.sh` (whose list is built from CCRC_ACCOUNTS, which
+# is why a non-rostered home can never be hooked). Collapsing them sends the
+# operator to the wrong fix. Since R33 they also carry different SEVERITIES —
+# forked is a WARN, unreachable stays a FAIL — because a fork is the expected
+# state of every multi-home box before its one-time migration, while an
+# unreachable home is a misconfiguration nothing will ever repair on its own.
+# See the WARN/FAIL calls at the bottom of this function for the full
+# reasoning.
+#
+# THIS RE-DERIVES `_mem_homes`/`_mem_state` (ccrc's own memory functions)
+# RATHER THAN SOURCING THEM — DELIBERATELY (D-92). `cmd_doctor` happens to
+# source this file into the same shell where `ccrc` already defines those two
+# functions, so calling them would technically work today. But this file is
+# ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
+# (this suite's own test harness does exactly that to read
+# `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
+# ccrc-install.test.ts:2547-2556) is this repo's standing ruling that
+# ccrc-doctor-checks must hold its own second spelling of anything it needs,
+# rather than lean on a scope accident. Don't "fix" this duplication by
+# reaching across a boundary that does not reliably exist.
+#
+# THE HOME GLOB ON A BOX WITH NO `.claude*` AT ALL: this check does not set
+# nullglob itself, so `"$HOME"/.claude*/` expands to its own literal text
+# when nothing matches — `_check_wrappers`, elsewhere in this file, toggles
+# `shopt -s nullglob` on and restores it before returning (`:2410`/`:2420`),
+# but that toggle lives and dies inside `_check_wrappers`' own subshell
+# (`cmd_doctor` runs every check as `out="$( "_check_$name" )"`), so it can
+# never leak into this one. The `[ -d "${h}projects" ]` guard right below is
+# what makes an unmatched literal glob harmless either way — it is never a
+# directory, so the loop body simply never runs and this check PASSes having
+# measured a box with no agent homes at all. That PASS is vacuous, not a
+# lie: there is nothing here that could have forked.
+#
+# EXTERNAL BINARIES ARE NOT BANNED HERE — `_check_caddyfile` calls `readlink`
+# (`:1720`) and `_check_graphify-path` calls `realpath` twice (`:3575`-
+# `:3576`), so "this file never shells out" would overstate its own practice.
+# The real doctrine is D-1350 (`:3555`-`:3572`): a tool is fine to use, but
+# its ABSENCE must become an unmeasured/SKIP outcome, never a narrowed or
+# wrong verdict — an adapter may not narrow a distinction it received. This
+# check still avoids `basename`/`readlink`/`grep` (below), but for a sharper
+# reason than house style: this check's OWN test harness
+# (`ccrc-doctor.test.ts`'s `doctorEnv`) runs every check against a PATH of
+# only its own stub binaries, and unlike `stat`/`date`/`timeout`/`jq` (which
+# `healthy()` explicitly links in), none of those three are ever linked —
+# measured, they resolve to nothing there. Reaching for them would need this
+# check to ALSO grow the SKIP/unmeasured handling D-1350 requires; writing it
+# in bash builtins sidesteps needing that machinery at all:
+# `${x%/}` then `${x##*/}` is `basename` in pure parameter expansion (the
+# same idiom `_check_wrappers` already uses at `name="${f##*/}"`), and the
+# settings.json scan below is a `read` loop rather than `grep`.
+#
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
+# DIRECTORY* (R20, Task 4 review round 2 — see `_mem_state` in `ccd/ccrc` for
+# the full ruling this mirrors). `[ "$link" -ef "$store" ]` alone answers only
+# "resolves to something that exists" — it is TRUE for a link resolving to a
+# regular FILE sitting where the store belongs, which is just as unusable a
+# memory store as a dangling link but LOOKS nothing like one. Round 2's
+# review measured this exact gap: `_check_memory` PASSed a box whose "store"
+# was `: > $HOME/.ccrc/memory/<slug>`, a plain file. `[ -d "$store" ]` is
+# therefore a SECOND, INDEPENDENT conjunct, not implied by `-ef` — deleting it
+# alone (leaving `-ef` in place) reproduces exactly that false PASS. `-ef`
+# still does the other half of the job for free: it compares device+inode
+# THROUGH the symlink (the same operator `_check_wrappers` already uses for
+# its own alias detection), so a RELATIVE link that genuinely resolves to the
+# store reads as converged without any `readlink` at all — a bare dangling
+# link (nothing to stat on either side) or a link naming a different file
+# both fail `-ef` on that fact alone.
+#
+# `[ -e "$link" ] || [ -L "$link" ] || continue`, NOT `[ -e "$link" ] ||
+# continue`: `-e` DEREFERENCES, so it is false for a dangling symlink —
+# exactly the pair the rule above calls forked, because its target text is
+# right but nothing is behind it. Skipping past it here would let doctor PASS
+# a box the census (`ccrc memory`) calls forked (R10 — the same defect Task 2
+# and Task 3 each hit once already on this branch).
+#
+# THREE SETTINGS.JSON SHAPES, NOT TWO (R22 + a Minor, Task 4 review round 2).
+# `install-session-hooks.sh:107-115` writes `cur='{}'` and proceeds to insert
+# the hook for ANY rostered home that has no settings.json at all — so a
+# missing file is not "nothing to report", it is proof the installer has
+# never touched this home, the MAXIMAL case of "will fork on first use".
+# Round 1 of this check only ever examined a settings.json that existed,
+# which silently PASSed exactly the home most likely to fork (measured:
+# `.claude-kimi/projects/` with no settings.json at all read as converged).
+# The third shape is a settings.json that EXISTS but cannot be READ (mode
+# problem, not a content problem): folding that into "unreachable" would be
+# the overloaded-null defect this codebase bans by name yet again — D-1350's
+# "an adapter may not narrow a distinction it received" applies here just as
+# it does to a missing `realpath`. "I could not read it" and "it is
+# definitely not wired" are different facts an operator fixes differently
+# (a permissions fix vs. a roster/settings.json edit), so an unreadable file
+# earns its own WARN, `unmeasured`, with its own remedy — never silently
+# promoted to the FAIL a confirmed-absent hook gets. `[ -r "${h}settings.json" ]`
+# is checked BEFORE ever opening the file for exactly this reason too: a
+# `while read … done < file` whose open() fails leaks bash's own permission-
+# denied diagnostic to the REAL stderr (redirections are set up left to right,
+# so a trailing `2>/dev/null` on that same line cannot catch the failure of
+# the `<` that precedes it) — refusing to attempt the open at all is simpler
+# than getting that ordering right, and it is what makes the WARN path clean.
+#
+# R21 (Task 4 review round 2): a box can be forked AND carry an unreachable
+# home AND carry an unmeasured one, all at once, and this check now answers
+# in all three classes rather than picking the loudest and discarding the
+# rest — `ccrc-doctor-checks`'s own header rules exactly this ("ONE CHECK MAY
+# ANSWER IN TWO (OR MORE) CLASSES": distinct findings are distinct operator
+# actions, so each gets its own line and its own remedy). The instruction
+# that shipped round 1's early-return ("emit exactly one verdict line or
+# doctor's tallies go inconsistent") was wrong: `cmd_doctor` counts VERDICT
+# LINES, not a fixed arity per check — the counting loop and the comment that
+# rules it are `ccd/ccrc:1990`-`:2007`, and the contract the count then has to
+# satisfy (the return code must be the WORST class the check printed, or the
+# check is failed as a ccrc bug) is `ccd/ccrc:2048`-`:2063` — so a fork on one
+# home and an unreachable finding on an unrelated home are computed
+# independently below and BOTH printed — dropping either one is silence about
+# a real finding, which is the one thing this whole task exists not to do.
+# SINCE R33 THE TWO ARE NO LONGER BOTH FAIL: a forked-and-unreachable box now
+# prints one WARN line and one FAIL line, and the worst-class cross-check at
+# `ccd/ccrc:2048`-`:2063` still picks FAIL as the return code — `unreachable`
+# alone is what can still fail `ccrc update`.
+#
+# NO `.claude-docserver` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
+# review round 3 — reached independently of `_mem_homes`'s identical guard in
+# ccd/ccrc, which is owned by other work in this wave, but for the same
+# reason). It used to be excluded by name in this loop. Removed because (a)
+# hard-coding one operator's box-local tool's directory name into shipped,
+# public-release-bound source is exactly the residue class the top-level
+# CLAUDE.md bans by name ("no account-name list in ANY shipped source file"),
+# and this tree is not supposed to know `.claude-docserver` exists at all —
+# it is "operator plumbing this tree does not know about", the same phrase
+# that CLAUDE.md uses to keep Tailscale out of this codebase; (b) it excluded
+# nothing measurable: `~/.claude-docserver` carries no `projects/` directory
+# on the box it was written for, so the very next line
+# (`[ -d "${h}projects" ] || continue`) already skips it. If some future box's
+# docserver ever does grow a `projects/` directory, treating it like any other
+# `.claude*` directory is the right answer — a silent blind spot for a name
+# this tool has no business knowing is worse than one more row in the census.
+_check_memory() {
+  local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
+  for h in "$HOME"/.claude*/; do
+    b="${h%/}"; b="${b##*/}"
+    [ -d "${h}projects" ] || continue
+    if [ ! -f "${h}settings.json" ]; then
+      # R22: never touched by install-session-hooks.sh — the maximal case of
+      # "will fork on first use".
+      unreachable="${unreachable:+$unreachable }$b"
+    elif [ -r "${h}settings.json" ]; then
+      hooked=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *session-hook.sh*) hooked=1; break ;; esac
+      done < "${h}settings.json"
+      [ "$hooked" -eq 1 ] || unreachable="${unreachable:+$unreachable }$b"
+    else
+      unmeasured="${unmeasured:+$unmeasured }$b"
+    fi
+    for d in "${h}projects"/*/; do
+      [ -d "$d" ] || continue
+      slug="${d%/}"; slug="${slug##*/}"
+      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
+      # than an oversight — the same one this file already records for `ccd`'s
+      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
+      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+      # `_mem_is_scratch`, and a `declare -F` guard would be the second
+      # spelling with a branch in front of it. `single-definition.test.ts`
+      # compares all three literals and reds on a drift. `_mem_is_scratch` in
+      # `ccrc` carries the rule and the measurement (D-2375).
+      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) continue ;; esac
+      link="${d}memory"
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      [ "$link" -ef "$store" ] && [ -d "$store" ] && continue
+      forked="${forked:+$forked }$b:$slug"
+    done
+  done
+  if [ -n "$forked" ]; then
+    # R33 (controller ruling — implemented, not relitigated): WARN, not FAIL.
+    # `cmd_install` ends with `cmd_doctor` in both role arms, and `cmd_doctor`
+    # returns 1 the moment any check FAILs, so a FAIL here hard-dies
+    # `cmd_update` (`_ccrc_die`) BEFORE `_upd_sweep` ever runs — the fleet's
+    # ~20 `claude-session@*` supervisors keep running the OLD ccd while the
+    # operator reads a message naming doctor, never the sweep it silently
+    # skipped. And this check FAILs on `forked` BY CONSTRUCTION on every box
+    # that has ever run more than one agent home, until the operator runs the
+    # one irreversible `ccrc memory --apply` — so an unrelated verb (`ccrc
+    # update`) was coercing operators into that migration to make itself
+    # succeed. `unreachable` below is not the same kind of finding and stays
+    # FAIL: a fork is the expected PRE-MIGRATION state of every multi-home
+    # box, but an unreachable home is a misconfiguration nothing will ever
+    # repair on its own. The three conditions this check answers in are still
+    # never collapsed to two — they now carry two severities instead of one,
+    # which is what the difference in their remedies actually means. A WARN
+    # still prints with its own remedy, and `cmd_doctor` still counts it —
+    # it just cannot fail `ccrc update`.
+    _dr_warn memory "memory is forked across agent homes: $forked" \
+      "one store per project: run \`ccrc memory\` to see the census, then \`ccrc memory --apply\`"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ -n "$unreachable" ]; then
+    _dr_fail memory "agent homes the session hook cannot reach, so they will fork on first use: $unreachable" \
+      "add the account to the roster so install-session-hooks.sh wires it, or register session-hook.sh in that home's settings.json by hand"
+    rc=1
+  fi
+  if [ -n "$unmeasured" ]; then
+    _dr_warn memory "could not tell whether the session hook reaches every agent home — settings.json exists but could not be read for: $unmeasured" \
+      "fix its permissions so doctor can read it (chmod u+r <home>/settings.json), or check by hand whether it references session-hook.sh"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -eq 0 ]; then
+    _dr_pass memory "one memory store per project; every agent home converged"
+  fi
+  return "$rc"
 }

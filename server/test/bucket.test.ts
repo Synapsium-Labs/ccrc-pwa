@@ -29,12 +29,14 @@ describe('sessionBucket', () => {
   });
 
   // `cleanup` is a CONJUNCTION, so it is entered at the later of its two
-  // events. The auto-archive path hides this — there the archive is the later
-  // one — but the manual path inverts it: archive at T0 with the PR still
-  // open, open the session at T1 (which acks it at T1), merge at T2. Stamped
-  // at T0 the session is dated before the ack that predates the episode, so
-  // `isUnseen` computes `T0 > T1` = false and the leapfrog bucket's badge
-  // never fires in the one flow it exists for.
+  // events. Back when the sweep auto-archived on merge this hid the
+  // ordering — the archive was always the later event — but the manual path
+  // (the only one there is now, per the 2026-09-10 auto-archive removal)
+  // inverts it: archive at T0 with the PR still open, open the session at T1
+  // (which acks it at T1), merge at T2. Stamped at T0 the session is dated
+  // before the ack that predates the episode, so `isUnseen` computes
+  // `T0 > T1` = false and the leapfrog bucket's badge never fires in the one
+  // flow it exists for.
   it('dates a workspace archived BEFORE its merge by the merge, not the archive', () => {
     const r = sessionBucket(
       { ...base, status: 'dead', archivedAt: 1700, pr: { phase: 'merged', mergedAt: 5_000_000 } as never },
@@ -44,9 +46,11 @@ describe('sessionBucket', () => {
   });
 
   it('keeps the archive time when the merge came first — the LATER event, not the merge one', () => {
-    // The auto-archive path: sweepPr sees the merge, archiveMerged archives
-    // seconds later. Taking `mergedAt` unconditionally would date the session
-    // before it was archived, i.e. before it could possibly be in `cleanup`.
+    // The old auto-archive path: sweepPr saw the merge, and `archiveMerged`
+    // archived seconds later (that sweep is gone now — 2026-09-10 — archiving
+    // is a human/coordinator act). Taking `mergedAt` unconditionally would
+    // date the session before it was archived, i.e. before it could possibly
+    // be in `cleanup`.
     const r = sessionBucket(
       { ...base, status: 'dead', archivedAt: 9000, pr: { phase: 'merged', mergedAt: 5_000_000 } as never },
       null,
@@ -336,7 +340,7 @@ describe('sessionBucket', () => {
 
   // D-74 end to end, on the EXACT registry shape the live fleet was measured
   // in on 2026-08-17: `.archived` + `.archivedreason merged:#N` + `.prphase
-  // merged` (what `archiveMerged` writes) standing beside a live tmux pane and
+  // merged` (what `ws-archive` writes) standing beside a live tmux pane and
   // a busy live-status file (what a later `ccd start` produced). Five of the
   // box's seven archive markers were in this state; four of those panes were
   // mid-turn. The unit cases above pin the ladder — this pins the whole path

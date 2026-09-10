@@ -446,7 +446,7 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
   });
 
   it("`ccrc uninstall`'s close line is quoted verbatim — it is a constant in cmd_uninstall", () => {
-    const line = 'uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved';
+    const line = 'uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity, and every project\'s memory), the session registry rows, worktrees and ~/ccrc-backups were all preserved';
     expect(ccrcSrc).toContain(`echo "${line}"`);
     expect(step12Section()).toContain(line);
   });

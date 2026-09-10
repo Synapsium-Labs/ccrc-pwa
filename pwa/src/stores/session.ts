@@ -550,7 +550,29 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // means an explicit teardown can never leave a stale list on screen
         // even in that corner, the same way `ask: null` covers `checkHookAsk`'s
         // corner.
-        set({ ask: null, mail: [] });
+        //
+        // `status` joins them, and its own server-side half is `start()`'s
+        // opening statement (`server/src/sessionws.ts`): that channel reports
+        // CHANGE, against a seed the client cannot see, so a reading learned
+        // in one connection used to still be on screen in the next one. This
+        // store is kept per session id for the life of the tab
+        // (`getSessionStore` below) and `status` is written by that frame and
+        // nothing else, so nothing else could ever correct it. MEASURED
+        // 2026-09-10: a lane swap took the pane away for 4.8s, the open screen
+        // was told `dead`, the socket that would have corrected it on its next
+        // poll was replaced rather than kept — and the operator read "Not
+        // running — the chat is read-only" over a disabled composer while that
+        // same view streamed the session's live transcript.
+        //
+        // `null` is not a guess about liveness — it is this store's own
+        // initial state, and `SessionScreen`'s `status ?? live?.status` falls
+        // through to the fleet snapshot exactly as it does before the first
+        // frame of any connection. That is also why the server's cold start
+        // is the primary fix and this is the belt: it covers the arms that
+        // have nothing to state (a resolve that could not measure the
+        // registry), where silence is the honest answer and a stale word
+        // would be the lie.
+        set({ ask: null, mail: [], status: null, statusUpdatedAt: null });
       },
 
       async send(text, opts = {}) {

@@ -2140,10 +2140,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * session actions sheet.
    *
    * WAVE 2: it now knows about coordination, because `ws-archive` has no hold
-   * rung in ccd (deliberately: this route is the reason) and `archiveMerged`'s
-   * own gate cannot help a request that never goes through it. An open run
-   * naming this session is refused `409 run-open`, NAMING the runs so the
-   * client can render a sentence rather than a slug.
+   * rung in ccd (deliberately: this route is the reason), so a request that
+   * arrives HERE meets no coordination check anywhere else on its way to the
+   * box — and nothing else on the server archives unasked, so there is no
+   * second gate to fall back on. An open run naming this session is refused
+   * `409 run-open`, NAMING the runs so the client can render a sentence rather
+   * than a slug.
    *
    * NOT a hard refusal — that would reverse a stated policy: README's holds
    * section blesses archiving a held workspace by hand, and this sheet is
@@ -2280,11 +2282,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // :456, :499 had it, the audit route did not)". That was FALSE, and the
     // measurement it cited is why: it grepped for the routes that ALREADY HAD
     // a gate, not for the routes that NEEDED one. `/archive`, `/restore` and
-    // `FleetWatcher.archiveMerged` were all missing theirs, all three are the
+    // `FleetWatcher`'s merge sweep were all missing theirs, all three are the
     // same verb generation as this route, and all three were added by this
-    // same branch. All three are gated now. The claim of completeness is no
-    // longer made in prose: `verb-gate.test.ts` parses `server/src` for every
-    // `CCD_ARGV.*` call site and fails on an ungated one it has not been told
+    // same branch. All three were gated. (Two still are; the merge sweep makes
+    // no ccd call at all now, so there is nothing left of it to gate.) The
+    // claim of completeness is no longer made in prose: `verb-gate.test.ts`
+    // parses `server/src` for every `CCD_ARGV.*` call site and fails on an
+    // ungated one it has not been told
     // about, so the next omission breaks a test instead of being asserted away
     // by a comment.
     if (!verbSupported(deps.fleetState, argv)) {

@@ -15,12 +15,13 @@
 // `$(date +%s)` — `strandnotify` has exactly one writer, `_strand_mark` (wave
 // 2b), and `compactnote` exactly one, `_compact_note` (D-2013), and no wire
 // route reaches either, so they are the same defence-in-depth class as
-// the other five, not a new exposure — and `SWAP_JITTER` is agent-set env,
-// not wire-set. Exploiting one already needs write access to
-// `~/.cc-sessions` as the fleet UNIX user. This is defence in depth against a
-// TORN or hand-edited registry field, not a live-vulnerability fix. The one
-// live wire-reachable instance was `cmd_ensure`'s positional, closed in
-// 73bc0fe.
+// the other five, not a new exposure — and `SWAP_JITTER` is not wire-set
+// either; ccd assigns it unconditionally, so nothing outside ccd reaches
+// that operand (see the note on the `_dispatch_swap` case below).
+// Exploiting one already needs write access to `~/.cc-sessions` as the
+// fleet UNIX user. This is defence in depth against a TORN or hand-edited
+// registry field, not a live-vulnerability fix. The one live wire-reachable
+// instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
@@ -87,14 +88,15 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
   it('_dispatch_swap does not evaluate a payload sitting in SWAP_JITTER', () => {
     const h = makeCcdHarness('arith-jitter');
     // MEASURED, and it corrects the plan's table: this site is NOT reachable
-    // from the environment. `ccd:56` is a bare `SWAP_JITTER=120`, not
-    // `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever the caller
-    // exported — the operand is always ccd's own literal. Passing the payload
-    // as env therefore proves nothing, and a test written that way is green
-    // for a reason unrelated to the guard.
+    // from the environment. ccd assigns `SWAP_JITTER` unconditionally
+    // (`grep -n '^SWAP_JITTER=' ccd/ccd`), not `${SWAP_JITTER:-120}`, so
+    // sourcing ccd overwrites whatever the caller exported — the operand is
+    // always ccd's own literal. Passing the payload as env therefore proves
+    // nothing, and a test written that way is green for a reason unrelated to
+    // the guard.
     //
     // So the hostile value is assigned AFTER the source, which is how it could
-    // actually arrive: the day someone respells line 54 as `${SWAP_JITTER:-120}`
+    // actually arrive: the day someone respells that assignment as `${SWAP_JITTER:-120}`
     // to make it tunable, or a future caller assigns it. The `-gt` is itself an
     // arithmetic context, reached before the `$(( RANDOM % ... ))`. The guard
     // degrades to jitter=0 — the documented pre-jitter behaviour.
@@ -143,7 +145,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
   });
 
   it('ccd assigns SWAP_JITTER unconditionally — the reason the env cannot reach that arithmetic', () => {
-    // Pins the fact the test above depends on. If line 54 ever becomes
+    // Pins the fact the test above depends on. If that assignment ever becomes
     // `${SWAP_JITTER:-120}`, this goes red and the reader is sent to the guard
     // that then starts carrying real weight instead of defence in depth.
     const src = readFileSync(CCD, 'utf8');
@@ -212,7 +214,10 @@ describe('_pane_ctx_pct is the one sanitiser the compact arithmetic depends on (
 describe("_spawn_start's only failure mode is die (Step 8, D-300 (was D-B8-4))", () => {
   it('has no bare non-zero return — the split installed a door and this keeps it shut', () => {
     const h = makeCcdHarness('arith-spawnret');
-    // Tasks 7/8 made every caller `_spawn_start "$id" <mode> || return $?`.
+    // Tasks 7/8 made every caller consume the rc — `_spawn_start "$id" <mode>
+    // || return $?` everywhere except `cmd_ws_restore`, which branches on it
+    // because it holds the reap-lock descriptor (see the note above that call
+    // in `ccd/ccd`).
     // That early return skips `_reg_claim` (and `_ws_supervise` at ws-add /
     // ws-restore) — the exact writes Wave 1 moved earlier. It is unobservable
     // ONLY because `_spawn_start` has no `return` of its own: every failure is

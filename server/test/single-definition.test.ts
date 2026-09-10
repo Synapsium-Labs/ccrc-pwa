@@ -1485,6 +1485,39 @@ describe('the model files, and who reads each one', () => {
     const src = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
     expect(src).toContain("export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;");
   });
+
+  it('ANTHROPIC_SMALL_FAST_MODEL never reaches `fable`, pinned in source (fix round 2A, N4)', () => {
+    // `modelenv.test.ts`'s own guard for this chain used to be a REGISTRY
+    // (haiku and sonnet both null, opus and fable both set) that reached this
+    // exact line, so a `?? fable` added to it would red. Fix round 1, v2
+    // (2026-09-09) narrowed `subagent` to haiku/sonnet, and the registry that
+    // test built also named `subagent: 'opus'` to stay otherwise legal — a
+    // shape `parseRegistry`'s own gate refused BEFORE `modelEnvBlock` ever
+    // reached this line, so the commit correctly retired that case rather
+    // than ship a registry `parseRegistry` would refuse. Nothing else took
+    // its place: measured 2026-09-10, mutating this line to
+    // `haiku ?? sonnet ?? fable ?? sentinel('haiku')` and running the four
+    // model test files (models, modelenv, models-op, ccrc-models) reds
+    // NOTHING — `Test Files 4 passed (4)`. A source pin is the only guard
+    // left, the same
+    // shape `modelenv.test.ts`'s own static pin further down that file uses
+    // for `ANTHROPIC_MODEL`'s chain.
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'modelenv.mjs'), 'utf8');
+    expect(src).toContain("ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),");
+  });
+
+  it('SUBAGENT_CLASSES is one list spelled in two languages — shared/models.mjs and ccd/ccrc\'s MODELS_SUBAGENT_CLASSES (round 3, NEW-4)', () => {
+    // `MODELS_CLASSES` (the four) is covered by the enumeration scan above.
+    // Nothing pinned its narrower sibling — the two classes `set-subagent`
+    // accepts — before this: a divergence between the node list and the bash
+    // copy is message-text only (it cannot misroute a write), but it can
+    // still promise a class the other half refuses, or refuse one the other
+    // half still offers.
+    const models = readFileSync(path.join(ccrcRoot, 'shared', 'models.mjs'), 'utf8');
+    expect(models).toContain("export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);");
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    expect(ccrc).toContain('MODELS_SUBAGENT_CLASSES="haiku sonnet"');
+  });
 });
 
 // — Stage 2e, Task 2: the per-box remote-control flag —
@@ -2698,5 +2731,136 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
       expect(src, f).toMatch(
         /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
     }
+  });
+});
+
+// ── D-2375: the scratch-slug predicate ─────────────────────────────────────
+describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+  // "Did the harness mint this slug for a throwaway directory?" is asked at
+  // three sites that cannot share a function between them:
+  //
+  //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
+  //     Its two callers (the census and `--apply`) reach it directly.
+  //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     `tableNames()`), so a `declare -F` guard would be the second spelling
+  //     with a branch in front of it. D-92's trade, unchanged.
+  //   - `session-hook.sh` is installed INTO an agent home and sources nothing
+  //     from this tree at all.
+  //
+  // So the agreement cannot be structural, and this is the mechanism that
+  // holds it instead. It matters more than the usual drift argument does: the
+  // hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can only
+  // ever be exercised on the platform the suite runs on — a Linux-only
+  // spelling was invisible to every ubuntu leg and to five task reviews, and
+  // only `test-macos` caught it. The two read-side sites read a directory
+  // NAME, so they are measurable everywhere; this pin is what carries their
+  // coverage across to the one site that is not.
+  //
+  // THE SITE LIST IS THREE BECAUSE THE HOOK ASKS IN SLUG SPACE. It holds the
+  // un-lossy value and could ask an exact question of it instead (the
+  // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
+  // records why it does not. If that is ever revisited, this list shrinks to
+  // two — a deliberate edit, not a drift.
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+
+  /** The guard line at one site, found by the one token no other line in
+   *  these tools carries. Exactly one per file, or the row that reads it is
+   *  measuring something it did not mean to. */
+  const guardLine = (f: string): string => {
+    const hits = codeLines(f).filter((l) => l.includes('-var-folders'));
+    expect(hits, `${rel(f)}: expected exactly one scratch-guard code line`).toHaveLength(1);
+    return hits[0] ?? '';
+  };
+
+  it('is spelled identically at exactly three sites, each named here BY NAME', () => {
+    expect(holdersOf(PRED)).toEqual([
+      'ccd/ccrc',                 // _mem_is_scratch — the rule, and the measurement
+      'ccd/ccrc-doctor-checks',   // _check_memory — spelled here, D-92's trade
+      'ccd/session-hook.sh',      // the hook's own case — shares nothing with either
+    ]);
+  });
+
+  it('each site carries the WHOLE alternation and nothing appended to it', () => {
+    // EQUALITY, NOT CONTAINMENT, and the difference is the whole value of this
+    // row. `holdersOf` matches with `String.includes`, so the row above stays
+    // green when a site APPENDS an alternative — measured 2026-09-10: adding
+    // `|-private-var-*` to `session-hook.sh` alone left every Linux-visible
+    // row in the tree green while, on Darwin, it would have swept up
+    // `/private/var/tmp` and skipped every fixture in `session-hook.test.ts`'s
+    // memory-convergence block. Capturing the arm closes both directions at
+    // once, and it is what makes the row above's title true.
+    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']) {
+      const m = /case "\$(?:1|slug)" in ([^)]*)\)/.exec(guardLine(path.join(ccrcRoot, f)));
+      expect(m, `${f}: the scratch guard is not a case arm this row can read`).toBeTruthy();
+      expect(m?.[1], f).toBe(PRED);
+    }
+  });
+
+  it('no site anywhere in the corpus carries the narrower Linux-only spelling', () => {
+    // The row above pins the three KNOWN sites. This one has a different
+    // population: a FOURTH site, written anywhere in these tools with the
+    // pre-D-2375 rule — which named the OS scratch root on Linux and nothing
+    // at all on Darwin.
+    for (const f of BASH) {
+      const narrow = codeLines(f).filter((l) => /in\s+-tmp\*\)/.test(l));
+      expect(narrow, rel(f)).toEqual([]);
+    }
+  });
+
+  it('no site anywhere in the corpus sweeps up /var/tmp, in either spelling', () => {
+    // The widening's UPPER BOUND, and the prefix a careless one takes first:
+    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots its
+    // memory-convergence fixtures there, and skipping it would hide a real
+    // fork from the operator.
+    //
+    // BOTH SPELLINGS, and bare rather than glob-anchored. Measured
+    // 2026-09-10, twice: an over-widening written `-var-tmp-*` — a dash before
+    // the star, which is what a hand actually writes — slipped a needle
+    // anchored as `-var-tmp*`; and `-private-var-tmp` is the spelling a real
+    // Darwin box produces, which a Linux-only control cannot see at all.
+    for (const needle of ['-var-tmp', '-private-var-tmp']) {
+      for (const f of BASH) {
+        const swept = codeLines(f).filter((l) => l.includes(needle));
+        expect(swept, `${rel(f)} (${needle})`).toEqual([]);
+      }
+    }
+  });
+
+  // KNOWN BOUND, stated rather than implied: a FOURTH site written in some
+  // other shell shape — a `[[ ]]` test, a helper of its own — is caught by
+  // neither the equality row (it reads three sites by name) nor the narrowing
+  // row (it looks for the old `case` spelling). Nothing here scans for an
+  // arbitrary re-implementation of the question.
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+    // Three suites state fixture preconditions against this rule and none can
+    // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
+    // they share. The first cut of D-2375 put a copy in each suite and pinned
+    // one of the three; this row is why that is now impossible.
+    const src = readFileSync(path.join(ccrcRoot, 'server/test/scratchSlugs.ts'), 'utf8');
+    const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
+    expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
+    const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
+    expect(mirror).toEqual(shipped);
+  });
+
+  it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
+    // The same two directories the scans above enumerate rather than name:
+    // an unscanned sibling is the "clean and unchecked becomes dirty and
+    // unchecked with nothing saying so" shape this file already refuses.
+    const holders = [path.join(ccrcRoot, 'server', 'test'),
+      path.join(ccrcRoot, 'server', 'test-e2e')]
+      .flatMap(sources)
+      // ANCHORED TO A DECLARATION, not a mention, and that is not cosmetic:
+      // the bare needle read the regex literal in the row above and reported
+      // THIS file as a second holder (measured). A declaration is what the
+      // row claims anyway.
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+        .test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/scratchSlugs.ts']);
   });
 });

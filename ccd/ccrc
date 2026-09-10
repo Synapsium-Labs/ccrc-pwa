@@ -1134,9 +1134,15 @@ MODELS_PROBES="codex openrouter compatible"
 # The four classes, in `shared/models.ts`'s CLASSES order.
 MODELS_CLASSES="haiku sonnet opus fable"
 
+# The two classes `set-subagent` accepts (`shared/models.mjs`'s
+# SUBAGENT_CLASSES): measured 2026-09-09 on Claude Code 2.1.267, a subagent
+# set to opus or fable runs on the sonnet slot's model regardless, so the
+# node op refuses those two — this is the usage-text spelling only.
+MODELS_SUBAGENT_CLASSES="haiku sonnet"
+
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|models|install|update|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|memory|models|install|update|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1154,6 +1160,14 @@ already running).
             "generated", and REFUSE every file ccrc did not write itself.
             Backs up before any overwrite; never touches an upstream or
             external account. [--dry-run] [--adopt] [--force]
+  memory    census every (home, project) memory pair on this box: one line
+            per pair naming its home, project slug and state — converged or
+            forked — then a summary count. Read-only unless [--apply] is
+            given, which unions every forked pair into ~/.ccrc/memory/<slug>
+            (backing up any real directory it replaces), re-points any
+            already-converged link that does not yet NAME the store
+            directly, and symlinks every home to the shared store. Homes
+            are enumerated from the filesystem, never the roster.
   models    the model-class registry: which concrete model each of the four
             classes (haiku, sonnet, opus, fable) means on a lane, and which
             class subagents run as. "ccrc models <id> show" reports it,
@@ -1194,7 +1208,11 @@ already running).
             executables. PRESERVES ~/.ccrc, the session registry rows,
             worktrees and ~/ccrc-backups. Refuses while live sessions
             exist. [--force] proceeds anyway; [--purge] also removes
-            ~/.ccrc and ~/ccrc-backups — never worktrees, never tmux state
+            ~/.ccrc's config (roster, identity) and ~/ccrc-backups — but
+            still PRESERVES ~/.ccrc/memory (every project's durable memory:
+            since 'ccrc memory --apply' it is the SOLE live copy, and a
+            session's prose is not configuration) unless [--purge-memory]
+            is also given; never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, dists,
             ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups —
@@ -2948,6 +2966,661 @@ cmd_wrappers() {
   return 0
 }
 
+# ── memory ────────────────────────────────────────────────────────────────
+# One memory store per PROJECT, shared by every agent home on the box.
+# `ccrc memory` is the CENSUS; `ccrc memory --apply` (Task 3) is the only thing
+# that moves a byte. The split is deliberate: the union is irreversible in the
+# sense that matters — a memory file is prose a session wrote once — so the
+# operator sees exactly what would happen before it happens.
+#
+# HOMES ARE ENUMERATED FROM THE FILESYSTEM, NOT FROM THE ROSTER. Measured
+# 2026-09-09: `.claude-glm` and `.claude-kimi` are on disk, hold memory, and
+# are in no roster entry. The roster describes accounts ccrc PLACES WORK ON;
+# it was never a census of homes, and using it as one is how the design's own
+# first draft came to list five homes when there were eight.
+_mem_homes() {   # -> one agent-home path per line
+  local d
+  for d in "$HOME"/.claude*/; do
+    # A named `.claude-docserver` skip used to sit here. REMOVED (final
+    # whole-branch review, completeness critic item 4): the docserver is a
+    # private, box-local operator tool this tree does not know about
+    # (CLAUDE.md says so explicitly, for the same reason it forbids reading
+    # a live `tailscale serve` mapping as this product's path) — hard-coding
+    # its directory name into general enumeration logic in a repo bound for
+    # public release is identity residue, and it was provably dead code: the
+    # very next line already excludes it on the one box it was written for
+    # (`.claude-docserver` has no `projects/`), so no test could ever pin it
+    # without manufacturing a `projects/` dir the real tool does not have.
+    [ -d "${d}projects" ] || continue
+    printf '%s\n' "${d%/}"
+  done
+}
+
+# THE OS SCRATCH ROOT IS NOT ONE SPELLING (D-2375). This predicate answers a
+# single question — "did the harness mint this slug for a throwaway directory?"
+# — and it takes four prefixes to ask it on both platforms `ccrc` ships to. It
+# shipped as a bare `-tmp*`, which is the LINUX spelling alone: on Darwin
+# `/tmp` is a symlink to `/private/tmp`, `$TMPDIR` is a per-user
+# `/var/folders/<x>/<y>/T`, and the one site that DERIVES a slug resolves
+# physically — the hook's `pwd -P`, whose own note carries the measurement
+# behind it (30 of 30 live session workdirs slugify to a project directory
+# that exists only once a symlinked path is resolved; `session-hook.sh`, just
+# above its `slug=` line).
+#
+# So no real macOS scratch path can produce a `-tmp...` slug — AND THAT IS A
+# STATEMENT ABOUT THE HOOK, the one site the platform reaches through a path:
+# the guard never fired there, so the hook minted a store for every throwaway
+# directory a Darwin session was started in. The two callers below are a step
+# removed; they match a directory NAME the harness already wrote, so what they
+# under-matched on a Darwin box is whatever that harness had produced there.
+#
+# FOUND BY THE `test-macos` LEG, though NOT by the mechanism that leg's own
+# comment claims for itself (the Darwin ARMS — `describe.skipIf(!IS_DARWIN)`,
+# `itDarwin`; nothing here is one). What caught it was an ordinary
+# cross-platform test whose fixture derives a path from `os.tmpdir()`. The leg
+# is therefore worth more than its comment says, and this is the evidence.
+#
+# `-var-folders*` AS WELL AS the resolved `-private-var-folders*`, because the
+# harness's resolution is measured on Linux only — a `/var/folders` path is
+# scratch under either spelling, and that directory exists off Darwin
+# nowhere.
+#
+# `/var/tmp` IS DELIBERATELY ABSENT, and this is the one prefix a widening
+# must not sweep up: POSIX makes it *persistent* scratch that survives a
+# reboot, unlike `/tmp`, and `session-hook.test.ts` roots its own project
+# fixtures there precisely because this rule must not skip them.
+#
+# ONE ANCHORING CONVENTION, and the four arms did not share it for one round:
+# `-var-folders-*` was separator-anchored while `-tmp*` was not, so the same
+# literal both over-matched (`-tmpfs-…`, `-tmpl-…`) and under-matched (the
+# scratch root spelled bare, `-var-folders`). All four are unanchored now.
+# That KEEPS the `-tmp*` over-match, deliberately: tightening it to
+# `-tmp|-tmp-*` would stop skipping slugs a live fleet is skipping today, and
+# that is a behaviour change to measure against the real registry first, not
+# to smuggle in behind a platform fix.
+#
+# NOT DERIVED FROM `$TMPDIR` either — and this is the seam the completeness
+# critic argued (C1, 2026-09-10), so the reason is recorded rather than
+# implied. Slug space IS lossy: measured with the shipped alphabet,
+# `/tmp/work/project`, `/tmp-work/project` and `/tmp.work/project` all produce
+# `-tmp-work-project`, so no prefix list can separate "inside the OS scratch
+# root" from "a directory whose name merely starts with tmp". The HOOK holds
+# the un-lossy value (`$root`, physical) and could ask an exact question of
+# it. It does not, because THE TWO CALLERS BELOW CANNOT: they enumerate slugs
+# the harness already wrote, the slugify has no inverse, and a hook that
+# skipped exactly while the census skipped approximately would converge pairs
+# the census never lists and the doctor never reports — an invisible fork,
+# which is the one thing this check exists to prevent. Sharing the lossiness
+# is what keeps the four mechanisms agreeing. If that trade is ever revisited,
+# the hook's arm moves and `single-definition.test.ts`'s site list shrinks to
+# two: a deliberate edit, not a drift.
+_mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
+  case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) return 0 ;; esac
+  return 1
+}
+
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
+# DIRECTORY* (R20, Task 4 review round 2 — supersedes R12's text-comparison
+# rule below). R12 (review round 2 of Task 2) first ruled that a link whose
+# `readlink` TEXT matched the store's absolute spelling, with nothing behind
+# it, must not read as `converged` — the `[ -d "$store" ]` conjunct was
+# R12's fix. R20 goes one step further on TWO fronts a pure text comparison
+# cannot reach, both measured on this branch's own doctor/census pair:
+#   1. A RELATIVE link that genuinely resolves to the store (e.g.
+#      `../../../.ccrc/memory/<slug>`) never matches `readlink`'s raw text
+#      against the absolute `$store` spelling — `_mem_state` called it
+#      `forked` even though the memory really is shared into the one store.
+#      This was a standing Minor from Task 2, deferred; R20 closes it.
+#   2. A link that resolves to something that EXISTS but is a plain FILE, not
+#      a directory (store corrupted, or created wrong by hand), passed a bare
+#      existence check while being just as unusable as a dangling link — the
+#      worse of the two bugs R20 found, because nothing about it LOOKS
+#      dangling.
+# `[ "$link" -ef "$store" ]` (bash builtin, comparing device+inode THROUGH
+# the symlink — the same operator `ccrc-doctor-checks`'s `_check_wrappers`
+# already uses for exactly this "resolves to the same file" question) answers
+# both: it follows a relative target exactly the way the kernel does, and it
+# needs no `readlink` at all. But `-ef` only proves EQUALITY, not SHAPE —
+# both sides could resolve to the same regular file — so `[ -d "$store" ]`
+# stays a second, independent conjunct: `-ef` is necessary and `-d` is
+# necessary, and dropping either one is a distinct, independently mutable
+# defect (Task 4 fix round 2 measured this: deleting `-d` alone leaves the
+# store-is-a-file case silently `converged`).
+#
+# THE COST THIS COMMENT ONCE ACCEPTED IS NO LONGER PAID — ruling R27, and the
+# correction matters because the sentence that stood here was WRONG about a
+# defect, not merely out of date. It read: "`--apply` skips pairs
+# `_mem_state` calls `converged`, so a relative-but-correct link is LEFT AS
+# WRITTEN rather than normalised … only the link's own spelling is left alone."
+# The second half is what was false. `-ef` follows a CHAIN, so the pairs left
+# alone included `.claude-corp -> .claude's link -> store` — not a spelling but
+# a shape the design forbids, in which one account's link is load-bearing for
+# another's, permanently (re-running `--apply` never repaired it) and invisibly
+# (`_check_memory` printed PASS). It is also an ordering a real box
+# plausibly produces under its actual locale (`en_US.UTF-8`: `.claude`
+# sorts before `.claude-corp`), so its own pair can converge first and
+# manufacture the chain mid-run — but see the CORRECTION below: this is not
+# a universal ordering rule, and an earlier version of this comment claimed
+# it was.
+#
+# THE SPLIT R27 SETTLES ON: this function's definition of `converged` is
+# unchanged and still right — the memory really is shared into the one store,
+# so the census and doctor should say so, and nothing here newly fails. What
+# changed is that `_mem_apply` no longer treats `converged` as "nothing to do":
+# it now re-points any converged link whose TEXT is not the store, with a bare
+# `ln -sfn` and no absorb. Read that arm for why the absorb must not happen.
+# So `converged` is a statement about where the bytes are, and `--apply` owes
+# a second property on top of it — that every home reaches them DIRECTLY.
+_mem_state() {   # <home> <slug> -> converged | forked | absent
+  local link="$1/projects/$2/memory" store="$HOME/.ccrc/memory/$2"
+  if [ -L "$link" ]; then
+    [ "$link" -ef "$store" ] && [ -d "$store" ] \
+      && { printf 'converged'; return 0; }
+    printf 'forked'; return 0
+  fi
+  [ -e "$link" ] && { printf 'forked'; return 0; }
+  printf 'absent'
+}
+
+cmd_memory() {
+  local apply=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+  local h b slug d state n=0 forked=0 skipped=0
+  for h in $(_mem_homes); do
+    b=$(basename -- "$h")
+    for d in "$h"/projects/*/; do
+      [ -d "$d" ] || continue
+      slug=$(basename -- "${d%/}")
+      if _mem_is_scratch "$slug"; then
+        # COUNTED, NOT JUST DROPPED (completeness critic C3, 2026-09-10). The
+        # skip used to collapse into the same silent `continue` as "this home
+        # holds no memory for this project", so the printed total was not the
+        # population and nothing named the difference — in the one output the
+        # operator reads to PREDICT what `--apply` will do. The count is taken
+        # AFTER the pair test, so it counts only rows that would otherwise have
+        # been pairs and the three numbers reconcile against one unit.
+        { [ -e "${d}memory" ] || [ -L "${d}memory" ]; } && skipped=$((skipped+1))
+        continue
+      fi
+      [ -e "${d}memory" ] || [ -L "${d}memory" ] || continue
+      state=$(_mem_state "$h" "$slug")
+      n=$((n+1))
+      [ "$state" = forked ] && forked=$((forked+1))
+      printf '%-18s %-50s %s\n' "$b" "$slug" "$state"
+    done
+  done
+  printf '\n%s pairs, %s forked, %s scratch skipped\n' "$n" "$forked" "$skipped"
+  # R9 (fix round 1), corrected at the final whole-branch review: this
+  # comment used to say "three failure paths" and name them; two review
+  # rounds since (D-2241's `could not absorb` refusals, R27/D-2238's `cannot
+  # normalise`, R30's `cannot` [build/write] the index) have added more —
+  # every `return 1` inside `_mem_apply` prints its own diagnostic to stderr
+  # first, and that is the property this line depends on, not the count.
+  # (An enumeration in a comment is itself a claim this branch has already
+  # let go stale once; if this sentence and the source ever disagree again,
+  # trust the source's own `return 1` sites.) Discarding that status here —
+  # the shape this line had before R9 — would let a migration that stopped
+  # HALFWAY read as a clean exit 0, the exact "no overloaded null at a seam"
+  # defect this whole branch exists to remove: an operator would see
+  # "success" over a box with some pairs converged and one left broken. The
+  # pure census (no `--apply`) is unaffected: it still exits 0 regardless of
+  # how many pairs are `forked`, because finding forked pairs is not a
+  # failure of the census — only a failed UNION is.
+  if [ "$apply" -eq 1 ]; then
+    _mem_apply || return 1
+  fi
+  return 0
+}
+
+# THE CONFLICT RULE IS: NO SILENT WINNER. A file unique to one home moves
+# across. A same-named file whose content DIFFERS keeps BOTH copies, the
+# incoming one suffixed with the home it came from — a memory file is prose a
+# session wrote once, and choosing between two of them is a judgement no script
+# has the standing to make. A byte-identical collision is one file, not two:
+# deduplicating what is provably the same costs the operator nothing to review.
+#
+# `MEMORY.md` IS EXEMPT BECAUSE IT IS DERIVABLE. It is an index of one line per
+# memory file THAT CARRIES `name:` FRONTMATTER — so it is REBUILT from the
+# union rather than merged. That framing used to claim every memory file
+# carries `name`/`description` frontmatter and that a clobbered index
+# "regenerates instead of silently losing a line" — both measured false by
+# this branch's own review: SOME memory files carry no `name:` line, and the
+# index does not self-heal for them. It DROPS them from the rebuild every
+# time, which is why `_mem_rebuild_index` COUNTS them and `--apply` reports
+# the count in a NOTE (R30) rather than claiming the file is covered. A
+# clobbered/lost index does regenerate on the next `--apply` for every file
+# THAT HAS a name — the self-healing property still holds for that case —
+# but a name-less file is a standing, permanent gap in the index, not a
+# transient write race, and this comment must not blur the two again.
+# (Illustrative count, measured 2026-09-09 — a moving fleet fact, not a
+# contract, and stated as a quote per this repo's own "any number about
+# mutable state is a quote" rule: 2 DISTINCT name-less files existed on
+# this box, reached through pre-existing symlinks as 6 file INSTANCES
+# across homes. Distinct-file and instance-flavoured counts are different
+# denominators — they differ here by exactly that symlink factor — so never
+# collapse "N distinct files" and "M instances" into one figure again.)
+_mem_index_line() {   # <file> -> "- [name](file) — description" on stdout,
+                      # rc 0; or nothing on stdout, rc 1, when the file
+                      # carries no `name:` frontmatter (R30 — the caller
+                      # COUNTS this; it must never invent a name to fill in)
+  local f="$1" name desc
+  name=$(sed -n 's/^name:[[:space:]]*//p' "$f" 2>/dev/null | head -n1)
+  desc=$(sed -n 's/^description:[[:space:]]*//p' "$f" 2>/dev/null | head -n1)
+  desc=${desc%\"}; desc=${desc#\"}
+  [ -n "$name" ] || return 1
+  printf -- '- [%s](%s) — %s\n' "$name" "$(basename -- "$f")" "$desc"
+}
+
+# m3 (review round 1): the original body was `{ … } > "$tmp" 2>/dev/null`. A
+# `2>/dev/null` on the SAME command as a failing `>` redirect does not catch
+# that redirect's own failure — bash reports "cannot open $tmp" on the real
+# stderr before the command (and its own redirections) ever run, because the
+# `>` is set up first and aborts the whole thing right there. Measured: an
+# unwritable store leaked `ccd/ccrc: line NNNN: …/.MEMORY.md.new: Permission
+# denied` straight past this function. Wrapping the redirecting command in an
+# OUTER group and hanging `2>/dev/null` off THAT outer group does catch it
+# (verified empirically — the inner failure now happens after the outer
+# group's own fd 2 is already /dev/null). The tool must name its own failure
+# from here on; the shell must not be the one naming it for us.
+_mem_rebuild_index() {   # <store> -> prints the count of *.md files DROPPED
+                         # for lacking `name:` frontmatter (R30) on stdout;
+                         # returns 0. Returns 1 with the tool's own
+                         # diagnostic on stderr and nothing on stdout if the
+                         # index itself could not be built or written.
+  local store="$1" f tmp="$1/.MEMORY.md.new" dropped=0 body line
+  # R30's original fix here was a trailing `true` inside the redirected
+  # group, so the group's own exit status could never depend on the LAST
+  # file's `_mem_index_line` result — a name-less last file returns 1, and
+  # without something like `true` the group (and so the `||` below) would
+  # read that as "could not build the index" and destroy $tmp, even though
+  # every earlier line built fine. That `true` fixed the name-less-last-file
+  # problem and BROKE something else: it also swallowed a genuine WRITE
+  # failure on the redirect below it. Measured against a `$tmp` symlinked to
+  # `/dev/full`: the `true`-terminated group returned rc 0 on a write that
+  # failed outright, so `mv -f` went on to install the (empty/truncated)
+  # result and the pair still printed `converged`, rc 0.
+  #
+  # Fix: decide `dropped` ENTIRELY in this shell, from each
+  # `_mem_index_line` call's own `$?`, before the redirected write ever
+  # happens — so the write is the ONLY command left inside the group, and
+  # its own exit status is what the group (and the `||` below) sees. Both
+  # properties now hold independently: a name-less last file only ever
+  # touches `dropped`, never the group's exit status; a real write failure
+  # only ever touches the group's exit status, never `dropped`.
+  body='# Memory index'$'\n\n'
+  for f in "$store"/*.md; do
+    [ -f "$f" ] || continue
+    case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
+    line=$(_mem_index_line "$f") && body="${body}${line}"$'\n' || dropped=$((dropped+1))
+  done
+  { { printf '%s' "$body"
+    } > "$tmp"
+  } 2>/dev/null || { rm -f -- "$tmp"; echo "ccrc memory: could not build the index for $store" >&2; return 1; }
+  # R30 sibling: `mv -f` SUCCEEDS when the destination is a DIRECTORY — it
+  # moves $tmp INSIDE it — so a `MEMORY.md` that is somehow a directory
+  # would silently swallow the whole index with rc 0 and no diagnostic.
+  # Refuse by name before that can happen.
+  if [ -d "$store/MEMORY.md" ]; then
+    rm -f -- "$tmp"
+    echo "ccrc memory: $store/MEMORY.md is a directory, not a file — cannot write the index" >&2
+    return 1
+  fi
+  mv -f -- "$tmp" "$store/MEMORY.md" \
+    || { echo "ccrc memory: could not write $store/MEMORY.md" >&2; return 1; }
+  printf '%s\n' "$dropped"
+}
+
+_mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
+                   # stdout; returns 1 (with its own stderr diagnostics) if
+                   # any copy failed, 0 otherwise.
+  # R6: `tag` strips a leading dot from the home basename (`.claude-corp` ->
+  # `claude-corp`) — every agent home starts with one, so leaving it in would
+  # make a conflict suffix read `same..claude-corp.md` (a double dot). Purely
+  # cosmetic: it changes nothing about which files collide or how.
+  #
+  # I3 (review round 1): this function is deliberately narrow — a "memory
+  # file" is a TOP-LEVEL `*.md` file; nothing recurses into a subdirectory
+  # and nothing that isn't `.md` is touched. That narrowness used to be
+  # silent — measured: a `scratch.txt`, a `README` and a `notes/deep.md`
+  # (itself a real memory file, just not a top-level one) all vanished from
+  # the run's output while the source directory was backed up and replaced
+  # by a symlink out from under them. `left` counts every top-level entry
+  # this pass did NOT take, so the caller can tell the operator how much is
+  # sitting, untouched, in whatever this pair's backup turns out to be — the
+  # bytes were never lost, only unmentioned.
+  #
+  # C1 (review round 1): every `cp` is now checked. A copy failure is a
+  # DIFFERENT fact from "this wasn't a memory file" (the `left` count above)
+  # — it means the union did not fully land, and the caller must refuse to
+  # treat the pair as converged or move anything away. `err` reports that
+  # fact through the exit status; `left` reports its own fact through
+  # stdout — a shell function hands back exactly one exit code, so the two
+  # can't share it without collapsing two conditions a caller must handle
+  # differently onto one value, which is the overloaded-null defect this
+  # branch's own conventions forbid.
+  local src="$1" store="$2" tag="${3#.}" f base dest sdest n left=0 err=0
+  # Final whole-branch review: when `$src` and `$store` are the SAME
+  # directory — a dangling-but-correctly-spelled link (R12's shape),
+  # repaired once its store has just been `mkdir -p`'d, whose `readlink -f`
+  # now resolves right back to the store — every top-level entry in `$src`
+  # IS already at `$dest`, because they are the same path. Falling through
+  # to the loop below would count the store's OWN files as "left behind,
+  # not migrated" (measured backwards, and previously invisible only
+  # because the NOTE that prints `left` was gated on a variable this arm
+  # never set). There is nothing to absorb when the source already IS the
+  # destination.
+  if [ "$src" -ef "$store" ]; then
+    printf '0\n'
+    return 0
+  fi
+  # R17 (review round 2): the glob below expands to NOTHING when `$src`
+  # cannot be READ — not just when it is empty. `readdir` needs read
+  # permission on the directory; a mode-0300 source (writable, searchable,
+  # unreadable) makes the glob silently see zero entries, so `left=0`,
+  # `err=0`, and the caller goes on to back it up and print `converged` over
+  # a store that never received anything. That is C1's own defect —
+  # `converged` claimed over a union that did not land — in the one
+  # condition C1's own `cp` check cannot see, because the loop that would
+  # have caught the failure never runs at all. An unreadable directory is
+  # not an empty one; refuse the pair the same way a failed `cp` already is.
+  #
+  # Final whole-branch review (Important, R17's own guard incomplete): a
+  # mode-0400/0600 source is READABLE but not SEARCHABLE — `readdir` (what
+  # `[ -r ]` guards) succeeds and the glob below still expands every name,
+  # but every `[ -e "$f" ]`/`[ -L "$f" ]` stat on those names then fails for
+  # want of search permission, so the loop body never runs: `left=0`,
+  # `err=0`, silent `converged` over an empty store, same as R17's own
+  # defect one level down. And `$src` need not be a directory at ALL — a
+  # plain file (or a symlink resolving to one) at the memory path makes the
+  # glob simply not expand, same silent outcome. `[ -d ]` and `[ -x ]`
+  # close both alongside R17's own `[ -r ]`.
+  if [ ! -d "$src" ] || [ ! -r "$src" ] || [ ! -x "$src" ]; then
+    echo "ccrc memory: cannot read $src" >&2
+    return 1
+  fi
+  for f in "$src"/*; do
+    # R19a (review round 2): `[ -e "$f" ]` alone DEREFERENCES, so a DANGLING
+    # entry (a broken symlink sitting in the source) was invisible here —
+    # the same defect class already ruled on twice on this branch
+    # (`cmd_memory`'s R10, `_mem_state`'s R12), and `_mem_apply` itself
+    # already writes the correct idiom a few lines below. Measured:
+    # `dangling.md` and `dangling.txt` both landed only in the backup,
+    # uncounted, with no NOTE at all. Letting a dangling entry through the
+    # gate is enough: a dangling NON-`.md` name falls out through the `left`
+    # counter below like any other non-memory entry, and a dangling `.md`
+    # name reaches the `cp`, which fails cleanly on a broken symlink and is
+    # counted through `err` (C1's mechanism) — either way it is now counted,
+    # never silent.
+    #
+    # DOTFILES ARE A SEPARATE, PRE-EXISTING GAP, LEFT OPEN HERE ON PURPOSE:
+    # this glob has never matched a leading `.` (no `dotglob`; the original
+    # brief's `*.md` glob before this branch touched it had the same
+    # property), so `.hidden.md` and `.DS_Store` stay invisible to BOTH
+    # absorption and the `left` counter — not a new gap this round opened.
+    # Turning dotglob on would change what counts as a top-level memory file
+    # (a dotfile `.md` would start being ABSORBED, not merely counted),
+    # which is a bigger decision than closing the dangling-entry gate this
+    # fix targets, so it is left for the final whole-branch review rather
+    # than folded in here silently.
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    base=$(basename -- "$f")
+    if [ -d "$f" ]; then left=$((left+1)); continue; fi
+    case "$base" in
+      MEMORY.md) continue ;;               # rebuilt, never merged — not "left behind"
+      *.md) : ;;                           # a memory file — absorbed below
+      *) left=$((left+1)); continue ;;     # I3: not a memory file — left for the operator
+    esac
+    dest="$store/$base"
+    if [ ! -e "$dest" ]; then
+      # R19b (review round 2): a `cp` that fails PARTWAY (ENOSPC/EIO, or a
+      # file-size limit) can still have CREATED `$dest` with truncated bytes
+      # in it before dying. Left in place, that debris becomes the canonical
+      # `$base` — a re-run sees a DIFFERING file at the primary name and
+      # suffixes the real content in behind it, so the wrong bytes end up
+      # filed under the name every reader trusts. `rm -f` it on failure so a
+      # retry starts clean instead of finding false "already there" content.
+      cp -p -- "$f" "$dest" \
+        || { echo "ccrc memory: could not copy $f to $dest" >&2; rm -f -- "$dest"; err=$((err+1)); }
+      continue
+    fi
+    cmp -s -- "$f" "$dest" && continue      # byte-identical: one file
+    # C2 (review round 1): differs from what's there — keep BOTH, but the
+    # suffixed slot may ALREADY be taken by an earlier, unrelated absorption
+    # (M1's forbidden silent winner, one filename later — measured: a
+    # pre-existing `same.claude-corp.md` was destroyed, unconditionally
+    # overwritten, by a same-named suffix from a genuinely different file).
+    # Never overwrite it blind: walk forward to the next free — or
+    # byte-identical — numbered slot instead.
+    n=1
+    sdest="$store/${base%.md}.$tag.md"
+    while [ -e "$sdest" ] && ! cmp -s -- "$f" "$sdest"; do
+      n=$((n+1))
+      sdest="$store/${base%.md}.$tag.$n.md"
+    done
+    [ -e "$sdest" ] && continue             # identical to what's already at that slot
+    # R19b applies here too, for the same reason: a partial write at a fresh
+    # numbered slot is still debris a future run would trip over.
+    cp -p -- "$f" "$sdest" \
+      || { echo "ccrc memory: could not copy $f to $sdest" >&2; rm -f -- "$sdest"; err=$((err+1)); }
+  done
+  printf '%s\n' "$left"
+  [ "$err" -eq 0 ]
+}
+
+_mem_apply() {
+  local h b slug d link store stamp bk src left plural
+  stamp=$(date -u +%Y%m%d-%H%M%S)
+  for h in $(_mem_homes); do
+    b=$(basename -- "$h")
+    for d in "$h"/projects/*/; do
+      [ -d "$d" ] || continue
+      slug=$(basename -- "${d%/}")
+      _mem_is_scratch "$slug" && continue
+      link="${d}memory"
+      # R10: `[ -e "$link" ]` alone DEREFERENCES, so it is false for a
+      # dangling symlink — exactly the pair `_mem_state` (Task 2, R12) calls
+      # `forked` because its target text is right but nothing is behind it.
+      # Skipping past that pair here would leave the census and `--apply`
+      # disagreeing about the same row, which is worse than either being
+      # wrong alone. `[ -L "$link" ]` catches it without dereferencing.
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      # ── R27: CONVERGED IS NOT NORMALISED, AND `--apply` OWES THE SECOND ───
+      # `_mem_state` calls a pair `converged` when the link RESOLVES to the
+      # store (R20) — which is the right answer for the census and for doctor,
+      # because the memory genuinely IS shared into the one store. But
+      # "resolves to" admits a shape the design forbids: a CHAIN. With
+      # `.claude/projects/<slug>/memory` -> the store and
+      # `.claude-corp/projects/<slug>/memory` -> `.claude`'s link, `-ef`
+      # follows the whole chain and answers true, so a bare
+      # `= converged && continue` here skipped that pair FOREVER — `--apply`
+      # never repaired it and `_check_memory` printed `PASS memory`.
+      #
+      # IT IS AN ORDERING A REAL BOX PLAUSIBLY PRODUCES, not a contrived one —
+      # under the box's actual `en_US.UTF-8` locale, `.claude` sorts before
+      # `.claude-corp`, so `.claude`'s own plain-directory pair converges
+      # FIRST and turns the very directory `.claude-corp` points at into a
+      # link to the store. The pair that was going to be repaired becomes a
+      # pair that reads converged, in the same run, by construction.
+      #
+      # CORRECTION (final whole-branch review): this is NOT "a prefix always
+      # sorts first" as a general rule, as an earlier version of this comment
+      # claimed. Bash sorts the expanded glob strings INCLUDING the trailing
+      # `/`, so under `LC_ALL=C` (what a stripped systemd environment, and
+      # this suite's own `doctorEnv`, actually set) `-` (0x2D) beats `/`
+      # (0x2F) and `.claude-corp/` sorts BEFORE `.claude/` — the opposite
+      # order, attributing a conflict copy to the wrong home. The chain
+      # shape this arm repairs is real prior art on this box regardless of
+      # which order manufactures it mid-run; only the false universal
+      # ordering claim is retracted here.
+      #
+      # WHY A CHAIN IS A DEFECT AND NOT A SPELLING. It makes one account's link
+      # LOAD-BEARING FOR ANOTHER'S — `.claude` becomes the master — which is the
+      # second defect the spec names in the prior art it replaces: retire, reset
+      # or lose `.claude` and every shared store on the box goes with it. That is
+      # the whole failure this branch exists to end, reintroduced one level up.
+      #
+      # NO `_mem_absorb` ON THIS PATH, DELIBERATELY — and the reason is NOT the
+      # one first written here, which was measured false and is recorded so
+      # nobody re-derives it. The claim was: absorbing a source that resolves to
+      # the store "would copy the store into itself and land every file a second
+      # time in conflict slots". It would not. `_mem_absorb` compares every
+      # candidate against what is already at `$dest` with `cmp -s` and treats
+      # byte-identical as one file, so a self-absorb dedupes everything and adds
+      # nothing. Measured directly: `_mem_absorb <store> <store> corp` over a
+      # store holding `a.md`, `scratch.txt` and `sub/` returned rc 0 and left the
+      # listing exactly `a.md scratch.txt sub`. Inserting the call on this path
+      # and re-running the suite is green (mutation M10).
+      #
+      # WHAT IS ACTUALLY WRONG WITH IT is that it computes a LIE and pays for
+      # the privilege. That same measured call returned `left=2` — it counted the
+      # store's OWN `scratch.txt` and `sub/` as entries "not migrated, left
+      # behind", which is exactly backwards: they are not stranded in a source,
+      # they are already in the destination. Today that number is invisible only
+      # because the NOTE that prints it is gated on `$bk`, which this arm never
+      # sets; the falsehood is latent, not absent, and the first change that
+      # prints `left` unconditionally would ship it. Against that it walks the
+      # whole store doing one `cmp` per file for a guaranteed no-op, and inherits
+      # `_mem_absorb`'s `return 1` on an unreadable source — a way for a re-point
+      # with nothing to do to fail.
+      #
+      # THE POSITIVE REASON stands on its own and is the one to keep: there is
+      # nothing to move. `_mem_state` has just said this link resolves to the
+      # store, so the bytes are already in the one place and the ONLY thing wrong
+      # with the pair is how the link spells its way there. A re-point is the
+      # whole repair. That asymmetry against the forked arm below is the point,
+      # not an omission.
+      #
+      # `ln -sfn`, NOT `ln -sf`: without `-n`, `ln` DEREFERENCES an existing
+      # symlink-to-a-directory and creates the new link INSIDE the store
+      # (`$store/<slug>`) instead of replacing the link — silently, exit 0. `-n`
+      # is what makes the replacement a replacement.
+      if [ "$(_mem_state "$h" "$slug")" = converged ]; then
+        # Already spelled canonically — the steady state, and the whole cost on
+        # a converged box. `readlink`'s RAW text is the right test here (not
+        # `-ef`, which is what got us into this): the question is not "does it
+        # resolve to the store" — `_mem_state` just said yes — but "does it NAME
+        # the store", and only raw text can tell a direct link from a chain or a
+        # relative spelling.
+        [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && continue
+        ln -sfn -- "$store" "$link" \
+          || { echo "ccrc memory: cannot normalise $link" >&2; return 1; }
+        echo "ccrc memory: normalised $b $slug (link now names the store directly)"
+        continue
+      fi
+      mkdir -p -- "$store" || { echo "ccrc memory: cannot create $store" >&2; return 1; }
+      # `bk` is reset every pair: a plain-directory pair sets it below, but a
+      # SYMLINK pair never does, and `local` lives for the whole function —
+      # without this reset a symlink pair processed right after a
+      # plain-directory one would print the PREVIOUS pair's backup path on
+      # its own "converged" line.
+      bk=""
+      if [ -L "$link" ]; then
+        # I4 (review round 1): resolve THROUGH the link to an absolute,
+        # canonical path before handing it to `_mem_absorb`. `readlink`'s raw
+        # text means something different resolved from the link's own
+        # directory than from this process's CWD — a RELATIVE target
+        # (measured: `../../../shared-memory`) silently absorbed nothing,
+        # while the run still reported `converged` and deleted the only link
+        # that named the real data. `readlink -f` is this file's own
+        # already-declared GNU/Linux assumption (ccd/ccrc:72).
+        #
+        # CORRECTION (final whole-branch review): the sentence that used to
+        # stand here claimed a target `readlink -f` cannot resolve "is not a
+        # failure … there is nothing to take" — measured false for the
+        # COMMON dangling shape. `readlink -f` SUCCEEDS on an ORDINARY
+        # dangling link (only the final path component is missing — its
+        # parent directory exists) and returns that non-empty path, so `$src`
+        # is non-empty, `_mem_absorb` hits its own `[ ! -d ]/[ ! -r ]` guard
+        # on a path that does not exist, and `_mem_apply` returns 1 —
+        # ABORTING every home not yet processed, silently as far as they are
+        # concerned (they are never named). The `else left=0` arm below is
+        # reached only in the narrower case where `readlink -f` cannot
+        # resolve AT ALL: a non-final path component missing (D-1352's own
+        # overloaded-empty warning), or a userland `readlink` with no `-f`
+        # support. Do not read the branch below as "the" dangling-link
+        # outcome — it is the one dangling link does NOT abort the run.
+        src=$(readlink -f -- "$link" 2>/dev/null)
+        if [ -n "$src" ]; then
+          left=$(_mem_absorb "$src" "$store" "$b") \
+            || { echo "ccrc memory: could not absorb $src into $store" >&2; return 1; }
+        else
+          left=0
+        fi
+        # A symlink pair: absorb whatever is behind the link, then re-point.
+        # CORRECTION (final whole-branch review): the target directory is
+        # left standing wherever it was — it need NOT belong to another
+        # agent home at all (the R18a/R18b tests below deliberately seed it
+        # as a bare foreign directory, `home/foreign-memory`, that owns no
+        # pair of its own); the point is only that this run does not own it,
+        # so it is never moved, only named in the NOTE below when something
+        # was left there uncounted. (This arm is also how a DANGLING
+        # correct-looking link — R12 — gets repaired: its target text is the
+        # store we just created above, now an empty directory, so absorbing
+        # it moves nothing before the link is dropped and relaid — and once
+        # that target IS the store itself, `_mem_absorb`'s own `-ef`
+        # short-circuit reports `left=0` rather than counting the store's
+        # own contents as left behind.)
+        rm -f -- "$link"
+      else
+        # C1 (review round 1): if absorb fails, STOP — do not back the source
+        # away. The `||` short-circuits before the `mv` below ever runs, so a
+        # partially-copied union leaves the original directory exactly where
+        # it was, not renamed into a backup the operator has to go find.
+        left=$(_mem_absorb "$link" "$store" "$b") \
+          || { echo "ccrc memory: could not absorb $link into $store" >&2; return 1; }
+        bk="${d}memory.pre-ccrc-$stamp"
+        mv -- "$link" "$bk" || { echo "ccrc memory: cannot back up $link" >&2; return 1; }
+      fi
+      # `ln -sfn`, NOT `ln -s`: without `-n`, a concurrent writer (another
+      # `--apply`, or the session hook) that wins a race and lays this exact
+      # link down BETWEEN this pair's `rm -f`/`mv` above and this line makes
+      # a bare `ln -s` DEREFERENCE the symlink-to-a-directory it finds and
+      # create `$store/<slug>` — a symlink INSIDE the shared store pointing
+      # at itself — silently, exit 0 (the same defect this file's own R27
+      # comment names for the normalise arm, at the sibling call above).
+      # `-f` makes a race that lands the identical target idempotent instead
+      # of a loop.
+      ln -sfn -- "$store" "$link" || { echo "ccrc memory: cannot link $link" >&2; return 1; }
+      # R30 sibling: `_mem_rebuild_index`'s own failure already carries its
+      # own diagnostic (permission denied, MEMORY.md is a directory, …) — do
+      # not discard it with `|| true` and go on to print `converged` over a
+      # store whose index just failed to write. Refuse the pair, the same as
+      # every absorb/link failure above.
+      local dropped
+      dropped=$(_mem_rebuild_index "$store") || return 1
+      # I3 / final whole-branch review: tell the operator what didn't come
+      # across and where it still is. The plain-directory arm names a
+      # backup path (`$bk`); the symlink arm never moves its source at all,
+      # so it names the source's own resolved location instead (`$src`) —
+      # whichever arm ran, `left>0` always has a location to point at.
+      local left_at="$bk"
+      [ -n "$left_at" ] || left_at="$src"
+      if [ "$left" -gt 0 ] && [ -n "$left_at" ]; then
+        plural=entries; [ "$left" -eq 1 ] && plural=entry
+        echo "ccrc memory: NOTE: $left $plural not migrated, left in $left_at"
+      fi
+      # R30: a memory file with no `name:` frontmatter is on disk, in the
+      # store, but absent from MEMORY.md — the artefact actually loaded into
+      # context. Report the count; inventing a name for it would be the same
+      # class of silent decision this branch already forbids for a conflict
+      # winner (no silent winner; no silent name either).
+      if [ "$dropped" -gt 0 ]; then
+        plural=files; [ "$dropped" -eq 1 ] && plural=file
+        echo "ccrc memory: NOTE: $dropped $plural not indexed in MEMORY.md (no name: frontmatter), still in $store"
+      fi
+      echo "ccrc memory: converged $b $slug${bk:+ (backup: $bk)}"
+    done
+  done
+  return 0
+}
+
 # cmd_adopt — rediscover this box's accounts from disk. The work is entirely
 # `ccd/ccrc-adopt`'s, and this verb is how it becomes reachable: adopt is a
 # tool that until now was installed by nothing, reached the fleet host only
@@ -3813,7 +4486,14 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
        ("  probe: \(.registry.probe)"),
        (["haiku","sonnet","opus","fable"]
          | map("  \(.)\t\($reg.classes[.] // "—")") | .[]),
-       ("  subagents run as \(.registry.subagent) (\($reg.classes[.registry.subagent] // "—"))")
+       (if .renderRefusal == null then
+          "  subagents run as \(.registry.subagent) (\($reg.classes[.registry.subagent] // "—"))"
+        else
+          "  subagents run as \(.registry.subagent) — NOT in force; see below"
+        end),
+       (if .renderRefusal != null then
+          "  the env block cannot be materialised: \(.renderRefusal)"
+        else empty end)
      end),
     (if .catalogue == null then "  catalogue: never probed — run: ccrc models refresh \(.id)"
      else "  catalogue: \(.catalogue.count) models\(if .catalogue.stale then " (STALE)" else "" end)" end),
@@ -3838,7 +4518,7 @@ _models_class_ok() {   # <class>
   local c
   for c in $MODELS_CLASSES; do [ "$c" = "$1" ] && return 0; done
   [ "$1" != "subagent" ] \
-    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which of those four subagents run as — run 'ccrc models <id> set-subagent <class>' to change it."
+    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which class subagents run as — ${MODELS_SUBAGENT_CLASSES// / or }; run 'ccrc models <id> set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>' to change it."
   _models_refuse unknown-class 2 "\"$1\" is not a class: the four are ${MODELS_CLASSES// /, }."
 }
 
@@ -4001,7 +4681,7 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
     set-subagent)
       local cls="${1:-}"
       [ -n "$cls" ] \
-        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_CLASSES// /|}>"
+        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>"
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-subagent takes one class, and got \"$1\""
       _models_class_ok "$cls"
@@ -5400,10 +6080,11 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
 #     not a gap: installing a timer that can only ever be a no-op would put a
 #     job in the operator's `launchctl list` that lies about what it does.
 #
-#   • the two limits.conf drop-ins (MemoryHigh/MemoryMax on the session unit
-#     and on app-claude\x2dsession.slice) — launchd has no memory ceiling of
-#     any kind. `ProcessType=Background` in the plists below is the nearest
-#     thing macOS offers and it governs CPU/IO scheduling, not memory. A box
+#   • the two limits.conf drop-ins (MemoryHigh/MemoryMax on the session unit,
+#     aggregate MemoryMax on app-claude\x2dsession.slice) — launchd has no
+#     memory ceiling of any kind. `ProcessType=Background` in the plists below
+#     is the nearest thing macOS offers and it governs CPU/IO scheduling, not
+#     memory. A box
 #     running many sessions has no aggregate cap on this platform, and
 #     `ccrc doctor` says so rather than reporting a limit nobody enforces.
 #
@@ -6530,6 +7211,16 @@ _upd_backup() {
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
+  # R34 (final whole-branch review): since `ccrc memory --apply`,
+  # `~/.ccrc/memory` is the SOLE live copy of every project's durable
+  # memory — not throwaway config — so it belongs in the one backup step
+  # every operator is told to run before anything destructive. `cp -a`
+  # copies a directory recursively; absence (never migrated on this box) is
+  # `_upd_backup_copy`'s ordinary no-op, not a failure. This is a
+  # convenience snapshot, not a substitute for `_uninst_purge`'s own R34
+  # fix: this directory sits under `$BOX_BACKUP_ROOT`, which `--purge`
+  # removes regardless of `--purge-memory`, same as every other entry here.
+  _upd_backup_copy "$HOME/.ccrc/memory"            memory
   # THE JOB FILES, UNDER THE NAMES THIS BOX ACTUALLY HAS THEM. On Linux that
   # is the unit list plus the session TEMPLATE; on macOS there is no template
   # (launchd has none — `ccd` mints a plist per session) and the names are
@@ -6903,19 +7594,38 @@ cmd_logs() {
 #   REFUSES  while live sessions exist (counted the way ccd counts them,
 #            `_box_sessions`) unless --force: uninstalling under a live
 #            fleet orphans every supervisor mid-carry.
-# `--purge` additionally removes `~/.ccrc` and ~/ccrc-backups — NEVER
-# worktrees, never tmux state (no tmux argv exists anywhere in this verb).
+# `--purge` additionally removes `~/.ccrc`'s CONFIG (ccrc.env, accounts.json,
+# build.json, …) and ~/ccrc-backups — NEVER worktrees, never tmux state (no
+# tmux argv exists anywhere in this verb).
+#
+# `~/.ccrc/memory` IS THE ONE EXCEPTION, and it is deliberate (R34, final
+# whole-branch review). Since `ccrc memory --apply` every project's durable
+# memory lives ONLY at `~/.ccrc/memory/<slug>` — every agent home's own copy
+# is a symlink into it, and anything a session writes afterward exists
+# nowhere else. `~/.ccrc` used to be pure disposable configuration; it is
+# not any more. `--purge` alone therefore PRESERVES `~/.ccrc/memory` even
+# though it removes the rest of `~/.ccrc` — the documented-safe sequence
+# `ccrc backup && ccrc uninstall --purge` must not silently destroy a
+# session's prose. An operator who really does want the memory store gone
+# too says so with the second, explicit flag: `--purge-memory` (refused on
+# its own — it means nothing without `--purge`).
 cmd_uninstall() {
-  local force=0 purge=0
+  local force=0 purge=0 purge_memory=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1 ;;
       --purge) purge=1 ;;
+      --purge-memory) purge_memory=1 ;;
       -h|--help) usage; exit 0 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
   done
+  if [ "$purge_memory" -eq 1 ] && [ "$purge" -eq 0 ]; then
+    echo "$PROG: --purge-memory needs --purge (it extends what --purge removes; on its own there is nothing to extend)" >&2
+    usage >&2
+    exit 2
+  fi
   # BY NAME, before anything is removed — the file's own probe discipline.
   # node is the marker verifier (shared/mark.mjs) and jq is the settings.json
   # surgeon (install-session-hooks.sh); a removal pass that discovered either
@@ -6944,11 +7654,15 @@ cmd_uninstall() {
   _uninst_graphify_skills
   _uninst_tree_bins
   _uninst_keep_asides
-  [ "$purge" -eq 1 ] && _uninst_purge
+  [ "$purge" -eq 1 ] && _uninst_purge "$purge_memory"
   if [ "$purge" -eq 1 ]; then
-    echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc and ~/ccrc-backups are gone (--purge)"
+    if [ "$purge_memory" -eq 1 ]; then
+      echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc (config AND every project's memory) and ~/ccrc-backups are gone (--purge --purge-memory)"
+    else
+      echo "uninstall: done — this box is off ccrc. Worktrees and the session registry rows were preserved; ~/.ccrc's config and ~/ccrc-backups are gone (--purge), but ~/.ccrc/memory (every project's durable memory) was PRESERVED — pass --purge-memory too to remove it as well"
+    fi
   else
-    echo "uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved"
+    echo "uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity, and every project's memory), the session registry rows, worktrees and ~/ccrc-backups were all preserved"
   fi
 }
 
@@ -7277,10 +7991,62 @@ _uninst_keep_asides() {
 # `--purge` only. NEVER worktrees (~/worktrees is sessions' WORK — ccd's
 # WORKTREES_ROOT, human-gated even inside ccd itself) and never tmux state:
 # no tmux argv exists anywhere in this verb, purge included.
+#
+# R34 (final whole-branch review, Critical): `~/.ccrc/memory` is NOT config
+# — since `ccrc memory --apply` it is the SOLE live copy of every project's
+# durable memory (every agent home's own copy is a symlink into it). A bare
+# `rm -rf -- "$HOME/.ccrc"` destroys it wholesale with no exception, no
+# prompt and no mention, and the documented-safe sequence `ccrc backup &&
+# ccrc uninstall --purge` cannot save it either (`_upd_backup`, what `ccrc
+# backup` runs, never copied `memory` before this fix). So `$1` (default 0,
+# `cmd_uninstall`'s `purge_memory`) gates whether memory is destroyed too:
+# 0 (bare `--purge`) removes everything ELSE under `~/.ccrc` and leaves
+# `~/.ccrc/memory` — and so `~/.ccrc` itself — standing; 1 (`--purge
+# --purge-memory`) removes the lot, same as the old unconditional behaviour.
 _uninst_purge() {
-  rm -rf -- "$HOME/.ccrc" "$BOX_BACKUP_ROOT" \
-    || _ccrc_die "purging ~/.ccrc and $BOX_BACKUP_ROOT failed"
-  echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+  local purge_memory="${1:-0}"
+  if [ "$purge_memory" -eq 1 ]; then
+    rm -rf -- "$HOME/.ccrc" "$BOX_BACKUP_ROOT" \
+      || _ccrc_die "purging ~/.ccrc (including its memory store) and $BOX_BACKUP_ROOT failed"
+    echo "uninstall: purge: ~/.ccrc (config AND its memory store) and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+    return 0
+  fi
+  if [ -d "$HOME/.ccrc" ]; then
+    local e had_nullglob=0 had_dotglob=0
+    shopt -q nullglob && had_nullglob=1
+    shopt -q dotglob && had_dotglob=1
+    # FIX (re-review): `nullglob` alone leaves a DOTFILE under `~/.ccrc`
+    # unmatched by `*` — nothing in this tree writes one, but an operator or
+    # the OS can (a `.DS_Store` on the macOS lane, an editor swap file, a
+    # `.bak`) — so it survived this loop, the `rmdir` below then failed on
+    # ENOTEMPTY, and the close line still unconditionally claimed "~/.ccrc
+    # … removed" regardless. `dotglob` closes that hole for the common case;
+    # the message below now checks what actually happened instead of
+    # asserting it, for whatever rare case still leaves something behind.
+    shopt -s nullglob dotglob
+    for e in "$HOME/.ccrc"/*; do
+      case "$(basename -- "$e")" in memory) continue ;; esac
+      rm -rf -- "$e" || _ccrc_die "purging $e failed"
+    done
+    [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+    [ "$had_dotglob" -eq 1 ] || shopt -u dotglob
+    # Nothing was ever migrated: `~/.ccrc/memory` never existed, so the loop
+    # above emptied `~/.ccrc` completely — remove the now-empty directory
+    # itself too, so a box that never ran `ccrc memory --apply` still sees
+    # bare `--purge` remove `~/.ccrc` WHOLE, exactly as it always did.
+    [ -d "$HOME/.ccrc/memory" ] || rmdir -- "$HOME/.ccrc" 2>/dev/null || true
+  fi
+  rm -rf -- "$BOX_BACKUP_ROOT" || _ccrc_die "purging $BOX_BACKUP_ROOT failed"
+  if [ -d "$HOME/.ccrc/memory" ]; then
+    echo "uninstall: purge: ~/.ccrc's config and ~/ccrc-backups removed; ~/.ccrc/memory (every project's durable memory — the sole live copy since 'ccrc memory --apply') was PRESERVED. Pass --purge-memory too to remove it as well"
+  elif [ -d "$HOME/.ccrc" ]; then
+    # The `rmdir` above did not empty it out — something this loop does not
+    # own (or does not know to remove) is still inside. Say so rather than
+    # claiming a removal that did not happen (the defect this fix closes).
+    echo "uninstall: purge: ~/.ccrc's config was purged and ~/ccrc-backups removed, but ~/.ccrc itself could not be removed — it is not empty; inspect it by hand"
+  else
+    echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
+  fi
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
@@ -7322,6 +8088,7 @@ case "$VERB" in
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
+  memory)  cmd_memory "$@" ;;
   models)  cmd_models "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
