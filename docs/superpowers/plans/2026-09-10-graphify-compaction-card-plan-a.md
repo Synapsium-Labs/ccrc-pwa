@@ -1952,6 +1952,17 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(true);
   });
 
+  it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('_hook_timeout() {');
+    expect(src).toContain('for bin in timeout gtimeout; do');
+    expect(src).toContain('command -v "$bin" >/dev/null 2>&1');
+    expect(src).toContain('"$bin" "$@"');
+    expect(src).toContain('return 127');
+    // Arrange a minimal PATH without timeout and a gtimeout argv stub; the
+    // stub receives `8 node ...` and the helper creates the card.
+  });
+
   it('with no timeout or gtimeout on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
     // `_hook_timeout` tries both supported deadline names. When neither exists,
     // it returns 127 and the swallowed helper call preserves the hook-owned set;
@@ -1987,7 +1998,25 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
 Run: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t "PreCompact and the helper"`
 Expected: FAIL — no card is ever written (the helper is never called), the header test fails.
 
-- [ ] **Step 3: The helper call**
+- [ ] **Step 3: The portable deadline resolver and helper call**
+
+At the utility layer, after `_hook_epoch_ms`, add the hook-local resolver. The
+hook is installed independently of `ccd`, so it cannot source the platform
+block; it tries GNU `timeout`, then macOS Homebrew `gtimeout`, and only returns
+127 after both are absent:
+
+```bash
+_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
+}
+```
 
 In `_hook_compact_pre`, replace the final two lines
 
@@ -2079,7 +2108,9 @@ Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TI
 1. Delete the `_hook_timeout "$COMPACT_HELPER_TIMEOUT"` prefix (run `node` bare) → `the helper runs through _hook_timeout` goes red (no argv file).
 2. Replace `--transcript "$CS_TRANSCRIPT"` with `--transcript "$tp"` → `a subagent's card is mined from ITS transcript` goes red (fleet.ts on the card).
 3. Delete `[ "$rc" -eq 0 ] && _hook_gate_tree || return 0` → `a graph further behind HEAD` goes red (a card appears).
-4. Delete `[ -f "$COMPACT_HELPER" ] || return 0` → no test reds (node fails on the missing file with the same outcome); the line is a short-circuit that saves a fork on an undeployed box, recorded here as unpinned by design.
+4. Replace `for bin in timeout gtimeout` with `for bin in timeout` → `resolves gtimeout` goes red.
+5. Replace `_hook_timeout`'s final `return 127` with `shift; "$@"` → `with no timeout or gtimeout on PATH` goes red because node runs bare and rewrites the set.
+6. Delete `[ -f "$COMPACT_HELPER" ] || return 0` → no test reds (node fails on the missing file with the same outcome); the line is a short-circuit that saves a fork on an undeployed box, recorded here as unpinned by design.
 
 - [ ] **Step 8: Run the whole file, then commit**
 
