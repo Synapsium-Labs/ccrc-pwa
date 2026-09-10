@@ -18,7 +18,7 @@ const ev = (over: Partial<MirroredLifecycleEvent> = {}): MirroredLifecycleEvent 
     cg: 'pane', cgraw: '0::/app.slice/tmux-spawn-x.scope', pid: 100, ppid: 1,
     pane: 'cc-demo-quiet-basin', paneWhy: null, tty: true, ssh: null,
   },
-  dec: { surface: 'cli', actor: 'the operator', reason: 'merged:#42' },
+  dec: { surface: 'cli', actor: 'the operator', reason: 'merged:#42', crosspool: null },
   meas: null, raw: '{}', gen: '1755000000000000000', ingestedAt: T0 + 500,
   ...over,
 });
@@ -57,7 +57,7 @@ describe('HistoryTab', () => {
     stub({
       events: [ev({
         obs: { cg: 'supervisor', cgraw: '0::/app.slice/claude-session@x.service', pid: 1, ppid: 1, pane: null, paneWhy: null, tty: false, ssh: null },
-        dec: { surface: 'pwa', actor: null, reason: null },
+        dec: { surface: 'pwa', actor: null, reason: null, crosspool: null },
       })],
       gaps: [],
     });

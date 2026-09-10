@@ -2,7 +2,9 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import type { FleetWatcher } from '../watch.js';
+import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -24,11 +26,11 @@ import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
-  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
+  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
-  type PeerSummary, type RunState, type RunSummary,
+  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
+  type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
 /**
@@ -268,6 +270,34 @@ export function registerCoordRoutes(
    * the box token rather than on nothing.
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
+  /**
+   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * which is serialized per-session through `askDeps.queue` — the SAME
+   * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
+   * threaded in here rather than rebuilt, so a parent's pre-emption and a
+   * child's own in-flight prompt/dialog/ask answer can never race the same
+   * tmux pane through two independent locks. Built in `server.ts`, ahead of
+   * this call, for the identical reason.
+   */
+  askDeps: AskDeps,
+  /**
+   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
+   * watcher's in-memory hold and fires the deferred push immediately —
+   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
+   * watcher-private state (that method's own docstring) and this file has no
+   * business reaching into its shape. Threaded in as its own parameter,
+   * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
+   * deliberately does not carry the watcher (`buildServer`'s own third
+   * argument, not a `Deps` field — see that function's signature), so a
+   * field added there would be a second place this wiring could come from.
+   * Optional and defaulted to nothing so every existing caller (`buildServer`
+   * with no watcher, or a test that builds these routes on a coord-only
+   * server) is unchanged: a decline still CASes the store row and answers
+   * `{ok:true}`, it just has no in-memory hold to drop early — `sweepAsks`
+   * would have released it anyway once `held.until` lapsed, if this process
+   * had ever held it in memory in the first place.
+   */
+  watcher?: FleetWatcher,
 ): void {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
@@ -327,14 +357,24 @@ export function registerCoordRoutes(
    * nothing, so there is no delivery lane needing a recorded rejection to
    * explain itself — the claims table itself is the record of every
    * acquisition that happened.
+   *
+   * `uuidField` (Task 9 fix round 1) names the body field THIS CALLER's
+   * request actually carries — `'byUuid'` for the claim lanes, `'fromUuid'`
+   * for `POST /api/asks/:id/answer` — so the `stale-uuid` detail can tell a
+   * caller which of ITS OWN fields to re-read. Before this, the prose was a
+   * literal `'byUuid does not match...'` no matter who called it: an ask
+   * caller, whose body has no `byUuid` field at all, was told to fix a field
+   * it never sent. The wording is ALSO caller-agnostic now ("sender", not
+   * "claimant") — this gate has two callers with two different verbs for
+   * what they are doing, and "claimant" is only true of one of them.
    */
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string,
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
   ): Promise<boolean> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
       reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: 'the registry directory could not be listed — transient, not a fact about the claimant' });
+        detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
     const registry = await readRegistry(deps.io, deps.cfg);
@@ -342,7 +382,7 @@ export function registerCoordRoutes(
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
         reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the claimant` });
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` });
         return false;
       }
       reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
@@ -356,7 +396,7 @@ export function registerCoordRoutes(
     }
     if (identity.uuid !== whoUuid) {
       reply.code(403).send({ ok: false, error: 'stale-uuid',
-        detail: 'byUuid does not match the registry — stale claimant; re-read your own .uuid' });
+        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` });
       return false;
     }
     return true;
@@ -1759,7 +1799,7 @@ export function registerCoordRoutes(
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs);
+      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord);
 
     let project: string;
     let selfId: string | null = null;
@@ -1908,7 +1948,7 @@ export function registerCoordRoutes(
         detail: `intent exceeds ${CLAIM_INTENT_MAX_BYTES} bytes — it renders on PeerSummary, it is not a spec` });
     }
 
-    if (!(await requireAttribution(reply, byId, byUuid))) return;
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
     if (runId !== null && coord.run(runId) === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
@@ -1940,7 +1980,8 @@ export function registerCoordRoutes(
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
         const names = await deps.io.readdir(deps.cfg.registryDir);
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux);
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
@@ -1996,7 +2037,7 @@ export function registerCoordRoutes(
     const id = Number(idParam);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    if (!(await requireAttribution(reply, body.byId, body.byUuid))) return;
+    if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
     // terminal row falls through to the store, whose answer is the honest
     // `claim-terminal`/`unknown-claim` — `not-owner` is only ever said about
@@ -2260,5 +2301,380 @@ export function registerCoordRoutes(
       allocations: rows.map((a) => ({ ...a,
         stale: a.state === 'allocated' && a.allocatedAt <= now - LEDGER_STALE_MS })),
     });
+  });
+
+  /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
+
+  // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
+  // CAS is checked against) is `registry.ts`'s export now, fix round 1
+  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
+  // both close over the SAME `Deps` object (this file's own `deps` param IS
+  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
+  // security-relevant fail-shut guard had no business existing as two
+  // copies that could silently drift. See `registry.ts`'s own doc comment
+  // on it for the full reasoning.
+
+  /**
+   * `POST /api/asks/:id/answer` — the parent presses the digit into its
+   * child's live menu. The most safety-sensitive route in the lane: unlike
+   * every other coordination write, this one ends in a KEYSTROKE into
+   * another session's pane, so every gate below runs BEFORE `answerAsk` is
+   * ever called, in the order the risk falls.
+   *
+   * Box token (`requireMailToken`) proves only "a process on this box" — one
+   * shared secret, identical for every session on the fleet host. It can
+   * never prove WHICH session is calling, so `requireAttribution` layers the
+   * registry pair on top, exactly as the claims lanes and the mail ingress
+   * already do. Then, and only then, `ask.parentId === fromId`: only this
+   * child's OWN derived parent may pre-empt its question — attribution alone
+   * would let any live session on the box answer any other session's ask.
+   *
+   * The CAS precedes the keystroke: `takeAskForAnswer` is the row acting as
+   * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
+   * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
+   * ever touches the pane. A refused press (`answerAsk` returning
+   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
+   * here means no digit was pressed and the question is still live and
+   * still pre-emptible — not because every one of `answerAsk`'s twelve
+   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
+   * precedes the loop, but because a row here only ever exists for a
+   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
+   * eligibility gate `hold` checks before minting one — D-2173), which
+   * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
+   * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
+   * is `'held'`, and this row sits in `'answering'`, so it cannot even
+   * reach it (it would silently strand the row forever, `changes: 0` and
+   * all). `untakeAsk` is the exact CAS built for this rollback.
+   */
+  app.post('/api/asks/:id/answer', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid, optionIndexes } = body;
+    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
+    // eligibility only single-select asks are ever held, so this array
+    // carries one element today — and that is the point. A singular field is
+    // what re-opens the multi-select commit hazard, silently, on the day
+    // someone widens eligibility. The wire shape must not be the thing to
+    // remember.
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
+        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as the mail ingress and the claims lanes do.
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+
+    // The same `Number.isInteger` shape guard every other `:id` route in
+    // this file uses (dispatch/close/advance/claims/ledger above) — a
+    // non-numeric id must 400 before it ever reaches `node:sqlite`, not
+    // throw a 500 out of a bound `NaN`.
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const ask = coord.askById(id);
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+
+    // D-2170: re-read the child's hookstate and prove the menu on screen is
+    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
+    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
+    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
+    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
+    // value can never equal a stored `askAt` — so handing it to the CAS
+    // below would answer `ask-moved`, a true statement about the CAS and a
+    // false one about the world. The two are not interchangeable to the
+    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
+    // "the child repainted — re-read the ask and answer the current one",
+    // and a coordinator told that when the truth is "this box could not read
+    // the child" re-reads, finds the row still `held`, and loops. Same
+    // fail-shut direction, before any keystroke; only the sentence changes.
+    if (fresh === UNMEASURED_ASK_AT) {
+      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
+        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
+    }
+    const taken = coord.takeAskForAnswer(id, fresh);
+    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
+
+    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
+    if (!res.ok) {
+      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
+      // route's own docstring. `answerAsk` never pressed a digit on this
+      // path, so the row goes back to `'held'` rather than being abandoned
+      // in `'answering'` with no exit.
+      if (!coord.untakeAsk(id)) {
+        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
+        // `'answering'`, and THIS request is the one that put the row there
+        // (`takeAskForAnswer` above, this same request). Nothing else should
+        // have moved it in between — `console.warn` on the surprise, the
+        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
+        // calls (e.g. its "unexpectedly still 'held' after a failed
+        // release" warning), rather than a silent discard.
+        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
+          "the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return reply.code(409).send(res);
+    }
+    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
+    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
+    // question; this one is the answer, naming the parent and what it chose
+    // — the operator's only durable trace of a decision made in their name
+    // over a question that never reached their phone. Ordered first so that
+    // if `settleAsk` below then throws, at least ONE durable trace of the
+    // answer survives — the feed record names who chose what even when the
+    // `asks` row's own `answeredBy`/`answer` never gets written. Same
+    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
+    // `coord.recordFeedEvent` are independently optional (a box with neither
+    // configured still answers the request), `recordFeedEvent` throws
+    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
+    // turn a successful press into a 500, and the flush is unconditional in
+    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
+    // `record()` mints the seq before this route can fail, so its
+    // persistence must follow regardless.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: ask.childId,
+          title: 'question answered',
+          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+                `${ask.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
+    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
+    // must never turn a successful press into a 500. The row is held
+    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
+    // own docstring is why no caller needs to distinguish "settled" from
+    // "lost the row between take and settle" — that race cannot happen
+    // here), so an unguarded throw would be a genuine infra fault (disk,
+    // `node:sqlite`), not a lost race — but left unguarded it would strand
+    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
+    // 500 a press that actually succeeded, and the parent's natural retry
+    // would get `not-held` — a LIE about who holds it, since the retrying
+    // caller IS the one who holds it. The digit is pressed either way, so
+    // this always returns `{ok:true}`.
+    try {
+      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
+        "'answering'; the feed record above (if it landed) is the surviving audit trace");
+    }
+
+    return { ok: true };
+  });
+
+  /**
+   * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
+   * child's question. This is the verb that makes the grace window a
+   * CEILING rather than a flat tax on every ask the parent cannot answer
+   * (Task 10, this lane's own reason for existing): a decline fires the
+   * operator's push NOW instead of making them wait out the rest of
+   * `ASK_GRACE_MS` for a question nobody upstream is going to rule on.
+   *
+   * Unlike `/answer` above, this route never touches the pane — no
+   * `answerAsk`, no CAS-then-press-then-rollback dance — so its gate ladder
+   * is the plain box-token + attribution + ownership shape the claims lanes
+   * already use, run in the order the risk falls: box token, then body
+   * shape, then attribution, then `unknown-ask`, then
+   * `ask.parentId === fromId`. Only this child's derived parent may decline
+   * its question — attribution alone would let any live session on the box
+   * decline any other session's ask, exactly the reason `/answer` layers the
+   * same check on top of the box token.
+   *
+   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
+   * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
+   * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
+   * `'stale'` refuses `not-held` rather than pretending to succeed — a
+   * decline that finds nothing held must not lie about what it did.
+   *
+   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
+   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
+   * `heldAsks`): the map is watcher-private state, so this route names the
+   * child id and nothing about the map's shape. It runs AFTER the CAS
+   * succeeds, never before — the store row is the fact, the in-memory hold
+   * is only ever a cache of the push `sweepAsks` would otherwise send later.
+   * A `watcher === undefined` server (every non-test `buildServer` caller
+   * always supplies one today, `src/index.ts`'s only construction) still
+   * releases the row and answers `{ok:true}` — that part is genuinely true —
+   * but has no hold to drop and no snapshotted push to fire, so it warns
+   * instead of silently dropping the operator's notification on the floor
+   * (fix round 1, item 1).
+   */
+  app.post('/api/asks/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    // Literally inline, not through a wrapper: the census derives lanes by
+    // regex-slicing this file between route registrations, so a gate call it
+    // cannot see is a lane it will not count.
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/release')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = body;
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as `/answer` and the mail ingress do.
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+
+    // The same `Number.isInteger` shape guard every other `:id` route in
+    // this file uses — a non-numeric id must 400 before it ever reaches
+    // `node:sqlite`, not throw a 500 out of a bound `NaN`.
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const ask = coord.askById(id);
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may decline its question' });
+    }
+
+    // A decline is not a failure — it is the parent saying "the operator
+    // should see this now", and it is what makes the grace window a CEILING
+    // rather than a tax on every ask the parent cannot rule on.
+    if (!coord.releaseAsk(id, Date.now())) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
+    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
+    // of `buildServer` today (`src/index.ts` always builds one) — but the
+    // row above has ALREADY moved `'held' -> 'released'` by the time this
+    // line runs, and the response below is unconditionally `{ok:true}`.
+    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
+    // push to fire, so the decline is real (the row genuinely released) but
+    // the operator's buzz — the entire reason this lane exists — silently
+    // never happens. Warning, not refusing: refusing here would tell the
+    // parent its decline failed when the store row says otherwise, which is
+    // a worse lie than a log line nobody reads until they go looking.
+    if (watcher === undefined) {
+      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
+        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
+        'push was never fired');
+    } else {
+      watcher.releaseHeldAsk(ask.childId);
+    }
+    return { ok: true };
+  });
+
+  /**
+   * `GET /api/asks?parent=<id>&state=<AskState>` — Task 11, the READ side of
+   * the ask pre-emption lane. Two callers, two credentials: a fleet PARENT
+   * reading its own children's open asks (so it can see whether two children
+   * are asking contradictory things, before either grace window lapses), and
+   * the PWA reading the same record for the operator's chip (Task 19).
+   *
+   * D-149'S SHAPE, COPIED VERBATIM FROM `GET /api/claims` (five shipped GETs
+   * already do this; do not invent a third shape): a live session cookie OR
+   * the box token, never neither, and AUTHENTICATE BEFORE ANSWERING ANYTHING
+   * INCLUDING THE 501 below — `GET /api/runs`'s own docstring is the reason
+   * this order matters at all: a bare `501` would tell an anonymous tailnet
+   * caller whether this box runs coordination, which no other route leaks.
+   *
+   * CROSS-PARENT SCOPING — the crux of this task, and the one respect in
+   * which this route is NOT a copy of `GET /api/claims`. That route's data
+   * (project paths) is fleet-wide and meant to be read across sessions; an
+   * ask's `question` is not — CLAUDE.md's own framing is "whether two
+   * children are asking contradictory things", which presumes the reader is
+   * one specific parent, not every session on the box. The box token proves
+   * only "a process on this box" — ONE SHARED SECRET, identical for every
+   * session on the fleet host — so a bare token would let ANY session read
+   * ANY OTHER parent's open asks by changing `?parent=`. The PWA/cookie
+   * caller IS the operator and reads across parents by design (unchanged);
+   * a box-token caller may not, so it must additionally ATTRIBUTE itself as
+   * the very parent it names — `?fromUuid=` standing in for the mutation
+   * routes' body field of the same name, checked against `?parent=` through
+   * the SAME registry gate `POST /api/claims` and both ask-mutation routes
+   * already run (`requireAttribution`; no separate `fromId` — the `parent`
+   * being asked about IS the identity under proof). A missing or mismatched
+   * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
+   *
+   * THIS IS FRESHNESS, NOT FORGERY-PROOFNESS — `requireAttribution`'s own
+   * honesty, `POST /api/mail`'s docstring above (:427-433), applies unchanged
+   * here: every session on the box can read every `.uuid` file under the one
+   * UNIX user this fleet runs as, including the parent's, so a determined
+   * caller can satisfy this check for a parent it is not. What it closes is
+   * an ACCIDENTAL cross-parent read — the box token alone, with no `parent`
+   * check at all — not a deliberate one; a session willing to go read its
+   * neighbour's `.uuid` file already has read access to that neighbour's
+   * live pane by the same fact (single UNIX user, no caller auth, `CLAUDE.md`).
+   *
+   * This scoping sits ONLY inside the box-token branch of the `authEnabled`
+   * block, deliberately: on a DARK box (`CCRC_AUTH` off, the shipped
+   * default) this route stays unauthenticated end to end, byte-identical to
+   * every other dual-credential GET's DARK behaviour
+   * (`peers-route.test.ts`'s own DARK case) — a box with no session gate has
+   * no notion of "a box-token caller" distinct from "anyone touching this
+   * box" left to scope (CLAUDE.md: "Identity on the fleet is attribution,
+   * not authentication: single UNIX user, ccd has no caller auth").
+   */
+  app.get('/api/asks', async (req, reply) => {
+    let viaBoxToken = false;
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/asks takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); a fleet parent reads its own children's asks cookieless`,
+          });
+        }
+        viaBoxToken = true;
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const q = req.query as { parent?: unknown; state?: unknown; fromUuid?: unknown };
+    if (typeof q.parent !== 'string' || q.parent.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: '?parent= is required' });
+    }
+    const parent = q.parent.trim();
+    let state: AskState | undefined;
+    if (q.state !== undefined) {
+      if (!isAskState(q.state)) {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: '?state=, when given, must be a valid AskState' });
+      }
+      state = q.state;
+    }
+
+    if (viaBoxToken) {
+      // The box token alone cannot prove WHICH parent is asking — only that
+      // some process on this box did. `fromUuid` is the registry proof, the
+      // same shape `/answer` and `/release` already require of their
+      // callers, checked against `parent` rather than a separate `fromId`.
+      if (typeof q.fromUuid !== 'string') {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: 'a box-token caller must also prove its identity — pass ?fromUuid=' });
+      }
+      if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
+    }
+
+    return reply.code(200).send({ ok: true, asks: coord.asksForParent(parent, state) });
   });
 }

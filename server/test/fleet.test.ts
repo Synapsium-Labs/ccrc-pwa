@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -7,8 +7,11 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
-import type { PrState } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { ASK_HELD_CHIP_MAX_MS } from '../src/askwindow.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
@@ -21,7 +24,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 };
 
 const mkHookState = (over: Partial<HookState> = {}): HookState =>
-  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, interrupted: false, ...over });
+  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
   const roster = parseRoster(DEFAULT_TEST_ROSTER);
@@ -292,6 +295,51 @@ describe('branch precedence', () => {
   });
 });
 
+// D-2011: the pane's `▓ ctx` reading, carried straight onto the wire. Same
+// setup idiom as "branch precedence" above (no other source ever supplies
+// this field, so there is no fallback arm to test — only present-vs-absent).
+describe('ctxPct on the wire (D-2011)', () => {
+  const setup = (): { home: string; run: Runner } => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-quiet-mesa', 'claude', {
+      project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+    });
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { home, run };
+  };
+
+  it('is null before any pane capture has landed — nothing else on the record ever measures it', async () => {
+    const { home, run } = setup();
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBeNull();
+  });
+
+  it('carries the statusline reading straight through', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 82 }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(82);
+  });
+
+  it('carries a measured 0% as 0, not null — a session Claude Code reports freshly compacted', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 0 }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(0);
+  });
+});
+
 describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkTmp('ccrc-');
@@ -528,7 +576,7 @@ describe('archived size on the wire', () => {
 });
 
 describe('hook state on the wire', () => {
-  it('a fresh hookstate carries all four fields — hookState, askSummary, subagents and graphQueries — onto the session', async () => {
+  it('a fresh hookstate carries all five fields — hookState, askSummary, subagents, graphQueries and graphGateDenials — onto the session', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -538,6 +586,7 @@ describe('hook state on the wire', () => {
         ask: { questions: [{ question: 'Pick one', header: 'Choose', options: [{ label: 'A' }, { label: 'B' }] }] },
         subagents: [{ name: 'reviewer', startedAt: 1000, id: null, description: null }],
         graphQueries: 7,
+        graphGateDenials: 2,
       })],
     ]);
     const fleet = await assembleFleet(
@@ -558,6 +607,12 @@ describe('hook state on the wire', () => {
     // replaced by a literal `null` — the count silently dropped for every live
     // session — and the entire server suite would stay green (D-1249).
     expect(s.graphQueries).toBe(7);
+    // R5's own counter, D-1613, and the number is deliberately DIFFERENT from
+    // the query count above: a seam that carried `hs?.graphQueries` onto both
+    // wire fields would pass with two 7s. The gate's next reading is denials
+    // beside queries, so a carry that copies one onto the other reports a
+    // fleet nobody can read.
+    expect(s.graphGateDenials).toBe(2);
   });
 
   it('carries a hookstate graphQueries of 0 onto the session as 0 — a measured zero is not an absence', async () => {
@@ -580,7 +635,46 @@ describe('hook state on the wire', () => {
     expect(s.graphQueries).toBe(0);
   });
 
-  it('a hookless session carries all four fields as null', async () => {
+  it('carries a hookstate graphGateDenials of 0 onto the session as 0 — an armed gate that never fired', async () => {
+    // The half a `hs ? 0 : null`, or a truthiness-flavoured carry, would still
+    // survive: "the gate is live here and has not had to stop anybody" is a
+    // MEASUREMENT, and the one this whole counter exists to report on the day
+    // R5 ships. The hookless sibling below pins the null (D-1613).
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({ state: 'working', graphGateDenials: 0 })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.graphGateDenials).toBe(0);
+  });
+
+  it('carries a hookstate graphGateDenials of NULL onto the session as null — a hook too old to have a gate', async () => {
+    // A hook that predates R5 writes no denial counter at all, and
+    // `hookstate.ts` reads that as `null`. The carry must not launder it into
+    // a 0, which is what a `?? 0` here would do — and which would paint every
+    // un-upgraded fleet box as a box whose gate is armed and quiet.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({ state: 'working', graphQueries: 4, graphGateDenials: null })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.graphQueries).toBe(4);
+    expect(s.graphGateDenials).toBeNull();
+  });
+
+  it('a hookless session carries all five fields as null', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -594,6 +688,7 @@ describe('hook state on the wire', () => {
     expect(s.askSummary).toBeNull();
     expect(s.subagents).toBeNull();
     expect(s.graphQueries).toBeNull();
+    expect(s.graphGateDenials).toBeNull();
   });
 
   it('dialogPending is true when only the pane detector says so', async () => {
@@ -677,6 +772,327 @@ describe('hook state on the wire', () => {
     expect(before.hookState).toBeNull();
     expect(after.hookState).toBe('done');
     expect(afterWaiting.hookState).toBe('waiting');
+  });
+});
+
+// Task 19: `FleetSession.ask`, computed server-side in `assembleFleet` off a
+// real `CoordStore` — ruling F5, NOT a consumer of `GET /api/asks`. The
+// `coord/store.ts` fixture idiom copied verbatim from `asks-store.test.ts`'s
+// own `mk()`.
+describe('the ask chip (Task 19)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+
+  // THE UNITS, ONCE. `assembleFleet`'s `now` is SECONDS; every stamp on an
+  // `asks` row — `at`, `answeredAt` — is MILLISECONDS (`insertAsk`/`settleAsk`'s
+  // real callers all pass `Date.now()`). Both chip bounds are ms arithmetic
+  // against `now * 1000`, so a fixture that mints a row at `now: 1` is not
+  // "a moment ago", it is 1970 — which is why every mint below is expressed
+  // relative to `NOW_MS`.
+  const NOW_S = 1784600000;
+  const NOW_MS = NOW_S * 1000;
+
+  it('reads a HELD ask row as the "held" chip, parentId carried verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+  });
+
+  it('folds ANSWERING onto "held" — a digit has not landed, so a parent may still (attempt to) answer', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true); // held -> answering
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+  });
+
+  // `assembleFleet`'s `now` (1784600000) is SECONDS; `answeredAt` is
+  // MILLISECONDS (`settleAsk`'s real callers all pass `Date.now()`) — one
+  // minute before "now" in ms, comfortably inside `ASK_ANSWERED_CHIP_WINDOW_MS`
+  // (30 minutes).
+  it('reads a recently-settled ask row as the "answered" chip, once a parent has ruled', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 60_000); // answering -> answered, 1 min ago
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' });
+  });
+
+  // Fix round 1, item 4 (coordinator review, RULING): left unbounded, "ruled
+  // by <parent>" would sit on the row FOREVER — the window bounds it to
+  // while the chip is still explaining something recent.
+  it('folds a STALE-ANSWERED chip (past ASK_ANSWERED_CHIP_WINDOW_MS) to no chip', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    // 40 minutes before "now" — past the 30-minute window.
+    coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 40 * 60_000);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  // WHOLE-BRANCH REVIEW, F2(b) — the RULING, replacing the test that used to
+  // sit here asserting the opposite ("a held ask is live by definition", a
+  // row minted 40 minutes ago still wearing the chip). That premise holds
+  // only within ONE PROCESS LIFETIME and only while `staleAsk` can still
+  // reach the row, and neither is guaranteed: `heldAsks` is never rehydrated
+  // at boot (D-2169, deliberately) and `dialogIds` is stamped on the priming
+  // tick BEFORE the notify gate, so every deploy leaves one stuck chip per
+  // session that had a live ask, forever. The bound is DERIVED from the two
+  // constants the lane actually runs on (`askwindow.ts`) — never a third
+  // number — because a `held` row older than the grace window plus the
+  // answering ceiling is stale by construction.
+  const holdMinted = async (home: string, coord: CoordStore, mintedAt: number) => {
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: mintedAt,
+    });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    return fleet.find((x) => x.id === 'claude-demo')!.ask;
+  };
+
+  it('still shows a held chip INSIDE the derived window — the control for the bound below', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    expect(await holdMinted(home, mkCoord(), NOW_MS - (ASK_HELD_CHIP_MAX_MS - 1_000)))
+      .toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+  });
+
+  it('folds a held row OLDER than ASK_GRACE_MS + ASK_ANSWERING_MAX_MS to no chip (F2(b))', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    expect(await holdMinted(home, mkCoord(), NOW_MS - (ASK_HELD_CHIP_MAX_MS + 1_000))).toBeNull();
+  });
+
+  it('bounds a folded-from-ANSWERING row by the same mint time — the stranded case F2(a) could not reach', async () => {
+    // `staleAsk` is called through a try/catch on every path, so a coord.db
+    // that throws leaves an `answering` row exactly where it was. The chip
+    // must not depend on that write having landed.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'],
+      now: NOW_MS - (ASK_HELD_CHIP_MAX_MS + 1_000),
+    });
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true);   // held -> answering, and stranded there
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — the chip used to build its `answered` arm from
+  // `row.parentId` and never read `row.answeredBy`, while `server.ts`'s
+  // `POST /api/sessions/:id/ask` settles the OPERATOR's own answer with
+  // `settleAsk(held.id, 'operator', …)`. So an ask the operator answered
+  // themselves, from their own phone, inside the grace window, rendered as
+  // "ruled by <parent-session-id>" — a false attribution on the one surface
+  // this lane exists to make honest. Every chip test in this block settled
+  // with `'coord-1'` and none with `'operator'`, which is exactly why the
+  // suite was green and blind.
+  it('names the OPERATOR, not the parent, when the operator answered their own held ask (F1)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.settleAsk(id, ASK_OPERATOR_PRINCIPAL, 'a', NOW_MS - 60_000);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // `parentId` is still carried — it is who MAY have answered, and the chip
+    // has always named it — but `answeredBy` is who DID, and they differ here.
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
+      .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'operator' });
+  });
+
+  it('carries a NULL answeredBy on an answered row that names no principal — never the parent by default', async () => {
+    // Reachable: `settleAsk` is guarded on both answer routes precisely
+    // because it can throw after the digit has already landed, leaving the
+    // row unattributed. The chip must say what the row says, not fill the
+    // gap in with `parentId`.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.db.prepare("UPDATE asks SET state = 'answered', answeredAt = ? WHERE id = ?")
+      .run(NOW_MS - 60_000, id);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
+      .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+  });
+
+  it('folds RELEASED to no chip — the operator\'s own ordinary push already fired', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.releaseAsk(id, 2000)).toBe(true); // held -> released
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('folds STALE to no chip — the dialog itself is gone, nothing left to explain', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.staleAsk('d', 'claude-demo', 2000)).toBe(true); // held -> stale
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('is null for a session CoordStore holds no ask row for at all', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('is null with no `coord` passed at all — a dark box, or a caller that predates the lane', async () => {
+    // Same registry row, and a coord store that genuinely HOLDS a live held
+    // ask for it — proving the null comes from the missing 11th argument,
+    // not from an empty store.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000);
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  // Fix round 1: `assembleFleet` is called UNWRAPPED from `FleetWatcher.tick()`
+  // and the `/ws/fleet` connect handler — neither wraps the call in its own
+  // try/catch, so a synchronous `node:sqlite` throw off a broken coord.db
+  // must degrade INSIDE this function, never escape it. Closing the
+  // connection reproduces the same class of throw a full disk or a lock race
+  // would (`push-copy.test.ts`/`fleetws.test.ts`'s own idiom for this).
+  it('degrades to a null ask, and warns, rather than throwing when coord.db is broken', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.db.close();
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+    expect(warnSpy.mock.calls.some(([line]) => String(line).includes('currentAsksFor'))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  // Fix round 1, item 3 (coordinator review): the whole point of collapsing
+  // N per-session reads into one batched query is that a broken box warns
+  // ONCE per assembly, not once per session — pinned directly with a
+  // multi-session fleet, since the single-session test above cannot tell
+  // "warned once" from "warned once per session" apart.
+  it('warns exactly ONCE per assembly on a broken coord.db, however many sessions are in the fleet', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-alpha', 'claude');
+    seedSession(home, 'claude-beta', 'claude');
+    seedSession(home, 'claude-gamma', 'claude');
+    const coord = mkCoord();
+    coord.db.close();
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet).toHaveLength(3);
+    expect(fleet.every((x) => x.ask === null)).toBe(true);
+    expect(warnSpy.mock.calls.filter(([line]) => String(line).includes('currentAsksFor')).length).toBe(1);
+    warnSpy.mockRestore();
   });
 });
 

@@ -8,7 +8,8 @@ import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
-  isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
+  isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
+  isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
@@ -18,6 +19,7 @@ import {
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   PROGRAM_KICKOFF_SUBJECT,
   RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
+  type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
@@ -169,6 +171,39 @@ export type AllocateResult =
   | { ok: true; allocation: AllocatedBlock }
   | { ok: false; why: 'not-seeded' }
   | { ok: false; why: 'bad-count' };
+
+/** One `asks` row, options JSON-decoded and `state` read through `isAskState`
+ *  — never a bare cast, the same we-do-not-know rule every enum column in
+ *  this file follows (schema.ts's own comment on the column). */
+export interface AskRow {
+  id: number; at: number; childId: string; parentId: string; runId: number | null;
+  askKey: string; askAt: number; dialogId: string;
+  question: string; options: string[];
+  state: AskState;
+  answeredBy: string | null; answer: string | null;
+  answeredAt: number | null; releasedAt: number | null;
+}
+
+/** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
+ *  differently (D-2170/D-2171): `not-held` means THE ROW IS NO LONGER
+ *  PRE-EMPTIBLE; `ask-moved` is the child repainting an identical question,
+ *  so the menu on screen may be a different instance. Collapsing them would
+ *  be an overloaded value at a seam.
+ *
+ *  `not-held` is NOT "another principal already took this row" — this
+ *  docstring said exactly that for a wave, and the gloss SPREAD from here
+ *  into the shipped coordinator contract (whole-branch review M3, corrected
+ *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). The CAS
+ *  source is the single state `'held'`, so every other state answers it:
+ *  `answering` (the lost race the old sentence described), and equally
+ *  `released` (the grace window lapsed and the operator's push has already
+ *  fired), `stale` (the dialog is gone) and `answered` (someone already
+ *  ruled). Only the first of those four is a race, and only the first is
+ *  worth a retry — which is precisely why the false gloss mattered on a
+ *  surface a coordinator reads. */
+export type AskTakeResult =
+  | { ok: true; row: AskRow }
+  | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' };
 
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
@@ -2839,16 +2874,27 @@ export class CoordStore {
    * mail inside a wave — and are `null` for ad-hoc mail with no run context;
    * the caller degrades both (`workspace ?? toId` for the title, same as
    * `pushOne`'s own fallback chains elsewhere in this file's callers).
+   *
+   * `fromId` and `runId` (fix round 1, item 1) ride beside `kind`/`subject`
+   * for the identical reason: the caller (`FleetWatcher.pushNewMail`) needs
+   * them to run `isAskNudgeMail` (`coord/rundefs.ts`) per row — the ask
+   * pre-emption lane's own nudge mail must record but never push, and that
+   * predicate's shape is exactly `fromId`/`runId`/`subject`. `runId` here is
+   * the RAW column (nullable), never coalesced through the `LEFT JOIN` the
+   * way `project`/`workspace` are — those degrade because they have no
+   * meaning without a run; `runId` itself is the fact the predicate needs
+   * verbatim, null included.
    */
-  mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; kind: string;
-                                       subject: string; project: string | null;
-                                       workspace: string | null }[] {
+  mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
+                                       runId: number | null; kind: string; subject: string;
+                                       project: string | null; workspace: string | null }[] {
     return this.db.prepare(
-      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.kind, m.subject, r.project, r.workspace ' +
+      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
+      'r.project, r.workspace ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
-    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; kind: string; subject: string;
-                         project: string | null; workspace: string | null }[];
+    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
+                         kind: string; subject: string; project: string | null; workspace: string | null }[];
   }
 
   /** `run_events`'s current high-water id — same priming role as
@@ -3701,5 +3747,343 @@ export class CoordStore {
       "WHERE state = 'allocated' AND allocatedAt <= ? ORDER BY project, n",
     ).all(cutoff) as Parameters<CoordStore['hydrateLedger']>[0][];
     return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /* ── asks (ask pre-emption lane, D-2169..D-2171) ─────────────────────── */
+
+  /** The parent of a dispatched program worker: the coordinator of the run
+   *  that dispatched it. DERIVED, never stored — `reclaimProgram` rewrites
+   *  `runs.claimedBy` for every run of a program in one transaction, so a
+   *  derived answer follows a handover for free while a stored id would name
+   *  a corpse.
+   *
+   *  `state NOT IN ('done','failed')` is COPIED from `openRunsForSession`
+   *  (`:1560`) and `openCoordinatorIds` (`:1575-1581`), never
+   *  `TERMINAL_RUN_STATES`: that constant is derived from `RUN_TRANSITIONS`,
+   *  which gives `'unknown'` an empty outgoing-edge list and so calls it
+   *  terminal — but every shipped session-keyed query in this file counts an
+   *  `'unknown'` row (a token a newer build wrote and this one degrades on
+   *  read) as OPEN. `openCoordinatorIds`'s own docstring rules on exactly this
+   *  divergence and says it "stays latent only while new predicates copy the
+   *  SQL spelling instead of re-deriving one" — this is that copy, not a
+   *  fresh derivation, so it agrees with `close.ts`'s `survivorOf` (built on
+   *  `openRunsForSession`) on which run of a session is open, including on an
+   *  `'unknown'` row.
+   *
+   *  ORDER BY id DESC is a CONVENTION, not a guarantee: nothing in the schema
+   *  forbids two open runs naming one sessionId, and the coordinator protocol
+   *  DELIBERATELY creates that state by opening wave N+1 before closing wave
+   *  N. The newest run's claimant is the right answer there, and
+   *  `close.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
+   *  caveat. Pinned by a two-wave/two-claimant test, verified red under
+   *  ASC (fix round 1, finding 2). */
+  parentOfSession(childId: string): string | null {
+    const row = this.db.prepare(
+      "SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ('done','failed') " +
+      'ORDER BY id DESC LIMIT 1',
+    ).get(childId) as { claimedBy: string | null } | undefined;
+    return row?.claimedBy ?? null;
+  }
+
+  private static readonly ASK_COLS =
+    'id, at, childId, parentId, runId, askKey, askAt, dialogId, question, options, ' +
+    'state, answeredBy, answer, answeredAt, releasedAt';
+
+  private hydrateAsk(r: {
+    id: number; at: number; childId: string; parentId: string; runId: number | null;
+    askKey: string; askAt: number; dialogId: string; question: string; options: string;
+    state: string; answeredBy: string | null; answer: string | null;
+    answeredAt: number | null; releasedAt: number | null;
+  }): AskRow {
+    // Read back through `isAskState`, never a bare cast — an out-of-vocabulary
+    // token a newer build wrote degrades honestly to `unknown` instead of
+    // being smuggled into the narrow type.
+    return {
+      ...r,
+      options: JSON.parse(r.options) as string[],
+      state: isAskState(r.state) ? r.state : 'unknown',
+    };
+  }
+
+  /** `askById`'s private backer. Every caller across this plan names
+   *  `askById`; this exists so `takeAskForAnswer` can read the row inside its
+   *  own transaction without going through the public name. */
+  private readAsk(id: number): AskRow | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE id = ?`,
+    ).get(id) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
+    return row === undefined ? null : this.hydrateAsk(row);
+  }
+
+  askById(id: number): AskRow | null {
+    return this.readAsk(id);
+  }
+
+  /** Minted at hold time (Task 6), state `'held'` — the only state an ask is
+   *  ever inserted in; nothing else writes a fresh row. */
+  insertAsk(a: {
+    childId: string; parentId: string; runId: number | null; askKey: string;
+    askAt: number; dialogId: string; question: string; options: string[]; now: number;
+  }): number {
+    const res = this.db.prepare(
+      'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, ' +
+      "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
+    ).run(a.now, a.childId, a.parentId, a.runId, a.askKey, a.askAt, a.dialogId,
+      a.question, JSON.stringify(a.options));
+    return Number(res.lastInsertRowid);
+  }
+
+  /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
+   *  addressed to this parent, or only those in one `state` when given. */
+  asksForParent(parentId: string, state?: AskState): AskRow[] {
+    const rows = (state === undefined
+      ? this.db.prepare(
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? ORDER BY id`,
+        ).all(parentId)
+      : this.db.prepare(
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? ORDER BY id`,
+        ).all(parentId, state)) as Parameters<CoordStore['hydrateAsk']>[0][];
+    return rows.map((r) => this.hydrateAsk(r));
+  }
+
+  /** Task 12's lookup when the operator answers: the row this child's live
+   *  question is held under, if any. At most one `held` row per child is ever
+   *  live at a time (a second mint only happens once the first has left
+   *  `held`), so the newest is the right — and normally only — answer. */
+  heldAskFor(childId: string): AskRow | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks ` +
+      "WHERE childId = ? AND state = 'held' ORDER BY id DESC LIMIT 1",
+    ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
+    return row === undefined ? null : this.hydrateAsk(row);
+  }
+
+  /** Task 19's fleet-chip lookup: the newest ask row for this child, in ANY
+   *  state — unlike `heldAskFor` above, which is scoped to `'held'` for Task
+   *  12's operator-answer lookup and would answer `null` through
+   *  `answering`/`answered`/`released`/`stale` alike. This method makes no
+   *  judgement about which states are worth showing; `fleet.ts`'s `fleetAsk`
+   *  does that folding on the row this returns, the same "hydrate raw, let
+   *  the caller fold" split `asksForParent` already keeps. Keyed on
+   *  `asks_by_child` (schema.ts) — an indexed read, not a scan. `ORDER BY id
+   *  DESC LIMIT 1` names the CURRENT question even once a second ask has
+   *  been minted for the same child, because a fresh insert only ever
+   *  happens once the previous row has left `held` (`insertAsk`'s own
+   *  docstring) — there is never more than one row in flight to disambiguate
+   *  by anything other than recency. */
+  currentAskFor(childId: string): AskRow | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE childId = ? ORDER BY id DESC LIMIT 1`,
+    ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
+    return row === undefined ? null : this.hydrateAsk(row);
+  }
+
+  /** `currentAskFor`'s BATCHED form (fix round 1, item 3 — coordinator
+   *  review): `assembleFleet` needs "the newest ask row per child" for the
+   *  WHOLE registry every tick, and a point lookup per child meant one
+   *  `db.prepare` + one indexed `.get` PER SESSION — ~20 statement
+   *  compilations every 2s tick alone, before the `/ws/fleet` connect,
+   *  `GET /api/fleet`, `GET /api/peers` and `POST /api/claims`-conflict
+   *  call sites that each assemble the fleet again. One query instead:
+   *  `MAX(id) … GROUP BY childId` names the newest id per matching child in
+   *  a single pass keyed on `asks_by_child` (the same index the singular
+   *  form already leans on), and the outer `WHERE id IN (…)` is a second,
+   *  primary-key lookup for the full rows — cheap, and it keeps this
+   *  method, like every other in this file, off `SELECT *`.
+   *
+   *  `placeholders` (D-1141, above) builds the `IN (...)` — never bare
+   *  string interpolation of `childIds` itself, so every value still
+   *  travels as a positional bind. Empty `childIds` short-circuits to an
+   *  empty map without preparing a statement at all: `assembleFleet` on a
+   *  registry with no rows (a fresh box) is the common case this guards,
+   *  and `placeholders(0)` would otherwise emit a syntactically invalid
+   *  `IN ()`. A child with no ask row at all is simply ABSENT from the
+   *  returned map — the caller's `.get(id) ?? null` fold, not a `null`
+   *  entry here. */
+  currentAsksFor(childIds: readonly string[]): Map<string, AskRow> {
+    const out = new Map<string, AskRow>();
+    if (childIds.length === 0) return out;
+    const ph = placeholders(childIds.length);
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE id IN (` +
+        `SELECT MAX(id) FROM asks WHERE childId IN (${ph}) GROUP BY childId` +
+      ')',
+    ).all(...childIds) as Parameters<CoordStore['hydrateAsk']>[0][];
+    for (const r of rows) out.set(r.childId, this.hydrateAsk(r));
+    return out;
+  }
+
+  /** THE GUARD IS IN THE `WHERE` (the `endClaim` shape). Two predicates, and
+   *  they are DIFFERENT refusals a caller acts on differently: `not-held`
+   *  means the row has LEFT `'held'` and is no longer pre-emptible (D-2171);
+   *  `ask-moved` means the child has written its hookstate again since the
+   *  mint, so the menu on screen may be a DIFFERENT INSTANCE of an identical
+   *  question (D-2170). Collapsing them would be an overloaded value at a
+   *  seam — one is about the row, the other is a near-miss wrong answer.
+   *
+   *  CORRECTED (whole-branch review M3): this said `not-held` means "another
+   *  principal already took this row", naming ONE of the four states that
+   *  answer it. The CAS source is `'held'` alone, so `answering` (the take
+   *  it described), `released`, `stale` and `answered` all land here — and
+   *  only the first is a lost race a retry could win. See `AskTakeResult`'s
+   *  own docstring above for the full list; the same false gloss had reached
+   *  `wave-lifecycle.md`, where a coordinator reads it. */
+  takeAskForAnswer(id: number, askAt: number): AskTakeResult {
+    return tx(this.db, () => {
+      const row = this.readAsk(id);
+      if (row === null) return { ok: false as const, why: 'unknown-ask' as const };
+      if (row.askAt !== askAt) return { ok: false as const, why: 'ask-moved' as const };
+      const res = this.db.prepare(
+        "UPDATE asks SET state = 'answering' WHERE id = ? AND state = 'held' AND askAt = ?",
+      ).run(id, askAt);
+      if (Number(res.changes) === 0) return { ok: false as const, why: 'not-held' as const };
+      return { ok: true as const, row };
+    });
+  }
+
+  /** answering -> held, CAS (fix round 1, finding 3).
+   *  The rollback `takeAskForAnswer`'s caller reaches for when the take
+   *  succeeded but the press itself was refused — a refusal there means no
+   *  digit was pressed and the question is still live. CORRECTED (D-2177
+   *  fix round 1): NOT because every one of `answerAsk`'s guards precedes
+   *  its `sendKey` loop — since D-2177 a failed `sendKey` refuses too
+   *  (`inject/ask.ts:136`, `:151`), so a refusal CAN now happen mid-send.
+   *  The real reason the conclusion still holds HERE: a row only ever
+   *  exists for a SINGLE-SELECT ask. `askActions` returns null whenever
+   *  `multiSelect === true` (`askkey.ts:83`), and `actions !== null` is the
+   *  sole eligibility gate `hold` checks before minting a row at all
+   *  (`watch.ts:3452`, D-2173) — a multi-select ask never gets a row to roll
+   *  back in the first place. A single-select answer makes exactly ONE
+   *  `sendKey` call and no Enter, so its `false` — send-keys exiting
+   *  nonzero — IS "the digit did not land," with no partial-send case a row
+   *  here could ever observe. `takeAskForAnswer`'s `askAt` CAS (above) pins
+   *  the live envelope to the mint-time one, so the question cannot have
+   *  turned multi-select between mint and this rollback either. A DISTINCT
+   *  verb from `releaseAsk` on purpose: "I abandoned my attempt" (still
+   *  pre-emptible, no push) and "the window is over" (push fires) are
+   *  different facts a reader of `state` needs to tell apart, and
+   *  `releaseAsk`'s CAS source is `'held'` — it cannot even reach a row
+   *  this call finds, which sat in `'answering'`. Returns whether THIS call
+   *  moved it, the same "I did it" vs. "someone else already did" shape as
+   *  `releaseAsk`/`staleAsk`. */
+  untakeAsk(id: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'held' WHERE id = ? AND state = 'answering'",
+    ).run(id);
+    return Number(res.changes) > 0;
+  }
+
+  /** answering -> answered, CAS (fix round 1, finding 4: unguarded, a future
+   *  caller that settles without first taking could rewrite a `released` or
+   *  `stale` row to `'answered'` with a fabricated `answeredBy`/`answer`/
+   *  `answeredAt` — a record asserting an answer nobody gave, in a table
+   *  whose whole stated job (schema.ts's own D-2169 comment) is to BE the
+   *  record. That is a silent lie, not a silent no-op, so it gets the same
+   *  `WHERE` guard as every other conditional write here even though every
+   *  path that reaches this method today already holds the row exclusively
+   *  at `'answering'` via a preceding `takeAskForAnswer`. `void` stays: no
+   *  current caller needs to distinguish "settled" from "lost the row
+   *  between take and settle", and inventing that distinction here would be
+   *  answering a question nobody asked rather than closing the one that was
+   *  asked (a wedge, not a race, is the failure this guard closes). */
+  settleAsk(id: number, by: string, answer: string, now: number): void {
+    this.db.prepare(
+      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ? " +
+      "WHERE id = ? AND state = 'answering'",
+    ).run(by, answer, now, id);
+  }
+
+  /** held -> released, CAS. Returns whether THIS call applied it, so the
+   *  sweep can tell "I released it" (push may proceed) from "someone beat
+   *  me" (a principal already took the row; the sweep must not push a stale
+   *  payload out from under an in-flight answer). */
+  releaseAsk(id: number, now: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'",
+    ).run(now, id);
+    return Number(res.changes) > 0;
+  }
+
+  /** held OR answering -> stale, CAS, keyed by the pane's own identity
+   *  (`dialogId`) and the child that painted it — the dialog vanishing off
+   *  the pane is the only signal `detectDialogs`' clear branch acts on. Same
+   *  CAS shape as `releaseAsk`: the return says whether this call is the one
+   *  that ended the hold.
+   *
+   *  BOTH LIVE STATES, not `'held'` alone (whole-branch review F2(a), a
+   *  RULING). The narrow form stranded a row FOREVER whenever the dialog
+   *  cleared while a principal sat mid-answer: the clear branch deletes its
+   *  `heldAsks` entry unconditionally (so `sweepAsks`, the map's only
+   *  collector, can never see the row again) while this CAS changed zero
+   *  rows — and `fleet.ts`'s `fleetAsk` folds `answering` onto `held`, so the
+   *  child wore a permanent "held — <parent> may answer" chip for a question
+   *  that no longer exists. No restart is needed to reach it. A vanished
+   *  dialog is stale whichever principal was mid-answer, so the source names
+   *  both.
+   *
+   *  TWO STATES, NEVER ALL SIX. `answered`, `released` and `stale` are
+   *  decisions that were really taken, and a late clear tick must not rewrite
+   *  one — the same reasoning `settleAsk`'s own `WHERE` carries. The residual
+   *  the widened arm buys, stated rather than discovered: a digit that lands
+   *  and a clear tick that arrives in the microseconds BEFORE the route's
+   *  `settleAsk` runs will leave that settle a no-op against a now-`stale`
+   *  row, so the answer is not named on the row. That is precisely why both
+   *  answer routes write their `feed_events` record BEFORE `settleAsk` and
+   *  say so in their own comments: the feed entry, not this column, is the
+   *  trace that survives a failure in this window. */
+  staleAsk(dialogId: string, childId: string, now: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'stale', releasedAt = ? " +
+      "WHERE dialogId = ? AND childId = ? AND state IN ('held','answering')",
+    ).run(now, dialogId, childId);
+    return Number(res.changes) > 0;
+  }
+
+  /** `askAt` ADVANCED, CAS'd on the two witnesses that say the instance did
+   *  not change (D-2403). The other half of D-2170's guard, and the half it
+   *  shipped without.
+   *
+   *  `askAt` is a snapshot of the child's hookstate `updatedAt` at mint, and
+   *  `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals
+   *  it. `freshAskAt`'s docstring argues that correctly for SUBSTITUTION —
+   *  `askKey` hashes CONTENT, so a child looping over identical questions
+   *  mints the same key twice and `updatedAt` is what tells instance 1 from
+   *  instance 2. What it does not say is that `updatedAt` moves for reasons
+   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamps it
+   *  unconditionally on EVERY write, and its `SubagentStart`/`SubagentStop`
+   *  arm re-reads `.ask` straight back off the file (`:1227` — D-2404: it is
+   *  that re-read, NOT the `:1233` ask-clear exemption two reviewers named,
+   *  since `state` is `waiting` on this path and the clear never applies) and
+   *  restores `prev_state`, so a subagent event on a session blocked at a dialog
+   *  rewrites the identical envelope under a fresh number. Nothing re-stamped
+   *  the row, so ONE such bump refused every parent answer for the row's
+   *  whole life and the lane degraded, silently and greenly, to the
+   *  pre-feature behaviour it was built to replace. Measured across the seam
+   *  in `server/test/ask-instance-guard.test.ts` — the real hook writing, the
+   *  real CAS refusing, with the control that says the bump is why.
+   *
+   *  WHY THIS IS NOT A WEAKENING. The `WHERE` demands both witnesses the
+   *  guard actually cares about: `dialogId` — the sha1 of the menu painted in
+   *  the pane, which `detectDialogs` re-scrapes every tick and which no hook
+   *  event can move — and `askKey`, the content the parent would be
+   *  answering. The caller passes them from THIS tick's scrape and THIS
+   *  tick's hookstate, so an advance is a positive observation that the same
+   *  menu is still on screen carrying the same question, not an assumption
+   *  that nothing happened. Repaint the dialog, change the question, or lose
+   *  the pane, and zero rows change: the stale `askAt` stands and the CAS
+   *  refuses exactly as designed. `'held'` alone, never `'answering'`: a
+   *  principal mid-answer already took the row against a specific `askAt`,
+   *  and moving it under them would be the race this guard exists to lose.
+   *
+   *  The residual, stated rather than discovered: the scrape is a 2 s poll,
+   *  so a bump landing between the last re-stamp and the route's own fresh
+   *  read still refuses once. That is a refusal a retry wins — which is what
+   *  `wave-lifecycle.md` already tells a coordinator `ask-moved` means —
+   *  rather than the permanent wedge it replaces. */
+  restampAsk(a: { id: number; dialogId: string; askKey: string; askAt: number }): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
+    ).run(a.askAt, a.id, a.dialogId, a.askKey);
+    return Number(res.changes) > 0;
   }
 }

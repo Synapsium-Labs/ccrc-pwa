@@ -10,7 +10,7 @@ const obsWith = (cg: LifecycleObs['cg']): LifecycleObs => ({
   tty: null, ssh: null,
 });
 const decWith = (surface: LifecycleDec['surface']): LifecycleDec => ({
-  surface, actor: null, reason: null,
+  surface, actor: null, reason: null, crosspool: null,
 });
 
 describe('journalWords: total over the L0 vocabulary', () => {

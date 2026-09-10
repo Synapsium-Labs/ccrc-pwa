@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import { ASK_OPERATOR_PRINCIPAL, graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -18,10 +18,10 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null, title: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null,
+  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 describe('label', () => {
@@ -133,6 +133,138 @@ describe('state', () => {
     render(<SessionLine session={s({ limits: { five: 10, seven: 82 } })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByLabelText('account limit near')).toBeInTheDocument();
+  });
+});
+
+describe('context pressure chip (D-2011) and the wedge signature (D-2016)', () => {
+  const chip = (): Element | null => document.querySelector('.sess-ctxpressure');
+
+  it('renders nothing when ctxPct is null', () => {
+    render(<SessionLine session={s({ ctxPct: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders nothing below the 80% floor', () => {
+    render(<SessionLine session={s({ ctxPct: 79 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders the quiet reading at or above 80%, with no wedge attribute', () => {
+    render(<SessionLine session={s({ ctxPct: 82, status: 'idle' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el).not.toBeNull();
+    expect(el?.textContent).toBe('ctx 82%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('never renders on a dead row, even at 99% — the same exemption the limits warning takes', () => {
+    render(<SessionLine session={s({ ctxPct: 99, status: 'dead', bucket: 'dead' })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('escalates to the wedge reading: high ctx AND busy AND no turn boundary for a long time', () => {
+    // `useNow`'s initial value is a real `Date.now()` read at mount — same
+    // idiom `subagentElapsed`'s own tests use — so a `statusUpdatedAt` this
+    // far in the past is already stalled the instant this renders, no fake
+    // timers needed.
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'busy', statusUpdatedAt: Date.now() - 95 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.getAttribute('data-wedge')).toBe('true');
+    expect(el?.textContent).toMatch(/^ctx 91% · stalled /);
+  });
+
+  it('does NOT escalate when the turn is recent — high ctx and busy alone are not the wedge', () => {
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'busy', statusUpdatedAt: Date.now() - 5 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('does NOT escalate once the row goes idle, however old statusUpdatedAt reads — the turn already ended', () => {
+    render(<SessionLine
+      session={s({ ctxPct: 91, status: 'idle', statusUpdatedAt: Date.now() - 200 * 60_000 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge')).toBe(false);
+  });
+
+  it('reads both fields defensively — an older server frame lacking ctxPct entirely must not throw', () => {
+    // Same contract `spawnState`/`started` are already tested against above:
+    // the live `fleet` frame is CAST, not revived, so a server predating this
+    // field omits the key at runtime even though `FleetSession` types it as
+    // always present.
+    const legacy = { ...s({ status: 'busy' }) } as Record<string, unknown>;
+    delete legacy['ctxPct'];
+    expect(() =>
+      render(<SessionLine session={legacy as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />)).not.toThrow();
+    expect(chip()).toBeNull();
+  });
+
+  // Finding 2 (fix round): the test above proves the row does not THROW and
+  // does not misrender on an older-server frame, but that held true even
+  // before `ctxPressure` existed — `undefined >= 80` happens to read
+  // `false`. This test pins the READER ITSELF: `ctxPressure`, not
+  // `session.ctxPct` raw, same idiom the D-1251 tests below use for
+  // `graphReadCount`. It is a positive control that the whole render path
+  // goes through the tolerant reader, not just an absence of a crash.
+  it('renders NO chip when the server omits the ctxPct key entirely — an older server (D-2011 reader)', () => {
+    const raw = s({ ctxPct: 91, status: 'busy' }) as unknown as Record<string, unknown>;
+    delete raw['ctxPct'];
+    render(<SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()).toBeNull();
+  });
+
+  it('renders NO chip when ctxPct arrives as a non-number an older peer never promised (D-2011 reader)', () => {
+    // `ctxPressure`'s other degrade, via the same `tolerantCount` ladder
+    // `graphReadCount`/`graphGateCount` use: a string/NaN/Infinity is a
+    // shape the wire type forbids and only a broken or hostile peer sends.
+    for (const bad of ['91' as unknown as number, NaN, Infinity]) {
+      cleanup();
+      render(<SessionLine session={{ ...s({ status: 'busy' }), ctxPct: bad } as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />);
+      expect(chip(), `ctxPct: ${bad}`).toBeNull();
+    }
+  });
+
+  // Finding 5 (fix round): `liveSessionStatus` collapses Claude Code's
+  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:316-317)
+  // while the SAME read sets `dialogPending` true (fleet.ts:419) — so a row
+  // blocked on a human permission prompt for hours, at high context, is
+  // `status: 'busy'` with no other signal distinguishing it from a real
+  // wedge unless this row itself checks `dialogPending`. D-2016's own text:
+  // "attention means a human answer unblocks the session, which is false
+  // here" — the ONE shape the wedge was defined to exclude.
+  it('does NOT escalate to the wedge when the session is waiting on a human, even at high ctx and a long stall (Finding 5)', () => {
+    render(<SessionLine
+      session={s({
+        ctxPct: 91, status: 'busy', dialogPending: true,
+        statusUpdatedAt: Date.now() - 95 * 60_000,
+      })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el, 'the quiet ctx reading must still render').not.toBeNull();
+    expect(el?.textContent).toBe('ctx 91%');
+    expect(el?.hasAttribute('data-wedge'), 'a human-blocked row must not read as wedged').toBe(false);
+  });
+
+  it('still escalates to the wedge under the identical stall when the session is NOT waiting on a human (Finding 5, other direction)', () => {
+    render(<SessionLine
+      session={s({
+        ctxPct: 91, status: 'busy', dialogPending: false,
+        statusUpdatedAt: Date.now() - 95 * 60_000,
+      })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const el = chip();
+    expect(el?.getAttribute('data-wedge')).toBe('true');
+    expect(el?.textContent).toMatch(/^ctx 91% · stalled /);
   });
 });
 
@@ -613,6 +745,116 @@ describe('held chip', () => {
   });
 });
 
+// The ask pre-emption lane's chip (design doc §2.8, Task 19). Same
+// `data-*`/`title` pattern as the held chip above, and deliberately the same
+// KIND of cell — a short, verbatim fact, informational only.
+describe('ask chip', () => {
+  it('shows "held — <parent> may answer" while a parent may still pre-empt', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('held — coord-1 may answer')).toBeInTheDocument();
+  });
+
+  it('shows "ruled by <parent>" once a parent has answered', () => {
+    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-1')).toBeInTheDocument();
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — the three `answered` sentences, and the reason
+  // this block was green and blind: every chip test above settles with the
+  // PARENT's id, so a chip that read `parentId` and ignored `answeredBy`
+  // passed all of them. `server.ts`'s `POST /api/sessions/:id/ask` settles
+  // the operator's own answer with `ASK_OPERATOR_PRINCIPAL`, on the same row,
+  // inside the same grace window — and that case rendered "ruled by
+  // <parent-session-id>", naming a session that did not answer.
+  it('shows "answered by you" when the OPERATOR answered their own held ask (F1)', () => {
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: ASK_OPERATOR_PRINCIPAL },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered by you')).toBeInTheDocument();
+    // …and NEVER the parent's name: the parent is still on the row (it is who
+    // MAY have answered), and it is not who did.
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]'))
+      .toHaveAttribute('title', 'you answered this question yourself, before its parent pre-empted it');
+  });
+
+  it('names whoever answeredBy says, even when that is not the parent on the row', () => {
+    // The general property, not the two shipped principals: the cell reads
+    // the field that MEANS "who ruled". A chip built from `parentId` renders
+    // `coord-1` here and passes nothing.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-2' },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-2')).toBeInTheDocument();
+    expect(screen.queryByText('ruled by coord-1')).toBeNull();
+  });
+
+  it('says only "answered" when the row names no principal — never the parent by default', () => {
+    // Reachable, not hypothetical: `settleAsk` is guarded on BOTH answer
+    // routes precisely because it can throw after the digit has landed,
+    // leaving `answeredBy` null on an `answered` row.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: null },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered')).toBeInTheDocument();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]')).toHaveAttribute(
+      'title',
+      'this question was answered before the operator was notified; the row names no principal',
+    );
+  });
+
+  it('renders neither chip when the session carries no ask — byte-identical to today', () => {
+    const { container } = render(<SessionLine session={s({ ask: null })}
+                                                onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+    expect(screen.queryByText(/may answer/)).toBeNull();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+  });
+
+  it('marks the chip data-ask-state for tests, and carries the full sentence as a title', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('[data-ask-state]');
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveAttribute('data-ask-state', 'held');
+    expect(chip).toHaveAttribute('title', 'coord-1 may answer this question before the operator is notified');
+  });
+
+  it('does not collide with .sess-ask (the hookState askSummary line) — different cell, different class', () => {
+    // The name collision this task was warned off is `AskState` (ToolCard.tsx's
+    // own local, unrelated three-member type) — this is a DIFFERENT, adjacent
+    // collision risk: `.sess-ask` already exists as the askSummary third line
+    // (`describe('ask summary')` above). Both can render on the same row at
+    // once, and neither may shadow the other's class or text.
+    render(<SessionLine session={s({
+      hookState: 'waiting', askSummary: 'Deploy now?',
+      ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
+    expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
+  });
+
+  // Fix round 1: `sessionAsk` passes ANY valid `AskState` through honestly
+  // (its own contract, pinned above) — `released`/`stale`/`unknown` are all
+  // vocabulary `isAskState` accepts, and a server ahead of or behind this
+  // build could genuinely send one on a live frame. The fold to "no chip"
+  // for those four has to happen HERE, not by trusting "only held/answered
+  // ever arrive" — a claim only true of a same-build server.
+  it('renders no chip for a valid-but-unrendered ask state — released/stale/unknown are not held or answered', () => {
+    for (const state of ['released', 'stale', 'unknown'] as const) {
+      const { container, unmount } = render(
+        <SessionLine session={s({ ask: { state, parentId: 'coord-1', answeredBy: null } })}
+                     onOpen={() => {}} onActions={() => {}} />,
+      );
+      expect(container.querySelector('.sess-ask-state'), state).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+});
+
 // Registry ladder (Task 2): a degraded row's small, honest note — the
 // `PrKeycap` grey+reason idiom, never a new banner. Same `data-*`/`title`
 // pattern as the held chip above.
@@ -1011,5 +1253,157 @@ describe('the graph chip', () => {
     render(<SessionLine session={s({ graphQueries: 4, status: 'dead', bucket: 'dead' })}
       onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+
+  // ── the gate's own half of the chip (R5, D-1613) ────────────────────────
+  // The gate denies a search call and counts the denial beside the queries.
+  // The chip is where that count becomes visible, and the whole point of R5's
+  // next reading is denials BESIDE queries — so the suffix rides the existing
+  // chip rather than claiming a second one.
+  it('appends · gated k when the gate has denied search calls', () => {
+    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 0 · gated 3')).toBeInTheDocument();
+  });
+
+  it('appends nothing when the gate is armed and has never fired — gated 0 is not a finding', () => {
+    // `> 0`, not `!== null`: a measured zero here says the gate had nothing to
+    // stop, which is the ordinary state of a session that queried its graph
+    // first. Rendering `· gated 0` on it would put a permanent suffix on every
+    // healthy row and make the k>0 rows unfindable — the chip's job is the
+    // exception, not the census.
+    render(<SessionLine session={s({ graphQueries: 2, graphGateDenials: 0 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 2')).toBeInTheDocument();
+    expect(screen.queryByText(/gated/)).toBeNull();
+  });
+
+  it('appends nothing when the denial count is null — a hook too old to have a gate', () => {
+    render(<SessionLine session={s({ graphQueries: 5, graphGateDenials: null })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 5')).toBeInTheDocument();
+    expect(screen.queryByText(/gated/)).toBeNull();
+  });
+
+  it('appends nothing when the server omits the key entirely — an older server (D-1613)', () => {
+    // The same cast-not-revived seam `graphReadCount`'s own D-1251 test above
+    // pins, one field over: a server predating R5 omits the key, and a raw
+    // `session.graphGateDenials > 0` would read `undefined > 0` as false —
+    // quietly right today, and wrong the moment anybody writes `!== null` or
+    // `!= null` instead. This is the test that pins the read going through
+    // `graphGateCount` (shared/api.ts) rather than the raw field.
+    const raw = s({ graphQueries: 5 }) as unknown as Record<string, unknown>;
+    delete raw['graphGateDenials'];
+    expect(() => render(
+      <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
+    )).not.toThrow();
+    const chip = document.querySelector('.sess-graph');
+    expect(chip?.textContent, `a gated suffix rendered: ${chip?.outerHTML}`).toBe('graph 5');
+  });
+
+  it('appends nothing when the denial count arrives as a non-number an older peer never promised', () => {
+    // `graphGateCount`'s other degrade, mirroring `graphReadCount`'s: a broken
+    // peer sending a string or a NaN is ignorant of the count, not a witness
+    // that the gate fired `NaN` times. `'3' > 0` is TRUE in JS, so a raw read
+    // would render `· gated 3` off a string the wire type forbids.
+    for (const bad of ['3', Number.NaN, Number.POSITIVE_INFINITY]) {
+      cleanup();
+      render(<SessionLine session={{ ...s({ graphQueries: 5 }), graphGateDenials: bad } as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />);
+      const chip = document.querySelector('.sess-graph');
+      expect(chip?.textContent, `${String(bad)} rendered a gated suffix: ${chip?.outerHTML}`)
+        .toBe('graph 5');
+    }
+  });
+
+  it('the title names the denials too, so the number has a sentence behind it', () => {
+    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('.sess-graph');
+    expect(chip?.getAttribute('title')).toContain('0 graphify read(s) this session');
+    expect(chip?.getAttribute('title')).toContain('3 search call(s) denied by the graphify gate');
+  });
+});
+
+describe('graphGateCount — the one reader of graphGateDenials, pinned directly (D-1691)', () => {
+  // The chip renders on `> 0`, so through it `null` and `0` are the same
+  // pixel, and a reader that folded the one into the other passed every chip
+  // test — measured by the review of PR #54. The wire contract is `null` ≠
+  // `0` (nothing measured is not a measured none), and the next consumer
+  // written with `!== null` would inherit whatever fallback this reader
+  // actually has. So the reader is pinned on its own, the way its sibling
+  // `graphReadCount` is pinned through a chip that renders on `!== null`.
+  it('reads absent and null as null, a finite number as itself, and junk as null', () => {
+    expect(graphGateCount({})).toBeNull();
+    expect(graphGateCount({ graphGateDenials: null })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: 0 })).toBe(0);
+    expect(graphGateCount({ graphGateDenials: 3 })).toBe(3);
+    expect(graphGateCount({ graphGateDenials: Number.NaN })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: '2' as unknown as number })).toBeNull();
+  });
+});
+
+// Fix round 1, item 2 (coordinator review): `sessionAsk` had zero tests —
+// every degrade branch below was reachable only from a server ahead of or
+// behind this build, exactly the seam a suite driven through `SessionLine`
+// alone cannot reach (the server never SENDS a malformed `ask`; this reader
+// exists for the case where it does). Pinned directly, the `graphGateCount`/
+// `substrateFault` pattern: `return s.ask ?? null` — no validation at all —
+// would stay green without this describe block.
+describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned directly (fix round 1)', () => {
+  it('reads absent, explicit null, and a well-formed pair straight through', () => {
+    expect(sessionAsk({})).toBeNull();
+    expect(sessionAsk({ ask: null })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' } }))
+      .toEqual({ state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — `answeredBy` degrades ON ITS OWN and never
+  // takes the chip down with it. A server predating the field omits the key
+  // entirely (the live frame is CAST, not revived, which is why this reader
+  // exists at all), and blank/wrong-typed values mean the same thing an
+  // absent one does: the row names no principal. What must NEVER happen is
+  // the substitution the chip used to make — filling the gap in with
+  // `parentId`, which names a session that did not answer.
+  it('degrades a missing, blank or wrong-typed answeredBy to null — and never to parentId', () => {
+    for (const raw of [
+      { state: 'answered', parentId: 'coord-1' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: null },
+      { state: 'answered', parentId: 'coord-1', answeredBy: '' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: 5 },
+      { state: 'answered', parentId: 'coord-1', answeredBy: { id: 'coord-1' } },
+    ]) {
+      expect(sessionAsk({ ask: raw as unknown as FleetSession['ask'] }), JSON.stringify(raw))
+        .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+    }
+  });
+
+  it('degrades the WHOLE pair to null on any malformed half — the pair only means something together', () => {
+    // Not an object at all — the shape a hand-rolled or adversarial frame
+    // could carry despite the type calling `ask` an object.
+    expect(sessionAsk({ ask: 'held' as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: 5 as unknown as FleetSession['ask'] })).toBeNull();
+    // `parentId` missing, wrong type, or empty.
+    expect(sessionAsk({ ask: { state: 'held' } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 5 } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: '' } })).toBeNull();
+    // `state` out of the six-member vocabulary entirely (not even `unknown`
+    // — a token `isAskState` itself rejects, e.g. a 7th member a build ahead
+    // of this one shipped).
+    expect(sessionAsk({ ask: { state: 'bogus' as AskState, parentId: 'coord-1' } })).toBeNull();
+  });
+
+  it('passes a valid-but-unrendered state through unchanged — folding those to "no chip" is SessionLine\'s job, not this reader\'s', () => {
+    // `released`/`stale`/`unknown` are all in `AskState`'s six-member
+    // vocabulary, so `isAskState` accepts them; this function's own
+    // contract is "read the wire honestly", not "decide what the design
+    // doc has words for" — that fold lives where the design doc's two
+    // sentences do, in `SessionLine.tsx`.
+    expect(sessionAsk({ ask: { state: 'released', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'released', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
   });
 });

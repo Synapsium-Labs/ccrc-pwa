@@ -336,6 +336,21 @@ export const CCD_ARGV = {
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
+   *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
+   *  `enable` rule above: a route picks between two words rather than
+   *  parameterising one builder. No route calls either of these yet (wave
+   *  3's); the agent grants the one prefix that covers both, and
+   *  `whitelist-subset` enumerates each separately so a shape nothing builds
+   *  cannot hide behind its sibling.
+   *
+   *  `project` reaches ccd UNVALIDATED, exactly as `/api/projects/:project/
+   *  workspaces` sends it: `_ws_project_valid` on the box is the authority,
+   *  and nothing server-side joins a request-supplied name into a path. */
+  projectPoolSet:   (project: string, pool: string) =>
+                      argv(['project-pool', '--project', project, '--pool', pool]),
+  projectPoolClear: (project: string) =>
+                      argv(['project-pool', '--project', project, '--clear']),
 } as const;
 
 /**
@@ -369,6 +384,26 @@ export function verbSupported(
  *  finding for this vocabulary, so its own green run is not what proves the
  *  parity; the `toContain` assertion above is. */
 export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
+
+/** The `ccd caps` token that says this box honours project pool tags (wave
+ *  2a). Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason: a
+ *  capability token copied into two files is the drift shape
+ *  `single-definition.test.ts` exists for. ccd's own `echo pools-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, and that test's `toContain` assertion is what keeps THIS one
+ *  equal to them.
+ *
+ *  It gates ONE decision, and only one, and that decision does not exist
+ *  yet: whether the server may build a `--cross-pool` argv, wave 3's. None
+ *  of the following exists today either — this names what each will be,
+ *  not what any is. The tag route (wave 3) will be gated on the VERB's
+ *  presence instead of on this token, and wave 3's 409 pre-check and its
+ *  placement forecast will be the server's own decisions over data they
+ *  read — gated by neither this token nor any other. Fix round 1 (Finding
+ *  2c): a prior version of this docstring stated the pre-check and the
+ *  forecast in the present tense, as if they already existed ungated;
+ *  they do not exist at all yet. */
+export const POOLS_CAP = 'pools-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

@@ -99,8 +99,10 @@ export interface AccountDef {
    *  is stating something false.
    *
    *  DECLARED, NEVER DERIVED. The tempting derivation — `homeAble: false` plus
-   *  `telemetry: 'none'` — is exactly `gpt`: a REAL opt-in account a session
-   *  reaches on purpose with `ccd prefer`, which
+   *  `telemetry: 'none'` — is exactly `gpt`: a REAL account — an overflow lane
+   *  the auto-swapper rotates onto as a last resort while it is installed and
+   *  not kill-switched, and one an operator can send a session to with
+   *  `ccd prefer`/`ccd swap` — which
    *  `pwa/test/accounts-screen.test.tsx`'s "every account, never hidden"
    *  invariant requires a row for. No predicate over the other fields can tell
    *  the two apart, so only the operator can say which this is.
@@ -108,6 +110,22 @@ export interface AccountDef {
    *  Optional in the FILE and defaulted false here, so every roster written
    *  before the field existed parses and renders exactly as it did. */
   hidden: boolean;
+  /** The operator's optional grouping of accounts — a billing or tenancy pool.
+   *  An account may serve a project when either side is untagged or the two
+   *  names agree; `shared/poolrule.ts` is the one place that rule is spelled in
+   *  TypeScript, and `ccd`'s `_pool_ok` is the other spelling, in bash (wave
+   *  2a) — the two share no code across the language boundary, so both are
+   *  driven over the same `POOL_RULE_CASES` fixture table instead.
+   *
+   *  REQUIRED on the type, with `null` as the untagged answer, so every
+   *  constructor of an `AccountDef` has to say which it means. The field is
+   *  OPTIONAL in the file, and `null` is what absence parses to — but an
+   *  explicit `"pool": null` in the JSON is REFUSED rather than folded into
+   *  absence. The two are different situations with different remedies: absence
+   *  is the file saying "untagged", a written `null` is an edit someone did not
+   *  finish, and answering "untagged" for it would be this parser narrowing a
+   *  distinction it received. */
+  pool: string | null;
 }
 
 /**
@@ -216,6 +234,48 @@ export class RosterError extends Error {
  */
 const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/**
+ * The pool-name charset — deliberately `ID_RE`'s exact shape, and for `ID_RE`'s
+ * exact reason. That sentence is an ASSERTION, not a claim on trust:
+ * `server/test/gen-accounts.test.ts` requires `ID_RE`'s literal, extracted from
+ * this file's text, to equal this object's `.source` and `.flags`. A later wave
+ * with a reason to diverge the two changes that sentence and that assertion in
+ * one act — the pin exists to make a divergence deliberate, not to forbid one.
+ *
+ * A pool name is embedded UNQUOTED in a generated bash `case` arm
+ * (`_ccrc_pool`, `shared/generate.mjs`) and printed with `echo`: a leading
+ * lowercase LETTER is what makes that `echo` safe, since bash's builtin
+ * swallows a first argument made entirely of `-` followed by `n`/`e`/`E` and
+ * prints nothing — the failure `generate.mjs` already documents for labels.
+ * `[a-z0-9-]` then leaves no room for whitespace, which `ccd` would word-split
+ * when it reads the value back through an unquoted `$( … )`.
+ *
+ * EXPORTED, unlike `ID_RE`, because things outside this file IMPORT the object
+ * today: `server/test/roster.test.ts` value-imports it to pin the grammar's
+ * BOUNDARY — the 32-character cap and the shapes just outside it — and
+ * `server/test/gen-accounts.test.ts` value-imports it to hold the bare-`node`
+ * mirror's hand-copied literal equal to this one, both being assertions only a
+ * reader of the one definition can make. One more importer is coming: the
+ * project-pool route (wave 3) will validate a request body against this object.
+ * Wave 2a's parity scan will read `POOL_NAME_RE.source` the same way, to pin
+ * `ccd`'s own hand-typed `POOL_NAME_RE=` bash literal equal to it.
+ *
+ * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT why this is exported:
+ * it hand-COPIES the literal, because a bare `node` cannot import TypeScript
+ * (that file's own header says so) — exactly the relationship it also has with
+ * the module-PRIVATE `ID_RE`, so it cannot be what distinguishes the two. A copy
+ * that cannot import cannot be held equal by the compiler either, so it is held
+ * equal by TEXT EXTRACTION: `gen-accounts.test.ts` lifts the literal out of that
+ * file's `const POOL_NAME_RE = /…/;` declaration and requires it to equal THIS
+ * object's `.source` and `.flags`, and reds by name if it finds no literal to
+ * lift at all. That is D-1742's second round. Its first concluded that the
+ * REJECT table's BEHAVIOUR held the two equal; the refutation was three
+ * tail-charset widenings of the mirror that every row of that table survived.
+ * The table remains the behavioural half and is not superseded — text equality
+ * proves the two files hold the same pattern, never that either side applies it.
+ */
+export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
 /** C0 controls plus DEL — everything a one-line status bar cannot survive.
  *  Deliberately NOT a whitelist of "printable" characters: real labels are
  *  `team·max` and `team·alt`, so anything narrower than "no control bytes"
@@ -236,7 +296,7 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
-  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden'],
+  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
 );
 // `upstream` and `external` carry no fields beyond the discriminator;
 // `generated` is the only kind with a second, optional one. Split so a typo
@@ -456,6 +516,25 @@ function parseAccount(raw: unknown, index: number): Draft {
   }
   const hidden = hiddenRaw === true;
 
+  // OPTIONAL in the file like `hidden` above, and refused rather than coerced
+  // when it is present and wrong — a literal `null` included. `typeof null ===
+  // 'object'`, so the `!== undefined` guard admits `null` to the check on
+  // purpose: see `AccountDef.pool` for why absence and a written `null` are not
+  // the same fact. The grammar is `POOL_NAME_RE`, which is `ID_RE`'s, because
+  // the value ends up in the same two places an id does — a bash `case` arm and
+  // an `echo`.
+  const poolRaw = raw['pool'];
+  if (poolRaw !== undefined && (typeof poolRaw !== 'string' || !POOL_NAME_RE.test(poolRaw))) {
+    throw new RosterError(
+      `account "${id}" has an invalid pool ${JSON.stringify(poolRaw)}: a pool name must start ` +
+        'with a lowercase letter and contain only lowercase letters, digits and hyphens ' +
+        '(max 32 characters).',
+      `Set "pool" for account "${id}" in ${ROSTER_PATH} to a name matching ` +
+        '^[a-z][a-z0-9-]{0,31}$, or remove the key entirely to leave the account untagged.',
+    );
+  }
+  const pool = poolRaw === undefined ? null : poolRaw;
+
   const telemetry = raw['telemetry'];
   if (telemetry !== 'anthropic' && telemetry !== 'none') {
     throw new RosterError(
@@ -481,7 +560,7 @@ function parseAccount(raw: unknown, index: number): Draft {
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden, pool };
 }
 
 /**

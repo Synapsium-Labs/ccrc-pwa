@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -428,6 +428,22 @@ describe('the rejection table is total, in both directions', () => {
     for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
   });
 
+  it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
+    // RULING F7: `AskRefuseCode` had no reverse scan — only two of the seven
+    // vocabularies sharing the kebab scanner below get both directions —
+    // so nothing would red if a route forgot one of the five route-level
+    // codes (`unknown-ask`/`not-held`/`ask-moved`/`not-parent`, Task 9, plus
+    // `child-unmeasurable`, whole-branch review M2) or typo'd it. `answerAsk`'s own ten live in `server/src/inject/ask.ts`,
+    // OUTSIDE `server/src/coord` entirely, so a coord-only scan (the
+    // `RunRefuseCode` shape just above) could never cover them — this reads
+    // BOTH directories, unlike every other reverse scan in this file.
+    const injectDir = path.resolve(here, '../src/inject');
+    const src = sources() + '\n' +
+      readdirSync(injectDir).filter((f) => f.endsWith('.ts'))
+        .map((f) => readFileSync(path.join(injectDir, f), 'utf8')).join('\n');
+    for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+  });
+
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
     // Deliberately over-broad, then filtered by an explicit allowlist of
     // NON-code kebab literals, so a new code cannot slip in unnamed. A token
@@ -560,8 +576,16 @@ describe('the rejection table is total, in both directions', () => {
         // guard rather than NOT_CODES, for the reason the `LifecycleGapReason` note
         // above gives: an allowlist accepts one spelling for ever, a guard accepts a
         // member added later and still rejects a typo'd one.
-        || isReclaimRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode`).toBe(true);
+        || isReclaimRefuseCode(tok)
+        // TASK 3 (D-2174) — the SEVENTH union, checked together and never
+        // merged, on the standing rule `enter-ignored` states above. The ask
+        // pre-emption routes spell five route-level refusals (`unknown-ask`,
+        // `not-held`, `ask-moved`, `not-parent`, and `child-unmeasurable`
+        // from the whole-branch review) as literals in server/src/coord,
+        // alongside `answerAsk`'s own ten — same refusal family, one union,
+        // admitted through its own exported guard rather than NOT_CODES.
+        || isAskRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
     }
   });
 });

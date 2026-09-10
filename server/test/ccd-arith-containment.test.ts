@@ -9,14 +9,19 @@
 // `=~ ^[0-9]+$` placed FIRST inside the same `[[ ]]` guards, because that is
 // what makes `&&` short-circuit before the arithmetic operand is evaluated.
 //
-// THREAT MODEL — say it plainly, as the commit does. None of the five swept
-// sites is wire-reachable: the fields they read (`lastswap`, `lastcompact`)
-// are written only by ccd's own `_reg_set` from `$(date +%s)`, and
-// `SWAP_JITTER` is agent-set env, not wire-set. Exploiting one already needs
-// write access to `~/.cc-sessions` as the fleet UNIX user. This is defence in
-// depth against a TORN or hand-edited registry field, not a live-vulnerability
-// fix. The one live wire-reachable instance was `cmd_ensure`'s positional,
-// closed in 73bc0fe.
+// THREAT MODEL — say it plainly, as the commit does. None of the seven swept
+// sites is wire-reachable: the fields they read (`lastswap`, `lastcompact`,
+// `strandnotify`, `compactnote`) are written only by ccd's own `_reg_set` from
+// `$(date +%s)` — `strandnotify` has exactly one writer, `_strand_mark` (wave
+// 2b), and `compactnote` exactly one, `_compact_note` (D-2013), and no wire
+// route reaches either, so they are the same defence-in-depth class as
+// the other five, not a new exposure — and `SWAP_JITTER` is not wire-set
+// either; ccd assigns it unconditionally, so nothing outside ccd reaches
+// that operand (see the note on the `_dispatch_swap` case below).
+// Exploiting one already needs write access to `~/.cc-sessions` as the
+// fleet UNIX user. This is defence in depth against a TORN or hand-edited
+// registry field, not a live-vulnerability fix. The one live wire-reachable
+// instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
@@ -83,14 +88,15 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
   it('_dispatch_swap does not evaluate a payload sitting in SWAP_JITTER', () => {
     const h = makeCcdHarness('arith-jitter');
     // MEASURED, and it corrects the plan's table: this site is NOT reachable
-    // from the environment. `ccd:56` is a bare `SWAP_JITTER=120`, not
-    // `${SWAP_JITTER:-120}`, so sourcing ccd overwrites whatever the caller
-    // exported — the operand is always ccd's own literal. Passing the payload
-    // as env therefore proves nothing, and a test written that way is green
-    // for a reason unrelated to the guard.
+    // from the environment. ccd assigns `SWAP_JITTER` unconditionally
+    // (`grep -n '^SWAP_JITTER=' ccd/ccd`), not `${SWAP_JITTER:-120}`, so
+    // sourcing ccd overwrites whatever the caller exported — the operand is
+    // always ccd's own literal. Passing the payload as env therefore proves
+    // nothing, and a test written that way is green for a reason unrelated to
+    // the guard.
     //
     // So the hostile value is assigned AFTER the source, which is how it could
-    // actually arrive: the day someone respells line 54 as `${SWAP_JITTER:-120}`
+    // actually arrive: the day someone respells that assignment as `${SWAP_JITTER:-120}`
     // to make it tunable, or a future caller assigns it. The `-gt` is itself an
     // arithmetic context, reached before the `$(( RANDOM % ... ))`. The guard
     // degrades to jitter=0 — the documented pre-jitter behaviour.
@@ -101,8 +107,45 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.cleanup();
   });
 
+  it('_compact_note does not evaluate a payload planted in compactnote', () => {
+    const h = makeCcdHarness('arith-compactnote');
+    // D-2013's FLOOR ANCHOR, and the payload is planted where the arithmetic
+    // actually reads. Until fix round B the epoch was the first token of
+    // `compactskip` and this test planted it there; the flap fix separated the
+    // marker from the anchor (`_strand_mark`/`_strand_clear`'s shape), so
+    // `compactskip` is now compared as a STRING and never as a number, and
+    // `compactnote` is the bare epoch `$((now - nts))` evaluates. A payload
+    // left in `compactskip` would prove nothing — the same trap this file's
+    // SWAP_JITTER note describes.
+    h.sh(
+      " _reg_set myid compactnote 'REG[$(touch \"$HOME/PWNED-note\")]';"
+      + ' _compact_note myid mid-turn');
+    expect(existsSync(path.join(h.home, 'PWNED-note'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_strand_mark does not evaluate a payload planted in strandnotify', () => {
+    const h = makeCcdHarness('arith-strand');
+    // The banner floor reads `strandnotify` as an arithmetic operand. A torn or
+    // hand-edited field is the threat model, exactly as `lastswap` is.
+    //
+    // MEASURED, under the guard removed: the injection genuinely fires (the
+    // marker IS created), but the resulting arithmetic syntax error inside
+    // `[[ ]]` aborts the enclosing function with rc 1, so `bash -c` exits
+    // non-zero and `h.sh`'s `execFileSync` THROWS before the `expect(...)`
+    // below is ever reached. The assertion is a live backstop for a future
+    // guard shape that fails softer — it is not what produces this test's red
+    // today; the thrown `Error` is.
+    h.sh(
+      '_reg_set myid wrapper claude;'
+      + " _reg_set myid strandnotify 'REG[$(touch \"$HOME/PWNED-strand\")]';"
+      + ' _strand_mark myid claude demo');
+    expect(existsSync(path.join(h.home, 'PWNED-strand'))).toBe(false);
+    h.cleanup();
+  });
+
   it('ccd assigns SWAP_JITTER unconditionally — the reason the env cannot reach that arithmetic', () => {
-    // Pins the fact the test above depends on. If line 54 ever becomes
+    // Pins the fact the test above depends on. If that assignment ever becomes
     // `${SWAP_JITTER:-120}`, this goes red and the reader is sent to the guard
     // that then starts carrying real weight instead of defence in depth.
     const src = readFileSync(CCD, 'utf8');
@@ -123,10 +166,21 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_auto_compact_check (lastswap)',         anchors: ['$((now - lastswap))', 'COMPACT_COOLDOWN'], arith: '$((' },
     { fn: '_spawn_start (fromswap)',                anchors: ['- lastswap ))', '-lt 300'],            arith: '$((' },
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
+    { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
+    { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
   ];
+  // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
+  // premise (#69 review round 4). The comment here said "the seven sites are all
+  // `[[ … ]]` guards" — a claim about the tree, and round 4 falsified it: the
+  // `lastswap` cooldown became `if [[ … ]]; then … fi` so it could clear a stale
+  // `tickstuck` stamp before returning. Nothing this file actually asserts
+  // depends on the statement form — the assertion is that the `=~ ^[0-9]` guard
+  // precedes the arithmetic ON THE SAME LINE — so the filter is widened rather
+  // than the code contorted back into a shape a scanner happened to assume.
   const codeLines = readFileSync(CCD, 'utf8').split('\n')
     .map((line) => line.trim())
-    .filter((line) => line.startsWith('[['));   // the five sites are all `[[ … ]]` guards, never comments
+    .map((line) => (line.startsWith('if [[') ? line.slice(3) : line))
+    .filter((line) => line.startsWith('[['));   // guards only, never comments
 
   for (const site of SITES) {
     it(`${site.fn} carries =~ ^[0-9] before its arithmetic`, () => {
@@ -160,7 +214,10 @@ describe('_pane_ctx_pct is the one sanitiser the compact arithmetic depends on (
 describe("_spawn_start's only failure mode is die (Step 8, D-300 (was D-B8-4))", () => {
   it('has no bare non-zero return — the split installed a door and this keeps it shut', () => {
     const h = makeCcdHarness('arith-spawnret');
-    // Tasks 7/8 made every caller `_spawn_start "$id" <mode> || return $?`.
+    // Tasks 7/8 made every caller consume the rc — `_spawn_start "$id" <mode>
+    // || return $?` everywhere except `cmd_ws_restore`, which branches on it
+    // because it holds the reap-lock descriptor (see the note above that call
+    // in `ccd/ccd`).
     // That early return skips `_reg_claim` (and `_ws_supervise` at ws-add /
     // ws-restore) — the exact writes Wave 1 moved earlier. It is unobservable
     // ONLY because `_spawn_start` has no `return` of its own: every failure is

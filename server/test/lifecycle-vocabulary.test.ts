@@ -24,7 +24,7 @@
 // WAVE 2 OWES THIS FILE FIVE THINGS, IN ONE COMMIT:
 //   1. `_LC_ACTS` as a TOP-LEVEL bash array, readable by `declare -p _LC_ACTS`
 //      after `source ccd` — not a local, not built inside a function.
-//   2. Its members exactly LIFECYCLE_ACTS minus LC_ACT_UNKNOWN (21 acts).
+//   2. Its members exactly LIFECYCLE_ACTS minus LC_ACT_UNKNOWN (22 acts).
 //   3. `_LC_OUTCOMES`, likewise, exactly LIFECYCLE_OUTCOMES minus
 //      LC_OUTCOME_UNKNOWN (4). Both degrades are the reader's.
 //   4. `_lc_emit()` at the top level, and it must CONSULT `_LC_ACTS` — an act
@@ -146,7 +146,7 @@ describe('ccd <-> shared: the journal vocabulary', () => {
     // the length assertion measures the mutant TODAY.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
     // Two independent claims about `want` itself — expect.soft.
-    expect.soft(want.length, 'guards the guard: an empty want passes everything').toBe(21);
+    expect.soft(want.length, 'guards the guard: an empty want passes everything').toBe(22);
     expect.soft(want, 'the filter must exclude the degrade, not merely run').not.toContain(LC_ACT_UNKNOWN);
     const acts = ccdArray('_LC_ACTS');
     if (acts === null) {

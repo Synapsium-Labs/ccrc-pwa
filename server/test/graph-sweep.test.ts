@@ -78,8 +78,58 @@ function plantGuardPython(): void {
   // — mkdirSync it here rather than relying on call order.
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
-# fake detect(): echo the fixture corpus (paths relative to cwd)
-cat "$HOME/fixture-corpus" 2>/dev/null || true
+# fake detect(): the fixture corpus (paths relative to cwd) — filtered through
+# the generated .graphifyignore the way the real detect() applies THESE entries
+# (D-1451). A leading '/' anchors at the directory holding the file, which is
+# the tree root (detect.py:883-895, \`anchored = raw.startswith("/")\`); a
+# trailing '/' is a directory, excluded with everything under it by the
+# ancestor walk (detect.py:924-931), i.e. by prefix; anything else names one
+# file. graphify-out/memory/ bypasses the filter entirely, exactly as
+# detect.py:1160-1166 does — query results are re-added whatever the ignore
+# rules say, which is why the guard exempts them from the breach test.
+# A stub that ignored .graphifyignore could not tell a filter that works from
+# one that does nothing.
+#
+# D-1453: a file entry is matched by an UNQUOTED \`case\` pattern, not by
+# equality. Equality was the one place this stub could not mirror the engine —
+# and it is exactly the place where the mirror is load-bearing, because bash's
+# \`case\` lets \`*\` cross a \`/\` just as \`fnmatch.fnmatch\` does (and just as
+# \`git ls-files -X\`'s wildmatch does NOT). With equality, an entry that eats a
+# TRACKED file out of the corpus is invisible to the suite. The corpus is also
+# teed to \$HOME/seen-corpus so a row can assert what SURVIVED, not only what
+# the filter carries — a shrunk corpus is otherwise silent (no withheld line,
+# no breach, exit 0).
+#
+# D-1458: every invocation appends one line to $HOME/detect-calls, so a row can
+# assert HOW MANY TIMES detect() ran. The guard now runs it twice — but only on
+# a tree where the first run caught a breach git ignores; the whole point of the
+# narrowing is that a tree with nothing to derive pays for exactly one run.
+echo call >> "$HOME/detect-calls"
+# and the filter as detect saw it on THIS call — the engine's own capture is
+# unreachable on a tree the guard refuses, and a withheld entry now always
+# refuses (it is in the corpus; that is why it was derived).
+rm -f "$HOME/detect-ignore"; cp .graphifyignore "$HOME/detect-ignore" 2>/dev/null || true
+[ -f "$HOME/fixture-corpus" ] || exit 0
+pats=()
+if [ -f .graphifyignore ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    pats+=("\${line#/}")
+  done < .graphifyignore
+fi
+{ while IFS= read -r p || [ -n "$p" ]; do
+  [ -n "$p" ] || continue
+  case "$p" in graphify-out/memory/*) printf '%s\\n' "$p"; continue ;; esac
+  keep=1
+  for pat in \${pats[@]+"\${pats[@]}"}; do
+    case "$pat" in
+      */) case "$p" in \${pat%/}/*) keep=0 ;; esac ;;
+      *)  case "$p" in $pat) keep=0 ;; esac ;;
+    esac
+  done
+  [ "$keep" = 1 ] && printf '%s\\n' "$p"
+done < "$HOME/fixture-corpus"; } | tee "$HOME/seen-corpus"
+exit 0
 `, { mode: 0o755 });
 }
 function runSweep(env: NodeJS.ProcessEnv = {}) {
@@ -260,12 +310,15 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
       .toBe(realTree);
   });
 
-  // The EFFECT the row's spelling decides, not just the spelling. `_gs_busy`
-  // matches a session by raw string compare of `$REG/<id>.workdir` against the
-  // as-globbed path, so an alias row means the idle gate never fires and the
-  // sweep builds under a working session — the one thing that gate exists to
-  // prevent.
-  it('an alias row would unmatch the idle gate — a session on the real path still defers it', () => {
+  // The EFFECT the row's spelling decides, not just the spelling: an alias row
+  // is the row every reader that matches BY STRING is unmatched by — the
+  // card's `.path == $p` census lookup (`ccd/session-hook.sh`) chief among
+  // them, so a session on the real path gets no "the sweep refused this tree"
+  // card at all. Until D-1562 the idle gate was such a reader too and an alias
+  // row meant it never fired; the gate now compares realpaths, so what this
+  // case still measures is the SPELLING the pass records for a tree a session
+  // is working in.
+  it('an alias row would unmatch the census readers — a session on the real path still defers it', () => {
     seedAccountsSh(home);
     const realTree = makeWorktreeRoot('foo'); plantEngine();
     fs.mkdirSync(j('projects'), { recursive: true });
@@ -279,7 +332,8 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
     fs.writeFileSync(path.join(cfg, 'sessions', '4242.json'), JSON.stringify({ state: 'working' }));
     expect(runSweep().status).toBe(0);
     expect(outcomeOf(realTree), 'the sweep built a graph under a WORKING session because its ' +
-      'census row named the alias and the idle gate matches by string').toBe('skipped-busy');
+      'census row named the alias, so no reader that matches by string finds this tree')
+      .toBe('skipped-busy');
     expect(fs.existsSync(j('engine-calls')),
       'the engine ran on a tree the idle gate should have deferred').toBe(false);
   });
@@ -308,6 +362,135 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
     expect(hits[0], 'the census carries the ALIAS under a symlinked root — the survivor rule asks ' +
       'about ANCESTRY when the only thing that distinguishes the two names is the last component')
       .toBe(j('projects', 'zeta'));
+  });
+});
+
+// D-1510 — CLAUDE CODE'S OWN WORKTREES ARE TREES TOO.
+//
+// `EnterWorktree` puts a session's worktree at `<repo>/.claude/worktrees/<name>`
+// — a real git toplevel, at a depth NONE of the three globs above reaches
+// (`$PROJECTS_ROOT/*/`, `$WORKTREES_ROOT/*/`, `$WORKTREES_ROOT/*/*/`).
+// MEASURED on the live fleet 2026-09-05: one of 18 live sessions was running in
+// `$PROJECTS_ROOT/<repo>/.claude/worktrees/<name>` over a graph.json a week old
+// with no `.graphify_engine` beside it — not the sweep's build, and nothing in
+// the sweep would ever refresh it. It reads fresh only until the first commit
+// lands there, and stale for ever after.
+//
+// The predicate and the dedupe are unchanged: what makes this a tree is the
+// same `--show-toplevel`-is-itself question every other candidate answers, and
+// a plain subdirectory beside it must still be nothing at all.
+describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (D-1510)', () => {
+  const paths = (): string[] => lastPass().trees.map((t: { path: string }) => t.path);
+
+  // D-1563 — AND ONLY WHILE A SESSION LIVES IN ONE. A `.claude/worktrees`
+  // candidate is discovered only while some `$REG/<id>.workdir` names it, so
+  // every positive case below registers a session on the tree it expects to
+  // find. Nothing else about the session matters here: with no hookstate
+  // beside the workdir the idle gate reads idle and the tree still builds —
+  // this is a DISCOVERY rule, not the gate.
+  function registerSession(id: string, tree: string): void {
+    const reg = j('.cc-sessions'); fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${id}.workdir`), tree + '\n');
+  }
+
+  it('discovers one under $PROJECTS_ROOT, keeps the parent, and skips a plain sibling', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const wt = path.join(repo, '.claude', 'worktrees', 'x');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'x', wt);
+    // D-1562's comparison, spelled once: the registry names this tree through
+    // a symlinked root and the census names it through $HOME — realpath on
+    // both sides is what makes them the same tree.
+    fs.symlinkSync(j('projects'), j('data'));
+    registerSession('alpha-x', path.join(j('data'), 'alpha', '.claude', 'worktrees', 'x'));
+    // a plain directory in the same place, with content and no git of its own
+    const notatree = path.join(repo, '.claude', 'worktrees', 'notatree');
+    fs.mkdirSync(notatree, { recursive: true });
+    fs.writeFileSync(path.join(notatree, 'a.py'), 'x = 1\n');
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), "the session's own worktree is invisible to the sweep — its graph is never "
+      + 'refreshed by anything').toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'a plain directory under .claude/worktrees was censused as a tree')
+      .not.toContain(notatree);
+    expect(paths(), 'the parent project lost its own row').toContain(repo);
+    expect(outcomeOf(repo)).toBe('never-built');
+  });
+
+  it('discovers one under $WORKTREES_ROOT as well (depth-2 workspace, then .claude/worktrees)', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const ws = j('worktrees', 'alpha', 'wt1');
+    fs.mkdirSync(path.dirname(ws), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'wt1-branch', ws);
+    const wt = path.join(ws, '.claude', 'worktrees', 'y');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(ws, 'worktree', 'add', '-q', '-b', 'y', wt);
+    registerSession('alpha-y', wt);                     // D-1563: a session lives in it
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'a Claude Code worktree inside a ccd workspace is invisible to the sweep')
+      .toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'the workspace that holds it lost its own row').toContain(ws);
+    expect(paths(), 'the parent project lost its own row').toContain(repo);
+  });
+
+  // D-1510 (review finding) — AND UNDER THE DEPTH-1 WORKSPACE SHAPE TOO.
+  // `$WORKTREES_ROOT/<name>` is its own toplevel (D-1367's measured shape), so
+  // a session's `.claude/worktrees/<x>` sits ONE level shallower there than in
+  // the case above and `$WORKTREES_ROOT/*/*/.claude/worktrees/*/` never reaches
+  // it. The two shapes of workspace the fleet actually has need one glob each.
+  it('discovers one under a DEPTH-1 workspace as well ($WORKTREES_ROOT/<name> is its own toplevel)', () => {
+    const solo = j('worktrees', 'solo');
+    fs.mkdirSync(solo, { recursive: true });
+    execFileSync('git', ['init', '-q', solo]);
+    fs.writeFileSync(path.join(solo, 'a.py'), 'x = 1\n');
+    git(solo, 'add', '.'); git(solo, 'commit', '-qm', 'init');
+    fs.appendFileSync(path.join(solo, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
+    plantEngine();
+    const wt = path.join(solo, '.claude', 'worktrees', 'z');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(solo, 'worktree', 'add', '-q', '-b', 'z', wt);
+    registerSession('solo-z', wt);                      // D-1563: a session lives in it
+    // the same plain directory beside it: content, no git of its own
+    const notatree = path.join(solo, '.claude', 'worktrees', 'notatree');
+    fs.mkdirSync(notatree, { recursive: true });
+    fs.writeFileSync(path.join(notatree, 'a.py'), 'x = 1\n');
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), "a Claude Code worktree inside a DEPTH-1 workspace is invisible to the sweep")
+      .toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'a plain directory under .claude/worktrees was censused as a tree')
+      .not.toContain(notatree);
+    expect(paths(), 'the workspace that holds it lost its own row').toContain(solo);
+  });
+
+  // D-1563 — THE RULE D-1510 WAS MISSING. The three globs found 15 directories
+  // on the live fleet, 14 of them git toplevels, and TEN were minted by Claude
+  // Code's own isolation — `agent-<hex>` subagent worktrees and `wf_<run>-<n>`
+  // workflow ones. The pass built eight of them cold at ~75 s each, ran eleven
+  // minutes against the two it took before, and recorded `skipped-budget` for
+  // the one named worktree D-1510 was written for. A tree is worth a build
+  // because a SESSION LIVES IN IT — the rule the idle gate already states.
+  // The parent projects and the ccd workspaces are unaffected: the operator
+  // put those there, session or not.
+  it('D-1563 — a .claude/worktrees tree NO session lives in gets no row at all', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const x = path.join(repo, '.claude', 'worktrees', 'x');
+    fs.mkdirSync(path.dirname(x), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'x', x);
+    const y = path.join(repo, '.claude', 'worktrees', 'y');   // the throwaway: a real toplevel…
+    git(repo, 'worktree', 'add', '-q', '-b', 'y', y);
+    registerSession('alpha-x', x);                            // …that no session names
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'the worktree a session LIVES in lost its row').toContain(x);
+    expect(paths(), 'a throwaway worktree no registered session lives in was censused, and a cold '
+      + 'build of it is what starved the tree the rule was written for').not.toContain(y);
+    expect(paths(), 'the parent project lost its own row — the operator put THAT there')
+      .toContain(repo);
   });
 });
 
@@ -572,6 +755,352 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
   });
 });
 
+describe('graph-sweep: the guard compares git TRUTH, not git QUOTING (D-1449)', () => {
+  // `git ls-files` C-quotes any path carrying a non-ASCII byte
+  // (`"J\303\240rn.py"`) unless core.quotepath is off, while detect() prints
+  // raw UTF-8 relative paths. `comm -23` then reads a TRACKED file as
+  // untracked and refuses the tree for ever, with no remedy on the box.
+  // MEASURED on the live fleet: mm-data was refused over two tracked files —
+  // a JSON named with a/o diacritics and a PNG named with an umlaut.
+  const NON_ASCII = 'Jàrnbìtar.py';        // raw UTF-8; git would print "J\303\240rnb\303\254tar.py"
+
+  it('a TRACKED non-ASCII path is not read as untracked (the tree still builds)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, NON_ASCII), 'x = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a tracked non-ASCII name');
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${NON_ASCII}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+  });
+
+  it('an UNTRACKED non-ASCII path still refuses, and the reason carries the raw name', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, NON_ASCII), 'x = 1\n');   // written, never committed
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${NON_ASCII}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
+    expect(reason).toContain(NON_ASCII);
+    expect(reason).not.toContain('\\303');   // never the C-quoted spelling
+  });
+
+  // D-1450: `-c core.quotepath=false` silences ONLY the non-ASCII class.
+  // `ls-files` still C-quotes a backslash, a double quote and any control
+  // byte, so a tracked file in any of those three classes was refused by the
+  // identical defect, with the identical no-remedy-on-the-box property. `-z`
+  // is raw for all four in one call; this row is what the narrower spelling
+  // cannot pass.
+  const QUOTED_TOO = ['back\\slash.py', 'quo"te.py', 'tab\tname.py'];
+
+  it('a TRACKED path git C-quotes for a backslash, a quote or a tab is not read as untracked', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    for (const n of QUOTED_TOO) fs.writeFileSync(path.join(repo, n), 'x = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracked names git C-quotes');
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${QUOTED_TOO.join('\n')}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+  });
+
+  it('an UNTRACKED backslash-named path still refuses, and the reason carries the raw name', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, 'back\\slash.py'), 'x = 1\n');   // never committed
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nback\\slash.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
+    expect(reason).toContain('back\\slash.py');
+    expect(reason).not.toContain('back\\\\slash.py');   // never the C-quoted spelling
+  });
+});
+
+describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () => {
+  // detect() reads `.gitignore` only along the ancestor chain from the VCS root
+  // down to the SCAN root (`_load_graphifyignore`, detect.py:793-836) — a
+  // NESTED `.gitignore` below the scan root is never read at all. So gitignored
+  // build artifacts entered the corpus, were untracked, and the guard refused
+  // the tree for ever, with no remedy on the box. MEASURED on the live fleet:
+  // synapsium-platform over `frontend/exposynapse-site/.astro/settings.json`
+  // (ignored by `frontend/exposynapse-site/.gitignore`) and
+  // MekWarLive/swift-harbor over `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  // The fix derives GIT'S OWN verdicts into the generated filter, so the two
+  // sides answer with one authority instead of two.
+  const captureFilter = 'cp .graphifyignore "$HOME/seen-ignore" 2>/dev/null || true';
+  const seen = () => fs.readFileSync(j('seen-ignore'), 'utf8');
+  // the same file as detect() saw it — readable even when the tree is refused
+  // and the engine never runs.
+  const seenAtDetect = () => fs.readFileSync(j('detect-ignore'), 'utf8');
+  // D-1453 — what the FILTER carries and what the CORPUS keeps are two
+  // different questions, and only the second can see an entry that eats a
+  // TRACKED file. plantGuardPython() tees the filtered corpus here.
+  const corpusSeen = () => fs.readFileSync(j('seen-corpus'), 'utf8');
+  // D-1458 — the stub appends one line per invocation. The derivation now costs
+  // a SECOND detect() run, and the row that matters is the one where it costs
+  // none at all.
+  const detectCalls = () => (fs.existsSync(j('detect-calls'))
+    ? fs.readFileSync(j('detect-calls'), 'utf8').split('\n').filter(Boolean).length : 0);
+
+  it('a NESTED .gitignore below the tree root is honoured — the tree BUILDS, and the entry is anchored', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'frontend', '.astro'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'frontend', 'index.ts'), 'export const i = 1;\n');
+    fs.writeFileSync(path.join(repo, 'frontend', '.gitignore'), '.astro/\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a nested .gitignore, below the scan root');
+    fs.writeFileSync(path.join(repo, 'frontend', '.astro', 'settings.json'), '{}\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'),
+      'a.py\nfrontend/index.ts\nfrontend/.astro/settings.json\n');
+    const r = runSweep();
+    expect(outcomeOf(repo), 'git ignores it, so it is not a breach — it is not corpus at all')
+      .not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'one ENTRY per line, anchored at the tree root, directory entries keeping their slash')
+      .toMatch(/^\/frontend\/\.astro\/$/m);
+    expect(r.stderr, 'the count is logged in the pass output, uncapped')
+      .toMatch(/git-ignored entries derived into the corpus filter: 1$/m);
+    expect(detectCalls(), 'measure, derive, measure again — the second run is what makes the derivation do anything')
+      .toBe(2);
+  });
+
+  it('a directory holding BOTH a tracked and an ignored file is NOT collapsed — only the ignored file is named', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'mixed'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    fs.writeFileSync(path.join(repo, 'mixed', 'keep.py'), 'k = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a directory with tracked content beside ignored');
+    fs.writeFileSync(path.join(repo, 'mixed', 'skip.log'), 'noise\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nmixed/keep.py\nmixed/skip.log\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), '--directory collapses a directory only when it holds no tracked file')
+      .toMatch(/^\/mixed\/skip\.log$/m);
+    expect(seen(), 'collapsing it would take the TRACKED mixed/keep.py out of the corpus with it')
+      .not.toMatch(/^\/mixed\/$/m);
+  });
+
+  it('a repo with nothing ignored gets no derived entries at all', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    // an operator list, so a filter is written at all and its contents are visible
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
+    expect(seen(), 'nothing is ignored, so nothing is derived').not.toMatch(/^\//m);
+    expect(r.stderr).not.toContain('git-ignored entries derived');
+    expect(detectCalls(), 'nothing derived, so no second run').toBe(1);
+  });
+
+  // D-1458 — A MEASURED COST WAS ACCEPTED INSTEAD OF REMOVED. D-1451..D-1453
+  // derived EVERY path git ignores. MEASURED on the live fleet (2026-09-04,
+  // custom-tools): 308 entries — 211 files under `.superpowers/`, 59 under
+  // `tools/`, 24 under `.remember/` — against a 1938-file corpus, at ~50 us per
+  // (pattern, path) with the path re-resolved inside the per-pattern loop
+  // (detect.py:891-895): ~600k matches, ~30 s added to EVERY pass over that
+  // tree, twice over. And only 22 of the 308 covered a file detect would ingest
+  // at all, every one under `.remember/` — which the DEFAULT noise list already
+  // excludes. The ledger measured that 30 s and signed it off as "inside the
+  // timeout". This row is the shape of that tree: a great many ignored paths,
+  // none of them anywhere near the corpus. It must cost NOTHING — no entries,
+  // and no second detect() run either.
+  it('a tree with hundreds of ignored files NONE of which reach the corpus derives nothing, and detect() runs once', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    // an operator list, so a filter is written at all and its contents are visible
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.tmp\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'ignore *.tmp');
+    // 300 ignored files at the ROOT, which holds tracked content — so
+    // `--directory` cannot collapse them and the old derivation would spell
+    // all 300 into the filter, one line each.
+    for (let i = 0; i < 300; i += 1) {
+      fs.writeFileSync(path.join(repo, `n${String(i).padStart(3, '0')}.tmp`), 'junk\n');
+    }
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');   // detect ingests none of them
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
+    const derivedLines = seen().split('\n').filter((l) => l.startsWith('/'));
+    expect(derivedLines, 'not one of the 300 covers a file detect would ingest, so not one is derived')
+      .toEqual([]);
+    expect(r.stderr, 'and nothing is counted, because nothing was carried')
+      .not.toContain('git-ignored entries derived');
+    expect(detectCalls(), 'the second run is reached only when something was derived').toBe(1);
+  });
+
+  // D-1458 — the derivation asks GIT, not the breach's shape. Without the
+  // check-ignore step every untracked corpus path would be derived into the
+  // filter, which is not a narrowing but a blanket amnesty: the guard would
+  // hide from itself the very paths it exists to refuse.
+  it('a breach path git does NOT ignore is never derived — the tree is still refused over it', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.writeFileSync(path.join(repo, 'skip.log'), 'noise\n');    // ignored, untracked
+    fs.writeFileSync(path.join(repo, 'poison.py'), 'x\n');       // untracked and NOT ignored
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nskip.log\npoison.py\n');
+    runSweep();
+    expect(outcomeOf(repo), 'the ignored path is derived away; the other one is a real breach')
+      .toBe('refused-by-guard');
+    const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
+    expect(reason).toContain('poison.py');
+    expect(reason, 'and the ignored one is gone from the corpus, so it is not in the reason')
+      .not.toContain('skip.log');
+  });
+
+  // D-1450's four quoting classes reach the derivation too, now that it round-
+  // trips every breach path through `git check-ignore --stdin`. `-z` frames
+  // both sides in NUL, so a non-ASCII name comes back raw; the line-framed
+  // spelling comes back C-quoted (`"J\303\240..."`), which would derive an
+  // entry naming a file that does not exist and leave the real one breaching.
+  it('a NON-ASCII ignored corpus path survives the check-ignore round trip and is derived raw', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    const NAME = 'Jàrnbìtar.log';
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.writeFileSync(path.join(repo, NAME), 'noise\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${NAME}\n`);
+    const r = runSweep();
+    expect(outcomeOf(repo), 'git ignores it, so it is not a breach at all')
+      .not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'the raw UTF-8 name, never the C-quoted spelling').toContain(`/${NAME}`);
+    expect(seen()).not.toContain('303');
+    expect(r.stderr).toMatch(/git-ignored entries derived into the corpus filter: 1$/m);
+  });
+
+  it('a derived entry is ANCHORED — an ignored `build/` may not hide a TRACKED src/build/', () => {
+    // Unanchored, this entry is a `build/` that matches at every depth: the
+    // RULE-3 probe sees it hide the tracked src/build/x.ts and withholds it,
+    // and build/junk.js then breaches the corpus. Anchored, it names the root
+    // directory git actually ignores and nothing else.
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'src', 'build'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'build/\n');
+    fs.writeFileSync(path.join(repo, 'src', 'build', 'x.ts'), 'export const x = 1;\n');
+    git(repo, 'add', '.gitignore'); git(repo, 'add', '-f', 'src/build/x.ts');
+    git(repo, 'commit', '-qm', 'tracks src/build despite an unanchored build/ rule');
+    fs.writeFileSync(path.join(repo, 'build', 'junk.js'), 'junk\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nsrc/build/x.ts\nbuild/junk.js\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'the entry names the ignored ROOT directory, not the name at every depth')
+      .toMatch(/^\/build\/$/m);
+  });
+
+  // D-1453 — THE SILENT CLASS THE PROBE CANNOT SEE, which D-1452 mistook for
+  // the probe's own case. The seam is THREE-way: git spells an entry as a
+  // PATH, `git ls-files -X` spends it as WILDMATCH (`*` does not cross `/`),
+  // detect spends it as `fnmatch.fnmatch` (detect.py:866, anchored arm, where
+  // `*` DOES cross `/`). Put the tracked file one directory DEEPER than the
+  // derived entry and the two glob dialects disagree: the probe answers empty
+  // and KEEPS the entry, and detect then eats the tracked file — no withheld
+  // line, no breach, exit 0. MEASURED against the installed 0.9.9 on this
+  // exact fixture: corpus with no filter ['a*.py', 'ax/b.py', 'keep.py']; with
+  // the raw entry `/a*.py` ['keep.py'] — the TRACKED ax/b.py gone; with the
+  // neutralized `/a[*].py` ['ax/b.py', 'keep.py']. Neutralization is the guard
+  // this row pins, and only the CORPUS assertion can see it.
+  it('a derived entry whose FILENAME carries a glob metacharacter is made LITERAL — a tracked file one directory deeper survives', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    // `\*` in .gitignore is a LITERAL star: only the file named `a*.py` is ignored.
+    fs.writeFileSync(path.join(repo, '.gitignore'), '/a\\*.py\n');
+    fs.mkdirSync(path.join(repo, 'ax'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'ax', 'b.py'), 'b = 1\n');
+    fs.writeFileSync(path.join(repo, 'keep.py'), 'k = 1\n');
+    // makeRepo's own `a.py` has to GO: `a*.py` matches it in wildmatch too, so
+    // leaving it would fire the probe and make this row red for the loud
+    // reason instead of the silent one it exists to measure.
+    git(repo, 'rm', '-q', 'a.py');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ax/b.py and keep.py; ignores the literal a*.py');
+    fs.writeFileSync(path.join(repo, 'a*.py'), 'untracked\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), 'ax/b.py\nkeep.py\na*.py\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    // the CORPUS first — it is the assertion that names the harm. The filter
+    // shape below only says HOW the corpus was kept whole.
+    expect(corpusSeen().split('\n'), 'the TRACKED file one directory deeper is still in the corpus')
+      .toContain('ax/b.py');
+    expect(corpusSeen().split('\n'), 'and the ignored untracked file the entry names is still excluded')
+      .not.toContain('a*.py');
+    expect(seen(), 'the metacharacter is neutralized into a one-character class — literal in BOTH dialects')
+      .toMatch(/^\/a\[\*\]\.py$/m);
+    expect(seen(), 'the raw spelling — the one whose `*` crosses a `/` under fnmatch — never reaches the filter')
+      .not.toMatch(/^\/a\*\.py$/m);
+    expect(r.stderr, 'nothing is hidden, so nothing is withheld')
+      .not.toContain('derived ignore entries withheld');
+  });
+
+  // D-1453 — the RULE-3 probe over derived entries keeps its own red row, and
+  // after neutralization it is the OTHER half of the same three-way seam: a
+  // backslash is LITERAL to `fnmatch` but an ESCAPE to wildmatch. The entry
+  // `a\b.log` — one untracked file to git, one literal name to detect — reads
+  // as `ab.log` to `git ls-files -X`, which is TRACKED. So the probe fires on
+  // a file detect would never have hidden: a VISIBLE false positive, which is
+  // the direction a belt is allowed to fail in. MEASURED both ways on the
+  // installed 0.9.9: `_is_ignored(ab.log, root, [(root, '/a\b.log')])` is
+  // False, while `git ls-files -c -i -X` over that same entry prints `ab.log`.
+  it('the RULE-3 probe still withholds — a backslash is an escape to wildmatch and a literal to fnmatch', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');  // so a filter is written at all
+    // `\\` in .gitignore is ONE literal backslash: the ignored file is `a\b.log`.
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'a\\\\b.log\n');
+    fs.writeFileSync(path.join(repo, 'ab.log'), 'tracked\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ab.log; ignores the literal a-backslash-b.log');
+    fs.writeFileSync(path.join(repo, 'a\\b.log'), 'untracked\n');   // ignored, untracked
+    // D-1458: the path has to be IN THE CORPUS for the derivation to look at it
+    // at all — which also makes the cost of a withheld entry plain. Under the
+    // census-wide derivation the entry was withheld and nothing else happened;
+    // now a withheld entry means the tree is refused over that path, in the
+    // open, which is the direction a belt is allowed to fail in.
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nab.log\na\\b.log\n');
+    const r = runSweep();
+    expect(r.stderr, 'the probe fires, and says which entry it withheld and why')
+      .toMatch(/derived ignore entries withheld, repo tracks matching files: \/a\\b\.log/);
+    expect(seenAtDetect(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
+    expect(seenAtDetect(), 'the withheld entry never reaches the generated filter')
+      .not.toMatch(/a\\b\.log/);
+    expect(r.stderr, 'nothing survived the probe, so no count is logged')
+      .not.toContain('git-ignored entries derived');
+    expect(detectCalls(), 'and nothing survived, so there is nothing to measure a second time').toBe(1);
+    expect(outcomeOf(repo), 'the path is still in the corpus and still untracked — a VISIBLE refusal')
+      .toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason)
+      .toContain('a\\b.log');
+    expect(corpusSeen(), 'and the TRACKED ab.log the probe protected is still in the corpus')
+      .toContain('ab.log');
+  });
+
+  // D-1452 — git emits REDUNDANT entries whenever a directory is not itself
+  // named by an ignore rule but all of its content is ignored: the collapsed
+  // directory AND every ignored file under it. Measured (git 2.43.0): with
+  // `*.log` and a directory holding only `a.log`/`b.log`, `ls-files -o -i
+  // --exclude-standard --directory` prints `f/`, `f/a.log`, `f/b.log` — three
+  // entries for one collapsed directory. Every extra entry is dead weight the
+  // corpus side pays for per scanned path (D-1452's cost note), and it inflates
+  // the number the pass logs, so the count would over-report what the filter
+  // carries.
+  it('redundant entries under a COLLAPSED directory are pruned, and the logged count states what the filter carries', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.mkdirSync(path.join(repo, 'f'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'f', 'a.log'), 'noise\n');
+    fs.writeFileSync(path.join(repo, 'f', 'b.log'), 'noise\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nf/a.log\nf/b.log\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'the collapsed directory is the entry that carries the subtree')
+      .toMatch(/^\/f\/$/m);
+    expect(seen(), 'and the files under it are redundant with it — dead weight in every detect() call')
+      .not.toMatch(/^\/f\/a\.log$/m);
+    expect(r.stderr, 'the count states the entries the filter carries, not the entries git printed')
+      .toMatch(/git-ignored entries derived into the corpus filter: 1$/m);
+  });
+});
+
 describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branch review)', () => {
   // A repo that adopts graphify upstream may COMMIT its own .graphifyignore
   // — tracked, so ignore rules don't protect it from deletion the way they
@@ -635,6 +1164,102 @@ describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branc
       .toContain('.graphifyignore');
     expect(fs.readFileSync(ignorePath, 'utf8')).toBe(before);   // untouched, not overwritten
     expect(fs.existsSync(path.join(repo, 'graphify-out', 'graph.json'))).toBe(false);
+  });
+
+  // (d) D-1452, narrowed by D-1458 — the case the other three cannot reach.
+  // (a)/(a2)/(b) each carry a foreign `.graphifyignore` but nothing GITIGNORED,
+  // untracked AND IN THE CORPUS, so the derivation produces an empty set and
+  // the write block never runs: all three stay green with the `foreign` skip
+  // deleted. Measured. This row supplies the missing precondition — one ignored
+  // untracked path that detect actually ingests, which since D-1458 is what it
+  // takes for the derivation to have anything to write — and the skip is the
+  // only thing standing between it and the repo's own committed file. Without
+  // the skip the generated filter OVERWRITES that tracked file, and
+  // `_gs_rm_generated`, reading its own marker on what is now a marker-bearing
+  // file, then DELETES it at exit: D-1161's failure one step worse, the repo
+  // left with a deleted tracked file. So the tree is refused here — the honest
+  // outcome for a repo whose own filter this sweep may not touch — and what
+  // this row pins is that the refusal costs the committed file nothing.
+  it('(d) a foreign file plus a GITIGNORED untracked path IN THE CORPUS: the derivation is skipped, and the committed file survives byte-identical', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const ignorePath = trackForeignIgnore(repo);
+    const before = fs.readFileSync(ignorePath, 'utf8');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '.gitignore'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.writeFileSync(path.join(repo, 'noise.log'), 'noise\n');   // ignored, untracked: derivable
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nnoise.log\n');
+    const r = runSweep();
+    // D-1459: what pins the outer `foreign` skip ITSELF, now that
+    // `_gs_open_filter` also refuses a foreign tree. With the skip deleted the
+    // derivation runs (and then writes nowhere, which is the point), so the
+    // file survives either way and every assertion below stays green — this
+    // line is the one that does not. The count log is printed for any non-empty
+    // `derived`, outside the write block.
+    expect(r.stderr, 'a tree the sweep may not filter must not pay for a derivation either')
+      .not.toContain('derived into the corpus filter');
+    expect(fs.existsSync(ignorePath), "the repo's own committed file must still exist").toBe(true);
+    expect(fs.readFileSync(ignorePath, 'utf8'), 'and be byte-identical — never overwritten by the derived filter').toBe(before);
+    expect(git(repo, 'status', '--porcelain'), 'and never dirtied, still less deleted').toBe('');
+    expect(outcomeOf(repo), 'RULE 2 yields, but this repo owns its filter — the breach is stated instead of filtered away')
+      .toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason)
+      .toContain('noise.log');
+  });
+
+  // (e)/(f) D-1459 — the helper's OWN contract, exercised DIRECTLY, because no
+  // caller can reach `_gs_open_filter` on a foreign tree today: RULE 2 empties
+  // `patterns` before call site 1, and the derivation skips on `foreign` before
+  // call site 2. Rows (a)-(d) therefore all stay green with the helper's
+  // ownership line deleted — measured — so without these two rows the only
+  // thing holding the shared write site shut on a foreign tree is a comment
+  // enumerating its callers, which goes stale the moment a third appears.
+  //
+  // The definitions are LIFTED FROM THE SHIPPED FILE (function name through the
+  // closing brace at column 0), never retyped: a fixture carrying its own copy
+  // of the helper could go green against a helper no box has. `trap -p EXIT` is
+  // run at top level, NOT in a command substitution — bash resets non-ignored
+  // traps in a subshell, so `$(trap -p EXIT)` prints nothing either way and
+  // could not tell an armed trap from a disarmed one.
+  function callOpenFilter(tree: string) {
+    return spawnSync('bash', ['-c', `
+      eval "$(sed -n '/^_gs_owns_ignore() {/,/^}/p; /^_gs_open_filter() {/,/^}/p' "$1")"
+      GS_FILTER_TREE=sentinel
+      _gs_open_filter "$2"; echo "rc=$?"
+      echo "tree=$GS_FILTER_TREE"
+      trap -p EXIT
+      trap - EXIT
+    `, 'bash', SWEEP, tree], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  }
+
+  it('(e) _gs_open_filter REFUSES a foreign tree itself: nothing written, no trap armed, non-zero return', () => {
+    const repo = makeRepo('alpha');
+    const ignorePath = trackForeignIgnore(repo);
+    const before = fs.readFileSync(ignorePath, 'utf8');
+    const r = callOpenFilter(repo);
+    expect(r.stdout, 'a foreign tree is a refusal, and callers key "append nothing" off it').toContain('rc=1');
+    expect(fs.readFileSync(ignorePath, 'utf8'), 'the marker header must never go over a tracked file').toBe(before);
+    expect(git(repo, 'status', '--porcelain'), 'and the tree is not dirtied').toBe('');
+    // and the trap is NOT armed on a file the sweep does not own — GS_FILTER_TREE
+    // still carries the sentinel, and no EXIT trap was installed.
+    expect(r.stdout).toContain('tree=sentinel');
+    expect(r.stdout).not.toContain('_gs_rm_generated');
+  });
+
+  it('(f) and the happy paths are unchanged: absent gets the header, ours is appended to, both arm the trap', () => {
+    const repo = makeRepo('alpha');
+    const p = path.join(repo, '.graphifyignore');
+    const first = callOpenFilter(repo);                       // absent
+    expect(first.stdout).toContain('rc=0');
+    expect(first.stdout).toContain(`tree=${repo}`);
+    expect(first.stdout).toContain('_gs_rm_generated');        // trap armed
+    expect(fs.readFileSync(p, 'utf8')).toBe(
+      '# generated by ccd-graph-sweep for one build — never committed, never edited\n');
+    fs.appendFileSync(p, 'fixtures/\n');
+    const second = callOpenFilter(repo);                      // ours, already open
+    expect(second.stdout).toContain('rc=0');
+    expect(second.stdout).toContain('_gs_rm_generated');
+    expect(fs.readFileSync(p, 'utf8'), 'idempotent: the header is not written twice').toBe(
+      '# generated by ccd-graph-sweep for one build — never committed, never edited\nfixtures/\n');
   });
 
   it('(c) the sweep\'s OWN marker-bearing leftover is still swept, even with a foreign file elsewhere', () => {
@@ -723,6 +1348,37 @@ describe('graph-sweep: D-1161 — the default yields, the operator instructs', (
     const calls = fs.existsSync(j('rm-calls')) ? fs.readFileSync(j('rm-calls'), 'utf8') : '';
     expect(calls, 'a leaked trap firing with an empty tree deletes at the filesystem root')
       .not.toMatch(/(^|\s)-f \/\.graphifyignore\s*$/m);
+  });
+
+  // D-1454 — THE 5-PATH CAP HID THE SIZE OF THE BREACH. The reason keeps its
+  // cap (a census row is read on a phone, and 60 paths on one line is not a
+  // finding, it is a wall), but a reader has no way to tell a tree with six
+  // untracked paths — one commit away from building again — from one with
+  // sixty, which is a corpus problem. The count is the difference between
+  // "fix it" and "triage it", and it costs one clause.
+  const reasonOf = (tree: string) =>
+    lastPass().trees.find((t: { path: string }) => t.path === tree)?.reason as string;
+
+  it('the refusal reason says how many breach paths the 5-path cap cut (D-1454)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const untracked = ['b1.py', 'b2.py', 'b3.py', 'b4.py', 'b5.py', 'b6.py', 'b7.py', 'b8.py'];
+    fs.writeFileSync(j('fixture-corpus'), ['a.py', ...untracked].join('\n') + '\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = reasonOf(repo);
+    // five named, and the three the cap cut are COUNTED, not silently dropped.
+    expect(reason, 'the cap still names at most five paths').toContain('b5.py');
+    expect(reason, 'a sixth path is named — the cap is gone, not counted').not.toContain('b6.py');
+    expect(reason, 'the breach beyond the cap is invisible').toMatch(/\(\+3 more\)$/);
+  });
+
+  it('a breach that fits inside the cap carries no count clause (D-1454)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nb1.py\nb2.py\nb3.py\nb4.py\nb5.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(reasonOf(repo), 'five paths named and five shown — nothing was cut')
+      .not.toMatch(/\(\+\d+ more\)/);
   });
 
   // The trap-body fix and the caller-side cleanup are DEFENSE IN DEPTH for the
@@ -848,6 +1504,343 @@ describe('graph-sweep: freshness is CONTENT, not commit identity (D-1368)', () =
   });
 });
 
+describe('graph-sweep: a rebuild is a CLAIM until the stamp advances (D-1509, D-1512)', () => {
+  /** Engine invocations across every pass so far — the effect, not the word. */
+  const engineCalls = (): number =>
+    (fs.readFileSync(j('engine-calls'), 'utf8').match(/^cwd=/gm) ?? []).length;
+  const reasonOf = (tree: string) =>
+    lastPass().trees.find((t: { path: string }) => t.path === tree)?.reason;
+  const stampOf = (repo: string): string =>
+    JSON.parse(fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8')).built_at_commit;
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // graphify 0.9.9's `_rebuild_code` short-circuit in the shape the live fleet
+  // measured (D-1509): the engine re-extracts the whole corpus, finds the
+  // topology unchanged, SAYS SO ON STDOUT and exits 0 WITHOUT rewriting
+  // graph.json — so `built_at_commit` keeps the sha of the last write while
+  // `graphify update` still prints "Code graph updated." and exits 0. The cold
+  // call still writes, exactly as the real engine does with no graph on disk.
+  const SHORTCIRCUIT = `if [ -f graphify-out/graph.json ]; then
+  echo "[graphify watch] No code-graph topology changes detected; outputs left untouched."
+  exit 0
+fi`;
+  // Same exit code, no verdict: an engine that returns 0 having written and
+  // said nothing at all. Nobody vouched for the stamp on disk.
+  const SILENT = `if [ -f graphify-out/graph.json ]; then exit 0; fi`;
+
+  // The restamp spends `$VENV/bin/python` WITH ARGUMENTS; `_gs_detect` spends
+  // the same interpreter with none (its script arrives on stdin). One stub
+  // serves both roles: vacuous for detect (an empty corpus never breaches the
+  // corpus guard, which is what every other Task 6/7 fixture relies on), and
+  // the real interpreter for the restamp — whose whole job is rewriting bytes
+  // on disk, so a stub that faked it would pin nothing.
+  function plantRestampPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exec python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  it('graphify says "left untouched", so the sweep RESTAMPS rather than claiming a rebuild', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    expect(stampOf(repo)).toBe(old);
+    // the report graphify writes beside the graph, carrying the same commit
+    const report = path.join(repo, 'graphify-out', 'GRAPH_REPORT.md');
+    fs.writeFileSync(report, `# Code graph\n\n- Built from commit: \`${old.slice(0, 8)}\`\n- Nodes: 0\n`);
+    const before = fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8');
+    bump(repo);
+    const head = git(repo, 'rev-parse', 'HEAD');
+
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo), 'an exit 0 that wrote nothing was recorded as a rebuild').toBe('restamped');
+    expect(reasonOf(repo)).toBe(`unchanged topology; ${old.slice(0, 8)} -> ${head.slice(0, 8)}`);
+    expect(stampOf(repo)).toBe(head);
+    expect(fs.readFileSync(report, 'utf8'))
+      .toContain(`- Built from commit: \`${head.slice(0, 8)}\``);
+    expect(engineCalls()).toBe(2);
+    // the stamp is ALL that moved: the graph the engine wrote is byte-identical
+    // everywhere else (the restamp splices a value, it does not re-serialize).
+    expect(fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8'))
+      .toBe(before.replace(old, head));
+
+    // and the restamp is read by the freshness predicate that already exists —
+    // no marker, no second spelling. The wedge is that this pass rebuilds.
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('fresh');
+    expect(engineCalls(), 'the restamped tree was rebuilt again — the every-15-minutes wedge').toBe(2);
+  });
+
+  it('the restamp reason names the tracked files commit-keyed freshness cannot see (D-1511)', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    bump(repo);
+    fs.writeFileSync(path.join(repo, 'a.py'), 'x = 2  # uncommitted\n');   // tracked, dirty
+    runSweep();
+    expect(outcomeOf(repo)).toBe('restamped');
+    expect(reasonOf(repo))
+      .toMatch(/^unchanged topology; [0-9a-f]{8} -> [0-9a-f]{8}; 1 tracked file\(s\) modified$/);
+  });
+
+  it('exit 0, no advance and NO verdict is a failed build — and nothing is written', () => {
+    const repo = makeRepo('alpha'); plantEngine(SILENT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'a stamp nobody verified was recorded as a build').toBe('failed');
+    expect(reasonOf(repo)).toContain('did not advance');
+    expect(stampOf(repo), 'the sweep restamped a graph graphify never vouched for').toBe(old);
+  });
+
+  // D-1509 (review finding) — THE PIN IS A RECEIPT, NOT AN ANNOUNCEMENT. The
+  // rc-0 arm wrote `.graphify_engine` at its TOP, before the stamp was
+  // re-measured, so both `failed` arms — this one and `restamp refused:` —
+  // advanced the pin for a build that wrote nothing. The next pass then reads
+  // the engine dimension as fresh and falls through to `head`, and `_gs_busy`'s
+  // O3 seconds hatch measures the age of a stamp no build ever earned.
+  it('a FAILED build does not advance the engine pin — only the two arms that return 0 write it', () => {
+    const repo = makeRepo('alpha'); plantEngine(SILENT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const pin = path.join(repo, 'graphify-out', '.graphify_engine');
+    expect(fs.existsSync(pin), 'the cold build earned its pin').toBe(true);
+    fs.rmSync(pin);                       // pass 2 is stale by the engine dimension
+    bump(repo);                           // ... and by head, so the stamp cannot advance
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(fs.existsSync(pin), 'a build that wrote nothing and vouched for nothing still stamped '
+      + 'the engine pin').toBe(false);
+  });
+
+  // D-1509 — THE REFUSAL SET IS A MECHANISM, NOT A COMMENT (review finding).
+  // The restamp splices bytes into an 8 MB file the engine wrote and the card
+  // reads live; what makes that admissible is what it REFUSES, and the whole
+  // set shipped pinned by nothing — deleting the mismatch guard left the suite
+  // 76/76 green. Each row below deletes one refusal and reads the census. They
+  // share a shape: outcome `failed`, a reason that NAMES the refusal, and a
+  // graph.json byte-for-byte what it was before the pass.
+
+  /** `plantRestampPython`'s interpreter with a WRITER racing it: before python
+   *  opens graph.json it replaces the very value the sweep measured ($2),
+   *  standing in for graphify — or a second sweep — landing a write in the
+   *  window between `_gs_stamp` and the splice. That window is the only thing
+   *  the mismatch guard exists for, and the stub is the fixture's one
+   *  injection point inside it. */
+  const FOREIGN = 'f'.repeat(40);
+  function plantRacingPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+# argv is \`- <path> <old> <new>\`: the script itself arrives on stdin.
+case "$2" in *graph.json) sed -i "s/$3/${FOREIGN}/" "$2" ;; esac
+exec python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  /** A venv interpreter that runs and fails — the half-installed venv, or a
+   *  python whose traceback goes to the log. It answers the corpus guard
+   *  vacuously (no arguments) so the pass still reaches the build. */
+  function plantBrokenPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exit 3
+`, { mode: 0o755 });
+  }
+
+  const graphOf = (repo: string) => path.join(repo, 'graphify-out', 'graph.json');
+
+  it('a graph.json that MOVED under the sweep is refused — the stamp is not this build\'s', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRacingPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'a graph written by somebody else was stamped as this build\'s')
+      .toBe('failed');
+    expect(reasonOf(repo))
+      .toBe(`restamp refused: graph.json holds ${FOREIGN}, not the ${old} this build measured`);
+    // and the racing writer's file survives untouched: the sweep spliced
+    // nothing over a write it never measured.
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before.replace(old, FOREIGN));
+    expect(stampOf(repo)).toBe(FOREIGN);
+  });
+
+  it('a graph.json with NO built_at_commit is refused — a stamp is replaced, never invented', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    fs.writeFileSync(graphOf(repo), JSON.stringify({ nodes: [], links: [] }));   // stamp-less
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    runSweep();
+    expect(outcomeOf(repo), 'a graph with no stamp at all was recorded as restamped').toBe('failed');
+    // the sweep's OWN measurement is what refuses, before the splice reads a
+    // byte — a graph with no stamp and one whose stamp is out of the tail's
+    // reach are different conditions and read differently.
+    expect(reasonOf(repo)).toBe('restamp refused: no built_at_commit to replace');
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before);
+  });
+
+  it('a built_at_commit outside the tail the CARD reads is refused, not appended to', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    const old = git(repo, 'rev-parse', 'HEAD');
+    // `_gs_stamp` reads the whole document (jq) while the splice reads the last
+    // 4096 bytes — exactly the window the session card reads it through
+    // (`tail -c 4096`, ccd/session-hook.sh). A graph whose stamp is not its
+    // last key puts the two out of each other's reach; the splice refuses
+    // rather than writing a stamp the card could never see.
+    fs.writeFileSync(graphOf(repo), JSON.stringify(
+      { built_at_commit: old, nodes: [], links: [], pad: 'p'.repeat(8192) }));
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(reasonOf(repo))
+      .toBe('restamp refused: no built_at_commit in the last 4096 bytes of graph.json');
+    expect(fs.readFileSync(graphOf(repo), 'utf8'),
+      'the splice wrote into a file it could not find the stamp in').toBe(before);
+  });
+
+  it('a python that cannot run at all is a refusal, never a silent success', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantBrokenPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'an interpreter that never spoke was read as a restamp').toBe('failed');
+    // it said nothing, so the sweep names the interpreter and the file rather
+    // than reporting an empty reason.
+    expect(reasonOf(repo)).toBe('restamp refused: python refused (graph.json)');
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before);
+    expect(stampOf(repo)).toBe(old);
+  });
+
+  /** A venv `python` that is the real interpreter with `shutil.copyfile` and
+   *  `shutil.copy2` raising — the disk filling in the window between mkstemp
+   *  and the copy. The patch fires ONLY when argv carries the restamp's three
+   *  trailing arguments, so `_gs_detect`'s stdin script (no arguments at all)
+   *  and every other call run untouched, exactly as `plantRestampPython`'s
+   *  dispatcher distinguishes them. */
+  function plantENOSPCPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    const fix = j('pyfix');
+    fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(fix, { recursive: true });
+    fs.writeFileSync(path.join(fix, 'sitecustomize.py'), `import shutil, sys
+def _boom(name):
+    real = getattr(shutil, name)
+    def wrapper(*a, **k):
+        # argv is \`- <path> <old> <new>\`: the restamp's own call, nothing else
+        if len(sys.argv) == 4:
+            raise OSError('simulated ENOSPC')
+        return real(*a, **k)
+    setattr(shutil, name, wrapper)
+for _n in ('copyfile', 'copy2'):
+    _boom(_n)
+`);
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exec env PYTHONPATH=${JSON.stringify(fix)} python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  // D-1509 (review finding) — A REFUSAL THAT LEAKS IS NOT A REFUSAL. Everything
+  // after `mkstemp` writes into a copy of an 8 MB graph.json that lives INSIDE
+  // graphify-out/, and a python that dies there (ENOSPC, a killed interpreter)
+  // left it behind for ever: the sweep never names it again, and it is inside
+  // the very directory the corpus guard measures.
+  it('a python that dies after mkstemp leaves no temp copy behind in graphify-out', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantENOSPCPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(reasonOf(repo)).toMatch(/^restamp refused:/);
+    expect(fs.readFileSync(graphOf(repo), 'utf8'), 'the graph moved under a refused restamp')
+      .toBe(before);
+    expect(fs.readdirSync(path.join(repo, 'graphify-out')).filter((n) => n.startsWith('.graph.json.')),
+      'the interpreter died holding a temp copy of the graph and nothing ever removes it')
+      .toEqual([]);
+  });
+
+  // D-1509 (review finding) — THE MTIME IS THE OPERATOR'S OWN SIGNAL. D-1509
+  // was FOUND by reading graph.json's mtime frozen while manifest.json moved
+  // every pass. `copy2` carries the old build's mtime onto the restamped file,
+  // so a healthy restamped tree reads exactly like the wedge it replaced.
+  it('a restamped graph.json carries the mtime of the restamp, not the old build\'s', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const graph = graphOf(repo);
+    const day = Date.now() / 1000 - 86400;
+    fs.utimesSync(graph, day, day);                 // the build the restamp inherits from
+    bump(repo);
+    const t0 = Date.now();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('restamped');
+    expect(fs.statSync(graph).mtimeMs, 'the restamp preserved the OLD build\'s mtime, so the one '
+      + 'signal this whole entry was found by now reads the same on a healthy tree')
+      .toBeGreaterThanOrEqual(t0 - 2000);
+  });
+
+  // D-1509 (review finding) — TWO CONDITIONS, ONE CENSUS WORD. graph.json is
+  // renamed at the END of its own loop iteration, so a refusal raised for
+  // GRAPH_REPORT.md left graph.json already carrying HEAD while the row read
+  // `failed`: the doctor's WARN set counts a tree whose stamp DID advance, and
+  // both readers (`_gs_stale`, the session card) read that graph as fresh. The
+  // report's "- Built from commit" line is graphify's human echo — the card
+  // reads only the node count from its head — so it is best-effort, and the
+  // log is where the miss is named.
+  it('a restamp whose GRAPH_REPORT.md cannot be rewritten is still a restamp — the miss goes to the log', (ctx) => {
+    // root reads a 0000-mode file, so the fixture cannot exist there.
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const report = path.join(repo, 'graphify-out', 'GRAPH_REPORT.md');
+    fs.writeFileSync(report, `# Code graph\n\n- Built from commit: \`${old.slice(0, 8)}\`\n- Nodes: 0\n`);
+    fs.chmodSync(report, 0o000);                    // readable to nobody: the splice cannot open it
+    bump(repo);
+    const head = git(repo, 'rev-parse', 'HEAD');
+    runSweep();
+    expect(outcomeOf(repo), 'graph.json already carries HEAD and the census calls the build failed')
+      .toBe('restamped');
+    expect(stampOf(repo), 'the graph the readers consult is the one that moved').toBe(head);
+    expect(fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8'),
+      'the report was silently left at the old commit')
+      .toContain(`graph-sweep: ${repo}: GRAPH_REPORT.md not restamped`);
+    fs.chmodSync(report, 0o644);                    // let the fixture HOME be removed cleanly
+  });
+
+  it('the log names the tree and the UTC instant BEFORE the engine speaks (D-1512)', () => {
+    const repo = makeRepo('alpha'); plantEngine('echo "ENGINE-SPEAKS-HERE"'); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const log = fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8');
+    const header = log.search(
+      new RegExp(`^graph-sweep: build ${esc(repo)} at 20\\d\\d-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$`, 'm'));
+    expect(header, 'the log attributes its build to no tree and no time').toBeGreaterThanOrEqual(0);
+    expect(log.indexOf('ENGINE-SPEAKS-HERE'),
+      'the header did not precede the output it attributes').toBeGreaterThan(header);
+  });
+});
+
 describe('graph-sweep: idle gate (Task 9)', () => {
   // seedAccountsSh gives the fixture HOME a real ~/.ccrc/accounts.sh so the
   // sweep's `source "$HOME/.ccrc/accounts.sh"` + `_ccrc_cfg_dir` resolve.
@@ -920,6 +1913,31 @@ describe('graph-sweep: idle gate (Task 9)', () => {
     runSweep({ CCRC_GRAPH_STALE_ESCAPE_SECS: '1' });                // threshold well under the 10s age
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
+  // D-1562 — THE GATE COMPARES REALPATHS, NOT SPELLINGS. `_gs_busy` used to
+  // find the session on a tree with `[ "$(cat "$wd")" = "$tree" ]`: the
+  // registry's `<id>.workdir` TEXT against the census's glob spelling. On the
+  // live box `$PROJECTS_ROOT` is itself a symlink onto the volume, so a
+  // project-root session's workdir reads the canonical name while the sweep
+  // names the same tree through `$HOME`. MEASURED 2026-09-05 against the live
+  // registry: 13 of 18 workdirs match a census path as a string, 18 of 18
+  // match by realpath — and the five that never matched were the five
+  // project-root and `.claude/worktrees` sessions, exactly the trees the gate
+  // was written to protect. Every one had read `idle` on every pass since the
+  // gate shipped.
+  it('D-1562 — a workdir that names the tree through a SYMLINKED root still defers it', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                     // seed a fresh build + stamp
+    bump(repo);                                                     // stale again; 1 commit behind
+    fs.symlinkSync(j('projects'), j('data'));                       // $HOME/data -> $HOME/projects
+    plantSession(path.join(j('data'), 'alpha'), 'working');         // the OTHER spelling
+    runSweep();
+    expect(outcomeOf(repo), 'the sweep built a graph under a WORKING session because the session '
+      + "registry spells the tree through a symlinked root and the gate compared the two spellings "
+      + 'as strings').toBe('skipped-busy');
+    expect(fs.readFileSync(j('engine-calls'), 'utf8').trim().split('\n'),
+      'the engine ran a second time on a tree the idle gate should have deferred').toHaveLength(1);
+  });
+
   it('O3 — a LARGE escape-secs threshold still defers a busy stale tree (SECONDS arm, negative case)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();

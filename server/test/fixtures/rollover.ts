@@ -57,10 +57,12 @@ export function rolloverCases(now: number): RolloverCase[] {
     {
       file: 'no-reset-fields-old.json',
       // No resetAt and older than its own 5h window: the EXISTING age rule
-      // still has to fire.
+      // still has to fire. The FLAG has to fire with it — this is the one
+      // shared row the age path owns, and it is what pins that the zero it
+      // writes is declared inferred rather than passed off as measured.
       content: compact({ five: 99, seven: 80, ts: now - 20000 }),
-      expect: { five: 0, seven: 80, fiveRolledOver: false, sevenRolledOver: false },
-      why: 'age rule still applies when resetAt is absent',
+      expect: { five: 0, seven: 80, fiveRolledOver: true, sevenRolledOver: false },
+      why: 'the age rule still applies when resetAt is absent — and its 0 is declared inferred',
     },
     {
       file: 'gpt-spaced.json',

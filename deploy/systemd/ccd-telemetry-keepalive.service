@@ -1,0 +1,12 @@
+[Unit]
+Description=Telemetry keepalive — one minimal turn per idle measured account (spec 2026-09-07 §C)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-telemetry-keepalive
+# budget: one turn per measured account at CCRC_KEEPALIVE_TURN_TIMEOUT (120s)
+# each, plus jq/census overhead. A pass past this is wedged, not slow.
+TimeoutStartSec=900
+# A keepalive must never be the thing that OOMs the fleet host (see
+# ccd-cap-scopes' own 13-days-silently-broken header). A turn that needs more
+# than this is not a minimal turn.
+MemoryMax=2G

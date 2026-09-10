@@ -289,6 +289,53 @@ describe('lifecycle routes', () => {
     expect(res.json()).toEqual({ ok: false, stderr: 'boom' });
     await app.close();
   });
+
+  // D-2177: `cmd_swap` is the one live-pane-destroying operation that was NOT
+  // serialized against `answerAsk`'s capture-then-send window — every other
+  // write route (`sendPrompt`, `answerDialog`, `answerAsk` itself) already
+  // shares ONE per-session `KeyedQueue` (`sendDeps`/`askDeps`, built once in
+  // server.ts). Modelled directly rather than by inspecting source: hold the
+  // queue slot for this session with a pending function (standing in for an
+  // in-flight `answerAsk` between its pane capture and its keystroke) and
+  // prove the swap route's own `ccd swap` call does not run until that
+  // function resolves — the pre-fix shape, where swap bypassed the queue
+  // entirely, would run its ccd call immediately instead.
+  it('POST /api/sessions/:id/swap serializes through the SAME per-session KeyedQueue as answerAsk (D-2177)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedDefault(home);
+    const order: string[] = [];
+    const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const queue = new KeyedQueue();
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue,
+    });
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const heldRun = queue.run(ID, async () => { order.push('held-start'); await held; order.push('held-end'); });
+
+    const swapPromise = app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/swap`,
+      payload: { wrapper: 'claude' },
+    });
+
+    // Give the swap request a real tick to reach the route handler. An
+    // unserialized swap has nothing async blocking it before its ccd call,
+    // so this is ample time for it to have run if it bypassed the queue.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(['held-start']);   // swap has NOT touched ccd yet
+
+    release();
+    await heldRun;
+    const res = await swapPromise;
+
+    expect(res.statusCode).toBe(200);
+    expect(order).toEqual(['held-start', 'held-end', `swap ${ID} claude`]);
+    await app.close();
+  });
 });
 
 // Fix round 3 (task 14 follow-up, Important #1-#3): the LOCAL-MODE skew
@@ -851,5 +898,26 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
+  });
+  it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
+    // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
+    // makes an unassigned artifact class a defect, and this one has NO
+    // COLLECTOR by design: a project's pool tag outlives every one of its
+    // workspaces — `_reg_purge`, `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`,
+    // `ws-restore` and `forget` all glob `$REG/<id>.*` and none of them can
+    // see a dotless directory. Nothing sweeps operator intent; the operator
+    // clears it, and `ccrc doctor` says when it has gone inert.
+    //
+    // The three per-id fields the pool design also adds (`.stranded`,
+    // `.strandnotify`, `.crosspool`, wave 2b) need no entry of their own: they
+    // are registry fields under the one-dot rule and purge with the row, like
+    // `swapblocked` and `lastswap`.
+    const c = LIFECYCLE.find((x) => x.name === 'project-pool-tag');
+    expect(c, 'shared/lifecycle.ts declares no project-pool-tag class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('ccd project-pool');
+    expect(c!.ruling).toContain('pools-stale');
+    expect(c!.root).toContain('pools/');
   });
 });

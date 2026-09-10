@@ -73,7 +73,7 @@ account home it finds. The server comes up on `127.0.0.1:7788`.
 Then:
 
 ```bash
-ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc doctor      # binaries, units, roster, hook registration, auth posture
 ccrc status      # what is running, where
 ```
 
@@ -448,7 +448,8 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
 host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
 fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, and `~/.ccrc/memory` — the
+sole live copy of every project's durable memory since `ccrc memory --apply` — complete before any
 install write); re-run the install spine from the verified staged tree (role-aware, atomic,
 seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
 the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
@@ -468,8 +469,11 @@ takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
 inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
 `~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
-backups — never worktrees, never tmux state.
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
+(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
+`~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
+a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
+to remove it too; never worktrees, never tmux state.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -533,12 +537,12 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the nineteen machine lanes the
-fleet host reaches (eighteen box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-two machine lanes the
+fleet host reaches (twenty-one box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+`/api/lifecycle`, `/api/peers`, `/api/claims`, `/api/asks`) take a live session cookie **or**
 the token, which is how a coordinator reads its own wave ledger from the fleet
 host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
@@ -605,6 +609,16 @@ never enable, and it dies with the row at reap. The PWA's ordinary
 workspace-add composes no flag and stays box-default, and the doctor's `rc`
 check keeps reporting the box flag alone.
 
+The LANE is the third suppressor (2026-09-07): a session that lands on an
+account the roster marks `homeAble: false` — an overflow lane such as the
+ChatGPT/Codex launcher, which holds no claude.ai OAuth and runs Claude Code in
+token mode against a local proxy — spawns without `--remote-control` whatever
+the box flag and the row say, because Remote Control needs a claude.ai token
+with the inference scope and that lane cannot present one. The flag returns on
+the next spawn back on a home-able account. So a session that is not driveable
+from the PWA while it sits on the overflow lane is behaving as designed, not
+misconfigured.
+
 `rc` is a check of its own, deliberately: it reads the flag file and nothing
 else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
 host**, which has no `ccrc.env` at all and is the one box in the topology that
@@ -643,8 +657,27 @@ telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors al
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
-placement; `telemetry: 'none'` says the account will never report rate limits,
+placement and out of being any session's default home, while leaving it in the
+auto-swap rotation as an **overflow lane** — a LAST RESORT, chosen only when no
+home-able account survives the rotation's whole filter, never merely because it
+scored better — for as long as it is installed and not kill-switched.
+`touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
+overflowed onto it returns home when home has headroom again *and* home is still
+servable for the project's pool;
+`telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness.
+
+Both clauses above were unconditional until account pools shipped, and neither is
+any more (D-1911; the ruled behaviour named below is D-1908, and this file still
+owes account pools a section of its own — D-1918). The rotation's filter is the pool rule, then the kill-switch, then
+headroom — so the home-able bracket can empty with every account perfectly
+healthy, simply because they are in another pool; and the return home is
+pool-gated, so a session whose home is in the wrong pool is re-homed rather than
+returned. One consequence is worth stating plainly because it looks like a bug:
+an account with **no** pool tag is servable for every pool, so an untagged
+overflow lane can be chosen while healthy tagged accounts sit refused. That is
+ruled behaviour, and such a move is deliberately **not** recorded as a pool
+crossing — nothing was overridden, because nothing constrained it.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
 both targets:
@@ -895,6 +928,108 @@ session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
 
+### A restart re-drives the turn it interrupted (D-2226)
+
+A usage-limit rescue is a `ccd swap`: the unit stops, the transcript is carried, the destination
+runs `<wrapper> --resume '<uuid>'`. Claude Code's own recovery for a limit — "Usage limit reached ·
+continuing automatically at HH:MM" — is an in-memory timer and dies with the old process. On the
+resume, Claude Code writes a META "Continue from where you left off." and a synthetic "No response
+requested." and submits the prompt **only** when `CLAUDE_CODE_RESUME_INTERRUPTED_TURN` is set.
+Before 2026-09-09 ccd never set it, so every rescue landed idle until a human typed (spec
+`docs/superpowers/specs/2026-09-09-post-swap-redrive-design.md`, four of four sessions measured).
+
+Now, on every spawn, `_spawn_start` exports that flag plus a ccd-authored `CLAUDE_CODE_RESUME_PROMPT`
+(`RESUME_PROMPT`, telling the model its previous process and every background task it owned are
+gone). Because the flag is a third-party default, `_spawn_settle` **measures** the landing:
+`_transcript_stalled_pair` reads the transcript tail, and if the newest real turn is still that
+unsubmitted pair after `REDRIVE_WAIT_S`, `_redrive_after_spawn` types the prompt itself and writes
+`redrive <id>: …` to `swap.log` (`redrive-skip` when the box holds a draft, the pane is
+hard-blocked, or an auto-continue is armed). Hookstate is not the measurement: `working` proves tool
+calls, not that the re-drive took.
+
+The one thing ccd must never do is cancel Claude Code's armed auto-continue with a keystroke.
+`_pane_auto_continue_armed` ("continuing automatically" / "continuing shortly") gates the compactor
+(`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
+arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
+pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
+message to resume"; the server parser keys on the structural markers — `isMeta` for the prompt
+line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
+(`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
+starting with that prefix, and nothing scans for it.
+
+### One memory store per project: `ccrc memory`
+
+**A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
+accounts.** Claude Code keeps it at `<config dir>/projects/<slug>/memory` — inside the
+*account's* home, not the project's — so the swap this whole design is bent around carries
+the conversation across and leaves the memory behind. Each home a box carries accumulates its
+own copy of what sessions learned about the same repo, and they drift apart.
+
+The answer is one store per **project**, shared by every home on the box:
+`~/.ccrc/memory/<slug>`, with each home's `projects/<slug>/memory` a symlink into it.
+Nothing has to move on a swap, because nothing was ever the account's to hold.
+
+```bash
+ccrc memory            # the census: one line per (home, project) pair, then a count
+ccrc memory --apply    # the union — the only step in any of this that moves a byte
+```
+
+**The census is read-only.** A pair is a home's `projects/<slug>/memory` that exists at all —
+a project a home has never held is not a pair and is not listed — and it reads either
+`converged` (the link *resolves* to the store and the store is a directory: resolution, never
+the link's spelling) or `forked` (a real directory, or any link that does not resolve to a
+store directory — pointing at another home, dangling, or landing on a plain file).
+**Homes are enumerated from the FILESYSTEM (`~/.claude*/`), never from the roster** — the
+roster describes the accounts ccrc places work on and was never a census of homes, and a box
+can carry config dirs no roster entry names. **Scratch slugs are skipped**, because the harness
+mints one for every throwaway directory a session was started in — four prefixes, because the OS
+scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
+`-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
+this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
+slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
+
+**`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
+home is copied across; a byte-identical collision stays one file; a same-named file whose
+content *differs* keeps **both** copies, the incoming one suffixed with the home it came
+from, for a human to reconcile. `MEMORY.md` is the exception — an index of one line per file,
+derived from each file's own `name`/`description` frontmatter where it has one. A file that
+does not (measured: a small minority fleet-wide) is dropped from the index — there is nothing
+to derive a line from — but never silently: the run counts what it dropped and names the
+count and the store in its own `NOTE:` line, the same discipline a suffixed conflict copy
+already gets. It is therefore rebuilt rather than merged. Sub-directories and non-`.md` files
+are not memory files: they are counted, not copied, and the run names how many stayed behind
+and where — a backup path on the plain-directory arm, the resolved source itself on the
+symlink arm, whichever ran. Only a **real directory** is backed up — beside itself as
+`memory.pre-ccrc-<UTC>`, with the path printed on that pair's line; the symlink arms take no
+backup, because a link holds no data. And it **refuses rather than reporting a success it did
+not achieve**: a union that cannot read a source or land a copy stops the *whole run* at that
+pair — the operator sees the failing pair's own diagnostic (or, on the symlink arm, the
+resolved target that could not be read, which names neither home nor project slug), but every
+home not yet processed is simply never reached and never mentioned, converged or not. Only the
+plain-directory arm's own source is guaranteed left exactly where it stood; nothing else is,
+once one pair fails. It also normalises a converged link whose own text is not the store — a
+relative spelling, or a *chain* through another home's link, which would quietly make one
+account's home load-bearing for every other, reintroducing one level up the very failure this
+replaces.
+
+`--apply` is a one-time operator act; two mechanisms keep it honest afterwards. The
+SessionStart hook converges one `(home, project)` pair per start and **never merges data** —
+it acts only where there is nothing to lose (an absent link, or a plain directory that is
+empty, tested by `rmdir`'s own failure so there is no check-then-act window across a live
+fleet), leaving a non-empty directory or a link pointing elsewhere exactly as found.
+`ccrc doctor`'s `memory` check then reports what the hook declined to touch, in three
+conditions it never collapses into one, each its own severity: **forked** pairs are a
+**WARN** (remedy: `ccrc memory --apply`) — a fork is the expected state of every multi-home
+box before its one-time migration, not a misconfiguration, and FAILing it would hard-die
+`ccrc update` before its supervisor sweep ever runs, coercing an unrelated verb into demanding
+that migration; homes the hook **cannot reach at all** are a **FAIL**, because
+`install-session-hooks.sh` builds its default list from the roster (remedy: add the account to
+the roster, or register `session-hook.sh` in that home's `settings.json` by hand) — nothing
+repairs that on its own; and a `settings.json` that exists but **cannot be read** earns its own
+**WARN** and remedy — "I could not measure it" is not "it is definitely not wired".
+
 ## Attention, notifications and answering
 
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
@@ -1139,7 +1274,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twelve clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
 `server/test/worker-skill.test.ts`), which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
@@ -1320,10 +1455,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its ten
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eleven
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twelve clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1559,9 +1694,12 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
   by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
-  reads. **Stdout stays empty on every other event** — on `PreToolUse` a stdout JSON is a permission
-  decision — and that is pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+  reads. **Stdout is this card on `SessionStart`, the search gate's deny on a gated `PreToolUse`
+  (R5, below) and the Read nudge's `additionalContext` on a nudged one (R6, below) — at most one of
+  those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
+  read as this hook having something to say about the call, and it says nothing there unless it
+  does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -1592,31 +1730,278 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `~/.cache/graphify-queries.log`: it is not under the agent whitelist and this design adds no read
   root.
 
-The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree with a fresh graph and a
-`graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
-saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
-above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
-**And that number is a sample somebody takes, not a series the tree keeps** (D-1365). `graphQueries`
-is live state only: the hook rewrites it in `~/.cc-sessions/<id>.hookstate.json` on every event and
-the server carries it onto `FleetSession` and the `~/.ccrc/state-cache.json` snapshot — nothing
-writes it to `coord.db`, to a run row or to any log, and it resets on every `SessionStart` that is
-not a `resume`, which for a dispatched worker means per-wave (dispatch `/clear`s the worker from
-wave 2 on). So *"revisit with one week of R4 data"* names an act somebody performs: a week or more
-after this branch deploys, read the `graph N` chips across the live fleet on one dated day — how
-many sessions carry a chip, how many read `graph 0`, and the total — and record that reading in
-`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`, the
-way §0 of the design recorded the retired block's own effect. Until that entry exists the revisit
-has no number, and a decline whose condition nobody can evaluate is re-derived rather than revisited.
+**The search gate (R5).** The `PreToolUse` speed bump — one deny on a session's first `Grep` in a
+tree with a fresh graph and a `graphQueries` of 0 — was **declined** on 2026-09-02 and **built** on
+2026-09-05 by operator ruling, on R4's own number (**D-1613**). The decline stands as the history
+that ruling reversed, and its three grounds were good ones: `PreToolUse` fires for subagents, which
+never saw the card; a deny path would be the first thing in the hook that can wedge a turn; and R4
+is what makes adoption measurable, so a gate belongs *after* the number says the card and the clause
+did not move it, not before there is a number. The number was taken two days after the read side
+deployed and recorded as D-1613 in
+`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`: 4
+graph queries fleet-wide over 3 corpora, and of 18 live sessions 10 carried `graphQueries` 0, two
+carried 1, one carried 2 and five carried nothing at all. The card and clause 12 had moved nothing
+the counter could see, so the ask became a deny — and each of the three grounds is answered by the
+mechanism rather than by prose.
+
+**What it gates:** `Grep`, `Glob`, and a `Bash` command that *heads* with a search — `rg`, `grep`,
+`egrep`, `fgrep`, `ugrep`, `ag`, `ack`, `find`, `fd` or `git grep`, after at most one `cd … &&`
+prefix and any run of `FOO=bar` assignments. A search at the *tail* of a pipeline
+(`vitest run | grep Tests`) filters output this session already produced and is not a codebase
+question, so it is not gated; `Read` is not gated either, because a named file is not a question;
+and `graphify` itself is never gated — the gate must not stand between a session and the one command
+that opens it.
+
+**When it is armed — all five, or the hook prints nothing and the call proceeds:** the operator's
+kill-switch `~/.ccrc/graph-gate-off` is absent; the session's tree carries a `graphify-out/graph.json`
+whose stamp the card's own `tail` read accepts; that graph reads `fresh`, `fresh — same content as
+HEAD`, or at most 10 commits behind `HEAD` (further behind, `not an ancestor of HEAD` and `freshness
+unmeasured` do **not** gate — the card has already told that session its graph is stale, and gating
+on it would be enforcing a bad answer); `graphQueries` is 0; and `graphGateDenials` is under 3. The
+`SessionStart` card says which of the two it will be, and says it only where the gate is really
+armed: a card promising a deny that never comes teaches the session to ignore the card.
+
+The deny is the one shape `PreToolUse` defines — a `permissionDecision` of `deny` with a reason —
+and the reason is the card's own vocabulary plus the act: this tree has a knowledge graph (node
+count and freshness word), this session has not queried it yet, search opens after one
+`graphify query` (`path` and `explain` spelled out beside it), and *Denial k of 3; after 3 the gate
+opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
+missing `jq`, an unresolvable tree, an unparseable stamp, a graph that is not there: no stdout, and
+the call proceeds. Three denials without a query and the fourth search passes — a session that
+cannot run `Bash` at all is never wedged by a hook it has no way to satisfy — and a denial is
+counted only when its JSON could be built, and *said* only once it is counted: the envelope is built
+in the arm and printed after the hookstate write lands, because a deny the next event cannot see
+reads `Denial 1 of 3` forever on a registry that will not take the write, and the one query that
+would open the gate is lost by the same failed write (D-1689, measured before the fix). What the gate
+cannot tell is bounded and recorded rather than fixed (D-1690): it measures the tree named by the
+call's `cwd`, not the directory a `cd` inside a `Bash` command will land in; `find … -delete` heads
+with `find`; and two subagents denied in the same instant can each count the same denial once. All
+three stop at three. Nothing but a gated call in an armed session pays for any of it: every other
+event, and every other tool call, costs the two integers the hook already had in hand.
+
+`graphGateDenials` rides beside `graphQueries` in the same hookstate and through its own single
+tolerant reader (`null`, an older hook, is never folded into `0`), resets with it on any
+`SessionStart` that is not a `resume` — so a dispatched worker meets the gate once per wave, and a
+`/clear` by hand re-arms it — and reaches the board additively on `FleetSession`: the `graph N` chip
+reads `graph N · gated k` when k > 0, and only then, because a measured `gated 0` is the ordinary
+state of a session that queried first and a suffix on every healthy row would bury the rows where
+the gate actually fired. `ccrc doctor`'s `graphify` line carries `gate on` or `gate off (operator
+file $HOME/.ccrc/graph-gate-off)`, whatever else that check has to report. The kill-switch is the
+operator's, nothing in this tree writes it, and it needs neither a deploy nor a token:
+`touch ~/.ccrc/graph-gate-off` opens every search on the box, `rm` closes them again —
+`$REG/coordinator-paused`'s own shape, a convention with a speed bump. The next reading is the
+gate's own effect: denials beside queries, on a dated day after this deploys, recorded under D-1613
+in the same ledger.
+
+**The Read nudge (R6).** The gate leaves `Read` alone — a named file is not a question — so a session
+can navigate file by file and never meet it, and the operator's ruling of 2026-09-06 (**D-1745**)
+closes that hole fleet-wide as a **nudge, not a deny**: a `Read` is never denied, in any state the
+gate can be in, because `Edit` requires a prior `Read` and denying one would charge every session
+told to fix a named file one denial before its first edit. What made the hole worth closing is
+D-1746's measurement of what graphify itself ships: its own project hooks nudge on `Read`, and 330 of
+the 345 queries in the week before the read side shipped came from the seven projects where someone
+had run its installer — four of them in untracked files a fresh clone or worktree does not carry —
+while ccrc-pwa, with five fresh graphs and no such file, sat at zero.
+
+**What is nudged:** a `Read` whose `file_path` ends in one of the 28 source and doc extensions
+graphify 0.9.9 itself nudges on (`_HOOK_SOURCE_EXTS`, spelled once in the hook as
+`GRAPH_NUDGE_READ_RE` and harvested by the suite rather than retyped, end-anchored and dot-prefixed
+so `.json` can never match `.js`), and whose path carries no `graphify-out/` segment at any depth —
+the card already sends that session to `GRAPH_REPORT.md` by name, and nudging the read it asked for
+would have the two halves of one mechanism contradict each other. **When it is armed:** the gate's
+own conditions 1–4, shared with it rather than copied — the kill-switch `~/.ccrc/graph-gate-off` is
+absent, the tree carries a datable `graphify-out/graph.json`, freshness reads `fresh`, same-content
+or at most 10 commits behind, and `graphQueries` is 0 — and *not* the fifth: there is **no bound and
+no counter**, because advice spends no denial and stops the moment the session queries, so the
+reading that measures it is R4's own, how soon `graphQueries` leaves 0 in a session that reads first.
+The envelope is an `additionalContext` with no `permissionDecision`, so the call proceeds, and it
+reads: *graphify: this tree has a knowledge graph (N nodes, <freshness>) and this session has not
+queried it yet. Before reading files to orient, run: `graphify query "<your question in plain
+words>"` (`graphify explain "<concept>"` for one concept). Reading a named file to edit it needs no
+query.* It is printed from the deny's own print site, after the hookstate write lands (D-1689), so at
+most one line ever leaves a `PreToolUse` — a `Read` is never gated and a `Grep`/`Glob`/`Bash` is
+never nudged — and everything the gate fails open on, the nudge fails open on too. The card's armed
+sentence now says both halves (*search tools … are gated, and source-file reads are nudged, until
+this session's first graph query*), and the off-sentence and the doctor's `gate on` / `gate off` need
+no second form, because `graph-gate-off` is one kill-switch for both.
+
+graphify's own hooks are left exactly where they are and **coexist** (D-1746): `graphify hook-guard
+search` and `graphify hook-guard read`, written into a project's `.claude/settings.json` by its
+installer, nudge on every matching call, never block, never look at freshness, and reach only the
+projects where someone ran that installer — vanishing from a fresh clone or worktree wherever that
+file is untracked. ccrc's half is the fleet-wide one: it reaches every tree on the box with no
+per-project act, it weighs the graph's freshness before it says anything, and it stops the moment the
+session queries — until then the nudge rides every matching read and the deny at most three searches,
+where graphify's keeps nudging for the life of the session (D-1797 corrected an earlier "once per
+session" here that the mechanism never had).
+
+**The two ccrc subjects (R7).** Two more subjects share the same `SessionStart` card, both fleet-registry
+reads rather than graph reads: the co-tenant subject and the program subject. Neither narrates — each
+says only what it measured — and both sit behind the same kill-switch and the same total clip, described
+below.
+
+The **co-tenant subject** counts other rows in `~/.cc-sessions` whose `.project` names this session's own
+and whose `.supervised` heartbeat is inside `CCRC_FRESH_S` (120 s — a third copy of `SUPERVISED_FRESH_MS`,
+outside every `single-definition` root because `ccd/` is not one of them). The rung is the heartbeat, never
+`.archived` — the same ruling `server/src/coord/peers.ts` already made for the peers route (D9): one row
+on this box has carried `.archived` for 33 days beside a 4-second-old heartbeat while the server still
+calls it `deliverable:"yes"`, and a main checkout can never be archived at all, so an `.archived` filter
+would both over- and under-count. It says *"ccrc: 2 other supervised rows name project `alpha`;
+`~/.local/bin/ccrc-api peers list --of <id>` names them and returns the five peer rules"* (singular "row
+names" at one), and it deliberately never says "live" — `_swap_beat` re-stamps `.supervised` through a
+whole `cp -a` swap carry on purpose, and 6 of 16 rows have gone silent for 5 h while the server still reads
+them `deliverable:"yes"` — or "share" — the 7 ccrc-pwa rows on this box resolve to 7 distinct workdirs on 6
+distinct branches, sharing a registry string and not a byte on disk. A row whose own `.project` could not
+be read still counts toward the total (fleet-scoped, not project-scoped: an unmeasurable row could belong
+to any project and cannot be ruled out) and turns the count into "at least N" rather than dropping the
+row or reporting an exact one; a lone row (`CT_N` of 0) is silence, never a "0 co-tenants" sentence. It
+prescribes the client verb `peers list`, never the route — the 200 that route returns carries
+`PEER_ETIQUETTE` verbatim, whose rule 0 is "claim before you edit" — so the card points at the authority
+instead of paraphrasing it, and `claims-advisory.test.ts`'s FORBIDDEN scan stays green.
+
+The **program subject** quotes `$REG/<id>.hold` bytes verbatim and never narrates: `rundefs.ts` declares
+the hold reason is parsed back nowhere in this tree, `wave-lifecycle.md` forbids inferring a wave from it,
+and the coordinator skill's own ban on inferring a role is pinned verbatim by its test — one program on
+this box revised its own wave count five times (1/5 → 2/6 → 3/6 → 4/6 → 5/7 → 6/7 → 7/8 → 8/9), so "wave 3
+of 6" would have been wrong five times over. The shape gate is the sanitiser too: a hold that fails its
+own bounded form (`program:<slug> wave:N[/M][ run:R]`, capped at `CCRC_HOLD_MAX` = 127 — one under the
+128-byte read cap, so refusing at 127 means every value this subject ever quotes was captured whole and
+never a silently truncated prefix that could lose its ` run:` suffix in the cut) is unspeakable and the
+subject is silent, same as an absent hold. Five distinct sentences cover what a **present** `.hold` can
+mean — the first two are what the file's presence alone can say, the last three what its bytes say:
+
+- **Unreadable** (exists, not a readable file): *"ccrc-program: this workspace is held and the hold's
+  reason could not be read — `~/.cc-sessions/<id>.hold` exists but is not a readable file. Every other
+  reader on this box treats that as HELD. If a program wave is running here,
+  `~/.local/bin/ccrc-api runs list` is the only thing that can say so."*
+- **Present and empty** (readable, and carrying no reason — `ccd ws-hold` refuses to write one that way, so
+  a `touch` or a hand-edit did; this is the same shape `registry.ts` calls `HOLD_NO_REASON` and renders
+  `<hold file is empty — no program named>`, and the same one `ws-rm`/`ws-reap` refuse on without reading a
+  byte): *"ccrc-program: this workspace is held and the hold names no program — `~/.cc-sessions/<id>.hold`
+  is present, readable, and carries no reason. … Every other reader on this box treats a present `.hold` as
+  HELD."* It gets its own sentence rather than the unreadable one, whose "is not a readable file" would
+  itself be false here, and rather than the silence it fell to before.
+- **Archived but still held** (`cmd_ws_archive` does no registry `rm`, and the failed+archive close path
+  releases nothing, so the bytes outlive the workspace): *"ccrc-program: this workspace is stamped ARCHIVED
+  and still carries a claim — `~/.cc-sessions/<id>.hold` reads `<h>`. An archive does not clear a hold, so
+  those bytes are the residue of a claim, not an assignment. Take that to the operator rather than starting
+  a wave on it."*
+- **Names no run** (no ` run:` suffix — a close claimed the workspace for its next wave, or a human wrote it
+  by hand, no dispatch placed it): quotes the hold, says the bytes *"name a program and a wave — what the
+  `ccrc-worker` skill is for"*, says *"It names NO run"*, and sends the session to
+  `~/.local/bin/ccrc-api runs list` before acting on it.
+- **Names a run**: quotes the hold, recommends the same skill, and adds where a brief would be listed
+  (`~/.local/bin/ccrc-api mail list --to <id>`, noting an already-acked brief is not listed again) and the
+  caveat that the hold can outlive the run that wrote it — whether that run is still open is answered only
+  by `runs list`, never by this file.
+
+  Neither sentence describes the skill's *internals*, and that is deliberate (D-1922): they used to call the
+  hold the skill's "declared trigger" and to name the skill's "first read", and both were false — the
+  declared trigger is `program:<slug> wave:N/M` **and** "you are not the session that opened the run", while
+  the hook's gate accepts the `wave:N` shape `holdReason` writes when `waveOf === null` and cannot measure
+  the second condition at all; and the skill's first read is `ccrc-api whoami`, with `mail list` appearing
+  nowhere in it. A card that recommends a skill can be honest; one that describes it goes stale the moment
+  the skill is edited.
+
+One emitted string, two referents: the graphify subject measures the payload's `cwd`; the program subject
+measures the tmux session id. A session that `cd`'d, or a second window opened on the same held id, makes
+"this workspace" and "this tree" different subjects with no way for the reader to tell — so on
+disagreement, or when the cwd could not be measured at all, the card drops the demonstrative and names the
+workspace by path instead: *"the workspace `<id>` (`<workdir>`)"*. That path is gated exactly as the hold
+bytes are, and for the same reason: `$REG/<id>.workdir` is registry text landing verbatim in a model's
+context, in a file any session on this box can write, so it carries both a path-shaped `case` class
+(`CCRC_WD_CLASS`, derived from `CCRC_PROJ_CLASS` with `/` prepended) and a length bound one under the
+128-byte read cap (`CCRC_WD_MAX`, derived from `CCRC_ID_MAX` so the off-by-one is a mechanism and not a
+number kept in step by hand). A path failing either is **unspeakable**: `wd` becomes empty, which restores
+the plain demonstrative rather than asserting a disagreement the hook cannot measure. Without the length
+bound a workdir longer than 128 characters that the cwd **equals exactly** came back truncated, compared
+unequal, and made the card claim a directory disagreement that did not exist beside a path that did not
+exist.
+
+**One emit.** The three builders — `_hook_graph_card`, `_hook_hold_card`, `_hook_ccrc_card` — only set
+text; nothing prints until the `SessionStart` arm joins whatever they set with one space
+(`${CARD:+$CARD }`, appended only when a prior subject already put text in `$CARD`, so a lone subject
+carries no leading or trailing space) and calls `_hook_emit_context` exactly once. A second
+`additionalContext` envelope on the same event makes the harness's stdout parser throw — the caller returns
+`{answer:{}}`, deleting every card fleet-wide, graphify's included, with a warning that blames a quoting
+bug that does not exist. `_hook_emit_context` is also the one site that clips the assembled total:
+`CARD_MAX_CHARS` (2400) is a different bound for a different job than the `<600` assertion elsewhere in the
+suite, which taints one repo-controlled field alone (the graph sweep's refusal reason) and stays exactly as
+it is; `CARD_MAX_CHARS` is the ceiling on graphify + hold + co-tenant + their two one-space joins together.
+It is argued from the **structural** worst case, not the live one: the worst combination measured on this
+fleet is 593 + 592 + 176 + 2 = 1363, but the worst the code can produce with every gated field at its own
+cap, re-measured end-to-end against a fixture HOME rather than hand-counted (2026-09-08, correcting the fix
+wave's own arithmetic), is graphify 719 (a 12-digit node count, engine and pin each at their 64-byte
+`head -c` cap, the longest freshness phrasing the code can produce — `fresh — same content as HEAD` — and
+the armed-gate sentence present) + held case A **860** (a 127-character workdir, a 127-character hold whose
+reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
+**modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
+sentences, so this is an assumption and not a ceiling; the longest id live on this fleet today is 29,
+`expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
+is interpolated un-padded and the singular and plural halves are the same length, so the count's digits are
+the whole of the difference: 244 / 245 / 246 at one, two and three digits, and the fleet's live shape is
+two) + two joins = **1826**, not the fix wave's 1768 — its own 801 for held case A undercounted the true 860
+by 59. Against 1800 that is **not** headroom: 1826 exceeds it by **26 characters**, and re-running the same
+combination against a copy of this file with `CARD_MAX_CHARS=1800` clips the assembled card mid-word inside
+the co-tenant sentence (`… returns the five peer rules.` cut to `… re`) — exactly the mid-word loss the join
+order (graphify → hold → ccrc) was already named as risking. 1800 did not comfortably clear its own
+structural worst case; it carried **negative** headroom against it, so the raise to 2400 closed a
+silent-truncation risk rather than widening a comfortable margin. 2400 clears 1826 by **574 characters**
+(about 31%) and is still under 10% of the neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte
+`additionalContext` cap on this same compact event. It is a ceiling and never a budget to spend up to: the
+node count is ungated (`grep -oE '[0-9]+ nodes'` is
+unbounded repetition inside a 4096-byte head) and can exceed any bound on its own, which is why the clip
+exists at all and why the number above only has to cover the fields that **are** gated. It is also what stands between an operator-controlled field and `jq`'s own `MAX_ARG_STRLEN`
+(measured 131072 on the fleet host): past it the `jq -cn` exec fails, `|| return 0` swallows it, and the
+hook prints nothing at all — deleting the graphify card too.
+
+**The kill-switch.** `~/.ccrc/ccrc-card-off` is the operator's own file, the same shape as
+`~/.ccrc/graph-gate-off` and `$REG/coordinator-paused`: touched by hand, in a directory ccrc owns and
+nothing in this tree writes, releasable without a deploy and without a token. `_hook_hold_card` and
+`_hook_ccrc_card` each check it first and return early; `_hook_graph_card` never consults it, so it
+silences the two ccrc subjects only — the graphify card (and its own `graph-gate-off`-governed gate
+sentence) is unaffected.
+
+**The two counters.** `ccrcPeerReads` and `ccrcClaims` ride in the same hookstate write the graph counters
+use, carried the same way — reset on any `SessionStart` whose source is not `resume`, kept across `resume`
+and `compact` — and read back by the same guarded jq fork, each behind its own `^[0-9]+$` degrade. Each
+counts an act, not a client: `ccrcPeerReads` increments on a `PostToolUse` `Bash` command matching
+`peers[[:space:]]+list`, `ccrcClaims` on one matching `claims[[:space:]]+take`, both anchored on the
+**verb pair** and never on `ccrc-api` — both skills set `API="$HOME/.local/bin/ccrc-api"` and then call
+`"$API" peers list`, so a counter anchored on the client name would score 0 against the exact spelling
+the fleet uses, and the hook reads the unexpanded command text. `ccrcPeerReads` is the proximate act
+the co-tenant card prescribes; `ccrcClaims` is the distal one that answer's own rule 0 prescribes next, and the one with
+a durable server-side arbiter — counted apart because each answers a different question about adoption.
+Unlike `graphQueries`/`graphGateDenials`, neither reaches `FleetSession` or any wire field:
+`server/src/hookstate.ts` needs no change, because its reader validates named keys and returns an
+object literal built from those names, with no key census — an unknown key is simply never looked at.
+Both counters live only in the raw `~/.cc-sessions/<id>.hookstate.json` file on the fleet box:
+hookstate-only, no server change, no PWA-visible chip.
+
+**The reading's instrument.** `~/.local/bin/graph-gate-snapshot` is the operator's own hourly carrier —
+outside every checkout, no repo lane, no vitest — that reads the registry and every session's hookstate
+file on the fleet host and rolls them into `~/.ccrc/graph-gate-readings.jsonl`: the graph gate's own
+queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at all — its fall is what
+proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
+adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
 own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
 is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`; each tree's row
-carries an outcome (`never-built · fresh · stale-rebuilt · refused-no-exclude · skipped-busy ·
-skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink · failed`) and a
-reason. A tree with a live, working session on it is deferred (the idle gate, tmux-free — read off
-the session registry and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape
-hatch. `touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
+carries an outcome (`never-built · fresh · stale-rebuilt · restamped · refused-no-exclude ·
+skipped-busy · skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink ·
+failed`) and a reason. `restamped` is D-1509's: graphify's full rebuild exits 0 without writing
+anything when the candidate graph's topology equals the existing one, so a build is re-measured on
+`built_at_commit` — advanced, or the engine said "left untouched" and the sweep splices in the stamp
+it skipped, or nothing is written and the row reads `failed`. A Claude Code worktree under a repo's
+`.claude/worktrees/` is discovered too, but **only while a registered session's workdir names it**
+(`~/.cc-sessions/<id>.workdir`, compared by realpath — Claude Code mints `agent-*` and `wf_*`
+worktrees for its own isolation, and eight cold builds of throwaways starved the tree the rule was
+written for, D-1563); project roots and ccd workspaces are discovered session or not. A tree with a
+live, working session on it is deferred (the idle gate, tmux-free — read off the session registry
+and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape hatch.
+`touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
 operator who needs the fleet host quiet.
 
 **Noise lists.** Two sources, unioned, and they are not the same kind of thing.
@@ -1644,6 +2029,38 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   guard, which measures corpus *minus* tracked — and graphify's shrink guard would then refuse the
   write, wedging the tree at `refused-shrink` on every pass. An **operator** pattern is honoured as
   written, tracked content included: that is the escape hatch, and the only one.
+- **What git ignores AND the corpus actually picked up is derived into the same generated file**
+  (D-1451, narrowed by D-1458). detect() reads `.gitignore` only along the ancestor chain from the
+  VCS root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied
+  and its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy
+  on the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor
+  over `.husky/_/`). So the guard runs in two steps: write the noise patterns, run detect() **once**,
+  and compute the breach (corpus ∖ tracked) it would refuse on. Then ask git whether each **breach**
+  path is ignored (`git check-ignore --no-index -z --stdin`, one call, NUL-framed so a non-ASCII or
+  backslash-bearing name round-trips raw; `--no-index` because git otherwise drops an input the index
+  matches **as a pathspec**, i.e. a filename carrying a metacharacter), and derive one entry per
+  ignored one — the path itself, anchored at the tree root with a leading `/`, or the **collapsed
+  directory** containing it when git's `--directory` census names one, so a whole ignored tree costs
+  one line. Only if something was derived is it appended and detect() run a **second** time.
+  D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
+  accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
+  ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
+  against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
+  second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive
+  the first run sees the ignored subtree unfiltered, so a 2000-file tree with a nested `.gitignore`
+  over a 5000-file ignored subtree pays **4.4 s + 1.4 s** where the old shape paid one **1.4 s** run.
+  That is **~+3 s**, paid exactly on the trees the derivation serves — a tree that derives nothing
+  still runs detect() once — and bounded by the size of the nested-ignored subtree, not the corpus
+  (the same subtree at 1000 files: 1.9 s).
+  Uncapped, with the entry count logged in the pass output; every derived entry goes through the same
+  `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign `.graphifyignore`
+  derives nothing — that file is not the sweep's to write. A filename carrying a glob metacharacter
+  reads as a path to git and as a pattern to everyone else, and that seam is **three-way** (D-1453):
+  the probe is `git ls-files -X`, i.e. wildmatch, where `*` does not cross a `/`; detect is
+  `fnmatch`, where it does. So the probe alone cannot stand in for detect — a derived entry is made
+  literal in BOTH dialects first (`*` → `[*]`, `?` → `[?]`, `[` → `[[]`), and the probe is the belt
+  behind it; since D-1458 a withheld entry always means the tree is then refused over that path in
+  the open, because it is only ever derived from something already in the corpus.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 per-home skill drift, per-tree excludes, the census's last pass, and free space on the
@@ -1744,8 +2161,11 @@ untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 The file carries one of three states — `working`, `waiting`, `done` — plus a
 structured **ask envelope** for a waiting session: either
 `{questions: [...]}` (an `AskUserQuestion`, copied verbatim from the tool call's
-own JSON) or `{approval: {tool, summary}}` (a permission prompt), and the
-subagents the hooks have seen start and stop.
+own JSON) or `{approval: {tool, summary}}` (a permission prompt), the
+subagents the hooks have seen start and stop, and the two graph counters the
+read side keeps — `graphQueries` (R4) and `graphGateDenials` (R5), each reset on
+a `SessionStart` that is not a `resume`, and each read back with `null` (no
+field, an older hook) kept apart from `0` (measured none).
 
 `server/src/hookstate.ts` reads it and **fails to null** on anything it cannot
 vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
@@ -2044,6 +2464,15 @@ target before overwriting anything — and a backup copy that *fails* aborts
 the deploy before `rsync --delete` can destroy the state it failed to save.
 The agent deploy installs `ccd` BEFORE restarting the agent — the agent
 caches `ccd caps` at boot, so the reverse order pins a stale verb set.
+Every file either lane replaces on the box lands **atomically** — executables
+through `install_atomic` (scp to a temp name, chmod, `mv -f`), the thirteen
+systemd units and drop-ins through the box-side `_unit_atomic` that mirrors it.
+Neither is tidiness: `cp` opens its destination `O_TRUNC` before it writes, so
+a copy killed mid-write (ENOSPC, a dropped ssh) would leave a truncated unit at
+its live name — and the dangerous truncation is the one that still *parses*,
+because `claude-session@.service` carries `KillMode=process` as the last key of
+its `[Service]` section and a unit cut above it kills by control-group instead,
+taking the tmux pane on the next restart.
 
 **Ordering between the two targets.** A change that touches `ccd/` — the hook
 script in particular — must ship to the fleet host *before or with* the server,

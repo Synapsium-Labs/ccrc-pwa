@@ -26,6 +26,25 @@ export interface LeastLoadedCase {
    *  file both implementations already read). Omitted/empty means no lane is
    *  declared off. */
   disabled?: string[];
+  /** Wrappers carrying a `<w>-authdead` marker — the account-health probe's
+   *  verdict, in the same registry directory as `-disabled` and read on the same
+   *  `readdir`. It ranks an account out of SCORING on both sides AND out of the
+   *  PREFERRED fallback tier on both sides, and out of ELIGIBILITY on neither:
+   *  when every home-able lane is condemned each side still names one, because
+   *  the verdict is a measurement and a measurement can be wrong. Three cases
+   *  below pin the three answers (`authdead-loses-scoring`,
+   *  `authdead-loses-the-fallback-too`, `all-condemned-unmeasured-still-places`).
+   *  Omitted/empty means nothing is condemned. */
+  authDead?: string[];
+  /** Wrappers carrying a `<w>-authdead` marker whose CONTENT is present but
+   *  malformed — an empty file, or a first whitespace-delimited field that is
+   *  not all digits. ccd's `_authdead` is FAIL-OPEN on exactly this shape
+   *  (absent, unreadable, empty or malformed all mean "not dead"), and the
+   *  server's `readLimits` must be too: trusting the FILENAME alone would
+   *  condemn an account ccd still happily places on. Keyed by wrapper so each
+   *  can carry its own malformed content; omitted/empty means no lane gets a
+   *  malformed marker. */
+  authDeadMalformed?: Record<string, string>;
   /** `null` iff every home-able lane is disabled — nothing is placeable, and
    *  both sides must say so in their own idiom (see the runner). */
   expect: { wrapper: string; score: number } | null;
@@ -86,9 +105,9 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         gpt: c({ five: null, seven: 0, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 400000 }),
       },
       expect: { wrapper: 'claude-b', score: 60 },
-      why: 'gpt is not home-able, so it is an opt-in lane a session reaches only by having it '
-        + 'as HOME (ccd\'s roster header) and it is absent from CCRC_HOME_ABLE, the array '
-        + '_ws_least_loaded iterates — it must never win, however free it looks',
+      why: 'gpt is not home-able: an overflow lane the auto-swapper may rotate onto (ccd\'s '
+        + 'roster header) but absent from CCRC_HOME_ABLE, the array _ws_least_loaded '
+        + 'iterates — placement must never pick it, however free it looks',
     },
     {
       name: 'disabled-lane-skipped',
@@ -137,9 +156,122 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         'claude-b': fresh(40, 40),
         'claude-d': fresh(20, 20),
       },
+      expect: { wrapper: 'claude-a', score: 10 },
+      why: 'a rolled-over window is UNMEASURED, not measured empty: the zero both sides used to '
+        + 'read here was inferred from a timestamp, never observed, and it beat three accounts '
+        + 'that had honestly reported 10, 20 and 40 — then went on beating them, because nothing '
+        + 'runs on an account nothing was placed on. The cheapest MEASURED account wins',
+    },
+    {
+      name: 'half-rolled-window',
+      files: {
+        // claude's 5h window ended; its 7d window is fresh and reads 5 — the
+        // shape EVERY Anthropic account passes through at each 5h reset, and
+        // the one the live fleet was sitting in when this case was written.
+        claude: c({ five: 87, seven: 5, ts: now - 15000, fiveResetAt: now - 100, sevenResetAt: now + 200000 }),
+        'claude-a': fresh(10, 10),
+        'claude-b': fresh(40, 40),
+        'claude-d': fresh(20, 20),
+      },
+      expect: { wrapper: 'claude-a', score: 10 },
+      why: 'ONE ended window is enough to make the row unmeasured: a score is a MAXIMUM, so the '
+        + 'surviving half bounds the truth only from below and 5 could really be 99. Scoring the '
+        + 'survivor is the placement magnet reaching through the readable half — the account whose '
+        + '5h state nobody has measured would rank emptiest on the fleet and win every placement. '
+        + 'This case had no coverage, which is why that divergence was invisible',
+    },
+    {
+      name: 'all-rolled-over',
+      // §B.2's honest cost, pinned in both languages. Two accounts really do
+      // share a 5h reset on this fleet, so a shared boundary that leaves NOTHING
+      // measured is a live shape, not a hypothetical. Both sides must land on
+      // their documented fallback — the first home-able account in roster order
+      // at score 0 — rather than on `null`/`""`, which would mean "nothing is
+      // placeable" and break every ws-add in that window.
+      //
+      // This case gives the SAME answer before and after the provenance fix, and
+      // that is what it is for: today every account scores an inferred 0 and the
+      // strict `<` keeps the first; afterwards every account is unmeasured, both
+      // sides skip them all, and the fallback keeps the first. The answer must
+      // not move while the reason does.
+      files: {
+        claude: c({ five: 10, seven: 98, ts: now - 72000, fiveResetAt: now - 72000, sevenResetAt: now - 50000 }),
+        'claude-a': c({ five: 40, seven: 40, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+        'claude-b': c({ five: 20, seven: 20, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+        'claude-d': c({ five: 30, seven: 30, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+      },
       expect: { wrapper: 'claude', score: 0 },
-      why: 'both sides apply the rollover rule before scoring, so a reset window frees '
-        + 'the account rather than excluding it for another six days',
+      why: 'every home-able window has turned over, so nothing is measured — both sides fall '
+        + 'back to the first home-able account in roster order rather than answering '
+        + '"nothing is placeable"',
+    },
+    {
+      name: 'authdead-loses-scoring',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      authDead: ['claude-a'],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the cheapest lane is condemned, so the cheapest lane nobody condemned wins — '
+        + 'a health verdict costs preference, never eligibility',
+    },
+    {
+      name: 'authdead-loses-the-fallback-too',
+      // NOTHING is measured — a fresh box, or the `all-rolled-over` shape above
+      // — so neither side can rank at all and both land on their fallback. The
+      // first lane in roster order is condemned, and the fallback must step over
+      // it: the shipped defect took the first candidate whether or not the probe
+      // had already measured it dead, so a healthy lane one position behind sat
+      // idle while placement landed on a credential that no longer authenticates.
+      files: {},
+      authDead: ['claude'],
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'with nothing measured the fallback decides, and a condemned lane is not '
+        + 'where it lands while a lane nobody condemned is available — a health verdict '
+        + 'costs preference in the FALLBACK too, not only in the scoring',
+    },
+    {
+      name: 'condemned-lane-is-the-only-measured-one',
+      // The same rule reached the other way round, and the shape a real fleet
+      // hits: the probe condemns the one lane that has telemetry, so the scored
+      // set empties and the fallback runs even though `.cc-limits` is not.
+      // `claude`'s 5 is on disk and must buy it nothing.
+      files: { claude: fresh(5, 3) },
+      authDead: ['claude'],
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'a condemned lane is dropped from scoring, so an empty scored set does not '
+        + 'mean an empty limits dir — the fallback still has to step over it, and its '
+        + 'real measured 5 must not rescue it',
+    },
+    {
+      name: 'all-condemned-unmeasured-still-places',
+      // THE OTHER HALF OF THE DECISION, and the one that is not symmetrical with
+      // `all-disabled` above. Every home-able lane is condemned and nothing is
+      // measured, and both sides still NAME a lane rather than answering
+      // null/"": `-disabled` is an operator's declaration and empties the field
+      // legitimately, while `-authdead` is a measurement that can be wrong, and
+      // letting one bad probe run wedge every ws-add on the box is the outcome
+      // neither language may produce. The measured variant of this case lives in
+      // the runner instead — the two sides agree on the ACCOUNT there and cannot
+      // agree on the score (D-1932) — so this one carries the rule into the
+      // shared fixture where both sides are driven over the same bytes.
+      files: {},
+      authDead: ['claude', 'claude-a', 'claude-b', 'claude-d'],
+      expect: { wrapper: 'claude', score: 0 },
+      why: 'every lane condemned is not every lane disabled: the fallback widens to the '
+        + 'condemned tier and answers the first lane in roster declaration order, because '
+        + 'a health verdict must never be the thing that leaves a box with no destination',
+    },
+    {
+      name: 'malformed-authdead-marker-is-not-dead',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      // Empty file AND a first field that is not digits — the two shapes a
+      // hand-edited or half-restored marker actually takes. ccd's `_authdead`
+      // is FAIL-OPEN on both; a filename-only reader would wrongly condemn
+      // claude-a here and hand the placement to claude-b instead.
+      authDeadMalformed: { 'claude-a': '', 'claude-b': 'not-a-number auth-401' },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a present-but-malformed marker is not a verdict — ccd requires the first '
+        + 'field to be all digits and is fail-open otherwise, and the server must agree '
+        + 'or a hand-edited file condemns an account ccd still places on',
     },
   ];
 }

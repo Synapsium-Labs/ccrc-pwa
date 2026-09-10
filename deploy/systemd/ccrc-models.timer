@@ -1,0 +1,8 @@
+[Unit]
+Description=Probe each provider's model catalogue hourly
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60min
+AccuracySec=5min
+[Install]
+WantedBy=timers.target

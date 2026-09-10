@@ -117,7 +117,15 @@ describe('the sixth refusal union', () => {
     // ever, a guard accepts a member added later and still rejects a typo'd one.
     const src = readFileSync(path.join(root, 'server/test/mail-routes.test.ts'), 'utf8');
     expect(src).toContain('|| isReclaimRefuseCode(tok)');
-    expect(src).toContain('isReclaimRefuseCode }');   // …imported, not just mentioned in prose
+    // …imported, not just mentioned in prose — read the NAMED-IMPORT LIST off
+    // `shared/api.js`'s own import line and require the guard to be one of its
+    // members. A comma-separated membership check, not a tail anchor: a later
+    // union appending its own guard after this one (as `isAskRefuseCode` did)
+    // must not red this.
+    const apiImport = /import \{([\s\S]*?)\} from '\.\.\/\.\.\/shared\/api\.js';/.exec(src);
+    expect(apiImport, "mail-routes.test.ts's shared/api.js import line moved shape").not.toBeNull();
+    const apiImportNames = (apiImport as RegExpExecArray)[1]!.split(',').map((s) => s.trim());
+    expect(apiImportNames).toContain('isReclaimRefuseCode');
     const notCodes = /const NOT_CODES = new Set\(\[([\s\S]*?)\n\s*\]\);/.exec(src);
     expect(notCodes, 'mail-routes.test.ts no longer declares `const NOT_CODES = new Set([...]);` — '
       + 'this harvest is reading a shape that moved, and a silent miss would pass everything').not.toBeNull();
