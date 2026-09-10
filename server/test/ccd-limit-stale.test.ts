@@ -15,6 +15,7 @@ const STUBS = `sleep() { :; };
 /** The bundle's own sentence for `phase:"stale"` (2.1.267, `mu(l)`): what the
  *  status line shows when Claude Code slept through its own reset. */
 const STALE = 'Your usage limit has reset · press enter to continue\n❯ ';
+const STALE_WITH_CONTINUATION_DRAFT = 'Your usage limit has reset · press enter to continue\n❯ \n  half a sentence\n────────────────────────\n  👤 team·max';
 const STALE_NO_PROMPT = 'Your usage limit has reset · press enter to continue\n';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
 const BUSY = 'Your usage limit has reset · press enter to continue\nWorking… (esc to interrupt)\n❯ ';
@@ -69,6 +70,11 @@ describe('_auto_stale_check presses Enter for a stale auto-continue (D-2360)', (
     expect(enters()).toEqual([]);
     expect(swapLog()).toMatch(/stale-skip myid: usage limit has reset but the input box is not empty/);
     expect(stamp()).toMatch(/^[0-9]+$/);
+  });
+  it('a blank marker with text on a continuation row is occupied: no synthesized Enter (D-2457)', () => {
+    seed(); check({ PANE_TEXT: STALE_WITH_CONTINUATION_DRAFT });
+    expect(enters()).toEqual([]);
+    expect(swapLog()).toMatch(/stale-skip myid: usage limit has reset but the input box is not empty/);
   });
   it('no prompt visible: nothing', () => { seed(); check({ PANE_TEXT: STALE_NO_PROMPT }); expect(enters()).toEqual([]); });
   it('a running turn: nothing', () => { seed(); check({ PANE_TEXT: BUSY }); expect(enters()).toEqual([]); });

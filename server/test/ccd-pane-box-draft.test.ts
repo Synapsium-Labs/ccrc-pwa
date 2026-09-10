@@ -1,6 +1,6 @@
 /**
- * ONE reader for the input box's own row, so ccd's two injectors cannot drift
- * from each other or from `draftOf` (server/src/inject/send.ts).
+ * ONE marker-row reader aligned with `draftOf` (server/src/inject/send.ts),
+ * plus one whole-box presence guard shared by every synthesized ccd action.
  *
  * Both guards read the FIRST `❯` line with a PLAIN space today. Measured on
  * this box, that is wrong in both directions: it returns a scrollback turn
@@ -34,9 +34,9 @@ afterEach(() => { h.cleanup(); });
  *  survives every editor and diff viewer this file passes through. */
 const NBSP = '\u00a0';
 
-/** Runs `_pane_box_draft` over a pane and returns exactly what it echoed. */
-const draft = (pane: string): string => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; _pane_box_draft "$1"`, 'bash', pane], {
+/** Runs one pane reader in a fixture HOME. */
+const paneRead = (command: string, pane: string): string => {
+  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${command}`, 'bash', pane], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     // BOTH poisons. This snippet sources ccd, so it can reach
     // `_have_systemctl`/`_supervised_start`, and `ccd-workspaces.test.ts`'s
@@ -47,6 +47,11 @@ const draft = (pane: string): string => {
   expect(r.status, r.stderr ?? '').toBe(0);
   return (r.stdout ?? '').replace(/\n$/, '');
 };
+/** Runs `_pane_box_draft` over a pane and returns exactly what it echoed. */
+const draft = (pane: string): string => paneRead('_pane_box_draft "$1"', pane);
+/** Answers whether any real content occupies the marker or continuation rows. */
+const occupied = (pane: string): boolean =>
+  paneRead('_pane_box_has_content "$1" && printf yes || printf no', pane) === 'yes';
 
 const pane = (boxRows: string[]): string =>
   ['earlier turn', `❯ an older submitted turn`, '● a reply', '─'.repeat(24),
@@ -113,6 +118,24 @@ describe('_pane_box_draft', () => {
  * So the fix is both halves together, and the pin is parity with `draftOf`,
  * which has stripped `DIM_SPAN` and SGR since it shipped.
  */
+describe('_pane_box_has_content reads the whole input box (D-2457)', () => {
+  it('finds a draft below a blank marker row', () => {
+    expect(occupied(pane([`❯${NBSP}`, '  half a sentence']))).toBe(true);
+  });
+
+  it('does not mistake chrome below the closing rule for box content', () => {
+    expect(occupied(pane([`❯${NBSP}`]))).toBe(false);
+  });
+
+  it('does not promote a dim ghost suggestion into real content', () => {
+    expect(occupied(pane([`\x1b[39m❯${NBSP}\x1b[2mcontinue\x1b[0m`]))).toBe(false);
+  });
+
+  it('still finds an ordinary marker-row draft', () => {
+    expect(occupied(pane([`❯${NBSP}half a sentence`]))).toBe(true);
+  });
+});
+
 describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () => {
   const ESC = '\x1b';
   /** Verbatim box rows. The first two are `send.test.ts`'s own live captures
@@ -148,15 +171,12 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     // site resolves its own tmux target (`-t "$(_tmux "$id")"`), so a nested
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`
     // truncates there and silently drops the trailing ` -e` from the match.
-    const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane.*\)"/g) ?? [];
-    // Five sites: the two injectors (`_auto_compact_check`'s drafting guard,
-    // `_inject_spawn_effort`'s empty-box guard), `_redrive_after_spawn`'s
-    // input-box-not-empty stand-down (D-2264) — the re-drive's own box-draft
-    // check is the one place inside that function NOT narrowed to `tail -8`
-    // (see the comment above `_redrive_after_spawn` in ccd/ccd) —
-    // `_session_hard_blocked`'s own non-empty-box stand-down (D-2363), and
-    // `_auto_stale_check`'s own non-empty-box stand-down (D-2360).
-    expect(calls, 'the two injector call sites, the redrive stand-down, _session_hard_blocked (D-2363) and _auto_stale_check (D-2360)').toHaveLength(5);
+    const calls = src.match(/_pane_box_has_content "\$\(tmux capture-pane.*\)"/g) ?? [];
+    // Five sites: the two injectors (`_auto_compact_check` and
+    // `_inject_spawn_effort`), `_redrive_after_spawn`, `_session_hard_blocked`,
+    // and `_auto_stale_check`. Every one can destroy or submit the box, so every
+    // one must ask the whole-box presence question rather than read row one.
+    expect(calls, 'all five synthesized-action guards use the whole-box reader').toHaveLength(5);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
 });

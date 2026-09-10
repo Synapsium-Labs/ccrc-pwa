@@ -1143,3 +1143,15 @@ whole-branch review's findings — same allocator, same act-of-definition discip
   remains outside the cache and is re-measured every time, so cached evidence can never carry a
   human's new draft through a swap. The worst added detection delay is 30 seconds, within the
   rescue arm's existing 120-second jitter.
+- **D-2456** — *The ccd limit detector parses the JSONL envelope before classifying it.* The final
+  release gate found that `_transcript_limit_banner` searched each raw line for field-shaped
+  substrings, so the same keys inside a nested tool input could make an ordinary assistant row
+  look like a top-level API-error envelope and force-swap a healthy session. The reader now asks
+  a JSON parser for top-level `type`, `isApiErrorMessage` and `error`; malformed rows and nested
+  lookalikes fail closed. The newest-real-row and local-command chatter rules stay unchanged.
+- **D-2457** — *Every ccd synthesized-action guard measures the whole input box.* The same release
+  gate found that `_pane_box_draft` deliberately reads only the marker row, while a human can
+  press Alt+Enter first and put real text on continuation rows beneath an empty marker. A shared
+  `_pane_box_has_content` adds the server's existing marker-to-closing-rule presence question;
+  all five ccd guards use it before swapping, stale Enter, redrive, `/compact`, or `/effort`.
+  Chrome after the closing rule is excluded and dim ghost suggestions remain empty.

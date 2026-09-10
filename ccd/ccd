@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bb2073849202b0dc1630dbc028473a6a55f2760a38009a6a913eb26b08ed1966
+# ccrc:generated 1 sha256=81294573b4a69c8d5e008abdf03aaba91f36a13662ea084f94a55a4516e54a20
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12917,7 +12917,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   #     fleet's busy steady state should not pay a transcript read every 5 s;
   #   - a NON-EMPTY INPUT BOX. `cmd_swap` carries the transcript and never the box,
   #     so a human mid-sentence on a limited account would lose the sentence to
-  #     the rescue. `-e` capture, like every other `_pane_box_draft` site.
+  #     the rescue. `-e` capture, through the whole-box reader D-2457 added.
   # A THIRD STAND-DOWN, the transcript arm's own (D-2443): a FRESH
   # `$REG/<id>.stalepress` stamp. `_auto_stale_check` runs earlier in the SAME
   # supervise tick and, on a stale auto-continue, presses Enter and stamps
@@ -12940,7 +12940,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" f cur last now scan scan_ts scan_verdict verdict=0
+  local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
   _pane_hard_blocked "$pane" && return 0
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
@@ -12957,8 +12957,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
   [[ "$verdict" -eq 1 ]] || return 1
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)")
-  [[ -z "$cur" ]]
+  ! _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)"
 }
 
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
@@ -12980,7 +12979,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # non-empty box (a human is at the keyboard; Enter would submit THEIR text),
   # and the cooldown, which also keeps the box-not-empty line from repeating
   # every five seconds (D-2361).
-  local id="$1" t pane now last cur
+  local id="$1" t pane now last
   t=$(_tmux "$id")
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
@@ -12990,8 +12989,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  if [[ -n "$cur" ]]; then
+  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
     echo "$(date '+%F %T') stale-skip $id: usage limit has reset but the input box is not empty [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
     return 0
   fi
@@ -13658,7 +13656,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # this session at all" or "this session is over its threshold and we are declining anyway" —
   # the two shapes that were silent, and the second is the one that matters.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t cur
+  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
@@ -13771,8 +13769,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
+    && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
@@ -13783,9 +13781,10 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
 }
 
-# The input box's own row, from a pane capture — `draftOf`'s rule
-# (server/src/inject/send.ts), in one place, so ccd's two injectors cannot
-# drift from each other or from the server's reader.
+# Two readings of the input box from one normalised pane: `_pane_box_draft`
+# keeps `draftOf`'s marker-row contract, while `_pane_box_has_content` asks the
+# safety question every synthesized ccd action needs — whether ANY box row is
+# occupied. Both share the dim/SGR normalizer, so those rules cannot drift.
 #
 # TWO corrections to the inline first-match, plain-space-anchored grep this
 # replaces, both measured live on 2026-08-14. (The old pattern is DESCRIBED
@@ -13840,9 +13839,13 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
 # is needed (and ERE has none): the interleaved alternative cannot match a reset
 # and `[^\e]` cannot match an ESC, so the match physically cannot run past the
 # first terminator.
-_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row, or empty
+_pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghosts and SGR removed
+  LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g'
+}
+
+_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty
   printf '%s\n' "$1" \
-    | LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g' \
+    | _pane_box_plain \
     | LC_ALL=C grep $'^\xe2\x9d\xaf' \
     | tail -1 \
     | LC_ALL=C sed -E $'s/^\xe2\x9d\xaf(\xc2\xa0| )*//; s/[[:space:]]*$//'
@@ -13851,6 +13854,40 @@ _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row,
   # status of the pipeline would leak out as a failure the callers (which read
   # the STDOUT, `[[ -n "$cur" ]]`) never asked about.
   return 0
+}
+
+_pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any real box row is occupied (D-2457)
+  # `_pane_box_draft` deliberately answers only the marker row, matching
+  # `draftOf`. That is not enough before a synthesized action: a human can press
+  # Alt+Enter first, leaving an EMPTY marker row and real text on an indented
+  # continuation row. Scan from the LAST marker to the closing horizontal rule,
+  # exactly like server `hasContentBelowMarker`; chrome after the rule is not box
+  # content. The shared normalizer keeps dim ghost suggestions empty here too.
+  # Ask the marker-row reader first both to keep ONE rule for that row and so a
+  # test that stubs the seam beneath an injector still controls the full guard.
+  [[ -n "$(_pane_box_draft "$1")" ]] && return 0
+  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+    function nonblank(s) { gsub(/[[:space:]]/, "", s); return s != "" }
+    function rule(s, n) {
+      gsub(/[[:space:]]/, "", s)
+      n = gsub(/─/, "", s)
+      return n >= 8 && s == ""
+    }
+    {
+      line = $0
+      if (index(line, "❯") == 1) {
+        active = 1; found = 0
+        sub(/^❯( | )*/, "", line)
+        if (nonblank(line)) found = 1
+        next
+      }
+      if (active) {
+        if (rule(line)) { active = 0; next }
+        if (nonblank(line)) found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
 }
 
 # Auth screens must never receive synthesized keystrokes: on a numbered login
@@ -14416,7 +14453,7 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
-  local t="$1" cur
+  local t="$1"
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
     echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
   fi
@@ -14424,8 +14461,9 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  if [[ -n "$cur" ]]; then echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0; fi
+  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
+    echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0
+  fi
   sleep 1
   tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
@@ -14460,32 +14498,61 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>") | 1 not | 2 unreadable (D-2362)
+_transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>") | 1 not | 2 unreadable (D-2362, D-2456)
   # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
-  # `"isApiErrorMessage":true` and `"error":"rate_limit"` (measured 2026-09-10:
-  # `quotaLimits:{status:"rejected",resetsAt:<epoch s>,rateLimitType:"seven_day"}`).
-  # Its TEXT — "You've hit your weekly limit · resets Sep 15, 12am (UTC)" — is the
-  # part `_pane_hard_blocked` has twice failed to match (D-2364), so nothing here
-  # reads it: `shared/api.ts`'s RATE_LIMIT_ERROR is the same literal, and
-  # `ccd-limit-banner.test.ts` reads this line from source to keep them equal.
+  # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
+  # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
+  # rateLimitType:"seven_day"}`). Its TEXT is not a detector, and neither are
+  # field-shaped strings nested in `message.content`: a JSON parser reads the
+  # envelope so an assistant discussing this feature cannot force-swap itself.
   # Same window and the same chatter rule as `_transcript_stalled_pair`:
   # local-command rows are not turns; any other user/assistant row after the
   # banner means the session moved on (a re-drive, a human message, a new turn).
   # `-f && -r`, never `-r` alone — D-2347's class: `-r` is true for a FIFO and an
   # unbounded character device, and `tail` on either blocks for ever (D-2370).
-  local f="$1" line found="" reset type
+  local f="$1" rows rc
   [[ -f "$f" && -r "$f" ]] || return 2
-  while IFS= read -r line; do
-    [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
-    if [[ "$line" == *'"type":"assistant"'* && "$line" == *'"isApiErrorMessage":true'* && "$line" == *'"error":"rate_limit"'* ]]; then found="$line"; continue; fi
-    case "$line" in *'<local-command-caveat>'*|*'<command-name>'*|*'<local-command-stdout>'*) continue ;; esac
-    found=""
-  done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
-  [[ -n "$found" ]] || return 1
-  reset=$(grep -oE '"resetsAt":[0-9]+' <<<"$found" | head -1 | cut -d: -f2)
-  type=$(grep -oE '"rateLimitType":"[a-z_]+"' <<<"$found" | head -1 | cut -d'"' -f4)
-  printf '%s\t%s\n' "$reset" "$type"
-  return 0
+  rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+
+found = None
+for raw in sys.stdin:
+    try:
+        row = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        found = None
+        continue
+    if not isinstance(row, dict):
+        found = None
+        continue
+    if row.get("type") not in ("user", "assistant"):
+        continue
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "rate_limit":
+        found = row
+        continue
+    chatter = row.get("type") == "user" and isinstance(content, str) and content.startswith(
+        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
+    )
+    if chatter:
+        continue
+    found = None
+
+if found is None:
+    raise SystemExit(1)
+quota = found.get("quotaLimits")
+quota = quota if isinstance(quota, dict) else {}
+reset = quota.get("resetsAt")
+kind = quota.get("rateLimitType")
+reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
+print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
+' 2>/dev/null
+  rc=$?
+  [[ "$rc" -le 1 ]] && return "$rc"
+  return 2
 }
 
 _redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
@@ -14518,9 +14585,9 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this
   # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
-  # on precisely the sessions this fallback exists to rescue. `_pane_box_draft` alone keeps the
-  # full `-e` capture: it already reads only the LAST `❯` line, so a wider window costs it nothing.
-  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane cur
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
+  # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
+  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
@@ -14538,8 +14605,8 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   echo "$pane" | grep -q "esc to interrupt" && return 0
   _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
+    && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "$RESUME_PROMPT"; sleep 1; tmux send-keys -t "$t" Enter
   return 0

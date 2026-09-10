@@ -32,6 +32,13 @@ const L = {
   }),
   metaPrompt: () => JSON.stringify({ type: 'user', isMeta: true, uuid: 'm1', timestamp: 't', message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off. Note: ccd restarted this session.' }] } }),
   assistant: (text = 'Working on it.') => JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: 't', message: { model: 'claude-opus-5', role: 'assistant', content: [{ type: 'text', text }] } }),
+  assistantWithNestedLimit: () => JSON.stringify({
+    type: 'assistant', uuid: 'a2', timestamp: 't',
+    message: {
+      model: 'claude-opus-5', role: 'assistant',
+      content: [{ type: 'tool_use', id: 'tool-1', name: 'inspect', input: { isApiErrorMessage: true, error: 'rate_limit' } }],
+    },
+  }),
   human: (text = 'resume') => JSON.stringify({ type: 'user', uuid: 'u1', timestamp: 't', message: { role: 'user', content: text } }),
   caveat: () => JSON.stringify({ type: 'user', isMeta: true, uuid: 'c1', timestamp: 't', message: { role: 'user', content: '<local-command-caveat>Caveat: ...</local-command-caveat>' } }),
   command: () => JSON.stringify({ type: 'user', uuid: 'c2', timestamp: 't', message: { role: 'user', content: '<command-name>/effort</command-name><command-args>ultracode</command-args>' } }),
@@ -93,6 +100,18 @@ describe('_transcript_limit_banner (D-2362)', () => {
     seed(); const p = writeTranscript([L.assistant("You've hit your weekly limit · resets Sep 15, 12am (UTC)")]);
     expect(detect(p).rc).toBe('1');
   });
+  it('field-shaped keys nested in ordinary assistant content are not a top-level limit envelope (D-2456)', () => {
+    seed(); const p = writeTranscript([L.assistantWithNestedLimit()]);
+    expect(detect(p).rc).toBe('1');
+  });
+  it('an unparseable row after a banner fails closed instead of trusting older evidence (D-2456)', () => {
+    seed(); const p = writeTranscript([L.banner(), '{"type":"assistant","message":']);
+    expect(detect(p).rc).toBe('1');
+  });
+  it('a tag quoted by a real assistant is a turn, not local-command chatter (D-2456)', () => {
+    seed(); const p = writeTranscript([L.banner(), L.assistant('The marker is <command-name>.')]);
+    expect(detect(p).rc).toBe('1');
+  });
   it('a banner without quotaLimits still detects, printing empty fields', () => {
     seed(); const p = writeTranscript([L.banner({ quotaLimits: undefined })]);
     expect(detect(p)).toEqual({ rc: '0', out: '\t' });
@@ -110,10 +129,10 @@ describe('_transcript_limit_banner (D-2362)', () => {
   });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one bash copy, one TS copy, pinned", () => {
     const src = fs.readFileSync(CCD, 'utf8');
-    const line = src.split('\n').find((l) => l.includes(`*'"isApiErrorMessage":true'*`) && l.includes('found="$line"'));
+    const line = src.split('\n').find((l) => l.includes('row.get("error") =='));
     if (!line) throw new Error('_transcript_limit_banner detector line not found in ccd/ccd');
-    const m = /\*'"error":"([a-z_]+)"'\*/.exec(line);
-    if (!m) throw new Error('no "error":"…" glob literal on the detector line');
+    const m = /row\.get\("error"\) == "([a-z_]+)"/.exec(line);
+    if (!m) throw new Error('no parsed error literal on the detector line');
     expect(m[1]).toBe(RATE_LIMIT_ERROR);
   });
 });
