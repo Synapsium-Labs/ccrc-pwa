@@ -2693,11 +2693,11 @@ export class CoordStore {
    * GUARDED. The three direct callers expand to FIVE reachable paths. Four run
    * in the same transaction as their `queueDelivery`: the mail route's send
    * `tx`, the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx`
-   * through `markDispatched` → `bindSession` → `requeueAbandonedMail`, and
+   * through `markDispatched` -> `bindSession` -> `requeueAbandonedMail`, and
    * `reclaimProgram`'s `tx`. `tx` is `BEGIN IMMEDIATE` over a synchronous
    * `DatabaseSync`, so those paths see no concurrent writer and the row this
    * stamps is provably `'queued'`. The fifth path — `requeueAbandonedMail`
-   * reached from the open route's `setSession` → `bindSession` — runs in
+   * reached from the open route's `setSession` -> `bindSession` — runs in
    * autocommit after its `ws-hold` succeeds. Its queue and stamp are
    * synchronous but not atomic. The `state NOT IN ${TERMINAL_DELIVERY_SQL}`
    * guard and the result union therefore refuse and expose a row that became
