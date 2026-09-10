@@ -2143,3 +2143,95 @@ last second. That is the right call and I have told them so.
 **Two merges, two lessons, same shape.** Round 4's ugrep false zero was a measurement whose TOOL I had
 not identified; this was a measurement whose SURFACE I had not enumerated. Neither was a wrong reading —
 both were correct readings of the wrong thing, reported as facts about the world.
+
+---
+
+## 2026-09-10 10:4x — D-2347 started. **The defect is real and the fix is verified. My ruling about WHERE it belonged was wrong.**
+
+Operator said "start it". What follows is the gate work, and most of it went against me.
+
+### The defect, reproduced — and one shape the booking does not name
+
+Measured on a clean worktree cut from `origin/main` at `24f32a18`, with the call BOUNDED (an unbounded
+red here is a hung CI job, not a failing test):
+
+| input to `_transcript_stalled_pair` | before | after `[[ -f "$f" && -r "$f" ]]` |
+|---|---|---|
+| a real stall (the positive path) | 0 | 0 |
+| regular file, not a stall | 1 | 1 |
+| absent | 2 | 2 |
+| **FIFO** | **HANG** (`timeout` killed it, rc 124) | 2 |
+| **character device** (`/dev/zero`) | **HANG** | 2 |
+| **directory** | **1** | 2 |
+
+`ccd-redrive.test.ts` 30/30 after the fix; `ccd-resume-flag` + `transcript-ladder` + `ccd-project-pool`
+106/106. The booked one-line remedy is correct and complete.
+
+**The directory row is not in D-2347's text, and it falsifies one clause of it.** The booking says the
+remedy is *"behaviour-identical for every input that answers today, since absent already returns 2"*.
+A directory ANSWERS today — it answers **1**, "measured, and not a stall" — and after the fix it answers
+2, "I could not measure." That is a behaviour change, and a correcting one: `tail` on a directory writes
+to stderr and emits nothing, so the loop reads zero lines and the function reports the status quo it
+never observed. Same overloaded-return family as the hang, reached without hanging.
+
+### **MY UPSTREAM RULING WAS WRONG.** The spec specifies the thing I called a defect
+
+I ruled that the fix "belongs upstream at `_transcript_path`'s unmeasured fallback rather than only
+`_transcript_stalled_pair`'s `-r`", and I put that in this ledger, in mail 391's successor and in mail
+427 to the worker. `docs/superpowers/specs/2026-08-12-swap-transcript-defect-family-design.md` §2.5
+specifies rung 4 verbatim:
+
+> 4. the resolved munge unchecked, exactly as today, so a session that has genuinely written nothing yet
+>    still records the canonical address rather than an empty string.
+>
+> The function's contract — **print one path, return non-zero only when the registry cannot answer** —
+> does not change, so no consumer and no manifest format moves.
+
+So `_transcript_path` returning rc 0 for a guess **is the contract**, argued and accepted, not a
+collapse. Three independent opus refuters killed my "the docstring names its own harm" reading **3/3**,
+and the strongest version is the one I missed: the harm sentence is scoped to *"a session that moves"* —
+a transcript that exists at ANOTHER address — and rungs 1–3 eliminate exactly that case before rung 4
+can run. Rung 4 is reachable only when no transcript for that uuid exists anywhere under this config
+dir, where there is no rival address to be wrong about. **Disclosure is not self-contradiction.**
+
+I read the CODE and inferred the rule. The spec that governs it was one file away. Third instance this
+week of the same failure — after the ugrep tool error and the two-surface protection error — and the
+only one that would have put a false deviation into a plan and dispatched it to a worker.
+
+### And the claim I mailed the worker was wrong too: TWO durable consumers, not three
+
+Refuted 3/3, and I confirmed it myself rather than taking it: `_transcript_path`'s four call sites are
+`_ws_archive_manifest` (6828, persisted by `_reg_set "$id" archivemanifest` at 6503 — DURABLE),
+`cmd_ws_audit` (9444 — **stdout only**), `_ws_tombstone` (10157, writes `$REG/.reaped/<id>.json` —
+DURABLE), and `_redrive_after_spawn` (14362 — the only one that OPENS the file). `cmd_ws_audit`'s own
+header says it *"destroys nothing and creates nothing that outlives it — no worktree, no branch, no
+registry field, no tombstone"*. I said "a manifest, an audit row and a tombstone" in mail 427.
+
+**The spec makes the identical error**, which is where I got it: §2.5 calls them *"`_ws_archive_manifest`,
+`cmd_ws_audit` and `_ws_tombstone`: the durable records written when a workspace is archived, audited
+and reaped."* One of those three is not a record and is not durable. Booking it.
+
+### The fix is not a new pattern — it is this program's OWN pattern, applied where it was missed
+
+`ccd/ccd:1331`, inside `_project_pool_state` — **account-pools wave 2a, ours** — already carries
+`[[ -f "$f" && -r "$f" ]]` with the argument written out: *"a character device gets the one answer that
+is safe for all of them… `-r "$f"` is checked in the SAME breath."* And `ccd-project-pool.test.ts`
+already carries the whole test vocabulary: a `boundedState` helper whose docstring explains that
+**vitest's own per-test timeout cannot save you** — `h.sh`'s `execFileSync` is SYNCHRONOUS and blocks the
+event loop the timer would fire on, so the bound must live on the child process — plus cases for FIFO,
+symlink-to-FIFO, symlink-to-`/dev/zero`, directory, mode-000 and broken symlink, each double-bounded.
+`ccd-crosspool.test.ts` carries six more FIFO cases.
+
+So D-2347 is sharper than "a missing test in a reader": **`_transcript_stalled_pair` is the one function
+in this class written outside an established, argued, already-tested house pattern that three suites in
+the same tree use.** That is what Part D should say, and it makes the remedy a transcription rather than
+a design.
+
+### My own mistake, recorded
+
+I ran `git checkout origin/main -- .` in this worktree as a careless reset. It rewrote every tracked
+file to main's content and STAGED it — a 190-file index. Nothing was lost: `ws/amber-summit` was pushed
+at `95292ea4`, zero untracked files, and `git reset --hard HEAD` restored it exactly. But it also means
+my first mutation-table run measured a worktree I had not intended to create, and was right by accident.
+**I re-measured deliberately in a scratch worktree cut from `origin/main`** before believing any of it,
+which is the only reason the table above is evidence rather than a coincidence.
