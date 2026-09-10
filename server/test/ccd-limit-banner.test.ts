@@ -85,6 +85,10 @@ describe('_transcript_limit_banner (D-2362)', () => {
     seed(); const p = writeTranscript([L.banner({ error: 'overloaded', quotaLimits: undefined })]);
     expect(detect(p).rc).toBe('1');
   });
+  it('an assistant row carrying the error field but not the API-error marker is not a limit: rc 1', () => {
+    seed(); const p = writeTranscript([L.banner({ isApiErrorMessage: undefined })]);
+    expect(detect(p).rc).toBe('1');
+  });
   it("the banner's TEXT on an ordinary assistant row is not a limit: rc 1 — text is never the detector", () => {
     seed(); const p = writeTranscript([L.assistant("You've hit your weekly limit · resets Sep 15, 12am (UTC)")]);
     expect(detect(p).rc).toBe('1');
