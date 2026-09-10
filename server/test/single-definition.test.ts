@@ -2700,3 +2700,72 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
     }
   });
 });
+
+// ── D-2375: the scratch-slug predicate ─────────────────────────────────────
+describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+  // "Did the harness mint this slug for a throwaway directory?" is asked at
+  // three sites that cannot share a function between them:
+  //
+  //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
+  //     Its two callers (the census and `--apply`) reach it directly.
+  //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     `tableNames()`), so a `declare -F` guard would be the second spelling
+  //     with a branch in front of it. D-92's trade, unchanged.
+  //   - `session-hook.sh` is installed INTO an agent home and sources nothing
+  //     from this tree at all.
+  //
+  // So the agreement cannot be structural, and this is the mechanism that
+  // holds it instead. It matters more than the usual drift argument does:
+  // the hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can
+  // only ever be exercised on the platform the suite runs on — a Linux-only
+  // spelling was invisible to every ubuntu leg and to five task reviews, and
+  // only `test-macos` caught it. The two read-side sites read a directory
+  // NAME, so they are measurable everywhere; this pin is what carries their
+  // coverage across to the one site that is not.
+  const PRED = '-tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*';
+
+  it('is spelled identically at exactly three sites, each named here BY NAME', () => {
+    expect(holdersOf(PRED)).toEqual([
+      'ccd/ccrc',                 // _mem_is_scratch — the rule, and the measurement
+      'ccd/ccrc-doctor-checks',   // _check_memory — spelled here, D-92's trade
+      'ccd/session-hook.sh',      // the hook's own case — shares nothing with either
+    ]);
+  });
+
+  it('no site carries the narrower Linux-only spelling', () => {
+    // THE RED CONTROL for the widening. Narrowing any one site back to a bare
+    // `-tmp*)` arm — which is what shipped, and what `test-macos` caught — is
+    // a red suite here rather than a silent Darwin-only regression, on a
+    // platform whose scratch root no `-tmp…` slug can name.
+    for (const f of BASH) {
+      const narrow = codeLines(f).filter((l) => /in\s+-tmp\*\)/.test(l));
+      expect(narrow, rel(f)).toEqual([]);
+    }
+  });
+
+  it('no site sweeps up /var/tmp — POSIX persistent scratch is not the scratch root', () => {
+    // The widening's UPPER BOUND, and the prefix a careless one takes first:
+    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots
+    // every project fixture it owns there, and skipping it would hide a real
+    // fork from the operator.
+    for (const f of BASH) {
+      const swept = codeLines(f).filter((l) => /-var-tmp\*/.test(l));
+      expect(swept, rel(f)).toEqual([]);
+    }
+  });
+
+  it('the TypeScript mirror in session-hook.test.ts carries the same four prefixes', () => {
+    // That file states its fixtures' preconditions against this predicate and
+    // cannot import a bash `case`, so it mirrors the list. This is what keeps
+    // the mirror from drifting in either direction — a mirror that is merely
+    // "close" would let the scratch test pass while measuring a shape the
+    // shipped guard does not skip, which is exactly the failure at bb23a9f1.
+    const src = readFileSync(path.join(ccrcRoot, 'server/test/session-hook.test.ts'), 'utf8');
+    const m = /const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
+    expect(m, 'session-hook.test.ts declares no SCRATCH_PREFIXES').toBeTruthy();
+    const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    expect(mirror).toEqual(shipped);
+  });
+});

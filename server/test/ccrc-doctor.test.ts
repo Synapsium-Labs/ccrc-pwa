@@ -6459,19 +6459,45 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   });
 
   // Guard test (Global Constraints: every guard ships with a red-when-deleted
-  // test). `-tmp*` slugs are scratch cwds the harness mints for every
-  // directory a session starts in; converging (or reporting) them would fill
-  // the census with noise about directories nobody will ever read. Seed one
-  // that LOOKS forked (a plain, non-symlink `memory` directory) and require
-  // it never reaches the verdict.
-  it('skips a -tmp* project slug even when it looks forked', () => {
-    const home = healthy('ccrc-doctor-mem-tmp-skip-');
-    const d = join(home, '.claude', 'projects', '-tmp-scratch', 'memory');
+  // test). A scratch slug is a cwd the harness mints for every directory a
+  // session starts in; converging (or reporting) them would fill the census
+  // with noise about directories nobody will ever read. Each fixture LOOKS
+  // forked (a plain, non-symlink `memory` directory) and must never reach the
+  // verdict.
+  //
+  // FOUR PREFIXES, ONE RULE (D-2375): `/tmp` on Linux, and on Darwin
+  // `/private/tmp` plus a per-user `/var/folders/<x>/<y>/T`. `_check_memory`
+  // reads a directory NAME, so all four are measurable on a Linux runner —
+  // unlike the hook's own copy, which derives its slug from a live cwd and can
+  // only be measured where it runs. That asymmetry is why the Linux-only
+  // spelling survived to `test-macos`.
+  for (const slug of ['-tmp-scratch', '-private-tmp-scratch',
+    '-var-folders-zz-8gk0000gn-T-scratch', '-private-var-folders-zz-8gk0000gn-T-scratch']) {
+    it(`skips the scratch project slug ${slug} even when it looks forked`, () => {
+      const home = healthy('ccrc-doctor-mem-tmp-skip-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^PASS memory: /m);
+    });
+  }
+
+  // THE NEGATIVE CONTROL for that list. `/var/tmp` is POSIX *persistent*
+  // scratch, not the OS scratch root, and it is where `session-hook.test.ts`
+  // roots every project fixture it owns — so a widening that swept it up would
+  // hide a real fork from the operator, which is the one thing this check
+  // exists to report. Without this row, widening the list has no upper bound
+  // any suite can see.
+  it('still WARNs about a forked /var/tmp slug — persistent scratch is not the scratch root', () => {
+    const home = healthy('ccrc-doctor-mem-vartmp-');
+    const d = join(home, '.claude', 'projects', '-var-tmp-project', 'memory');
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'a.md'), 'x');
     writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS memory: /m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-var-tmp-project/m);
   });
 
   // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch

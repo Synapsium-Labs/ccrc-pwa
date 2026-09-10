@@ -1109,6 +1109,8 @@ number up; do not invent one.
   in `.claude` alone). Converging those would fill the shared store with empty directories nobody will
   read. All three mechanisms skip a slug beginning `-tmp`, and the census filter, the hook guard and
   the doctor guard use the same rule. Tasks 1, 2 and 4.
+  **Widened 2026-09-10 by D-2375:** "a slug beginning `-tmp`" was the LINUX spelling of the rule, not
+  the rule. Read D-2375 for what the guard skips now.
 
 - **D-2182** — the spec's §3 says the pre-existing symlinks are "re-pointed" to the neutral store,
   but a symlink pointing at another HOME has that home's real directory behind it and its contents
@@ -1253,6 +1255,30 @@ blocks say.
 - **D-2252** — `_mem_absorb`'s conflict tag is a home basename, which begins with a dot, so this plan's
   `${base%.md}.$tag.md` produces `same..claude-corp.md`. The leading dot is stripped:
   `same.claude-corp.md`. Cosmetic, and it lands in a file an operator has to read and judge. Task 3.
+
+- **D-2375** — **THE SCRATCH GUARD WAS THE LINUX SPELLING OF ONE RULE, AND WAS DEAD CODE ON DARWIN.**
+  D-2181's `-tmp*` names the OS scratch root on Linux and nothing at all on macOS: `/tmp` there is a
+  symlink to `/private/tmp`, `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`, and every site that
+  derives a slug resolves physically (`pwd -P`; the harness resolves too — measured, no `-data-…` slug
+  exists on a box where `/data` is a symlink). So **no real macOS scratch path can produce a `-tmp…`
+  slug**: the guard never fired there, and the hook minted a store for every throwaway directory a
+  Darwin session started in. The predicate is now four prefixes — `-tmp*`, `-private-tmp*`,
+  `-var-folders-*`, `-private-var-folders-*` — byte-identical at all three sites and pinned by
+  `single-definition.test.ts`, which also reds if any site narrows back. `/var/tmp` is deliberately
+  **not** in the list (POSIX *persistent* scratch, and where `session-hook.test.ts` roots its own
+  project fixtures), and each mechanism now carries that negative control as well as the four
+  positives. Not derived from `$TMPDIR`: unset it skips nothing, `/` it skips every project, and the
+  two read-side callers see a slug with no cwd to compare against at all.
+
+  **HOW IT WAS FOUND, and the asymmetry that hid it:** the `test-macos` leg, on PR #76's own merge
+  commit `bb23a9f1` — non-required, so it blocked nothing, and it is the only reason this is not on
+  `main`. The assertion that failed was a *fixture precondition*
+  (`expect(tmpSlug.startsWith('-tmp')).toBe(true)`), and it was measuring the shipped guard correctly
+  when it failed. Five task reviews, a 31-agent whole-branch review and every ubuntu leg missed it,
+  because the hook DERIVES its slug from a live cwd — its copy of the guard can only ever be exercised
+  on the platform the suite runs on, and no Linux fixture can name a Darwin scratch root. The two
+  read-side sites read a directory NAME, so their four-prefix rows are real on Linux; the pin is what
+  carries that coverage across to the site that cannot have it. Tasks 1, 2 and 4.
 
 ---
 

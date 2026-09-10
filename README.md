@@ -981,8 +981,12 @@ the link's spelling) or `forked` (a real directory, or any link that does not re
 store directory — pointing at another home, dangling, or landing on a plain file).
 **Homes are enumerated from the FILESYSTEM (`~/.claude*/`), never from the roster** — the
 roster describes the accounts ccrc places work on and was never a census of homes, and a box
-can carry config dirs no roster entry names. Slugs beginning `-tmp` are skipped, because the
-harness mints one for every throwaway directory a session was started in.
+can carry config dirs no roster entry names. **Scratch slugs are skipped**, because the harness
+mints one for every throwaway directory a session was started in — four prefixes, because the OS
+scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
+`-private-tmp*` and `-var-folders-*`/`-private-var-folders-*` (macOS `/tmp` resolves through
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
+this rule — POSIX makes it persistent — so a project kept there is censused like any other.
 
 **`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
 home is copied across; a byte-identical collision stays one file; a same-named file whose

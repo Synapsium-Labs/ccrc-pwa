@@ -2148,18 +2148,32 @@ describe('the R7 counters', () => {
 // the cwd) and slugifies it, and refuses to act unless that project directory
 // already exists.
 //
-// EVERY FIXTURE PROJECT ROOT IS A REAL DIRECTORY OUTSIDE `/tmp`, and both
-// halves of that are load-bearing. Real, because the hook `cd`s into it and
-// asks git about it, so a fabricated path is skipped. Outside `/tmp`, because
-// the slug now comes from the project root and all four mechanisms skip a slug
-// beginning `-tmp` (D-2181): a project root under `os.tmpdir()` — `/tmp` on
-// this fleet — would be skipped by the very rule these tests are not testing,
-// and every assertion below would pass for the wrong reason.
+// EVERY FIXTURE PROJECT ROOT IS A REAL DIRECTORY OUTSIDE THE OS SCRATCH ROOT,
+// and both halves of that are load-bearing. Real, because the hook `cd`s into
+// it and asks git about it, so a fabricated path is skipped. Outside the
+// scratch root, because the slug now comes from the project root and all four
+// mechanisms skip a scratch slug (D-2181, widened by D-2375): a project root
+// under `os.tmpdir()` would be skipped by the very rule these tests are not
+// testing, and every assertion below would pass for the wrong reason.
+//
+// `/var/tmp` is that "outside" ON BOTH PLATFORMS, which is why `mkProjBase`
+// insists on it: POSIX persistent scratch is the one temp-shaped directory
+// D-2375's list deliberately does not cover. `os.tmpdir()` is `/tmp` on this
+// fleet and a per-user `/private/var/folders/.../T` on Darwin, and the guard
+// now skips both.
 describe('memory convergence (spec 2026-09-08 §2)', () => {
   /** The harness's own slug rule, measured against 30 live session workdirs:
    *  every character outside `[A-Za-z0-9-]` becomes `-`, over the PHYSICAL
    *  path (`/data` is a symlink on this box and no `-data-…` slug exists). */
   const slugOf = (p: string): string => p.replace(/[^A-Za-z0-9-]/g, '-');
+
+  /** The scratch-slug predicate, MIRRORED from the three shipped sites
+   *  (`_mem_is_scratch` in `ccd/ccrc`, this hook's own `case`, and
+   *  `_check_memory`'s) — there is no importing a bash `case`, and the mirror
+   *  is pinned against all three copies by `single-definition.test.ts`, which
+   *  also reds if any site narrows back to the Linux-only `-tmp*` (D-2375). */
+  const SCRATCH_PREFIXES = ['-tmp', '-private-tmp', '-var-folders-', '-private-var-folders-'];
+  const isScratch = (s: string): boolean => SCRATCH_PREFIXES.some((p) => s.startsWith(p));
 
   const madeRoots: string[] = [];
   /** A scratch tree for project roots. `/var/tmp` is POSIX, exists on Linux
@@ -2214,7 +2228,7 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     root = path.join(pbase, 'main');
     fs.mkdirSync(root, { recursive: true });
     SLUG = slugOf(root);
-    expect(SLUG.startsWith('-tmp')).toBe(false);   // the fixture is the shape it claims
+    expect(isScratch(SLUG), SLUG).toBe(false);     // the fixture is the shape it claims
     fs.mkdirSync(projDir(), { recursive: true });
   });
 
@@ -2289,9 +2303,20 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   it('skips a scratch slug — /tmp work accumulates no durable memory', () => {
     // The slug now comes from the project ROOT, so the scratch shape is a
     // scratch project root — which is exactly what `os.tmpdir()` gives.
+    //
+    // ONE TEST, TWO MECHANISMS, each real only on its own platform: this
+    // exercises `-tmp*` on Linux and `-private-var-folders-*` on Darwin,
+    // because `os.tmpdir()` IS the OS scratch root and the two platforms do
+    // not spell it alike. That is the whole of D-2375 — the assertion below
+    // failed on `test-macos` at `bb23a9f1` while passing on every ubuntu leg,
+    // and it was measuring the shipped guard correctly when it did: nothing
+    // skipped the Darwin scratch root, so the hook minted a store there.
+    // The message names the path, because "expected false to be true" cost a
+    // log download to interpret.
     const tmpRoot = mkTmp('ccrc-hookscratch-');
     const tmpSlug = slugOf(tmpRoot);
-    expect(tmpSlug.startsWith('-tmp')).toBe(true);   // the fixture is the shape it claims
+    expect(isScratch(tmpSlug),
+      `the OS scratch root ${tmpRoot} is not a shape the shipped guard skips`).toBe(true);
     const d = path.join(home, '.claude-x', 'projects', tmpSlug);
     fs.mkdirSync(d, { recursive: true });
     run(payload({ cwd: tmpRoot, transcript_path: path.join(d, 'x.jsonl') }));
@@ -2352,7 +2377,7 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   it('does nothing when the derived project directory does not exist — no junk store (R32)', () => {
     const stray = path.join(pbase, 'stray-tree');
     fs.mkdirSync(stray, { recursive: true });       // a real cwd with no project dir
-    expect(slugOf(stray).startsWith('-tmp')).toBe(false);
+    expect(isScratch(slugOf(stray)), stray).toBe(false);
     run(payload({ cwd: stray }));
     expect(fs.existsSync(link())).toBe(false);
     expect(fs.existsSync(storeRoot())).toBe(false);

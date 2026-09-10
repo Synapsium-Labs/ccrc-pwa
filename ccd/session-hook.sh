@@ -652,7 +652,13 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   # every project root a session is started in, including throwaway temp dirs
   # (measured: a dozen `-tmp-*` slugs in one home), and converging those would
   # fill the store with empty directories nobody will ever read.
-  case "$slug" in -tmp*) return 0 ;; esac
+  #
+  # FOUR PREFIXES, ONE RULE — "the OS scratch root", which is not spelled the
+  # same on both platforms this tool ships to. `-tmp*` alone was the LINUX
+  # spelling and is DEAD CODE on Darwin (D-2375); `_mem_is_scratch` in `ccrc`
+  # carries the measurement, and what is deliberately NOT in the list. The
+  # pattern list is byte-identical at all three sites, pinned there.
+  case "$slug" in -tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*) return 0 ;; esac
   # THE EXISTENCE CHECK. See the block above: this is the whole reason
   # computing the slug is safe.
   [ -d "$projects/$slug" ] || return 0

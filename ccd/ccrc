@@ -2990,6 +2990,38 @@ _mem_homes() {   # -> one agent-home path per line
   done
 }
 
+# THE OS SCRATCH ROOT IS NOT ONE SPELLING (D-2375). This predicate answers a
+# single question — "did the harness mint this slug for a throwaway directory?"
+# — and it takes four prefixes to ask it on both platforms `ccrc` ships to. It
+# shipped as a bare `-tmp*`, which is the LINUX spelling alone: on Darwin
+# `/tmp` is a symlink to `/private/tmp`, `$TMPDIR` is a per-user
+# `/var/folders/<x>/<y>/T`, and every site that DERIVES a slug resolves
+# physically (the hook's `pwd -P`; the harness resolves too — measured, no
+# `-data-...` slug exists on a box where `/data` is a symlink to `/mnt/...`).
+# So no real macOS scratch path can produce a `-tmp...` slug: the guard never
+# fired there, and the hook minted a store for every throwaway directory a
+# Darwin session was started in. The `test-macos` leg found it, which is the
+# class that leg exists to catch.
+#
+# `-var-folders-*` AS WELL AS the resolved `-private-var-folders-*`, because
+# the harness's resolution is measured on Linux only — a `/var/folders` path
+# is scratch under either spelling, and that directory exists off Darwin
+# nowhere.
+#
+# `/var/tmp` IS DELIBERATELY ABSENT, and this is the one prefix a widening
+# must not sweep up: POSIX makes it *persistent* scratch that survives a
+# reboot, unlike `/tmp`, and `session-hook.test.ts` roots its own project
+# fixtures there precisely because this rule must not skip them.
+#
+# NOT DERIVED FROM `$TMPDIR` either: unset, it would skip nothing; `/`, it
+# would skip every project on the box; and the two callers below never see a
+# cwd at all — they enumerate slugs the harness already wrote, so a prefix
+# list is the only form of the question they can ask.
+_mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
+  case "$1" in -tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*) return 0 ;; esac
+  return 1
+}
+
 # CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
 # DIRECTORY* (R20, Task 4 review round 2 — supersedes R12's text-comparison
 # rule below). R12 (review round 2 of Task 2) first ruled that a link whose
@@ -3068,7 +3100,7 @@ cmd_memory() {
     for d in "$h"/projects/*/; do
       [ -d "$d" ] || continue
       slug=$(basename -- "${d%/}")
-      case "$slug" in -tmp*) continue ;; esac
+      _mem_is_scratch "$slug" && continue
       [ -e "${d}memory" ] || [ -L "${d}memory" ] || continue
       state=$(_mem_state "$h" "$slug")
       n=$((n+1))
@@ -3342,7 +3374,7 @@ _mem_apply() {
     for d in "$h"/projects/*/; do
       [ -d "$d" ] || continue
       slug=$(basename -- "${d%/}")
-      case "$slug" in -tmp*) continue ;; esac
+      _mem_is_scratch "$slug" && continue
       link="${d}memory"
       # R10: `[ -e "$link" ]` alone DEREFERENCES, so it is false for a
       # dangling symlink — exactly the pair `_mem_state` (Task 2, R12) calls

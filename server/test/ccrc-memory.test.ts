@@ -23,6 +23,29 @@ function seed(homeSuffix: string, slug: string, files: Record<string, string>): 
   for (const [n, c] of Object.entries(files)) fs.writeFileSync(path.join(d, n), c);
 }
 
+/** FOUR PREFIXES, ONE RULE — "the OS scratch root", which the two platforms
+ *  ccrc ships to do not spell alike: `/tmp` on Linux; on Darwin `/tmp` is a
+ *  symlink to `/private/tmp` and `$TMPDIR` is a per-user
+ *  `/var/folders/<x>/<y>/T`. D-2375.
+ *
+ *  SEEDED AS LITERAL SLUGS, and that is exactly what makes the Darwin
+ *  spellings measurable HERE, on a Linux runner: the census and `--apply`
+ *  read a directory NAME the harness already wrote, never a live cwd. The
+ *  hook's copy of this guard derives its slug from a real path with `pwd -P`,
+ *  so it can only ever be measured on the platform it runs on — which is how
+ *  a Linux-only guard shipped past five reviews, and what `test-macos`
+ *  caught. */
+const SCRATCH_SLUGS = ['-tmp-scratch', '-private-tmp-scratch',
+  '-var-folders-zz-8gk0000gn-T-scratch', '-private-var-folders-zz-8gk0000gn-T-scratch'];
+
+/** THE NEGATIVE CONTROL for that list, and the prefix a careless widening
+ *  sweeps up first. `/var/tmp` is POSIX *persistent* scratch — it survives a
+ *  reboot, unlike `/tmp` — so it is not the OS scratch root, and
+ *  `session-hook.test.ts` roots every project fixture it owns there. A guard
+ *  that skipped it would drop those fixtures, and any real project kept
+ *  there, out of the census in silence. */
+const PERSISTENT_SLUG = '-var-tmp-project';
+
 describe('ccrc memory — the census', () => {
   it('names a home that holds a plain memory directory', () => {
     seed('.claude', '-p-demo', { 'a.md': 'x' });
@@ -159,9 +182,16 @@ describe('ccrc memory — the census', () => {
     expect(fs.existsSync(path.join(home, '.ccrc', 'memory'))).toBe(false);
   });
 
-  it('ignores scratch slugs', () => {
-    seed('.claude', '-tmp-scratch', { 'a.md': 'x' });
-    expect(run(['memory']).out).not.toContain('-tmp-scratch');
+  for (const slug of SCRATCH_SLUGS) {
+    it(`ignores the scratch slug ${slug}`, () => {
+      seed('.claude', slug, { 'a.md': 'x' });
+      expect(run(['memory']).out).not.toContain(slug);
+    });
+  }
+
+  it('does NOT ignore a /var/tmp slug — persistent scratch is not the scratch root', () => {
+    seed('.claude', PERSISTENT_SLUG, { 'a.md': 'x' });
+    expect(run(['memory']).out).toContain(PERSISTENT_SLUG);
   });
 
   // Fix round 1, Important 2a (R11): `_ccrc_usage_die` (ccd/ccrc:1162)
@@ -504,13 +534,24 @@ describe('ccrc memory --apply — the union', () => {
   // sibling in `_mem_apply` did not — deleting the apply-side guard left
   // the whole suite green while `--apply` happily converged a throwaway
   // scratch slug into the shared store.
-  it('--apply ignores scratch (-tmp*) slugs — never converges them', () => {
-    seed('.claude', '-tmp-scratch', { 'a.md': 'A' });
+  for (const slug of SCRATCH_SLUGS) {
+    it(`--apply ignores the scratch slug ${slug} — never converges it`, () => {
+      seed('.claude', slug, { 'a.md': 'A' });
+      const r = run(['memory', '--apply']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(home, '.ccrc', 'memory', slug))).toBe(false);
+      expect(fs.lstatSync(path.join(home, '.claude', 'projects', slug, 'memory'))
+        .isSymbolicLink()).toBe(false);
+    });
+  }
+
+  it('--apply DOES converge a /var/tmp slug — the negative control for that list', () => {
+    seed('.claude', PERSISTENT_SLUG, { 'a.md': 'A' });
     const r = run(['memory', '--apply']);
     expect(r.code).toBe(0);
-    expect(fs.existsSync(path.join(home, '.ccrc', 'memory', '-tmp-scratch'))).toBe(false);
-    expect(fs.lstatSync(path.join(home, '.claude', 'projects', '-tmp-scratch', 'memory'))
-      .isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'memory', PERSISTENT_SLUG, 'a.md'))).toBe(true);
+    expect(fs.lstatSync(path.join(home, '.claude', 'projects', PERSISTENT_SLUG, 'memory'))
+      .isSymbolicLink()).toBe(true);
   });
 
   // Important (final whole-branch review): R27's "already canonical, do

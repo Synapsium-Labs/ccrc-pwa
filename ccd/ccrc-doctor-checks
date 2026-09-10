@@ -4164,7 +4164,15 @@ _check_memory() {
     for d in "${h}projects"/*/; do
       [ -d "$d" ] || continue
       slug="${d%/}"; slug="${slug##*/}"
-      case "$slug" in -tmp*) continue ;; esac
+      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
+      # than an oversight — the same one this file already records for `ccd`'s
+      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
+      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+      # `_mem_is_scratch`, and a `declare -F` guard would be the second
+      # spelling with a branch in front of it. `single-definition.test.ts`
+      # compares all three literals and reds on a drift. `_mem_is_scratch` in
+      # `ccrc` carries the rule and the measurement (D-2375).
+      case "$slug" in -tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*) continue ;; esac
       link="${d}memory"
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"
