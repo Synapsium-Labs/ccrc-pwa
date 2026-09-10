@@ -167,9 +167,10 @@ be discovered:
   different keychain — a posture `ccrc install` will not choose for you. For an always-on
   box, stay logged in and turn off sleep.
 - **No memory ceiling.** The per-session and fleet-wide caps are cgroup limits
-  (`MemoryHigh`/`MemoryMax` on the session unit and on `app-claude\x2dsession.slice`), and
-  launchd has no equivalent of any kind. `ccd-cap-scopes` is not installed there either —
-  it caps cgroup scopes, and there are none.
+  (`MemoryHigh`/`MemoryMax` on the session unit, per-pane `MemoryHigh`/`MemoryMax`, and the
+  aggregate `MemoryMax` on `app-claude\x2dsession.slice`), and launchd has no equivalent of
+  any kind. `ccd-cap-scopes` is not installed there either — it caps cgroup scopes, and
+  there are none.
 
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.
