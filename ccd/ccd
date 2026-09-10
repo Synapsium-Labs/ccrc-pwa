@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5768604f4fdbda7aefd48f2711d40553ff4c92486561594095de2682f5a4e8f9
+# ccrc:generated 1 sha256=70c2b0170f12af0c293aaf3e3c655ff263cf1581fa9f93da8c7cb1a3b94a7c69
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13332,6 +13332,27 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # return here, ahead of any classifier, and a limited session with a blank
   # pane was never rescued. `_session_hard_blocked` reads the transcript for
   # that case; a blank pane that is NOT blocked still stands still, as before.
+  # THE VERDICT'S OWN COST, DISCLOSED (final review finding 3, 2026-09-10).
+  # Replacing `_pane_hard_blocked` with `_session_hard_blocked` here did not
+  # only add a capability, it added a PRICE, and this row pays it on EVERY
+  # tick past the two cooldown gates above, whether limited or not. Measured
+  # in a FIXTURE HOME (roster via `shared/generate.mjs`, 200 iterations x 3
+  # runs, box load 9-32): `_pane_hard_blocked` alone ~2.6-2.9 ms/call;
+  # `_session_hard_blocked` ~30-35 ms/call — roughly +27-32 ms per row per
+  # tick, an order of magnitude (~11-13x). The cost lands on an IDLE, HEALTHY
+  # row: no "esc to interrupt", so no early return, so the full transcript
+  # arm runs — `_transcript_path` (registry reads, two `tr` pipelines,
+  # `_ws_realpath`) and `_transcript_limit_banner` (the file read) — only to
+  # answer "not blocked", which is the ordinary answer most rows give most
+  # ticks. At ~20 live sessions on a 5s tick that is a meaningful fraction of
+  # a core in steady state, up from what `_pane_hard_blocked` alone cost.
+  # Not fixed here: hoisting `_transcript_path` (its inputs are registry
+  # fields this same tick has just synced) or a short per-session cooldown on
+  # the transcript arm are both live options — a limit banner is not
+  # second-critical — but neither has an orchestrator ruling or a D-number
+  # yet, and this comment's job is disclosure, the same discipline the
+  # `_tick_strand_undecidable` block at its own call site (below, in this
+  # file) already keeps for its own capture-pane cost.
   _session_hard_blocked "$id" "$pane" && hard_blocked=1
   [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
@@ -16195,6 +16216,14 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # (#69 review, S2). An empty capture is a pane nobody could read; clearing on
   # it would be the fabricated clear C1 exists to prevent, and it is the one
   # place the clear below must NOT move up to.
+  # THIS CALL'S OWN COST, DISCLOSED SEPARATELY FROM THE CAPTURE ABOVE (final
+  # review finding 3, 2026-09-10) — the capture-pane essay above this function
+  # is about the `tmux capture-pane` fork alone; `_session_hard_blocked`
+  # (replacing `_pane_hard_blocked` here too) adds its own cost on top, same
+  # order of magnitude as `_auto_swap_check`'s call (~+27-32 ms/call, ~11-13x
+  # — full measurement and attribution at that call site's comment). This tick
+  # runs on the SAME 5s cadence and the same unconditional capture, so an idle
+  # row pays both.
   _session_hard_blocked "$1" "$pane" && blocked=1
   [[ -n "$pane" || -n "$blocked" ]] || return 0
   # THE MARKER MUST FOLLOW THE TRUTH — `_strand_mark`'s own docstring says so,
