@@ -13,7 +13,7 @@ D-2347, inherited from #73, plus the eleven other open instances of its class th
 **Architecture:** Three independent changes, all under `ccd/`, plus vitest suites under `server/test/`.
 Part A touches the PLATFORM BLOCK, which is byte-identical in `ccd/ccd` and `ccd/ccrc` and pinned equal
 by `macos-platform.test.ts` — **both files must change together or that pin reds.** Part B touches
-`ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only, at twelve guard sites, one line each.**
+`ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only.** Its site count is DERIVED at execution time, not quoted here: D1-D5 name ten mandatory sites and D8 names four further groups, two of them conditional and one dead on a Linux fleet, so no reading of the list below yields the twelve this sentence used to assert (D-2475). Re-measure the class before fixing it, and navigate by SYMBOL — every line anchor in Part D predates #69/#78/#79 and has drifted.
 No server, agent, shared or PWA source is touched.
 **`test-macos` IS NOT A REQUIRED CHECK** (measured 2026-09-10: the four required contexts are
 `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, and `.github/workflows/ci.yml:129` says
@@ -159,8 +159,9 @@ read corrects — it is a process that never returns, holding whatever it holds.
       is a CI timeout, and on a load-sensitive suite it burns the whole run. Measure every case RED
       first; a case that is green before the fix is pinning nothing.
 - [ ] **D7. Mutation table.** Per site: revert the guard, measure that site's case RED, restore, measure
-      green. Twelve rows. Do not batch — a single table entry covering "the class" cannot tell which of
-      twelve guards is unpinned.
+      green. **One row per site you actually fixed** — the count is whatever your own census returned, not a
+      number carried from this document (D-2475). Do not batch — a single table entry covering "the class"
+      cannot tell which guard is unpinned.
 - [ ] **D8. The remaining sites, DISCLOSED not silently dropped.** The sweep also named
       `_ws_archive_manifest`'s `prhistory` open (6779), `_attic_project`'s `sed` (7120), `cmd_ws_add`'s
       three `grep`s of `info/exclude` (4654) and `cmd_supervise`'s darwin start-limit arm (14970, dead on
@@ -261,7 +262,7 @@ of Part B.
 ### D-2376 — D-2347 is one of twelve, and the sweep that found them also found a class that must not be swept
 Looking for D-2347's siblings with two independent censuses (a `-r` census and a "read by name" census,
 each run under `/bin/grep -F` because `/usr/bin/grep` here is ugrep) returned **twelve open sites** of
-the read-by-name-after-a-permissive-guard class in `ccd/ccd`, listed in Part D. The method validated
+the read-by-name-after-a-permissive-guard class in `ccd/ccd`, listed in Part D. **That total does not survive re-counting the list it points at — see D-2475**, which measured the class by symbol on `origin/main` and corrected the headline and the mutation table; the per-group findings below stand, it is only the sum that was wrong. The method validated
 itself: it independently re-found all three sites the #69 round-3 fix closed (`_reg_get`,
 `_auto_swap_check`'s `$sf`, `_auto_compact_check`'s `$sf`) and classified them correctly as fixed, and
 re-found `_transcript_stalled_pair` as open.
@@ -355,3 +356,21 @@ separately ruled that D-2347's fix "belongs upstream at `_transcript_path`'s unm
 cannot answer."* Three independent refuters killed that reading 3/3. Recorded here because the ruling was
 mailed to the worker as a direction, and a direction withdrawn only in conversation is still standing in
 the plan a worker reads.
+### D-2475 — the twelve-site cardinal is unreachable from the sites this part enumerates
+**A cardinal in a plan headline is a claim about a list, and it goes stale the moment the list is edited.**
+Part D's opening sentence and D7's mutation table both asserted **twelve** guard sites. Counting what the
+part actually enumerates: D1 is one site, D2 five, D3 one, D4 two and D5 one — **ten mandatory** — and D8
+then names four further groups (`_ws_archive_manifest`'s `prhistory` open, `_attic_project`'s `sed`,
+`cmd_ws_add`'s three `grep`s of `info/exclude`, and `cmd_supervise`'s darwin start-limit arm), of which D8
+itself makes the first two conditional on D1-D5 landing cheaply and the last is dead on a Linux fleet.
+Ten plus four is fourteen; ten plus the two conditional ones is twelve only if a reader silently picks
+which two, and the document never says. **Measured on `origin/main` 2026-09-10**, by symbol rather than by
+this part's drifted line numbers: `[[ -e "$REG/$id.hold" ]]` returns **six** gates, of which exactly
+**five** are followed by a `cat` of that path — the sixth (`_auto_swap_check`) reads nothing after its gate
+and is correctly out of class, so D2's five is right and it is the total that is wrong. Every line anchor
+in Part D has also drifted: `ccd:1090` still lands on `source "$CCRC_ACCOUNTS_SH"`, but `3112`, `3773`,
+`3936`, `4975`, `5360`, `6000`, `6779`, `7120`, `10403`, `14316`, `14970` and `16697` now land on comment
+text or unrelated code. The fix is the rule this repo already minted for census claims (D-2459): **a
+derived guard must discover its population.** The headline no longer quotes a number and D7 now takes one
+row per site the worker's own census returns. **A plan may name the sites it found; the moment it also
+totals them, it has planted a fact that the next edit falsifies silently.**
