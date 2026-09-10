@@ -700,13 +700,25 @@ describe('_reg_purge`s dot-free inventory', () => {
     // registry fields under the one-dot rule and purge with the row; that is
     // exactly why they need no lifecycle-manifest entry of their own, and this
     // is the only place that claim is written down.
+    // THE ANCHOR MOVED WITH THE CLAIM (#69 review round 3). The sentence said
+    // "measured against every registry file a session has today", and it was
+    // not: `$REG/.<id>.starts` leads with a dot, so `_reg_purge`'s
+    // `"$REG/$id".*` glob cannot match it and no explicit `rm -f` names it.
+    // The comment now scopes itself to the `$REG/<id>.<field>` SHAPE — which
+    // is what it always measured — and discloses the one file outside it, so
+    // this anchor tracks the corrected words rather than the wrong ones.
     const src = fs.readFileSync(CCD, 'utf8');
-    const from = src.indexOf('The dot-free claim, measured against every registry file');
+    const from = src.indexOf('The dot-free claim, measured against every `$REG/<id>.<field>` file');
     expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
-    const block = src.slice(from, from + 1400);
+    const block = src.slice(from, from + 2400);
     for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
       expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
     }
+    // AND THE DISCLOSURE IS PART OF THE CLAIM, not a footnote to it: a scoped
+    // sentence with no statement of what it excludes is the same defect in a
+    // narrower costume.
+    expect(block, 'the sentence scopes itself but never names the file it excludes')
+      .toContain('.starts');
   });
 });
 
