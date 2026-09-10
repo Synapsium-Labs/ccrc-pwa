@@ -42,7 +42,11 @@ shipped form departs from the plan's text: D-2349 the home shaped at the door (t
 with detail); D-2350 the open route binds AFTER the hold; D-2351 `setSession` returns `bindSession`'s answer and
 a `session-rebound` run event records an occupant change; D-2352 `homeProject` joins the reconstruction drill's
 UNRECOVERABLE census; D-2353 the dispatch `project-mismatch` row says abandon first, never a blind retry. Same-
-bytes derivations, test-only pins and prose fixes carry no number. An execution-time deviation gets its own
+bytes derivations, test-only pins and prose fixes carry no number. **D-2410** (minted 2026-09-10 12:2x UTC):
+main took migration 9 mid-wave (PR #74, the ask pre-emption lane), so this wave's one migration ships as
+migration 10 and `COORD_SCHEMA_VERSION` derives to 10; the wave-1 plan's seventeen "migration 9" mentions stay as
+anchored snapshots, and the wave-2 and wave-3 plans, the spec and this ledger cite no number (measured zero). An
+execution-time deviation gets its own
 allocator
 call: the worker writes `D-TBD-<slug>` with a full entry and mails a `deviation-request` naming the count;
 the coordinator mints exactly that many, defines them in the same act, and mails the numbers back.
