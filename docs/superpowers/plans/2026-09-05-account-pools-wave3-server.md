@@ -3330,6 +3330,7 @@ git commit -m "test(pools): the reader crosses the agent, so a tag on the server
 
 ---
 
+### Task 12 — DONE 2026-09-10 (the gate ran; one load finding, D-2409)
 ### Task 12: Whole-branch gate
 
 **Files:** none — this task changes nothing and proves everything.
@@ -3574,3 +3575,19 @@ block above.
   `expected { listed: true, tags: Map{ …(1) } } to deeply equal { listed: false }`, which is the exact
   message step 3 predicted and never got — and GREEN 16/16 with it reverted. The row this pins,
   §11 row 17 server half, is now a mechanism rather than a request.
+
+- **D-2409 (2026-09-10)** (Task 12) — **`boot.test.ts` is load-sensitive and is NOT on `CLAUDE.md`'s
+  known-flake list, so the gate's own instruction cannot classify it.** Task 12 step 1 names five
+  suites to re-run in isolation before calling a break; `boot.test.ts` is not among them, and it is
+  the only suite that failed the whole-branch run. Its failures are timing assertions against a
+  3000 ms budget — `expected 5819 to be less than 3000` in the full run, `expected 3129 to be less
+  than 3000` in isolation — and **isolation did NOT clear it**, which by the list's own rule would
+  make it a real break. It is not. The control settles it: the identical suite on **unmodified
+  `origin/main` (`29e634b3`), same box, same minute, fails identically** (1 of 3). The box was at
+  **load average 43.66 on 16 cores**, with eight other sessions running `tsc`/`vitest`/`esbuild`; the
+  `pwa` suite in the same window went 2191/2192 on one run and 2173/2192 on the next, the second's 19
+  failures every one `Test timed out in 5000 ms` across 12 files. **Two lessons, and the second is the
+  one worth carrying: (a) `boot.test.ts` belongs on the flake list; (b) "re-run in isolation" is not a
+  sufficient test for a load flake when the box stays loaded — the sufficient test is the SAME suite
+  on an UNMODIFIED ref at the same moment**, which distinguishes "this branch broke it" from "this box
+  cannot meet a timing budget right now" and costs one worktree.
