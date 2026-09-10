@@ -3591,3 +3591,172 @@ block above.
   sufficient test for a load flake when the box stays loaded — the sufficient test is the SAME suite
   on an UNMODIFIED ref at the same moment**, which distinguishes "this branch broke it" from "this box
   cannot meet a timing budget right now" and costs one worktree.
+
+- **D-2421 (2026-09-10)** (wave 4 / run 35 close) — **Opening a PR moves two claimed fingerprint fields
+  with no commit anywhere, and clause 9 names only commits.** Worker clause 9 says a done-claim is
+  measured once and sent once, and that after `wave-done` you stop pushing because "a new commit under
+  your own claim makes it stale". Both parties reasoned in commits all morning; the coordinator even
+  warned that a PR DESCRIPTION is not a commit, which was true and irrelevant. Measured: the
+  coordinator accepted a fingerprint carrying `prNumber 67 / prPhase merged`, `ccd pr-state --session
+  ccrc-pwa-clear-meadow` answered `67 / merged` at that moment, and one `gh pr create` later — no
+  commit, the branch tip unmoved at `7ca2b97a` — the same probe answered **`81 / open`**.
+  `prNumber`/`prPhase` are re-measured against the branch's NEWEST PR, so opening one falsifies an
+  accepted claim from outside the vocabulary clause 9 uses to warn about staleness: against
+  `prVerdict` (`server/src/coord/fingerprint.ts`), `claimed 'merged'` against `measured 'open'` hits
+  `if (claimed === 'merged' && measured !== 'merged') return 'regressed'`, and re-verification would
+  have refused `pr-regressed`. **The remedy is ORDERING, and the worker skill already implies it** —
+  work, push, open the PR, THEN mail `wave-done`. This wave inverted it because the C1 rescue lane was
+  measured and claimed before wave 3's own PR existed, and the inversion is what exposed the seam.
+  Worth one sentence in `ccd/worker-skill/SKILL.md`'s "Reporting a wave-done": *measure the fingerprint
+  after the PR exists, never before.* Coordinator ruled no second fingerprint is sent:
+  `awaiting-review -> merging -> closing` re-measures at CLOSE time, by which point the honest pair is
+  `81 / merged`, which `prVerdict` passes and which cannot go stale again.
+
+- **D-2422 (2026-09-10)** (the #81 merge) — **A comment measured correctly on one parent can be FALSE on
+  the merge, and no guard in this tree can see it.** The whole review apparatus — mutation tables,
+  census pins, the citation sweep — measures a claim against the tree it was written on. A merge
+  produces a tree neither author ever ran. Concrete instance, and it is the sharpest possible one
+  because the falsified sentence was itself the CORRECTED half of a #78 sweep: `origin/main`'s
+  `server/test/ccd-crosspool.test.ts` asserts that ``git grep -c stranded server/src/registry.ts`` is
+  **0 on this tree, so the banner is what carries it until that reader lands**. This merge lands that
+  reader — account-pools wave 3 makes `SessionRecord.stranded` a real fail-shut field with 12
+  `stranded` lines in `registry.ts`, and `fleet.ts` carries its `reason` onto `FleetSession.stranded`.
+  So the newer, swept, more-careful side is the one the merge breaks, and taking "main's side because
+  main is newer" would have shipped it. Rewritten to the post-merge truth, including what is STILL
+  true: nothing under `pwa/src` reads `FleetSession.stranded` — every `stranded` hit there is
+  `strandedAccount`, the transcript axis, a different field. **The rule this yields: in a merge, the
+  side to distrust is not the older one, it is whichever side made a claim ABOUT THE OTHER SIDE'S
+  ABSENCE.**
+
+- **D-2423 (2026-09-10)** (the #81 merge) — **D-2177's census is wrong by one route, and the correction
+  found a second unqueued pane-destroying write.** `server/src/server.ts`, the ask-preemption plan
+  (`docs/superpowers/plans/2026-09-09-ask-preemption-lane.md:45`), its spec (`:457`) and
+  `server/test/lifecycle.test.ts:293` all call `cmd_swap` "the one live-pane-destroying operation that
+  was NOT routed through the per-session `KeyedQueue`". Measured on the merged tree: `POST
+  /api/sessions/:id/stop` reaches `cmd_stop`, which ends in `_ws_unsupervise` + `tmux kill-session`,
+  through `runCcdOr502` with no queue — that much D-2177's own author had already found. What nobody
+  measured is `POST /api/sessions/:id/archive`: `cmd_ws_archive` ends in the **same two-line pair**
+  (`grep -n '^cmd_ws_archive()' ccd/ccd`, whose own header calls the pane "its one cost"), and it too
+  returns straight through `runCcdOr502`. The queued routes are swap, pr-open, forget and
+  workspace/reap; `/restore` is unqueued but `cmd_ws_restore` kills no pane, so the honest census is
+  **two** gaps, not one and not three. Both are named at every site now. Neither is closed here — that
+  is the ask lane's call, not this merge's.
+
+- **D-2424 (2026-09-10)** (the #81 merge) — **The merge made an existing mutation-table guard able to
+  pass vacuously, by adding awaited work in front of the thing it was timing.**
+  `server/test/lifecycle.test.ts`'s D-2177 case held the queue slot, slept **20 ms**, and asserted the
+  swap had not reached ccd — with its premise stated in the comment: "an unserialized swap has nothing
+  async blocking it before its ccd call, so this is ample time for it to have run if it bypassed the
+  queue." That was true when written. It is false after this merge: wave 3's swap route awaits
+  `readSessionRecord`, a registry `readdir` and `readProjectPools` BEFORE the queued call, so a mutant
+  that deleted `queue.run` could still be inside those reads at the 20 ms mark on a loaded box, and the
+  case would report green while proving nothing. **A timing assertion is a claim about the code in
+  front of it, and a merge can add code in front of it.** Fixed by removing the clock: the test now
+  waits until the route has ENQUEUED (observed through a recording `KeyedQueue`), which is the same
+  property with nothing to out-race. MEASURED RED under a queue bypass: `Error: the swap route never
+  enqueued`; GREEN 50/50 restored.
+
+- **D-2425 (2026-09-10)** (the #81 merge) — **The merge minted an invariant neither parent had, and until
+  it was pinned it lived only in a comment.** On `ws/clear-meadow` the swap route's `crossPool` arm
+  returned `runCcdOr502(reply, CCD_ARGV.swapCross(...))` outside any queue; on `origin/main` there was
+  no `crossPool` arm and the ordinary swap went straight into `sendDeps.queue.run` (D-2177). Composing
+  them required a decision no reviewer of either PR ever made: **both arms behind ONE queued call**,
+  with every refusal — the 501, the 404/503 ladder, the pool verdict — hoisted in front of it. That is
+  a new guard, so by this repo's own doctrine it ships with a test that reds when it is deleted.
+  `server/test/swap-route-pool.test.ts` now pins it WITHOUT a timeout, by observing the enqueue.
+  MEASURED RED with the `crossPool` arm reverted to a direct `runCcdOr502`: `Error: waitFor timed out:
+  the swap route to enqueue`; GREEN 14/14 restored. **A conflict resolution is authorship, not
+  arbitration — the decisions it makes have no PR of their own and no reviewer unless the resolver
+  gives them one.**
+
+- **D-2426 (2026-09-10)** (the #81 merge) — **Two counts in ONE sentence composed differently, and a
+  naive union of both would have been wrong.** `server/test/auth-gate.test.ts` reads "the assertion
+  that covers all 69, not the 24 exempt" on this branch and "all 71, not the 27 exempt" on
+  `origin/main`. Measured on the merged tree the pair is **72 / 27**: the WHOLE moved because both
+  parents added routes, while the EXEMPT half took `origin/main`'s number unchanged, because this
+  branch's one new route (`POST /api/projects/:project/pool`) is deliberately NOT exempt and
+  `origin/main`'s three ask-lane routes all are. Same for the totals — `ROUTES.length` is **75** (47 +
+  28), a number NEITHER parent's literal carries, so that assertion could not be resolved by choosing a
+  side at all. `server/src/auth/gate.ts`'s docstring must read **72** or this file's own F7/D-1302
+  self-check reds with "gate.ts claims a route count this tree does not derive". **The lesson is not
+  the arithmetic, it is that "compose both sides" is itself a claim that needs measuring per quantity,
+  not per conflict.**
+
+- **D-2427 (2026-09-10)** (the #81 merge) — **Five unpinned prose censuses inside `auth-gate.test.ts` were
+  false on the merge and NOTHING reds on them — inside the very file whose F7/D-1223 scan exists to
+  stop exactly this.** That scan covers four "claim lines" by needle; these five sit outside all four
+  and outside the three conflicts, so the suite stays green while they lie: `59 scanned + the static
+  wildcard` (derived value 75, and 59 was stale for several waves before this merge); the exempt-class
+  breakdown `25 = /health + the 13 box-token lanes … + the FIVE exempt-BUT-authenticated GETs`
+  (measured: **28 = … 15 box-token lanes … SIX**, the ask lane's two POSTs joining the box-token class
+  and its GET joining D-149's); `a toEqual listing 25 keys` (28); `71 scanned − 3 websockets − 24
+  exempt-and-scanned = 44` (**75 − 3 − 27 = 45**); and `44 since the caps pair` (45). All five
+  corrected against the merged tree. **A census pin protects the sentences it names and advertises
+  safety for the ones it does not** — the file that documents this defect class was shipping five
+  instances of it.
+
+- **D-2428 (2026-09-10)** (the #81 merge) — **#78's citation sweep left the same false spatial claim
+  standing in `ccd/ccd` itself, inside the census block a pin scans, where the pin is structurally
+  blind to it.** `ccd/ccd:1846` reads "the same shape `ccd-pool-ok.test.ts` already carries for the
+  `_pool_ok` header **one function away**". Measured: `_pool_ok()` is at `ccd/ccd:1549` and `_reg_get()`
+  at `1809`, with six function definitions in between (`_id`, `_tmux`, `_session_probe`,
+  `_session_verdict`, `_alive`, `_reg_set`). The sweep corrected the copy in
+  `server/test/ccd-reg-get-census.test.ts` to "in the same file" and did not correct this one — and
+  `ccd-reg-get-census.test.ts`'s cardinal scan cannot catch it, because that scan only sees DIGITS, so
+  a false SPATIAL citation in the block it guards can never red. **NOT FIXED HERE:** `ccd/ccd` takes
+  `origin/main`'s side wholesale by ruling, and editing it would put this merge into a file whose
+  deploy is AGENT-FIRST for reasons unrelated to a comment. Reported for the C1 lane.
+
+- **D-2429 (2026-09-10)** (the #81 merge) — **This branch's `ccd/ccd` was strictly OLDER than a fix that
+  is merged AND deployed on the live fleet, so a per-file merge decision could have reverted production
+  behaviour.** The probe that settled it, run twice independently: `_pane_auto_continue_armed` 0 on
+  this branch vs 5 on `main`, `_transcript_stalled_pair` 0 vs 4, `_resume_env` 0 vs 4 — i.e. all of
+  #73, whose post-swap resume landing was measured live on the fleet (53 landings, 0 fallback
+  keystrokes) the same day. Of the 42 lines this branch's `ccd/ccd` had that `main` lacked, **39 were
+  comments and were exactly the false citations #78 swept**, and the other 3 were the PRE-#73 spawn
+  lines without `_resume_env`. So the side with MORE unique content was the side with NOTHING worth
+  keeping. **`ccd/ccd` takes `main`'s side wholesale, and the argument is a measurement of what each
+  side uniquely contains — never a diff size, a date, or which branch "owns" the file.**
+
+- **D-2430 (2026-09-10)** (the #81 merge) — **A merge resolution is measured against a ref that keeps
+  moving, and the completeness pass is what noticed.** The 37-conflict resolution was measured against
+  `origin/main` at `cc0d744d`. By the time it was verified, `main` was at `878ee3ce` — two commits
+  nobody in the resolution had seen (#80's ask instance guard, #72's MemoryHigh removal), touching
+  three of the same source files plus `ccd/ccd`. Nothing in the merge machinery says so: `git merge`
+  pins `MERGE_HEAD` at the ref you started from and reports success against it, and the PR's own
+  `mergeable` field would have said `CONFLICTING` afterwards with no explanation of why the resolution
+  you just verified was not enough. Taken as a SECOND merge commit rather than by re-opening a verified
+  resolution, and checked rather than trusted (`ccd/ccd` `cmp`-identical to `main`'s; `registry.ts`
+  keeps both `stranded` and #80's `updatedAt` argument; `watch.ts` keeps both the `pools` emitter and
+  `sweepAsks`). **A conflict measurement has a shelf life, and it is shorter than a careful
+  resolution.**
+
+- **D-2431 (2026-09-10)** (the #81 merge) — **Taking THIS branch's side in
+  `ccd-reg-get-census.test.ts` would have redded the suite, because its anchors do not exist in the
+  merged `ccd/ccd` at all.** The case slices `ccd/ccd`'s `_reg_get` header on
+  `block.indexOf('It has moved four times in five rounds')` and
+  `block.indexOf('converted the three verb readers')`. Both measure **-1** against the merged tree
+  (`/bin/grep -n -F`, no hit) — #78 replaced that history with "It has moved six times". The first
+  fails `expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1)`
+  immediately; worse, the second would make `block.indexOf('\n', -1)` resolve to the block's FIRST
+  newline, so `outsideHistory` would carry the whole dated list and the cardinal scan would report
+  every historical figure as a stale census. **A test that reads another file by literal is a
+  cross-file coupling with no type and no compiler** — when the file it reads takes the other side of a
+  merge, the test must follow it or the suite goes red for a reason the diff does not show.
+
+- **D-2432 (2026-09-10)** (the #81 merge) — **Main's own hunk left a dangling antecedent two lines
+  outside its own conflict, and three of this branch's stale cardinals were corrected in passing.**
+  `server/test/ccd-reg-get-census.test.ts`'s docstring ended "that pin is why the `_pool_ok` census
+  never went stale through **the same five rounds**" — a phrase pointing at "the five review rounds
+  that touched it", which `origin/main`'s rewrite of the paragraph ABOVE deleted. Unconflicted text,
+  byte-identical on both parents, and false the moment the merge landed: the merged `ccd/ccd` counts
+  SIX moves. Rewritten to stand on its own. Corrected in the same pass, each measured against the
+  merged `ccd/ccd`: "Four sites carry `&& ! _pool_untaggable`" (**five** —
+  `/bin/grep -cF '&& ! _pool_untaggable' ccd/ccd`); "`_undecidable_cause` interpolates `$POOLS_DIR`
+  into ONE of its **five** operator-facing sentences" (**six** arms — home, wrapper, crosspool,
+  project, pool, `*` — the cardinal having been true for exactly one commit, between round 4 creating
+  the function and round 5 adding the `wrapper` arm); and "the half left open is the one with **135**
+  call sites" (133 across 109 non-comment lines, and the durable form names the census that holds it
+  rather than restating a number). **A merge is where one branch's stale prose meets the other
+  branch's corrected prose, and the conflict markers show you only the sentences that happen to
+  collide.**
