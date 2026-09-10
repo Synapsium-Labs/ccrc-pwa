@@ -588,6 +588,7 @@ const OPS = {
     keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
   },
   declared: { keys: ['file', 'id', 'disabled'], repeat: [] },
+  switched: { keys: ['id', 'disabled'], repeat: [] },
   // THE ONE OP IN THIS FILE THAT DOES NOT ANSWER JSON, and the exception is
   // argued at its arm below rather than here: bash needs seven roster values
   // and `$( )` + `read` cannot carry an empty field safely in either of the
@@ -1735,6 +1736,17 @@ function main(argv) {
       disabled: a['disabled'] === 'true',
       roster: json,
     });
+    return 0;
+  }
+
+  if (op === 'switched') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'switched needs --id'); return 2; }
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv', `switched needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`);
+      return 2;
+    }
+    // A boolean state reaches the wire, never the truthy string bash passed.
+    out({ ok: true, id: a['id'], disabled: a['disabled'] === 'true' });
     return 0;
   }
 

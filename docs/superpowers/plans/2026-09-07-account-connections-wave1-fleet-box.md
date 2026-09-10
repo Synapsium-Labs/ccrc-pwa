@@ -18353,3 +18353,68 @@ Recorded, not fixed. The honest options are to widen the command to every operat
 in the banner that the grep finds this shape and that a new shape is on the author. Left for the wave-2
 pass rather than opened here — the count it protects is now three sentences from the rule it serves, and
 the rule is what the tests enforce.
+
+### D-2469 — two disables can each preserve the lane the other removes
+
+Task 31's refusal was a read/check/write transaction implemented as three unrelated operations. With two
+placeable lanes, two concurrent `ccrc account disable` processes can both read both lanes, each exclude its
+own target, each observe the other as the required survivor, and then write both markers. Each call returns
+success; the fleet has no globally placeable destination. The single-process predicate is correct, but the
+invariant is global, so its transaction must be global too.
+
+The marker directory now carries one durable, never-unlinked `.account-placement.lock`; both enable and
+disable take the same blocking `flock` before any marker-state decision or mutation. Enable participates
+because it mutates the same state another disable measures. Failure to create, open, or lock the file is a
+structured refusal rather than permission to run unserialised.
+
+### D-2470 — truncating a marker path follows somebody else's filesystem object
+
+`_acct_mark_off` used `: > "$REG/<id>-disabled"`. That safely creates or truncates an ordinary marker, but it
+also follows a symlink and can block opening a FIFO. Account ids are validated; the filesystem object at the
+derived path is not. A switch verb must not truncate an arbitrary target merely because someone placed a
+link at the name it owns.
+
+The writer now stages an empty regular file beside the destination and replaces the destination through the
+platform's no-directory atomic rename. It neither opens nor follows the existing object. The postcondition
+is measured with `-f` and `! -L`, the same regular-file meaning placement consumes without accepting a link.
+
+### D-2471 — a sourceable projection can omit the array the safety guard needs
+
+A hand-edited `accounts.sh` that still defines `CCRC_ACCOUNTS` but omits `CCRC_HOME_ABLE` is valid shell and
+passes `_acct_roster_ids`. Task 31 then expanded the missing array as empty. A target outside that invented
+empty set was treated as a non-reduction and disabled without the last-placeable refusal. "The projection
+sources" and "the projection contains this reader's register" are different facts.
+
+`_acct_placeable` now requires `CCRC_HOME_ABLE` to be declared as an array after sourcing. Absence or a scalar
+is `projection-invalid`; a declared empty array remains a valid projection for a roster with no home-able
+accounts.
+
+### D-2472 — projection stdout was parsed as account ids
+
+Both projection readers sourced `accounts.sh` inside the same command substitution used to carry ids back.
+A sourceable file that printed a line polluted that data stream. In `_acct_placeable`, a printed token with
+an executable of the same name became a phantom survivor and could authorize disabling the real last lane.
+The generator does not print, but this is the reader of a mutable generated file and it already promises a
+structured answer when that file is invalid.
+
+The source step now redirects its stdout away from the id channel; only the reader's own `printf` statements
+cross the subshell boundary. Projection diagnostics on stderr remain visible.
+
+### D-2473 — a repeated singular flag silently retargeted the operation
+
+`enable` and `disable` take one account id, but `_acct_one_id` accepted `--id first --id second` and operated
+on the second. A machine caller whose argument assembly duplicated the singular flag could therefore switch
+a different lane from the one named first while receiving a successful answer.
+
+The parser now refuses a second `--id` at argv exit 2 before reading or writing account state. Both spellings,
+`--id X` and `--id=X`, share the same seen-bit.
+
+### D-2474 — file and directory markers were reported with incompatible meanings
+
+Placement's marker predicate is `-f`: a directory at `<id>-disabled` does not switch a lane off. Enable used
+`rm -f`, which refuses to remove that directory, but its failure sentence said the account was "still
+switched off". That was false under the very predicate the feature exists to drive.
+
+Marker mutations now distinguish a regular owned marker from a conflicting filesystem object. Enable
+refuses a non-regular path without calling it an off state; disable replaces non-directory names safely and
+refuses a directory. Success is reported only after the exact regular-file postcondition is measured.

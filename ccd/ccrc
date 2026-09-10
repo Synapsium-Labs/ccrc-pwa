@@ -976,7 +976,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare roster"
+ACCT_SUBS="add candidates check credential declare disable enable roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -4767,7 +4767,7 @@ _acct_operator_steps() {   # <id> — appends the two steps
   ACCT_OPERATOR_STEPS+=("$(printf "$ACCT_OPERATOR_STEP_2" "$1")")
 }
 
-_acct_disable_new() {   # <id> <what-still-stands> — the marker `ccd`'s `_lane_enabled` reads
+_acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
   # Spec §5: both connect verbs leave the new lane SWITCHED OFF, so a lane whose
   # credential nobody has measured cannot be picked by `_ws_least_loaded` the
   # moment it is rostered. This only uses ccd's existing mechanism:
@@ -4783,14 +4783,21 @@ _acct_disable_new() {   # <id> <what-still-stands> — the marker `ccd`'s `_lane
   # at a second address, and BOUND BELOW so `set -u` reds a caller that forgot it even
   # on the path where the write succeeds. Task 27's `declare` is that second caller.
   #
-  # THE REMEDY IS `touch`, NOT the unshipped `ccrc account disable` (measured:
-  # `unknown-subcommand`, exit 2). Task 24's `auth-start` names an unshipped door
-  # because signing in has no hand form; this switch IS ccd:1024's own file.
-  local id="$1" stands="$2"
+  # STAGE + RENAME, NEVER REDIRECTION (D-2470). `: > "$marker"` follows a symlink
+  # and can block on a FIFO. The staged regular file is empty by construction, and
+  # `_plat_mv_notdir` atomically replaces every non-directory name without opening
+  # it. `-f && ! -L` is then the exact postcondition: ccd reads `-f`, and accepting
+  # a link here would re-introduce the write-through path on the next converge.
+  local id="$1" stands="$2" marker="$_SVC_REG/$1-disabled" tmp="$_SVC_REG/.$1-disabled.tmp.$$"
   mkdir -p "$_SVC_REG" \
     || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
-  : > "$_SVC_REG/$id-disabled" \
-    || _acct_refuse 1 disable-marker "cannot write $_SVC_REG/$id-disabled, so this lane cannot be left switched off. Fix that path, then: touch $_SVC_REG/$id-disabled. $stands"
+  rm -f -- "$tmp"
+  : > "$tmp" \
+    || _acct_refuse 1 disable-marker "cannot write the staged empty marker $tmp, so this lane cannot be left switched off. Fix $_SVC_REG, then: touch $marker. $stands"
+  _plat_mv_notdir "$tmp" "$marker" \
+    || { rm -f -- "$tmp"; _acct_refuse 1 disable-marker "cannot write $marker by replacing it with an empty regular marker, so this lane cannot be left switched off. Fix that path, then: touch $marker. $stands"; }
+  { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
+    || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so this lane cannot be proved switched off. Fix that path, then: touch $marker. $stands"
 }
 
 
@@ -4913,7 +4920,7 @@ _acct_add() {
   # the argument. The CLAUSE is this caller's: at this line only the 0600 file exists.
   local added rc2=0 stands="Nothing was written."
   [ -n "$ACCT_SECRET_WRITTEN" ] && stands="The 0600 credential file $ACCT_SECRET_WRITTEN WAS written before this step and nothing rolls it back: no roster entry names it yet, so nothing on this box can run it, and re-running this same command overwrites it."
-  _acct_disable_new "$ACCT_ID" "$stands"
+  _acct_mark_off "$ACCT_ID" "$stands"
 
   # ── 3. THE ROSTER ENTRY ─────────────────────────────────────────────────
   # CAPTURED, NOT DISCARDED. `>/dev/null` would throw away the refusal envelope
@@ -5127,11 +5134,145 @@ _acct_roster_ids() {   # -> fills ACCT_ROSTER_IDS
   [ -f "$sh" ] \
     || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which accounts are already declared — run 'ccrc install' to generate it from \$HOME/.ccrc/accounts.json. Nothing was written."
   listed="$(
+    # Source stdout is not the id channel (D-2472); only this loop may print.
     # shellcheck source=/dev/null
-    . "$sh" || exit 1
+    . "$sh" >/dev/null || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
     for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$a"; done
-  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced, so this box cannot say which accounts are already declared. Nothing was written."
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced as an account projection, so this box cannot say which accounts are already declared. Regenerate it with 'ccrc install'. Nothing was written."
   while IFS= read -r a; do [ -n "$a" ] && ACCT_ROSTER_IDS+=("$a"); done <<<"$listed"
+}
+
+# ── the one id and the fleet-wide placement floor ────────────────────────
+# These helpers fill globals instead of printing because `_acct_refuse` exits;
+# a command substitution would swallow its JSON envelope in a subshell.
+ACCT_ONE_ID=""
+_acct_one_id() {   # <verb> [--id X | --id=X] -> ACCT_ONE_ID
+  local verb="$1" v="" flag="" seen=0
+  shift
+  ACCT_ONE_ID=""
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id)
+        [ "$seen" -eq 0 ] \
+          || _acct_refuse 2 duplicate-argument "the singular flag --id was given more than once. Nothing was written."
+        [ $# -ge 2 ] \
+          || _acct_refuse 2 missing-value "the flag --id takes a value and nothing followed it. Nothing was written."
+        seen=1; v="$2"; shift ;;
+      --id=*)
+        [ "$seen" -eq 0 ] \
+          || _acct_refuse 2 duplicate-argument "the singular flag --id was given more than once. Nothing was written."
+        seen=1; v="${1#*=}" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes only --id" ;;
+    esac
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag --id was given an empty value. Give it an account id. Nothing was written."
+    case "$flag" in --id) ACCT_ONE_ID="$v" ;; esac
+    shift
+  done
+}
+
+_acct_known_or_refuse() {   # <id> — refuses unless the generated projection names it
+  local id="$1" other=""
+  _acct_roster_ids
+  for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
+    [ "$other" = "$id" ] && return 0
+  done
+  _acct_refuse 1 unknown-id "no account \"$id\" in \$HOME/.ccrc/accounts.json - 'ccrc account roster' lists what is there. Nothing was written."
+}
+
+# This is intentionally GLOBAL: it protects the fleet-wide floor of home-able,
+# enabled executables. Project-specific eligibility belongs to placement and is
+# not duplicated here; otherwise a broken lane could become impossible to switch
+# off. After excluding one protected lane, at least one such destination remains.
+ACCT_PLACEABLE=()
+_acct_placeable() {   # [<id to exclude>] -> fills global placeable lanes
+  local skip="${1:-}" sh="$HOME/.ccrc/accounts.sh" listed="" a=""
+  ACCT_PLACEABLE=()
+  [ -f "$sh" ] \
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say where a session could be placed - run 'ccrc install' to regenerate it from \$HOME/.ccrc/accounts.json. Nothing was written."
+  listed="$(
+    # Source stdout is not the id channel (D-2472); only this loop may print.
+    # `source` success alone does not prove this register exists or is an array
+    # (D-2471). A declared empty array remains a valid, measured empty set.
+    # shellcheck source=/dev/null
+    . "$sh" >/dev/null || exit 1
+    declare -p CCRC_HOME_ABLE 2>/dev/null | grep -q '^declare -a ' || exit 1
+    for a in ${CCRC_HOME_ABLE[@]+"${CCRC_HOME_ABLE[@]}"}; do printf '%s\n' "$a"; done
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced as an account projection with a CCRC_HOME_ABLE array, so this box cannot say where a session could be placed. Regenerate it with 'ccrc install'. Nothing was written."
+  while IFS= read -r a; do
+    [ -n "$a" ] || continue
+    [ "$a" = "$skip" ] && continue
+    [ -x "$WRAPPER_BIN_DIR/$a" ] || continue
+    [ -f "$_SVC_REG/$a-disabled" ] && continue
+    ACCT_PLACEABLE+=("$a")
+  done <<<"$listed"
+}
+
+ACCT_MARKER_LOCK_FD=""
+_acct_marker_lock() {   # -> lock held on ACCT_MARKER_LOCK_FD until the caller returns
+  local lock="$_SVC_REG/.account-placement.lock"
+  mkdir -p "$_SVC_REG" \
+    || _acct_refuse 1 marker-lock "cannot create $_SVC_REG, so the account placement floor cannot be serialised. Nothing was written."
+  command -v flock >/dev/null 2>&1 \
+    || _acct_refuse 1 marker-lock "flock is unavailable, so the account placement floor cannot be changed safely. Install flock, then retry. Nothing was written."
+  exec {ACCT_MARKER_LOCK_FD}>>"$lock" \
+    || _acct_refuse 1 marker-lock "cannot open $lock, so the account placement floor cannot be serialised. Fix that path, then retry. Nothing was written."
+  flock "$ACCT_MARKER_LOCK_FD" \
+    || _acct_refuse 1 marker-lock "cannot lock $lock, so the account placement floor was left unchanged. Nothing was written."
+}
+
+_acct_enable() {   # [--id X]
+  local marker=""
+  _acct_one_id enable "$@"
+  _acct_id_or_refuse "$ACCT_ONE_ID"
+  _acct_known_or_refuse "$ACCT_ONE_ID"
+  _acct_marker_lock
+  marker="$_SVC_REG/$ACCT_ONE_ID-disabled"
+  # A directory is not a disabled marker to ccd's `-f` predicate. Do not call it
+  # switched off, and do not let `rm -f`'s directory refusal phrase that lie.
+  [ ! -e "$marker" ] || [ -f "$marker" ] || [ -L "$marker" ] \
+    || _acct_refuse 1 marker-conflict "$marker exists but is not a marker file, so its presence does not mean account $ACCT_ONE_ID is switched off. Move that object aside, then retry. Nothing was written."
+  rm -f -- "$marker" \
+    || _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written."
+  [ ! -e "$marker" ] && [ ! -L "$marker" ] \
+    || _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written."
+  _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
+    switched --id "$ACCT_ONE_ID" --disabled false
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_disable() {   # [--id X]
+  local id="" a="" was_placeable=0 marker=""
+  _acct_one_id disable "$@"
+  id="$ACCT_ONE_ID"
+  _acct_id_or_refuse "$id"
+  _acct_known_or_refuse "$id"
+  _acct_marker_lock
+  marker="$_SVC_REG/$id-disabled"
+  [ ! -d "$marker" ] || [ -L "$marker" ] \
+    || _acct_refuse 1 marker-conflict "$marker is a directory, not the regular marker ccd reads. Move that directory aside, then retry. Nothing was written."
+  # An already-off lane, or one outside the protected fresh-placement set,
+  # removes no global destination. Project-specific eligibility is not this guard.
+  if ! { [ -f "$marker" ] && [ ! -L "$marker" ]; }; then
+    _acct_placeable
+    for a in ${ACCT_PLACEABLE[@]+"${ACCT_PLACEABLE[@]}"}; do
+      [ "$a" = "$id" ] && was_placeable=1
+    done
+    if [ "$was_placeable" -eq 1 ]; then
+      _acct_placeable "$id"
+      [ "${#ACCT_PLACEABLE[@]}" -gt 0 ] \
+        || _acct_refuse 1 last-enabled-home "account $id is the only globally placeable lane - every other home-able account is either disabled (its \$HOME/.cc-sessions/<id>-disabled marker is present) or has no executable in $WRAPPER_BIN_DIR, so disabling this one would leave the fleet with no placement destination at all. Nothing was written."
+    fi
+  fi
+  _acct_mark_off "$id" "No marker was written, so account $id remains switched on. No other file was written."
+  { [ -f "$marker" ] && [ ! -L "$marker" ]; } \
+    || _acct_refuse 1 disable-marker "$marker is not a regular marker after the write, so account $id cannot be proved switched off. No other file was written."
+  _acct_read_op "The marker for account $id was written and the lane is switched off. Only this report failed." \
+    switched --id "$id" --disabled true
+  printf '%s\n' "$ACCT_OUT"
 }
 
 # `_inst_accounts_sh` PRINTS ("install: accounts.sh: …") and refuses through
@@ -5376,7 +5517,7 @@ _acct_declare() {
   # ── 1. THE SWITCH, OFF ──────────────────────────────────────────────────
   # The clause is this caller's and it is the honest one at THIS line: nothing
   # has been written yet, and — unlike `add` — nothing ever writes the launcher.
-  _acct_disable_new "$id" "Nothing else was written: no roster entry names \"$id\" yet, so this box does not have that account, and the launcher $WRAPPER_BIN_DIR/$id is somebody else's file that ccrc never writes. Re-run this same command once the cause is fixed."
+  _acct_mark_off "$id" "Nothing else was written: no roster entry names \"$id\" yet, so this box does not have that account, and the launcher $WRAPPER_BIN_DIR/$id is somebody else's file that ccrc never writes. Re-run this same command once the cause is fixed."
 
   # ── 2. THE ROSTER ENTRY ─────────────────────────────────────────────────
   # ONE VALIDATOR. The endpoint gate is `BASE_URL_OK`, called by the roster
@@ -6589,6 +6730,14 @@ cmd_account() {
       # them. Every failure path inside it `exit`s, so the `return 0` below is
       # reached only when the answer was printed.
       _acct_check "$@"
+      return 0
+      ;;
+    enable)
+      _acct_enable "$@"
+      return 0
+      ;;
+    disable)
+      _acct_disable "$@"
       return 0
       ;;
     declare)

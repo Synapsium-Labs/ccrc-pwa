@@ -3370,7 +3370,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     () => {
       // THE ONE SEAM IN THIS TASK NOTHING MEASURED (review round 1). Every other
       // case here runs on a box where the marker write SUCCEEDS, so all of them
-      // stay green when `_acct_disable_new`'s two `||` arms are deleted — and
+      // stay green when `_acct_mark_off`'s two `||` arms are deleted — and
       // deleted, the verb answers `{"ok":true,"disabled":true,…}` for a lane with
       // no file on disk. Measured on row 2 before this case existed: exit 0,
       // `disabled:true`, `existsSync(marker) === false`. A verb that publishes a
@@ -3535,7 +3535,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       expect(oneObject(r)['error']).toBe('duplicate-id');
     });
 
-  it('_acct_disable_new takes the clause as $2, and reds without one even when the write works',
+  it('_acct_mark_off takes the clause as $2, and reds without one even when the write works',
     () => {
       // D-2135, and D-2133's check applied to it: the mechanism is the ONE LINE
       // `local id="$1" stands="$2"`. Binding there rather than expanding `$2`
@@ -3547,7 +3547,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       // no other case calls this function with the wrong arity.
       const home = box('ccrc-account-off-clause-');
       seedBoxRoster(home, FIXTURE_ROSTER);
-      const bad = sourceCall(home, '_acct_disable_new lab-dev0');
+      const bad = sourceCall(home, '_acct_mark_off lab-dev0');
       expect(bad.code, 'a caller with no clause was served').not.toBe(0);
       expect(bad.stderr).toMatch(/\$2: unbound variable/);
       expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled')),
@@ -3568,7 +3568,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
         const h = box('ccrc-account-off-clause-row-');
         seedBoxRoster(h, FIXTURE_ROSTER);
         breakIt(h);
-        const r = sourceCall(h, `_acct_disable_new lab-dev0 "${STANDS}"`);
+        const r = sourceCall(h, `_acct_mark_off lab-dev0 "${STANDS}"`);
         expect(r.code, `${what}: ${r.stderr}`).toBe(1);
         const j = oneObject(r);
         expect(j['error'], what).toBe('disable-marker');
@@ -3710,10 +3710,266 @@ const UPSTREAM = {
 };
 
 /** The marker `_lane_enabled` reads (ccd/ccd:1024), at the path ccd reads it
- *  from — spelled once here because six cases below assert on its presence or
+ *  from — spelled once here because the cases below assert on its presence or
  *  its absence, and the two are the same claim in opposite directions. */
 const offMarker = (home: string, id: string): string =>
   join(home, '.cc-sessions', `${id}-disabled`);
+
+/** A placeable lane needs no telemetry membership: placement reads the generated
+ * `CCRC_HOME_ABLE` projection, its marker, and its executable launcher. */
+const HOMEABLE = (
+  id: string,
+  hue: string,
+  telemetry: 'anthropic' | 'none' = 'anthropic',
+) => ({
+  id, label: 'team·shared', hue, configDirSuffix: `.claude-${id}`, homeAble: true,
+  telemetry, exec: { kind: 'generated', provider: 'anthropic' },
+});
+
+describe('ccrc account enable / disable', () => {
+  it('disable writes ccd\'s marker and reports the measured state without requiring telemetry', () => {
+    const home = box('ccrc-account-disable-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet', 'none')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ ok: true, id: 'claude', disabled: true });
+    expect(existsSync(offMarker(home, 'claude'))).toBe(true);
+  });
+
+  it('enable removes the marker and is idempotent when it was already absent', () => {
+    const home = box('ccrc-account-enable-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(home, 'alt-max'), '');
+    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max']))['disabled']).toBe(false);
+    expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
+    const again = run(home, ['account', 'enable', '--id', 'alt-max']);
+    expect(again.code, again.stderr).toBe(0);
+    expect(oneObject(again)['disabled']).toBe(false);
+  });
+
+  it('refuses a directory where the marker file should be without misreporting it as switched off', () => {
+    const home = box('ccrc-account-enable-marker-directory-');
+    seedRosterJson(home, [UPSTREAM]);
+    mkdirSync(offMarker(home, 'claude'), { recursive: true });
+    const r = run(home, ['account', 'enable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('marker-conflict');
+    expect(String(j['detail'])).not.toContain('still switched off');
+    expect(lstatSync(offMarker(home, 'claude')).isDirectory()).toBe(true);
+  });
+
+  it('replaces a symlink marker without writing through to its target', () => {
+    const home = box('ccrc-account-disable-marker-symlink-');
+    seedRosterJson(home, [UPSTREAM]);
+    const canary = join(home, 'canary');
+    writeFileSync(canary, 'KEEP');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync(canary, offMarker(home, 'claude'));
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(canary, 'utf8')).toBe('KEEP');
+    expect(lstatSync(offMarker(home, 'claude')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(offMarker(home, 'claude')).isFile()).toBe(true);
+  });
+
+  it('half-updated boxes report no-answer after changing the marker', () => {
+    const home = staleAtBox('ccrc-account-enable-skew-', 'switched');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(home, 'alt-max'), '');
+
+    const r = run(home, ['account', 'enable', '--id', 'alt-max']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('no-answer');
+    expect(String(j['detail'])).toContain('switched');
+    expect(String(j['detail'])).toContain('marker for account alt-max was removed');
+    expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
+  });
+
+  it('refuses to disable the last lane the placer can land on', () => {
+    const home = box('ccrc-account-disable-last-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(home, 'alt-max'), '');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('last-enabled-home');
+    expect(String(j['detail'])).toContain('disabled');
+    expect(String(j['detail'])).toContain('.local/bin');
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('serialises two disables so both cannot consume the other lane', () => {
+    const home = box('ccrc-account-disable-concurrent-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    const barrier = join(home, 'disable-barrier');
+    mkdirSync(barrier);
+    // Both pre-fix processes reach marker creation only after accepting the
+    // other lane as their survivor. Under the lock, the first waits briefly,
+    // writes, and releases; only then can the second re-measure and refuse.
+    writeFileSync(join(home, '.local', 'bin', 'mkdir'), `#!/bin/sh
+if [ "$1" = -p ] && [ "$2" = "$HOME/.cc-sessions" ]; then
+  /bin/mkdir -p "$2" || exit $?
+  : > "$HOME/disable-barrier/$$"
+  n=0
+  while [ "$n" -lt 100 ]; do
+    set -- "$HOME/disable-barrier/"*
+    [ "$#" -ge 2 ] && exit 0
+    n=$((n + 1)); sleep 0.01
+  done
+  exit 0
+fi
+exec /bin/mkdir "$@"
+`, { mode: 0o755 });
+    const pair = spawnSync(BASH, ['-c',
+      '"$1" account disable --id claude >"$HOME/claude.out" 2>"$HOME/claude.err" & p1=$!\n'
+      + '"$1" account disable --id alt-max >"$HOME/alt-max.out" 2>"$HOME/alt-max.err" & p2=$!\n'
+      + 'wait "$p1" || :\nwait "$p2" || :\n', '_', ccrcIn(home)],
+    { env: env(home), encoding: 'utf8', timeout: 10_000 });
+    expect(pair.error, pair.stderr).toBeUndefined();
+    const answers = ['claude', 'alt-max'].map((id) =>
+      JSON.parse(readFileSync(join(home, `${id}.out`), 'utf8')) as Record<string, unknown>);
+    expect(answers.filter((j) => j['ok'] === true), JSON.stringify(answers)).toHaveLength(1);
+    expect(answers.filter((j) => j['error'] === 'last-enabled-home')).toHaveLength(1);
+    expect(['claude', 'alt-max'].filter((id) => existsSync(offMarker(home, id)))).toHaveLength(1);
+  });
+
+  it('does not count a home-able, enabled lane whose launcher is missing', () => {
+    const home = box('ccrc-account-disable-nolauncher-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('last-enabled-home');
+  });
+
+  it('allows disabling a target outside the protected fresh-placement set', () => {
+    const home = box('ccrc-account-disable-target-nolauncher-');
+    seedRosterJson(home, [UPSTREAM]);
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ ok: true, id: 'claude', disabled: true });
+    expect(existsSync(offMarker(home, 'claude'))).toBe(true);
+  });
+
+  it('keeps unreadable projections distinct from a box with nowhere to land', () => {
+    const home = box('ccrc-account-disable-noproj-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    rmSync(join(home, '.ccrc', 'accounts.sh'));
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('projection-absent');
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('uses projection-invalid when the generated projection cannot source', () => {
+    const home = box('ccrc-account-disable-badproj-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(\n');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('projection-invalid');
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('refuses a sourceable projection that omits its home-able array', () => {
+    const home = box('ccrc-account-disable-nohomearray-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'claude');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('projection-invalid');
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('does not treat output from a sourceable projection as a placeable account', () => {
+    const home = box('ccrc-account-disable-noisyproj-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'phantom');
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'),
+      'printf "%s\\n" phantom\nCCRC_ACCOUNTS=(claude)\nCCRC_HOME_ABLE=(claude)\n');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('last-enabled-home');
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('allows disabling an already-disabled lane because it removes no placeable lane', () => {
+    const home = box('ccrc-account-disable-again-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'claude');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(home, 'claude'), '');
+    const r = run(home, ['account', 'disable', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['disabled']).toBe(true);
+  });
+
+  it('refuses an id the roster does not carry on both verbs', () => {
+    const home = box('ccrc-account-endis-unknown-');
+    seedRosterJson(home, [UPSTREAM]);
+    for (const sub of ['enable', 'disable']) {
+      const r = run(home, ['account', sub, '--id', 'lab-dev0']);
+      expect(r.code, sub).toBe(1);
+      expect(oneObject(r)['error'], sub).toBe('unknown-id');
+    }
+    expect(existsSync(offMarker(home, 'lab-dev0'))).toBe(false);
+  });
+
+  it('refuses a repeated singular id before it can retarget either verb', () => {
+    const home = box('ccrc-account-endis-repeat-id-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    for (const sub of ['enable', 'disable']) {
+      const r = run(home, ['account', sub, '--id', 'claude', '--id=alt-max']);
+      expect(r.code, sub).toBe(2);
+      expect(oneObject(r)['error'], sub).toBe('duplicate-argument');
+    }
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+    expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
+  });
+
+  it('refuses malformed argv at exit 2 on both verbs', () => {
+    const home = box('ccrc-account-endis-argv-');
+    seedRosterJson(home, [UPSTREAM]);
+    for (const sub of ['enable', 'disable']) {
+      const unknown = run(home, ['account', sub, '--id', 'claude', '--force']);
+      expect(unknown.code, `${sub}: unknown flag`).toBe(2);
+      expect(oneObject(unknown)['error'], `${sub}: unknown flag`).toBe('unknown-argument');
+      for (const [idArgv, detail] of [
+        [['--id'], 'nothing followed it'],
+        [['--id', ''], 'was given an empty value'],
+        [['--id='], 'was given an empty value'],
+      ] as const) {
+        const missing = run(home, ['account', sub, ...idArgv]);
+        expect(missing.code, `${sub} ${idArgv.join(' ')}`).toBe(2);
+        const j = oneObject(missing);
+        expect(j['error'], `${sub} ${idArgv.join(' ')}`).toBe('missing-value');
+        expect(String(j['detail']), `${sub} ${idArgv.join(' ')}`).toContain(detail);
+      }
+    }
+  });
+});
 
 describe('ccrc account declare: somebody else\'s launcher, and what it refuses', () => {
   it('declares a launcher that is NOT a ccrc-shaped wrapper — compiled, no config-dir line', () => {
@@ -4434,7 +4690,7 @@ describe('ccrc account declare: the pre-pass, and the class a field fault answer
   });
 
   it('the marker it could not write is a refusal, and the clause is THIS site\'s (D-2135)', () => {
-    // THE `declare` SITE'S `_acct_disable_new` CLAUSE, WHICH MEASURED NOTHING
+    // THE `declare` SITE'S `_acct_mark_off` CLAUSE, WHICH MEASURED NOTHING
     // (review round 1). Every other declare case runs on a box where the marker
     // write succeeds, so replacing this call's clause with "Nothing was
     // written." — a sentence that is true at `add`'s first write and at the
