@@ -1942,6 +1942,8 @@ and count checks are evidence, not a substitute.
 `required_approving_review_count: 0`, and #70, #68 and #67 all merged in that exact state with zero
 reviews. Green checks plus MERGEABLE is the whole gate.
 
+**[FALSIFIED 2026-09-10 07:22 — see the merge entry at the end of this file.]** Both sentences above are wrong. `branches/main/protection` is only ONE of GitHub's two rule surfaces; ruleset 22520257, active since 2026-09-08, requires **one approval** with Admin/Maintain bypassing, and the required checks are **four** — `test-macos` is additive and non-required. The seven merges at `reviews=0` are equally consistent with "no approval required" and "approval required, this actor bypasses", so they were never evidence.
+
 **Booked to the follow-up, both tool-generated false anchors:** git's `@@ … symbol` hunk header (an
 enclosing-symbol GUESS from preceding context, not a claim about what changed) and the ugrep zero. Both
 are false anchors no amount of author care prevents, which is what distinguishes them from the rest of
@@ -2012,6 +2014,8 @@ identical to `ccd/ccrc`. **The merge is the worker's/operator's act; I gate and 
 `mergeStateStatus: BLOCKED` and `reviewDecision: REVIEW_REQUIRED` are both **cosmetic on this repo** —
 measured branch protection carries `required_approving_review_count: 0`, and #70, #68 and #67 all merged
 in exactly that state with zero reviews. Five green checks plus MERGEABLE is the whole gate.
+
+**[FALSIFIED 2026-09-10 07:22 — see the merge entry at the end of this file.]** Both sentences above are wrong. `branches/main/protection` is only ONE of GitHub's two rule surfaces; ruleset 22520257, active since 2026-09-08, requires **one approval** with Admin/Maintain bypassing, and the required checks are **four** — `test-macos` is additive and non-required. The seven merges at `reviews=0` are equally consistent with "no approval required" and "approval required, this actor bypasses", so they were never evidence.
 
 **A fleet hazard worth carrying, and it hit me:** the crossrepo coordinator (`claude-ccrc-pwa`) removed
 four of my scratch worktrees at ~02:05 by running `git worktree list | grep scratchpad` in the main
