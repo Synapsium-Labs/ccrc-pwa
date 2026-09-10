@@ -4666,15 +4666,14 @@ export interface MailSummary {
   /**
    * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
    *
-   * FREE TEXT, and it has to be treated as such: five semantic writer
-   * categories put different kinds of thing here (PR #75 review round 1,
-   * store-7) — a typed `sendPrompt` error code, `'recipient not in registry'`,
-   * a deliberate run/recipient cancel (`'run closed'`, `'coordinator
-   * reclaimed'`, or `'recipient rebound'`), and a whole English sentence
-   * (`MAIL_REPLAY_CEILING_ERROR`). The three cancel strings are three SQL
-   * assignments but one category: each explains a delivery parked because its
-   * intended run or role-holder changed. The column is a maintainer's grep
-   * target, not a vocabulary, and it has never been validated on the way in.
+   * FREE TEXT, and it has to be treated as such (PR #75 review round 1,
+   * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
+   * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
+   * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
+   * Three direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
+   * examples of the column's contents, not a closed census or vocabulary: it
+   * is a maintainer's grep target and has never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a

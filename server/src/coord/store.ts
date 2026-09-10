@@ -2562,9 +2562,9 @@ export class CoordStore {
       kind: isMailKind(r.kind) ? r.kind : 'unknown', subject: r.subject,
       artifacts: JSON.parse(r.artifacts) as string[],
       state: isMailDeliveryState(r.state) ? r.state : 'unknown',
-      // RAW, both of them. `lastError` is free text (four writers, four kinds
-      // of thing — see `MailSummary.lastError`'s own docstring for the rule
-      // every client owes it); narrowing it HERE would be this store deciding
+      // RAW, both of them. `lastError` is free text — see
+      // `MailSummary.lastError`'s own docstring for the rule every client owes
+      // it; narrowing it HERE would be this store deciding
       // a display question on the reader's behalf, and would drop exactly the
       // detail a maintainer greps the column for.
       attempts: r.attempts, lastError: r.lastError,
