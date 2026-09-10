@@ -5413,10 +5413,11 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
 #     not a gap: installing a timer that can only ever be a no-op would put a
 #     job in the operator's `launchctl list` that lies about what it does.
 #
-#   • the two limits.conf drop-ins (MemoryHigh/MemoryMax on the session unit
-#     and on app-claude\x2dsession.slice) — launchd has no memory ceiling of
-#     any kind. `ProcessType=Background` in the plists below is the nearest
-#     thing macOS offers and it governs CPU/IO scheduling, not memory. A box
+#   • the two limits.conf drop-ins (MemoryHigh/MemoryMax on the session unit,
+#     aggregate MemoryMax on app-claude\x2dsession.slice) — launchd has no
+#     memory ceiling of any kind. `ProcessType=Background` in the plists below
+#     is the nearest thing macOS offers and it governs CPU/IO scheduling, not
+#     memory. A box
 #     running many sessions has no aggregate cap on this platform, and
 #     `ccrc doctor` says so rather than reporting a limit nobody enforces.
 #
