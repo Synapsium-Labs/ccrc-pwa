@@ -94,14 +94,50 @@ Small, focused PRs get read quickly. Large mechanical sweeps are fine but say so
 description, and keep the mechanical part separate from the judgement part.
 
 `main` is protected: every change lands by pull request, and there are no direct pushes —
-including by the maintainer.
+including by the maintainer. One approving review is required, and the maintainer's own
+PRs are not exempt: `enforce_admins` is on, so nobody merges their own work unreviewed.
 
 CI runs the three suites plus a PWA build on every pull request. Fork PRs run with a
-read-only token and no repository secrets.
+read-only token and no repository secrets. A fork PR's workflow runs wait for a
+maintainer to approve them the first time you contribute — that is GitHub's gate, not a
+judgement about your patch, and the sign-off check below reports without waiting for it.
 
 Found a security problem? Do not open an issue — see [`SECURITY.md`](SECURITY.md).
+
+## Sign your commits off (DCO)
+
+Every commit needs a `Signed-off-by` trailer, and CI checks for it:
+
+```
+git commit -s -m "your message"
+```
+
+which appends one line built from your `user.name` and `user.email`:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+That line is not a signature and not a copyright assignment — nothing is signed away, and
+it is not GPG signing (`-S`, capital, is a different thing this repo does not require).
+It is an assertion of the [Developer Certificate of Origin](https://developercertificate.org/):
+that you wrote this, or otherwise have the right to submit it under the AGPL, and that you
+understand your name and email become a permanent public record of having said so.
+
+The realistic reason it is asked for: if you have a day job, your employment contract may
+already own the code you write on a Saturday. The trailer is where you state that this
+contribution is yours to give.
+
+**Forgot it?** Do not open a second PR. For the last commit, `git commit --amend -s
+--no-edit`. For a whole branch, `git rebase --signoff origin/main`. Both rewrite history,
+so force-push your own branch afterwards — that is your branch, not `main`, and is fine.
+
+Git offers no "always sign off" setting for commits, and [says why](https://git-scm.com/docs/git-config#Documentation/git-config.txt-formatsignOff):
+adding the trailer "should be a conscious act". A hook that appends it to every commit
+turns the assertion into a formality, which is the one thing it cannot survive being.
 
 ## Licence
 
 By contributing you agree that your contributions are licensed under the **AGPL-3.0-only**, the
-same licence as the project. See [`LICENSE`](LICENSE).
+same licence as the project. See [`LICENSE`](LICENSE). The sign-off above is the per-commit
+record of that agreement; this sentence is the statement of it.

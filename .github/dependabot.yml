@@ -1,0 +1,78 @@
+# Dependency updates for a repo that has no root package.json.
+#
+# The layout is the whole reason this file is not the two-line default:
+# `server/`, `agent/` and `pwa/` each carry their OWN package-lock.json and are
+# installed independently (`cd server && npm ci`), so Dependabot needs one
+# `directory` per package. Point it at `/` alone and it finds nothing and says
+# nothing — a silent no-op that looks exactly like "no updates available".
+#
+# `shared/` is deliberately ABSENT. It has a package.json but no lockfile and no
+# dependencies: the file exists solely to tell tsc's NodeNext resolver that
+# shared/*.ts is ESM (see the `//` key in shared/package.json). Listing it here
+# would be an entry that can never produce an update.
+#
+# Grouping, not one PR per bump: `main` now requires an approving review, so an
+# ungrouped week could put a dozen PRs in front of a human who has to click
+# approve on each. Minor and patch updates ride together per package; MAJORS
+# stay separate on purpose, because those are the ones that need a person to
+# read a changelog rather than a green tick.
+version: 2
+
+updates:
+  # ── the three runnable packages ───────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    groups:
+      server-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    groups:
+      agent-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /pwa
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    groups:
+      pwa-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  # ── the actions the workflows pin ─────────────────────────────────────────
+  #
+  # ci.yml and release.yml pin actions/checkout@v4 and actions/setup-node@v4 by
+  # major tag, which floats within v4 but never crosses to v5 — so without this
+  # entry the pins age silently until a deprecation notice turns a green leg
+  # red. `/` is correct here regardless of the package layout: this ecosystem
+  # reads .github/workflows, not a manifest.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(actions)
+    groups:
+      actions:
+        patterns: ['*']

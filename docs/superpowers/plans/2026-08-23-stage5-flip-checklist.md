@@ -56,6 +56,21 @@ backup directory).
    revisit at the first outside contributor). CodeRabbit on public PRs is a cost call —
    yours.
 
+   > **Superseded 2026-09-07 — the revisit happened.** `required_approving_review_count`
+   > is now **1**. The trigger named above ("the first outside contributor") had not
+   > actually arrived — every PR through #59 is an internal branch — but the repo is
+   > public and the gate is worth having in place BEFORE the first stranger's PR rather
+   > than in reaction to it. `enforce_admins` stays on, so this binds the maintainer too:
+   > the operator's own PRs now need an approval from one of the other two
+   > collaborators.
+   > `require_code_owner_reviews` stays **off** — see `.github/CODEOWNERS` for why turning
+   > it on would quietly make Maksym's approval unable to satisfy the requirement.
+   >
+   > Landed alongside: `.github/CODEOWNERS` (auto-assignment only), `.github/dependabot.yml`
+   > (npm × three packages + github-actions), and DCO sign-off — see CONTRIBUTING. The
+   > step-2 Actions setting above ("require approval for all outside collaborators")
+   > remains the intended value and is the one item here still verified by hand in the UI.
+
 3. **Re-scan — confirmation, not mechanism.**
    `cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts` must be
    green, then have the fleet session re-run the pre-flip six-finder scan workflow over
