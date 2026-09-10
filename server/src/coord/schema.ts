@@ -786,6 +786,51 @@ export const MIGRATIONS: readonly string[] = [
      AND n IN (1294, 1332)
      AND landedIn = 'docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md';
   `,
+
+  // ── 9: user_version 8 -> 9 ───────────────────────────────────────────────
+  //
+  // The ask pre-emption lane. A child's live AskUserQuestion, held from the
+  // operator's notification for a grace window so the child's parent can
+  // answer it from the artifacts first.
+  //
+  // D-2169'S RULING ON `asks`: this table is a RECORD and an answer mutex. It
+  // is authoritative for NEITHER of the two facts the lane turns on — the
+  // question is authoritative on the child's live PANE, and the deferred push
+  // is authoritative in the watcher's own memory. Its loss is therefore FREE:
+  // with no rows, no parent is told and no parent can answer, so every ask
+  // pushes immediately, which is the behaviour that shipped before this lane.
+  // Putting the deferred push HERE instead would have inverted that — a lost
+  // db would delete the notification outright, because `dialogIds` is stamped
+  // on first sighting whether or not the push was raised, so no later tick
+  // re-raises it.
+  //
+  // `state` is read back through `isAskState`, never a cast — the same
+  // we-do-not-know rule as every enum column in this file. `askAt` is the
+  // instance guard (D-2170): a snapshot of the hookstate's `updatedAt` at mint
+  // time, because `askKey` hashes CONTENT and a child asking the same question
+  // twice regenerates it byte-for-byte.
+  `
+    CREATE TABLE asks (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      at         INTEGER NOT NULL,
+      childId    TEXT    NOT NULL,
+      parentId   TEXT    NOT NULL,
+      runId      INTEGER,              -- provenance only; an ask outlives its wave
+      askKey     TEXT    NOT NULL,     -- askKey(hs.ask) at mint time
+      askAt      INTEGER NOT NULL,     -- hookstate updatedAt at mint time (D-2170)
+      dialogId   TEXT    NOT NULL,     -- the pane-scrape identity, for staleness
+      question   TEXT    NOT NULL,
+      options    TEXT    NOT NULL,     -- JSON array of option labels, in order
+      state      TEXT    NOT NULL,     -- AskState; isAskState on read, never a cast
+      answeredBy TEXT,                 -- a session id, or 'operator'
+      answer     TEXT,                 -- the option label that was pressed
+      answeredAt INTEGER,
+      releasedAt INTEGER
+    );
+    CREATE INDEX asks_by_state ON asks(state);
+    CREATE INDEX asks_by_child ON asks(childId);
+    CREATE INDEX asks_by_parent ON asks(parentId, state);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

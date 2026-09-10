@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
 } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -2092,6 +2093,86 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     // badge and the board come to disagree about the same box.
     oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
     oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
+  });
+
+  describe('AskState', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_STATE_MAP')).toEqual(['shared/api.ts']);
+      expect(oneDefinition('ASK_STATES')).toEqual(['shared/api.ts']);
+    });
+
+    it('derives its runtime list from the map, never a second array', () => {
+      const src = read('shared/api.ts');
+      expect(src).not.toMatch(/ASK_STATES[^=]*=\s*\[/);
+    });
+
+    it('round-trips every member and refuses non-members', () => {
+      expect(ASK_STATES.length).toBe(6);
+      expect(new Set(ASK_STATES).size).toBe(ASK_STATES.length);
+      for (const s of ASK_STATES) expect(isAskState(s)).toBe(true);
+      expect(isAskState('nope')).toBe(false);
+      expect(isAskState(null)).toBe(false);
+      expect(isAskState(7)).toBe(false);
+    });
+  });
+
+  describe('AskRefuseCode', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_REFUSE_CODE_MAP')).toEqual(['shared/api.ts']);
+    });
+
+    it('leaves no second copy of the literal set in inject/ask.ts', () => {
+      // D-2174: the union used to live here, inline, with no runtime list.
+      expect(read('server/src/inject/ask.ts')).not.toMatch(/'menu-mismatch'\s*;/);
+    });
+
+    it('round-trips every member', () => {
+      // RULING F1: fourteen, not the brief's ten — the four route-level
+      // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`,
+      // emitted by later tasks' routes in server/src/coord) share this same
+      // refusal family and so join this one union rather than a second.
+      // FIFTEEN since the whole-branch review (M2): `child-unmeasurable`
+      // split "this box could not read the child" back out of `ask-moved`,
+      // which had been carrying both — a narrowing that reached the shipped
+      // coordinator contract, not merely a taxonomy.
+      expect(ASK_REFUSE_CODES.length).toBe(15);
+      for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
+      expect(isAskRefuseCode('nope')).toBe(false);
+      expect(isAskRefuseCode(null)).toBe(false);
+    });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1: the one principal token BOTH sides act on —
+  // `server.ts` writes it into `asks.answeredBy`, the PWA renders a
+  // different sentence for it ("answered by you"). Two literals would let
+  // the writer and the reader drift into a chip that silently stops
+  // recognising the operator's own answer and falls back to naming the
+  // parent, which is exactly the defect F1 closed.
+  describe('ASK_OPERATOR_PRINCIPAL', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const definers = (): string[] =>
+      ALL.filter((f) => /export const ASK_OPERATOR_PRINCIPAL\b/.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(definers()).toEqual(['shared/api.ts']);
+    });
+
+    it("leaves no bare 'operator' literal in either file that acts on it", () => {
+      // The writer and the renderer, by name. `coord/rundefs.ts` legitimately
+      // owns the same WORD for the mail lane (`SYSTEM_MAIL_SENDER_MAP`) and is
+      // deliberately not scanned: those members answer "who sent this", a
+      // different question from "who pressed the key".
+      expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
+      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+    });
   });
 });
 

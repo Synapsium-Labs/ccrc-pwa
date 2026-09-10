@@ -40,7 +40,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true,
-  spawnState: null, ...over,
+  spawnState: null, ask: null, ...over,
 });
 
 describe('coordPresence — three answers, because the client cannot measure what the server measures', () => {

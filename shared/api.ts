@@ -113,6 +113,83 @@ export interface FleetSession {
    *  and never `''`, since this line renders unconditionally on a waiting
    *  card. */
   askSummary: string | null;
+  /**
+   * The ask pre-emption lane's chip (design doc §2.8, Task 19): computed
+   * SERVER-SIDE in `fleet.ts`'s `assembleFleet`, reading `CoordStore`
+   * directly — NOT a consumer of `GET /api/asks`, which keeps the parent's
+   * cross-sibling read and any later PWA list view (D-2310, fix round 1:
+   * the tracked spec/plan said otherwise at the time this shipped — see
+   * those documents' own `## Deviations found` for the correction). Every
+   * other `FleetSession` field is computed in `assembleFleet`, and routing
+   * this one through an HTTP call to the server's own route would be a new
+   * pattern for no gain (ruling F5).
+   *
+   * Only two of `AskState`'s six members ever reach this field: `held`
+   * while a parent may still pre-empt the child's live question, and
+   * `answered` once one has ruled AND recently (`fleet.ts`'s
+   * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
+   * `answered` folds to `null` too, since the chip stops being a true
+   * explanation of why the operator was not asked once "just now" has
+   * become "a while ago"; `held` is bounded too, by `askwindow.ts`'s
+   * `ASK_HELD_CHIP_MAX_MS` since the row's own mint — F2(b), correcting a
+   * wave in which this field claimed a held ask is "live by definition").
+   * The design doc's §2.8 gave the chip two sentences — "held — <parent>
+   * may answer" and "ruled by <parent>" — and F1 made the second three,
+   * because the OPERATOR can settle the same row from their own phone: see
+   * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
+   * of each. `assembleFleet` folds the other four
+   * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
+   * pass them through raw: `answering` is the between-tick sliver while a
+   * digit is in flight, so it is folded onto `held` (still, functionally,
+   * "may answer") rather than shown as a state the design doc gives no
+   * words for; `released` and `stale` both mean the operator's own ordinary
+   * push has already fired or the dialog itself is gone, so a chip
+   * explaining why they were not asked would be explaining something no
+   * longer true; `unknown` is an out-of-vocabulary token this build cannot
+   * speak for.
+   *
+   * `parentId` is the session the row was ADDRESSED to — the one that may
+   * pre-empt this question — and `answeredBy` is the principal that actually
+   * ruled. THEY ARE NOT THE SAME FIELD, and this docstring said they were
+   * for one wave (whole-branch review F1): it claimed "for `answered` this
+   * is the same id `answeredBy` carries, since only a child's own derived
+   * parent is ever allowed to press the digit". That stopped being true when
+   * Task 12 landed — BEFORE this chip was written — because `server.ts`'s
+   * `POST /api/sessions/:id/ask` takes the held row itself and settles it
+   * with `ASK_OPERATOR_PRINCIPAL`. So an ask the operator answered from
+   * their own phone, inside the grace window, rendered as "ruled by
+   * <parent-session-id>": a false attribution on the one surface this lane
+   * exists to make honest. `answeredBy` is carried through and rendered on
+   * its own terms.
+   *
+   * `answeredBy` is `null` on every `held` chip (nobody has ruled) and —
+   * REACHABLY — on an `answered` one whose row names no principal:
+   * `settleAsk` is guarded on both answer routes precisely because it can
+   * throw after the digit has already landed. `state` is what tells those
+   * two apart, so the pair is not an overloaded null. A reader must NOT fill
+   * a missing `answeredBy` in with `parentId`; that substitution is the
+   * defect this field exists to close.
+   *
+   * `null` when this session has never raised an ask `CoordStore` still
+   * holds a row for, when the relevant row is one of the four folded states
+   * above (or an `answered` row past its window), or when this assembly had
+   * no `CoordStore` open at all (a dark box, or a caller/test with no
+   * `coord` fixture) — several different reasons, one answer, because none
+   * is something the chip can act on differently from the others.
+   *
+   * ADDITIVE, `FLEET_PROTO` untouched. Read through `sessionAsk` below when
+   * consuming a LIVE (cast, not revived) frame — the same tolerant-reader
+   * discipline `substrateFault`/`graphReadCount` already state, because a
+   * server predating this field omits the key at runtime despite this
+   * being typed as required. `reviveFleetSession` below: absent (an older
+   * snapshot predates the lane entirely) -> null; present-but-malformed
+   * ALSO -> null, never a rejection of the whole session (D-2311, fix
+   * round 1 — `reviveAsk`'s own docstring has the full argument: this
+   * field gates no action, so there is no direction a degrade could get
+   * backwards, and `reviveFleetSessions` rejecting one bad chip would cost
+   * the operator their ENTIRE cached snapshot for it).
+   */
+  ask: { state: AskState; parentId: string; answeredBy: string | null } | null;
   /** Subagents the hook last reported running. Null mirrors `hookState`: no
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
@@ -366,6 +443,51 @@ function tolerantCount(raw: number | null | undefined): number | null {
  */
 export function graphGateCount(s: { graphGateDenials?: number | null }): number | null {
   return tolerantCount(s.graphGateDenials);
+}
+
+/**
+ * Tolerant read of `FleetSession.ask` for a value that has NOT been through
+ * `reviveFleetSession` — the live `fleet` WS frame, cast on arrival by
+ * `pwa/src/stores/fleet.ts`'s `asFleetMsg`. This field is ADDITIVE
+ * (`FLEET_PROTO` held at 1), so a server predating Task 19 omits the key
+ * entirely, and a row from it reads as a session with no ask — never as a
+ * session whose ask this client failed to read — the same absence-permits
+ * stance every sibling tolerant reader above takes.
+ *
+ * A present-but-broken shape (not an object, `parentId` not a non-empty
+ * string, `state` not one of `AskState`'s six tokens) degrades to `null`
+ * whole: unlike `substrateFault`'s per-half tolerance, the `(state,
+ * parentId)` pair only means something TOGETHER — a state with no parent to
+ * name, or a parent with a state this build cannot read, has nothing honest
+ * left to display, and there is no affordance behind this field to fail
+ * open or closed toward (it is informational only).
+ *
+ * The ONE place every PWA surface reads this field, so the fleet card and
+ * any later surface cannot drift onto two different fallbacks.
+ * `SessionLine.tsx` then renders content for exactly `held`/`answered` —
+ * the two the design doc gives words to (`FleetSession.ask`'s own
+ * docstring) — so the other four valid-but-unrendered tokens read as "no
+ * chip" here too, the same fold `assembleFleet` already applies
+ * server-side, now doubled client-side for a server ahead of this build.
+ */
+export function sessionAsk(
+  s: { ask?: { state: AskState; parentId: string; answeredBy?: string | null } | null },
+): { state: AskState; parentId: string; answeredBy: string | null } | null {
+  const v = s.ask ?? null;
+  if (v === null || typeof v !== 'object') return null;
+  const raw = v as { state?: unknown; parentId?: unknown; answeredBy?: unknown };
+  if (typeof raw.parentId !== 'string' || raw.parentId === '' || !isAskState(raw.state)) return null;
+  // `answeredBy` (F1) degrades ON ITS OWN and never rejects the chip: a
+  // server predating that field omits the key entirely, and an unattributed
+  // `answered` row is a real shape (see `FleetSession.ask`'s docstring).
+  // Absent, wrong-typed and blank all read as "the row names no principal";
+  // the one thing a reader must never do is substitute `parentId`.
+  const by = raw.answeredBy;
+  return {
+    state: raw.state,
+    parentId: raw.parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
 }
 
 /**
@@ -1486,6 +1608,86 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
   return typeof v === 'string' && (READY_VERDICTS as readonly string[]).includes(v);
 }
 
+/** The life of one ask — a child's live `AskUserQuestion` that its parent may
+ *  pre-empt before the operator is notified.
+ *
+ *  `held`      the push is deferred; the parent may answer.
+ *  `answering` a principal has taken the row and is pressing a key (D-2171).
+ *  `answered`  a digit landed. `answeredBy` says which principal.
+ *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
+ *  `unknown`   a token this build does not know, read off disk after a deploy
+ *              rollback. Never accepted at ingress; a writer claiming it is
+ *              refused `bad-state`. */
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+
+export const ASK_STATE_MAP: Record<AskState, true> = {
+  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+};
+
+export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
+
+export function isAskState(v: unknown): v is AskState {
+  return typeof v === 'string' && (ASK_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * The principal an ask row names when THE OPERATOR answered it themselves —
+ * `server.ts`'s `POST /api/sessions/:id/ask`, the lock-screen path, which
+ * takes the held row and settles it around its own press (Task 12, D-2171).
+ * Every other value `answeredBy` can carry is a registry session id: the
+ * parent's own route settles with `fromId`, guarded to equal the row's
+ * `parentId`.
+ *
+ * L0 and spelled ONCE, because it is a value both sides act on: the server
+ * writes it, and the PWA renders a different sentence for it ("answered by
+ * you" — the operator IS the person reading the fleet card, so a role word
+ * there would be stranger than the second person). Deliberately NOT derived
+ * from `coord/rundefs.ts`'s `SYSTEM_MAIL_SENDER_MAP`, which owns the same
+ * word for the MAIL lane: that map is server-side (the PWA cannot import
+ * it) and its members answer "who sent this message", a different question
+ * from "who pressed the key".
+ */
+export const ASK_OPERATOR_PRINCIPAL = 'operator';
+
+/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+ *  ask pre-emption routes (server/src/coord) emit as their own literals —
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  Both groups are the same refusal family (reasons an ask answer was
+ *  refused), so they share this one union rather than splitting into two
+ *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
+ *  leaves `AskResult` and is not removed here is a compile error.
+ *
+ *  `child-unmeasurable` is the whole-branch review's addition (M2), and it is
+ *  a DIFFERENT CONDITION from `ask-moved`, not a nicer word for it:
+ *  `freshAskAt` answers `UNMEASURED_ASK_AT` for three reads that failed (no
+ *  session record, no measured identity, no readable hookstate), and folding
+ *  those onto "the child repainted its question" narrowed a distinction the
+ *  route had received — the highest-yield rule in this tree. It mattered
+ *  because it reached a shipped contract: `wave-lifecycle.md` tells a
+ *  coordinator that `ask-moved` means re-read the ask and answer the current
+ *  one, and a coordinator told that when the truth is "this box could not
+ *  read the child" re-reads, finds the row still `held`, and loops. */
+export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
+  'not-alive': true, 'not-waiting': true, 'stale-ask': true, 'ask-mismatch': true,
+  'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
+  'no-menu': true, 'menu-mismatch': true,
+  'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
+  'child-unmeasurable': true,
+};
+
+export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
+  Object.keys(ASK_REFUSE_CODE_MAP) as AskRefuseCode[];
+
+export type AskRefuseCode =
+  | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
+  | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
+
+export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
+  return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** The five measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;
@@ -2094,6 +2296,60 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
   return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
 };
 
+/** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
+ *  round 1 / D-2311). Absent → null: an older snapshot predates the ask
+ *  pre-emption lane entirely. Present but malformed — not an object, or
+ *  `parentId` missing/not a non-empty string — ALSO → null, and this is a
+ *  DELIBERATE departure from the `reviveSwapBlocked`/`reviveSubstrate`
+ *  stance this docstring used to (wrongly) claim it followed.
+ *
+ *  Those two fields reject the whole session on a malformed value because
+ *  each flags a FAULT an operator must not have silently laundered into
+ *  "nothing wrong" — their own docstrings' "fails open toward" language,
+ *  i.e. there is a direction (flagged vs. clean) that a wrong degrade would
+ *  get backwards. The ask chip has no such direction: it "gates no action"
+ *  (`FleetSession.ask`'s own docstring, unchanged by this fix), so a bad
+ *  chip and no chip are the SAME outcome for the operator, not two outcomes
+ *  one of which is dangerous to reach silently.
+ *
+ *  What made the old "reject the session" choice actively wrong here, not
+ *  merely a stricter option: `reviveFleetSessions` (below) returns `null`
+ *  on the FIRST unrevivable row, discarding the ENTIRE array — the whole
+ *  `state-cache.json` (`server/src/fleetstate.ts`) and the whole PWA
+ *  offline cache (`pwa/src/lib/offline.ts`), the two surfaces an operator
+ *  falls back to when things are ALREADY bad. One malformed `parentId` on
+ *  one session's chip is not worth that cost for a field with nothing to
+ *  protect.
+ *
+ *  `state` still degrades onto `AskState`'s designated-ignorance member,
+ *  `unknown` (`reviveStoppedBy`'s pattern — an out-of-vocabulary token from
+ *  a build ahead of this one, not a fault): an unreadable `state` on an
+ *  otherwise-valid `parentId` is not a reason to drop the pair. Only a
+ *  missing/malformed `parentId`, or a non-object `ask` entirely, folds the
+ *  WHOLE field to `null` — the pair only means something together, the
+ *  same rule `sessionAsk` (this file's live-frame twin, below) already
+ *  states for identical input; the two readers now agree where before they
+ *  did not (`sessionAsk({ask:{state:'held'}})` always answered `null`,
+ *  while this function used to destroy the file on the same shape). */
+const reviveAsk = (o: RawObj, k: string): { state: AskState; parentId: string; answeredBy: string | null } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) return null;
+  const s = v as RawObj;
+  const parentId = s['parentId'];
+  if (typeof parentId !== 'string' || parentId === '') return null;
+  const stateRaw = s['state'];
+  // `answeredBy` (F1) degrades exactly as `sessionAsk`'s does, and for the
+  // same two reasons: a snapshot written before that field existed omits the
+  // key, and a genuinely unattributed `answered` row is a real shape.
+  const by = s['answeredBy'];
+  return {
+    state: isAskState(stateRaw) ? stateRaw : 'unknown',
+    parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+};
+
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
 
@@ -2284,6 +2540,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       held: optStr(o, 'held'),
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
+      // Absent → null (`reviveAsk`'s own rule): an older snapshot predates
+      // the ask pre-emption lane entirely, the same degrade `held` takes
+      // for the same reason. Present-but-malformed ALSO degrades to null
+      // inside `reviveAsk` (D-2311) — deliberately NOT the `held`/`bucket`
+      // shape above, whose malformed values throw and this function's catch
+      // turns into "reject the whole session": a bad ask chip and no ask
+      // chip are the same outcome for the operator, so one bad chip must
+      // not discard the whole snapshot. See `reviveAsk`'s own docstring for
+      // the full argument.
+      ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to

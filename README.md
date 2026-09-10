@@ -533,12 +533,12 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the nineteen machine lanes the
-fleet host reaches (eighteen box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-two machine lanes the
+fleet host reaches (twenty-one box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+`/api/lifecycle`, `/api/peers`, `/api/claims`, `/api/asks`) take a live session cookie **or**
 the token, which is how a coordinator reads its own wave ledger from the fleet
 host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
@@ -1197,7 +1197,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twelve clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
 `server/test/worker-skill.test.ts`), which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
@@ -1378,10 +1378,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its ten
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eleven
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twelve clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1622,7 +1622,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
