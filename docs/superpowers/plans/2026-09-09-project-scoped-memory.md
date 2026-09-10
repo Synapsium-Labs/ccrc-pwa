@@ -1335,10 +1335,20 @@ blocks say.
   rev-parse` once and a `cd`/`pwd -P` subshell — each about a thousand times that — and the budget
   row is green 3/3 in isolation. Load, with the arithmetic to say so.
 
-  **NOT VERIFIED ON DARWIN AT THE TIME OF WRITING.** Both fix commits were unpushed when this entry
-  was written, so the branch's only `test-macos` run is the red one that found the defect. The
-  Darwin behaviour is argued from the platform's own resolution rules and pinned by source
-  equality, not observed. What settles it is the next `test-macos` run.
+  **VERIFIED ON DARWIN 2026-09-10.** The paragraph this replaces said the Darwin behaviour was argued
+  from the platform's resolution rules and pinned by source equality, not observed, because both fix
+  commits were unpushed when it was written. It is observed now: run `34476486530` at `2ff0dd80`,
+  `test-macos` **pass in 33m13s**, 286/286 test files, and `session-hook.test.ts` — the file that was
+  red at `bb23a9f1` — **156/156 in 31s**. The Linux leg of the same run: 286/286, 8002 passed, 56
+  skipped.
+
+  **AND THE COUNT IS THE INTERESTING PART.** 286, where this checkout collects 284: GitHub tests
+  `refs/pull/76/merge`, so both legs ran this branch merged with a main that had moved 6 commits on,
+  including two suites (`ask-instance-guard`, `ccd-reg-get-census`) that do not exist in the local
+  tree at all. Every "full suite" figure taken locally on this branch is therefore a figure about a
+  DIFFERENT TREE than the one CI passed — smaller by two suites, and short of six commits of main.
+  Neither number was wrong; they answer different questions, and only CI's answers the one a merge
+  turns on.
 
 ---
 
