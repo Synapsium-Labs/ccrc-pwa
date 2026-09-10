@@ -1999,3 +1999,44 @@ transcript. Offered to take it into my own ccd queue plan
 Also noted: their correction that TWO files carried non-mechanical merge content, not one. That matters
 more than they framed it — a reviewer told "one file" does not go looking at the test that pins the very
 sentence, which is precisely the reviewer I was.
+
+---
+
+## 2026-09-10 01:4x — #69 IS 5/5 GREEN AND MERGEABLE at `f27c4d50`. Gate complete (my mail 414)
+
+`test-macos` returned SUCCESS. **All five checks green, `mergeable: MERGEABLE`.** My clearance at 399
+stands: verified independently at server **280 / 7753 / 56, zero failures**, agent 18, pwa 80 + typecheck
+clean, one marker verifying, census stated 133/109 against measured 133/109, platform block `e7f0696d`
+identical to `ccd/ccrc`. **The merge is the worker's/operator's act; I gate and do not merge.**
+
+`mergeStateStatus: BLOCKED` and `reviewDecision: REVIEW_REQUIRED` are both **cosmetic on this repo** —
+measured branch protection carries `required_approving_review_count: 0`, and #70, #68 and #67 all merged
+in exactly that state with zero reviews. Five green checks plus MERGEABLE is the whole gate.
+
+**A fleet hazard worth carrying, and it hit me:** the crossrepo coordinator (`claude-ccrc-pwa`) removed
+four of my scratch worktrees at ~02:05 by running `git worktree list | grep scratchpad` in the main
+checkout and force-removing every match. **Every ccd workspace is a worktree of the SAME repository, so
+`git worktree list` is FLEET-WIDE** — a filter that looks local is not. Nothing was lost here: the
+removals included `rw-f27c`, the tree I had verified this head in, but the verification was complete and
+its results were in mail 399 and this ledger before the removal, and `ws/amber-summit` was clean and
+pushed at `17bd0ca0`. **Clean by exact path, never by filtering that list.** They have recorded it as
+`git-worktree-list-is-fleet-wide`; my own removals in this session all named exact paths under my session
+scratchpad, which is why they were safe.
+
+**What follows the merge, in order:**
+1. **Wave-4 close** — `ws/clear-meadow` must reach the merged commit before the done-fingerprint runs or
+   it reads `stale-tip`. Worker handles it at close time.
+2. **D-2347** — its own small ccd PR, agent-first, fixing `_transcript_path`'s unmeasured fallback rather
+   than only `_transcript_stalled_pair`'s `-r`. Offered to take it into my ccd queue plan
+   (`2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`) so the worker can stay on wave 4. It is
+   live on a deployed fleet and must not sit as a booked number.
+3. **D-2341** — the citation sweep, frozen tree, nothing else in the commit.
+4. Then the operator's standing ruling: **spawn the ccd workspace** against the queue plan (D-2187–D-2193,
+   D-2224, now plus D-2347), and wave 3's remaining tasks.
+
+**The pattern worth keeping from these five rounds:** every defect that mattered in the last two rounds
+was found by someone refuting their OWN work — the worker's nine lenses on the commit that closed my six,
+their three on their own merge resolution, and my two self-corrections tonight (the ugrep false zero I
+authored, and the false history clause I endorsed by comparing it to my own draft instead of to the
+history). **Adversarial review of someone else's work finds less than adversarial review of your own,
+because only the author knows which claims were never measured.**
