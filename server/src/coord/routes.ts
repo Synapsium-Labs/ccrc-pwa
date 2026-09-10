@@ -27,7 +27,8 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
@@ -300,6 +301,31 @@ export function homeProjectVerdict(input: {
   if (!input.known) return { kind: 'write' };
   if (input.stored === null) return { kind: 'backfill', home: input.body };
   return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
+}
+
+/** What `POST /api/runs` accepts as a `homeProject`, decided ONCE at the door
+ *  (PR #75 review round 1, F2 + F4). Two answers, never folded: an accepted
+ *  value is TRIMMED — the same fold `fieldMeasured` applies to a registry
+ *  field — and a refused one carries the sentence the caller is told. */
+export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
+
+/**
+ * A home is a single path segment under `projectsRoot`, and nothing else:
+ * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
+ * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
+ * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
+ * ever — every later open sending the clean spelling refused `home-mismatch`
+ * against a value that RENDERS the same — and a `..` segment would name a
+ * file outside the projects root. Pure, so `home-project.test.ts` drives
+ * every branch; the route reads `detail` onto its 400 verbatim.
+ */
+export function shapeHomeProject(raw: string): HomeProjectShape {
+  const home = raw.trim();
+  if (home === '') return { ok: false, detail: 'homeProject is empty' };
+  if (home === '.' || home === '..' || home.includes('/')) {
+    return { ok: false, detail: `homeProject must be a single path segment, not ${JSON.stringify(home)}` };
+  }
+  return { ok: true, home };
 }
 
 /**
@@ -1086,12 +1112,22 @@ export function registerCoordRoutes(
         typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
         !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
-        // Present-and-empty is a malformed body, not an absent home: absence is
-        // the legacy generation saying nothing, and `'   '` is an edit somebody
-        // did not finish. Folding them would write a whitespace home onto a
-        // programme row forever.
-        !(homeProject === undefined || (typeof homeProject === 'string' && homeProject.trim() !== ''))) {
+        // Present-and-not-a-string is a malformed body. The VALUE is shaped
+        // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
+        // is a single path segment — because the first non-NULL home a
+        // programme stores is permanent and `ledgerAbsPath` joins it under
+        // `projectsRoot` (PR #75 review round 1, F2 + F4).
+        !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // THE ONE SHAPING. Every consumer below — the verdict, `openRun`,
+    // `setProgramHome` (through the verdict's own `home`), the response —
+    // reads `home`, never the raw body field.
+    let home: string | undefined;
+    if (typeof homeProject === 'string') {
+      const shaped = shapeHomeProject(homeProject);
+      if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
+      home = shaped.home;
     }
     const waveOfVal = (waveOf ?? null) as number | null;
 
@@ -1119,7 +1155,7 @@ export function registerCoordRoutes(
     // apart. `programs()` is one read of a table with one row per programme.
     const known = coord.programs().some((p) => p.slug === program);
     const homeVerdict = homeProjectVerdict({
-      body: typeof homeProject === 'string' ? homeProject : undefined,
+      body: home,
       known, stored: known ? coord.programHome(program) : null,
       legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
     });
@@ -1127,7 +1163,13 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
     }
     if (homeVerdict.kind === 'required') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+      // Its OWN sentence, not the body-shape guard's bare `bad-request` 36
+      // lines up: two conditions whose remedies differ — "your JSON is
+      // malformed" versus "this build requires a home" — must not reach the
+      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
+      // true; the day wave 3 flips the constant, this is the one refusal the
+      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
@@ -1136,7 +1178,7 @@ export function registerCoordRoutes(
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy,
-      ...(typeof homeProject === 'string' ? { homeProject } : {}) });
+      ...(home !== undefined ? { homeProject: home } : {}) });
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
@@ -1155,12 +1197,24 @@ export function registerCoordRoutes(
     }
 
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the hold immediately, and persist the id onto the
-    // row (`CoordStore.setSession`, this task's own deviation D-45) so the
-    // dispatch route can later read `run.sessionId` back and know to `ensure`
-    // rather than `ws-add` (deviation D-1).
+    // wave 1 held): place the hold FIRST, and bind the id onto the row only
+    // once the hold stands (PR #75 review round 1, store-1). `setSession`
+    // funnels into `bindSession`, which on a RE-bind re-issues the
+    // predecessor's outstanding worker mail to the heir and parks the
+    // predecessor's rows — writes that run in autocommit, outside any `tx()`
+    // — so a refused hold (501/502) must not have moved the occupant: the
+    // coordinator is told the open FAILED, and the row, the predecessor's
+    // delivery and the heir's queue all read exactly as they did before. The
+    // dispatch route later reads `run.sessionId` back to choose `ensure`
+    // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
+    //
+    // A re-bind is RECORDED on the run's own trail, naming both occupants and
+    // how many deliveries moved (store-2): `openRun`'s dup arm keys on
+    // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
+    // a retried open naming a different session reaches this line with a
+    // predecessor — a live path, not a store-test-only one — and an occupant
+    // change must be attributable like every other run write.
     if (typeof sessionId === 'string') {
-      coord.setSession(opened.id, sessionId);
       const argv = CCD_ARGV.wsHold(sessionId,
         holdReason(program, wave, waveOfVal, opened.id),
         sweepDec(deps.fleetState, `run:${opened.id} open`));
@@ -1169,6 +1223,12 @@ export function registerCoordRoutes(
       }
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+      const predecessor = coord.resolveWorker(opened.id);
+      const bound = coord.setSession(opened.id, sessionId);
+      if (bound.rebound) {
+        coord.recordRunEvent(opened.id, 'coordinator',
+          'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+      }
     }
 
     // Re-read rather than reasoned about: `openRun`'s first insert and the
@@ -1177,15 +1237,20 @@ export function registerCoordRoutes(
     const ledgerRepo = coord.programHome(program);
     return reply.code(200).send({
       ok: true, id: opened.id, program: opened.program, state: opened.state,
-      // UNCHANGED. The coordinator keeps the relative path it has always had.
-      ledgerPath: `docs/superpowers/programs/${program}.md`,
+      // UNCHANGED for the caller, now DERIVED: `shared/api.ts`'s `ledgerPath`
+      // is the one spelling of where a programme's ledger lives — the PWA and
+      // `coord/kickoff.ts` tell the operator where to commit it from the same
+      // helper — so a change there reaches this response too (PR #75 review
+      // round 1, WIRE-3; `single-definition.test.ts`'s census could not see the
+      // segmented join this replaces).
+      ledgerPath: ledgerPath(program),
       // Both null while the stored home is null, and never derived from the
       // registry or the claimant (design §3 F2's rejected alternative): a fact
       // the programme carries forever must not depend on a live read that can
-      // degrade.
+      // degrade. `ledgerRepo` is the SHAPED home the row holds (F2/F4 above).
       ledgerRepo,
       ledgerAbsPath: ledgerRepo === null ? null
-        : path.join(deps.cfg.projectsRoot, ledgerRepo, 'docs', 'superpowers', 'programs', `${program}.md`),
+        : path.join(deps.cfg.projectsRoot, ledgerRepo, ledgerPath(program)),
     });
     });
   });

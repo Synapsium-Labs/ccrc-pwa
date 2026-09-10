@@ -4,7 +4,10 @@
 // proves the RULE, and it is the only place the legacy flip can be measured
 // before it happens.
 import { describe, it, expect } from 'vitest';
-import { HOME_PROJECT_LEGACY_ACCEPTED, homeProjectVerdict } from '../src/coord/routes.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { HOME_PROJECT_LEGACY_ACCEPTED, homeProjectVerdict, shapeHomeProject } from '../src/coord/routes.js';
 
 describe('homeProjectVerdict', () => {
   it('writes the body home on a programme this box has never seen', () => {
@@ -44,7 +47,54 @@ describe('homeProjectVerdict', () => {
       .toEqual({ kind: 'legacy' });
   });
 
+  it("the route's `required` arm answers with a detail — a bare bad-request would be the body-shape guard's own answer", () => {
+    // A scan, not a request, because the constant cannot be flipped from here
+    // (D-2056) and this branch is dormant until wave 3 flips it: the day it
+    // goes live, the one refusal the flip exists to produce must not reach the
+    // caller as the same bytes a malformed body gets (CLAUDE.md, "no overloaded
+    // null at a seam"). PR #75 review round 1, F3.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.resolve(here, '../src/coord/routes.ts'), 'utf8');
+    const arm = /homeVerdict\.kind === 'required'\) \{[\s\S]{0,700}?reply\.code\(400\)\.send\(\{[^}]*\bdetail: 'homeProject is required'/.exec(src);
+    expect(arm, "the `required` arm sends no `detail`").not.toBeNull();
+  });
+
   it('is shipped in the legacy generation — and this is the line wave 3 changes', () => {
     expect(HOME_PROJECT_LEGACY_ACCEPTED).toBe(true);
+  });
+});
+
+describe('shapeHomeProject', () => {
+  // THE ONE SHAPING of a home, at the door of POST /api/runs (PR #75 review
+  // round 1, F2 + F4). The first non-NULL home a programme stores is permanent
+  // — `setProgramHome` is `WHERE homeProject IS NULL` — and `ledgerAbsPath`
+  // joins it under `projectsRoot`, so a value that is trimmed for the check
+  // but stored raw homes the programme at `'demo\n'` forever, and a `..`
+  // segment names a file outside the projects root.
+  it('trims the value it accepts', () => {
+    expect(shapeHomeProject(' demo ')).toEqual({ ok: true, home: 'demo' });
+    expect(shapeHomeProject('demo\n')).toEqual({ ok: true, home: 'demo' });
+    expect(shapeHomeProject('demo')).toEqual({ ok: true, home: 'demo' });
+  });
+
+  it('accepts the shapes a project directory name actually takes', () => {
+    expect(shapeHomeProject('ccrc-pwa')).toEqual({ ok: true, home: 'ccrc-pwa' });
+    expect(shapeHomeProject('demo.v2_x')).toEqual({ ok: true, home: 'demo.v2_x' });
+  });
+
+  it('refuses a value that is empty after the trim, with a detail that names the field', () => {
+    for (const raw of ['', '   ', '\n']) {
+      const r = shapeHomeProject(raw);
+      expect(r.ok, JSON.stringify(raw)).toBe(false);
+      if (!r.ok) expect(r.detail).toContain('homeProject');
+    }
+  });
+
+  it('refuses anything that is not a single path segment — a separator, `.`, `..`', () => {
+    for (const raw of ['a/b', '../x', '/etc', 'demo/', '.', '..', ' ../x ']) {
+      const r = shapeHomeProject(raw);
+      expect(r.ok, JSON.stringify(raw)).toBe(false);
+      if (!r.ok) expect(r.detail).toContain('homeProject');
+    }
   });
 });

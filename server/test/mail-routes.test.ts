@@ -629,6 +629,15 @@ describe('the rejection table is total, in both directions', () => {
                                   // is the row wave 3's flip counts to zero over
                                   // seven consecutive days; same reasoning as
                                   // its sibling above, not a wire code.
+      'session-rebound',         // coord/routes.ts run_events.detail (PR #75 review
+                                  // round 1, store-2) — recorded when a second open
+                                  // of a still-`planned` wave names a DIFFERENT
+                                  // sessionId and `bindSession` re-binds the run:
+                                  // the detail names predecessor, heir and how many
+                                  // deliveries moved. Forensic history on the run,
+                                  // exactly like its two siblings above — no
+                                  // `refused`/`reject.code` ever carries it, nothing
+                                  // switches on it over the wire.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

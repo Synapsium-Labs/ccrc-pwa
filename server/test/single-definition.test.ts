@@ -983,9 +983,6 @@ describe('the program ledger is parsed by nothing', () => {
     // message; neither reads a byte off either path.
     "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
     "'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +",
-    // coord/routes.ts:692 — POST /api/runs's response names where a
-    // coordinator should commit the ledger; the route never opens it.
-    'ledgerPath: `docs/superpowers/programs/${program}.md`,',
     // shared/api.ts's `ledgerPath` — the same category as the entry above,
     // one ring down: it NAMES the path the operator is expected to have
     // committed, before `POST /api/runs` is ever composed, and never opens it.

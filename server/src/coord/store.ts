@@ -1524,13 +1524,15 @@ export class CoordStore {
    * sentence in the paragraph above is still true of what this method DOES;
    * what changed is only where the statement lives.
    */
-  setSession(runId: number, sessionId: string): void {
-    // Delegated, not re-implemented: `bindSession` above is the one writer of
-    // this column. This method keeps its name and its `void` return because its
-    // two callers act on nothing — the open route and the fresh-spawn arm both
-    // bind a run that names no session yet, where `bindSession`'s answer is
-    // always `{rebound:false, reissued:0}`.
-    this.bindSession(runId, sessionId);
+  setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+    // Delegated, not re-implemented: `bindSession` above is the writer of this
+    // column. Its answer is RETURNED, not dropped (PR #75 review round 1,
+    // store-2): the open route is a live RE-bind path — a retried open of a
+    // still-`planned` wave naming a different session reaches it with a
+    // predecessor — and records what it was told on the run's trail. The
+    // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
+    // where the answer is always `{rebound:false, reissued:0}` and is ignored.
+    return this.bindSession(runId, sessionId);
   }
 
   /**

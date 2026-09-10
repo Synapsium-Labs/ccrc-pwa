@@ -136,6 +136,17 @@ const tokenHeaders = (token: string | null): Record<string, string> =>
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
+
+/** A `to:'worker'` brief queued to `to` on `runId`, the shape a wave brief
+ *  takes in the store — the mail row keeps the ROLE, the delivery the
+ *  session, exactly as `POST /api/mail` writes them. Returns the delivery id. */
+const queueWorkerBrief = (coord: CoordStore, runId: number, to: string): number => tx(coord.db, () => {
+  const m = coord.insertMail({ fromId: CLAIMED_BY, fromUuid: 'a'.repeat(36), toId: 'worker', runId,
+    kind: 'status', subject: 'the wave brief', body: 'b', artifacts: [] });
+  const d = coord.queueDelivery(m.id, to, '');
+  coord.setDeliveryEnvelope(d.id, `to: ${to}\nack: ccrc-api mail ack ${d.id}\n`);
+  return d.id;
+});
 const postDispatch = (
   app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
 ) =>
@@ -212,6 +223,103 @@ describe('POST /api/runs', () => {
     expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
     // …and no hold was placed on a workspace this run was never going to get.
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
+    // F2. The body guard used to test `.trim()` and then store the RAW value;
+    // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was
+    // permanent and every clean re-send was refused `home-mismatch` against a
+    // value that rendered the same.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo\n' });
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(first.json()).toMatchObject({
+      ledgerRepo: 'demo', ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+  });
+
+  it('refuses a home that is not a single path segment — 400 with a detail, and nothing is opened or homed', async () => {
+    // F4. `ledgerAbsPath` is `path.join(projectsRoot, home, …)`, and a `..`
+    // segment escapes the root; the skill tells its reader that path is the
+    // file a wave in another repository READS. Refused at the door, where an
+    // empty home is already refused, so a home is a name and never a path.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    for (const bad of ['../x', 'a/b']) {
+      const res = await postOpen(app, { ...OPEN_BODY, homeProject: bad });
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringContaining('homeProject') });
+    }
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it('a second open of the same planned wave naming a DIFFERENT sessionId re-binds the run, hands the heir the brief, parks the predecessor, and records `session-rebound` naming both occupants', async () => {
+    // store-2 / MUT-3. `openRun`'s dup arm keys on (program, wave, waveOf,
+    // claimedBy, planned) and NOT on sessionId, so this retry finds the same
+    // row; `setSession` funnels into `bindSession`, whose re-bind branch is
+    // therefore a LIVE path — and an occupant change is now attributable on
+    // the run's own trail like every other run write.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(200);
+    expect((second.json() as { id: number }).id).toBe(id);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    // The heir holds a freshly rendered copy; the predecessor's row is parked.
+    const heir = w.coord.outstandingMailFor('demo-second');
+    expect(heir.map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.outstandingMailFor('demo-existing')).toHaveLength(0);
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    // RECORDED, naming predecessor and heir and what moved.
+    expect(w.coord.runEvents(id).map((e) => e.detail))
+      .toContain('session-rebound: demo-existing -> demo-second, 1 re-issued');
+  });
+
+  it('a refused ws-hold leaves the occupant unchanged — no re-bind, no re-issue, no park, no event', async () => {
+    // store-1. The bind used to run BEFORE the hold, in autocommit, so a 502
+    // told the coordinator the open FAILED while `runs.sessionId` had already
+    // moved, the predecessor's brief was parked and the heir held a queued
+    // delivery `sweepMail` would inject into a session nobody had held.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run, calls } = makeRunner(home);
+    let holds = 0;
+    // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
+    const failSecondHold: Runner = async (cmd, argv) => {
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      return run(cmd, argv);
+    };
+    const w = await openApp(home, failSecondHold); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(502);
+    expect(second.json()).toEqual({ ok: false, stderr: 'ws-hold failed' });
+    expect(holds, 'the hold was never attempted').toBe(2);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toHaveLength(0);
+    expect(w.coord.runEvents(id).map((e) => e.detail).filter((d) => d?.startsWith('session-rebound'))).toEqual([]);
+    void calls;
   });
 
   it('permits a reused sessionId that stays in the same project', async () => {
