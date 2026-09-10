@@ -45,7 +45,7 @@ the coordinator mints exactly that many, defines them in the same act, and mails
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | — | **dispatched** 2026-09-09 — run 36, worker `ccrc-pwa-bright-meadow`, 9 items; brief queued, skill present |
+| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75 | **in review** — wave-done 2026-09-10 01:10 UTC at `312cea5d` (26 commits, 39 files), advance accepted, 9/9 items settled, CI green ×5; review round 1 (5 Opus lenses in own worktrees, every finding refuted by Sonnet skeptics): 24 raised, 23 survived, 10 important — sent back to working 01:5x UTC for the fix round |
 | 2 | Skills + PWA: the coordinator skill's boundary sentences, the worker skill's foreign-plan sentence, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, the mail screen's programme grouping and chip. AGENT-FIRST. | — | not opened |
 | 3 | Docs + the legacy flip: README sections, the Aug 11 spec's status line, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | not opened |
 
@@ -86,6 +86,14 @@ acceptance list, verbatim.
 
 ## Carried constraints
 
+- **Wave 2 owns two mechanisms wave 1's review measured and did not build:** (a) a `project-mismatch` at
+  dispatch WEDGES the run — re-opening the planned wave without `sessionId` hits `openRun`'s dup arm (keyed
+  on program/wave/waveOf/claimedBy/planned, never sessionId), returns the same run still bound, and the hold
+  the open placed on the foreign workspace stands; wave 1 fixes the skill's remedy prose (abandon first) and
+  wave 2 decides whether a session-less retry clears the binding and releases the hold (a fleet act, so a
+  design, not a patch). (b) `reconstruct` rebuilds programmes with `homeProject` NULL, so a lost coord.db
+  forgets every home and the next open backfills whatever it is told — wave 1 records it in the drill's
+  UNRECOVERABLE census; carrying the home through a rebuild needs an artifact that proves it.
 - **`SessionRecord.project` is not on the measured ladder** (found by wave 1, D-2342): `registry.ts`'s
   `project ?? id` over `field()` folds absent and unreadable to one null, so every consumer that DECIDES on
   `record.project` decides on a fold. Wave 1 fixed the one decision it added (the dispatch rung reads the
