@@ -241,7 +241,6 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
         const name = path.basename(p);
         started.push(name);
         if (name === 'demo') return { ok: true, content: 'pool-a' };
-        if (name === 'acct-a-demo') throw new Error('transport failed');
         return new Promise(() => {});
       },
     };
@@ -257,6 +256,20 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'unreadable' });
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo', 'quiet-basin', 'acct-a-demo']);
   }, 3_000);
+
+  it('maps a rejected marker read to unreadable without rejecting the sweep', async () => {
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo'] : localIO.readdir(p),
+      readFileMeasured: async () => Promise.reject(new Error('transport failed')),
+    };
+
+    const read = await readProjectPools(io, cfg(), names);
+
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+  });
 });
 
 describe('L3 may not narrow — four states in, four states out', () => {
