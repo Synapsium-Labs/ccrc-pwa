@@ -18245,3 +18245,111 @@ The lesson is narrow and worth stating plainly: **when a guard is meant to fire 
 "it went red" is not the measurement — the measurement is the pair**, and a guard that aborts before
 reaching its own load-bearing assertion cannot be observed at all. Order of assertions is part of the
 mechanism, not presentation.
+
+### D-2433 — the swapped column is WIDENED, not swapped back
+
+D-2397's repair could have been a revert. It is not: the row tuple's cause slot became a list, so a row
+may pin as many slices of its own cause as it has, and the killed row in both `_acct_auth_why` tables now
+pins **both** the clause naming the kill — the one D-2220 exists for — and the arithmetic round 4 swapped
+in. **No source change was needed. The test was the defect**, which is worth saying plainly, because four
+rounds of this task have been about code and this one was about the thing measuring it.
+
+### D-2434 — the class had a fourth address, and it was round 4's own red control
+
+`_acct_no_answer`'s killed arm is the case round 4 held up as the **red control** that turned its
+siblings' greens into findings — and its own cause clause was pinned by nothing. Measured: rewriting it
+to claim the process answered badly left the file green.
+
+**The round that wrote the warning wrote it beside an arm that had the defect.** A red control proves the
+guard it is compared against can fire; it says nothing about whether the control itself is complete.
+
+### D-2435 — a fifth address, pinned three thousand lines away in a describe about something else
+
+`_acct_no_answer`'s rc=2 arm had its cause pinned only inside `ccrc account add`'s check-add case — a
+different describe, a different call site, a bare matcher with no message. Reachable, so not a hole; but
+a reader auditing this arm finds nothing, and a reader editing that far-away case has no idea what it
+holds.
+
+The implementer's note on it is the useful part: *"I nearly shipped a comment claiming that mutation was
+green — it is not, and the measurement is the only reason I know."* **A census over addresses can be
+right about the class and wrong about every instance, because coverage does not live where the code
+does.**
+
+### D-2436 — the fifth arm gets a next step, and the step is chosen by what the operator can actually do
+
+Option (a), argued in the code. The arm is reached only when the launcher **ran and printed something
+unreadable** — traced to the single `defer(null)` that routes here, for a body that is not a JSON object.
+So the operator's real next move is to look at what it printed — **and they cannot**: the call site
+captures stdout into a variable, hands it to the classifier, keeps no copy, and sends stderr to
+`/dev/null`. The sentence therefore says to put the question again by hand *and says why that is
+necessary*, rather than pointing at a file that does not exist.
+
+Two constraints shaped the wording and both are the kind that only appear when you write the sentence:
+**no argv is named**, because the helper serves two callers and naming one question would become a lie
+the day the other's gate widens — and on the probe caller "the same question" is a **billed request**, so
+the note must not read as a command to paste. **No path is interpolated**, which is the budget answer
+rather than a budget claim: a path would have put `$HOME` in front of a 233-character step and made this
+arm's remedy the first thing the cap eats. The two callers do not even share headroom — one closing
+clause is 33 characters, the other 220.
+
+### D-2437 — three banners the fifth arm falsified, found by fixing the arm
+
+Giving the arm a step made three standing sentences false at once: one saying every sentence in the
+helper is about a launcher that never ran (now four of five), one saying the branch with no interpolated
+path is *the* killed arm (now two arms), and one in the test scoping a cap table to "every branch" when
+the probe lane cannot reach the fifth. All three corrected.
+
+**A repair that makes prose false is the common case, not the exception** — this wave has now hit it in
+every round — and the only reliable way to find them is to re-read every sentence that mentions the thing
+you changed, not the ones near your diff.
+
+### D-2438 — THE EQUIVALENT MUTANT: a fourth reason a mutation stays green
+
+Replacing the signal arithmetic with the literal `9` left the file green. Not unpinned, not unreachable,
+not un-applied: **the fixture kills with signal 9 at exit 137, so both spellings render identical bytes.**
+The mutant is semantically equivalent *on the inputs the suite uses*. Subtracting a different constant
+reds twice.
+
+This is a genuine fourth answer to *the mutation stayed green*, and the only one of the four that is not a
+defect in the test. The way to tell it apart is the one used here: **mutate to something the fixture
+cannot coincide with**, and if that reds, the first mutation was equivalent rather than unmeasured.
+
+### D-2439 — the round's own lesson landed on the round that wrote it
+
+D-2402 says a guard that aborts before reaching its load-bearing assertion cannot be observed. Round 5's
+new case had a wrong control assertion that stayed invisible for a whole run **because an earlier
+assertion in the same case aborted first** — the identical failure, in the round that recorded it.
+
+Not irony worth savouring: it is evidence the lesson is about a property of the tool, not about care.
+Vitest's abort-at-first-failure means assertion order silently decides what is observable, and no amount
+of attention fixes that. **Put the load-bearing assertion first, always.**
+
+### D-2440 — a wrong figure inside the paragraph about unmeasured figures
+
+The banner said the killed arm's next step ends at character 181. Measured by running the shipped
+function — by the verifier, and again by me — it ends at **169**. Nothing pinned it.
+
+The paragraph containing that number exists to argue that **a budget nobody measures has already been
+spent**. Both of its own numbers were unmeasured.
+
+### D-2441 — and the other figure was true for exactly one account id
+
+The same sentence quoted 233 for the `else` arm's step. That arm interpolates the account id, so measured
+across ids this fleet carries the step ends anywhere from **226 to 252**. A fixed character count for a
+string containing a variable-length field is a claim about one input dressed as a property.
+
+Both figures are now gone. What replaces them is the **property** the cases actually pin — no `$HOME`
+reaches these two arms, so no depth truncates them — plus an instruction that a later author who needs a
+figure must measure it against the id they mean.
+
+### D-2442 — the census command is scoped by shape, which is the defect its own paragraph warns about
+
+The corrected banner prescribes a grep for the arms' `elif` spelling as the way to re-take the census,
+"because a count in prose goes stale". That grep finds constructs shaped like these two. **D-2396's whole
+finding was that the missed construct was missed *because it was not shaped like the others*.** So the
+remedy for a stale count is a command with the same blind spot as the reader it replaces.
+
+Recorded, not fixed. The honest options are to widen the command to every operator-note writer, or to say
+in the banner that the grep finds this shape and that a new shape is on the author. Left for the wave-2
+pass rather than opened here — the count it protects is now three sentences from the rule it serves, and
+the rule is what the tests enforce.
