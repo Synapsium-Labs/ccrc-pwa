@@ -1237,9 +1237,18 @@ and 237 distinct, zero lines lost from either parent, no conflict residue. The o
   `_redrive_after_spawn` runs from `_spawn_settle`, which `cmd_supervise` reaches BEFORE its watch loop,
   on every spawn, swap landing and restart. **INHERITED, not introduced** — byte-identical on
   `origin/main` — so it is not this resolution's defect, and it is not fixed at merge time either: the
-  remedy is one line (`[[ -f "$f" && -r "$f" ]]`, behaviour-identical for every input that answers
-  today, since absent already returns 2 and rc 2 already has the right operator sentence) plus the
-  red-first FIFO case `ccd-redrive.test.ts` has no equivalent of. A one-line behavioural change to
+  remedy is one line (`[[ -f "$f" && -r "$f" ]]`) plus the red-first FIFO case `ccd-redrive.test.ts`
+  has no equivalent of.
+  **CORRECTED — this entry claimed the one-liner was "behaviour-identical for every input that answers
+  today", and that is false.** Measured by extracting the function verbatim and driving it under
+  `timeout 5` on both spellings: a FIFO and a symlink to `/dev/zero` go HANG -> 2, a real transcript
+  stays 1, an absent path stays 2, and **a DIRECTORY moves 1 -> 2**. So it is a behavioural change, not
+  merely a hang fix. It is a CORRECTING one — `tail` on a directory emits nothing, so the loop reports
+  "measured, not a stall" about a window it never read — but a claim of identity was wrong, and the
+  clause was written from the shape of the guard rather than from running it. The coordinator's
+  independent census over `ccd/ccd` found the same row, and books it in the ccd queue plan — its
+  number is NOT named here, because a D-ref in tracked prose seeds this project's ledger floor
+  whether or not the number was issued to this plan, and `deviation-refs.test.ts` refuses it. A one-line behavioural change to
   another PR's code, made at merge time, is what "designs made at merge time ship wrong" is about.
   **A refutation is a claim, and half of this one did not survive:** the lens also reported that #69's
   comment "claims that rung as shared". It does not — it names one specific sibling lane,
