@@ -36,6 +36,17 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
       ...env,
     },
   });
+/** `run`, plus stderr: the hook's contract is silence on BOTH streams, and a
+ *  bare `find` over a directory that does not exist would break it on stderr
+ *  while stdout stays clean. */
+const runFull = (payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8',
+    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', ...env },
+  });
+  return { stdout: r.stdout, stderr: r.stderr };
+};
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
@@ -2253,5 +2264,172 @@ describe('the R7 counters', () => {
     fs.writeFileSync(stateFile(), '{nope');
     bash('ls');
     expect(readState().ccrcPeerReads).toBe(0);
+  });
+});
+
+describe('the compaction card — which context is compacting (spec §3.0)', () => {
+  it('PreCompact writes the set: scope main, the parent transcript, files null, the rule\'s inputs — no graph, no subagents/, no stderr', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);                                  // a tree with NO graph
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript, 'auto'));
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(readState().state).toBe('working');
+    const set = readSet();
+    expect(set).toMatchObject({ v: 1, scope: 'main', agent: null, transcript, parentLive: null, liveAgents: 0,
+      cwd: tree, built: null, fresh: null, steered: false, served: false, files: null, stats: null });
+    expect(Number.isInteger(set.at)).toBe(true);
+    expect(fs.existsSync(cardFile()), 'no graph, so no card').toBe(false);
+  });
+
+  it('one LIVE agent beside a quiet parent is that subagent, with its id, its path and the inputs the rule saw', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript, agents } = plantSession({ lines: workLines(tree), parentAge: DEAD,
+      subagents: [{ id: 'a43142b934b4bf501', lines: [tl.user('hi')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'a43142b934b4bf501',
+      transcript: agents['a43142b934b4bf501'], parentLive: false, liveAgents: 1 });
+  });
+
+  it('finds a Workflow agent one directory deeper — subagents/workflows/<run>/', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript, agents } = plantSession({ lines: workLines(tree),
+      subagents: [{ id: 'ad18df71e1499fc22', lines: [tl.user('hi')], age: LIVE, under: 'workflows/wf_d5df1d76-69e' }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'ad18df71e1499fc22',
+      transcript: agents['ad18df71e1499fc22'] });
+  });
+
+  it('a DEAD agent file beside a live parent is main — liveness, not existence', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: DEAD }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'main', agent: null, transcript, liveAgents: 0, parentLive: null });
+  });
+
+  it('two live contexts are AMBIGUOUS — a live parent beside a live agent, or two live agents — and the set says which', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const both = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, both.transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', agent: null, transcript: null, files: null,
+      parentLive: true, liveAgents: 1 });
+    fs.rmSync(setFile());
+    const fanout = plantSession({ sid: 'sess-2', lines: workLines(tree), parentAge: DEAD, subagents: [
+      { id: 'a1', lines: [tl.user('x')], age: LIVE },
+      { id: 'a2', lines: [tl.user('y')], age: LIVE, under: 'workflows/wf_1' },
+    ] });
+    run(preCompact(tree, fanout.transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', agent: null, transcript: null, parentLive: null, liveAgents: 2 });
+  });
+
+  it('a MANUAL trigger is main whatever is live — only the main thread takes /compact — and records no liveness', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'manual'));
+    expect(readSet()).toMatchObject({ scope: 'main', transcript, parentLive: null, liveAgents: null });
+  });
+
+  it('OVERLAP: an unconsumed set inside the in-flight window makes the next PreCompact ambiguous and removes the card', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope).toBe('main');
+    fs.writeFileSync(cardFile(), `${readSet().at}\ngraphify card — planted\n`);
+    run(preCompact(tree, transcript, 'auto'));            // a second compaction, the first unfinished
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', transcript: null });
+    expect(fs.existsSync(cardFile()), 'the card of the overlapped compaction is gone').toBe(false);
+    // …but a set OLDER than the window is a compaction that never finished, not overlap
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), old, old);
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope).toBe('main');
+  });
+
+  it('sweeps this id\'s STALE compaction temps — a helper killed by timeout leaves one, and _reg_purge never sees a dot-leading name', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const reg = path.join(home, '.cc-sessions');
+    const stale = path.join(reg, '.demo-quiet-basin.compactcard.999.tmp');
+    const young = path.join(reg, '.demo-quiet-basin.4242.compactset.tmp');
+    const other = path.join(reg, '.other-id.compactcard.999.tmp');
+    for (const f of [stale, young, other]) fs.writeFileSync(f, 'x');
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(stale, old, old); fs.utimesSync(other, old, old);
+    run(preCompact(tree, transcript, 'auto'));
+    expect(fs.existsSync(stale), 'stale temp of this id swept').toBe(false);
+    expect(fs.existsSync(young), 'a young temp may belong to a helper in flight').toBe(true);
+    expect(fs.existsSync(other), 'another id\'s temp is not ours to sweep').toBe(true);
+  });
+
+  it('a served session (empty transcript_path) and an unreadable path write no set', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    run({ ...preCompact(tree, ''), transcript_path: '' });
+    expect(fs.existsSync(setFile())).toBe(false);
+    run(preCompact(tree, path.join(home, 'nowhere', 'gone.jsonl')));
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state, 'the state write is not gated on the card').toBe('working');
+  });
+
+  it('with no `find` on PATH nothing may be said — no set, the state written, no stderr', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript, 'auto'), { PATH: minimalPath(['find']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('an agent file whose name is unspeakable is refused — nothing is written', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree),
+      subagents: [{ id: 'x y`z', lines: [tl.user('hi')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(fs.existsSync(setFile())).toBe(false);
+  });
+
+  it('the operator file ~/.ccrc/compact-card-off silences the arm', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('with a fresh graph the set carries built and fresh, still files null before the helper exists', () => {
+    const tree = cardTree();                            // no plantHelper(): Task 6 adds the card
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const set = readSet();
+    expect(set.built).toMatch(/^[0-9a-f]{40}$/);
+    expect(set.fresh).toBe('fresh');
+    expect(set.files).toBeNull();
+  });
+
+  it('the set is written whole or not at all — no temp survives, and the temp is dot-prefixed with the pid', () => {
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const names = fs.readdirSync(path.join(home, '.cc-sessions'));
+    expect(names.filter((n) => n.includes('compactset'))).toEqual(['demo-quiet-basin.compactset']);
+    // the temp's shape, pinned in the source: `.<id>.<pid>.<suffix>.tmp`, the hookstate writer's own idiom
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain('local tmp="$REG/.$id.$$.${1##*/}.tmp"');
+  });
+
+  it('the constants are the spec\'s, the total is DERIVED, and the shape predicate is spelled once', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toMatch(/^COMPACT_CARD_MAX_CHARS=4000$/m);
+    expect(src).toMatch(/^CARD_MAX_CHARS=2400$/m);
+    expect(src).toMatch(/^CARD_TOTAL_MAX_CHARS=\$\(\( CARD_MAX_CHARS \+ 1 \+ COMPACT_CARD_MAX_CHARS \)\)$/m);
+    expect(src).toMatch(/^COMPACT_CARD_MAX_AGE=1200$/m);
+    expect(src).toMatch(/^COMPACT_LIVE_S=120$/m);
+    expect(src).toMatch(/^COMPACT_HELPER_TIMEOUT=8$/m);
+    expect(src).toMatch(/^COMPACT_WORKSET_MAX=12$/m);
+    expect(2400 + 1 + 4000).toBeLessThan(10000);      // under the harness's spill (2.1.266 `Pdr=1e4`)
+    expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
   });
 });

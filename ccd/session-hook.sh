@@ -685,6 +685,131 @@ _hook_hold_card() {
   return 0
 }
 
+# ── THE COMPACTION CARD: WHICH CONTEXT IS COMPACTING (spec §3.0) ─────────
+# The three compaction payloads carry the PARENT'S session_id and
+# transcript_path and no agent field — for a subagent's compaction exactly as
+# for the main thread's (measured 2026-09-09 on 2.1.266: five headless runs,
+# byte-identical key sets; `prompt_id` is the parent's on a subagent's rows
+# too). So the hook asks the filesystem, and ONLY HERE, at PreCompact: from
+# this moment the compacting context writes nothing for ≥79 s, so any later
+# arm would see it as the quietest file, never the newest. The rule is
+# LIVENESS, not recency:
+#   manual trigger            → main   (only the main thread takes /compact)
+#   no live agent file        → main   (an auto-compaction fires right after a write)
+#   one live agent, parent quiet → that subagent
+#   anything else             → ambiguous — two contexts wrote inside the window
+#                               and nothing says which one stopped to compact
+# `ambiguous` is an ANSWER: no card (a sibling's card is wrong context, and
+# wrong context is worse than none), a measurement that says so, and a count
+# on the corpus. It is the honest answer for a Workflow fan-out — seven and
+# eight agents of one session, measured, writing every 4–6 s for 13–39 min —
+# so a subagent card is reachable only for a SOLO live subagent. The rule
+# records what it saw (CS_LIVE_N, CS_PARENT_LIVE) beside its verdict, so every
+# journal line can be audited offline against the transcripts.
+# A subagent's transcript is `<transcript minus .jsonl>/subagents/**/
+# agent-<id>.jsonl` (Agent-tool subagents directly in it, Workflow agents one
+# `workflows/<run>/` deeper); `<transcript minus .jsonl>` IS
+# `<dirname>/<session_id>`, so no second payload read is needed.
+# `find -mmin` is on GNU and BSD alike; `-printf` is not, and this file's
+# header declares two userlands. `find` itself is new to this file and guarded
+# like `jq` at the top: a box without it says NOTHING rather than a silent
+# `main` for every compaction.
+_hook_compact_scope() {   # <transcript_path> <trigger> -> CS_SCOPE CS_TRANSCRIPT CS_AGENT CS_LIVE_N CS_PARENT_LIVE ; rc 1 = nothing may be said
+  CS_SCOPE=""; CS_TRANSCRIPT=""; CS_AGENT=""; CS_LIVE_N=""; CS_PARENT_LIVE=""
+  local tp="$1" trig="$2" dir="" f="" live="" n=0 mins=$(( COMPACT_LIVE_S / 60 ))
+  [[ -n "$tp" && -f "$tp" && -r "$tp" ]] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  if [[ "$trig" == manual ]]; then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  dir="${tp%.jsonl}/subagents"
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      n=$(( n + 1 )); live="$f"
+    done < <(find "$dir" -name 'agent-*.jsonl' -mmin "-$mins" 2>/dev/null)
+  fi
+  CS_LIVE_N="$n"
+  if (( n == 0 )); then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  if (( n > 1 )); then CS_SCOPE="ambiguous"; return 0; fi
+  # The parent's own liveness decides only here, beside exactly one live
+  # agent, and is recorded only when it decided.
+  if [ -n "$(find "$tp" -mmin "-$mins" 2>/dev/null)" ]; then CS_PARENT_LIVE="true"; CS_SCOPE="ambiguous"; return 0; fi
+  CS_PARENT_LIVE="false"
+  [[ -f "$live" && -r "$live" ]] || return 1
+  f="${live##*/}"; f="${f#agent-}"; f="${f%.jsonl}"
+  # SHAPE-GATED, like every other string this file quotes: the id lands in the
+  # set, the journal and (Plan B) the wire. A name this refuses is unspeakable
+  # and the arm says nothing — `case` plus `${#x}`, the file's own idiom.
+  case "$f" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  (( ${#f} <= CCRC_ID_MAX )) || return 1
+  CS_SCOPE="subagent"; CS_TRANSCRIPT="$live"; CS_AGENT="$f"
+  return 0
+}
+
+# The hookstate writer's own tmp+mv idiom (`$REG/.$id.$$.hookstate.tmp`),
+# factored for the three compaction files. The braces put the REDIRECTION's
+# failure under the 2>/dev/null too (D-1691). The temp is a DOTFILE beside its
+# target — invisible to every suffix-shaped registry glob — and `$$` keeps two
+# hooks' temps apart.
+_hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behind
+  local tmp="$REG/.$id.$$.${1##*/}.tmp"
+  { printf '%s\n' "$2" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$1" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
+# Called from the very end of this file, AFTER the hookstate rename: the
+# `working` stamp lands first and never waits on the helper (Task 6 adds it,
+# bounded by `timeout`). Prints nothing — stage 1. Every failure is silent and
+# total for what comes after it.
+_hook_compact_pre() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" rc=0
+  local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
+  tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  _hook_compact_scope "$tp" "$trig" || return 0
+  # OVERLAP (spec §3.0). One slot per session id, and every context of the
+  # session writes it. An unconsumed set still inside the in-flight window
+  # means another compaction is in flight (or failed inside the window), and
+  # no later arm can tell which context it serves — so BOTH degrade: this one
+  # is ambiguous and the earlier one's card is removed. The helper makes the
+  # verdict durable by re-reading the slot before each of its own writes.
+  if [ -n "$(find "$set" -mmin "-$mins" 2>/dev/null)" ]; then
+    CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""
+  fi
+  [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
+  # THE SWEEP. A helper killed by `timeout` between its temp write and its
+  # rename leaves `.<id>.<name>.<pid>.tmp`, which leads with a dot and is
+  # therefore invisible to `_reg_purge`; nothing else would ever remove it.
+  # Only THIS id's compaction temps, only older than the window — a young one
+  # may belong to a helper in flight.
+  find "$REG" -maxdepth 1 -name ".$id.*compact*.tmp" -mmin "+$mins" -delete 2>/dev/null || true
+  rc=0; _hook_graph_measure || rc=$?
+  at=$(_hook_epoch_ms)
+  # THE HOOK'S OWN SET. `at` is the nonce the card will be paired on (§3.3).
+  # `files:null` is NOT MINED, which the helper's `files:[]` (mined, empty)
+  # must never be read as — two conditions, two values. Written BEFORE the
+  # graph gates, so PostCompact has the scope on a tree with no graph at all;
+  # `built`/`fresh` are measured first so the journal carries them either way;
+  # `parentLive`/`liveAgents` are what the rule saw, null where it did not look;
+  # `served` is stamped by SessionStart(compact) after a successful emit.
+  doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
+      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" \
+      --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
+      '{v:1, at:$at, scope:$scope, agent:(if $agent=="" then null else $agent end),
+        transcript:(if $t=="" then null else $t end),
+        parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
+        liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
+        cwd:(if $cwd=="" then null else $cwd end),
+        built:(if $built=="" then null else $built end),
+        fresh:(if $fresh=="" then null else $fresh end),
+        steered:false, served:false, files:null, stats:null}' 2>/dev/null) || return 0
+  _hook_write_atomic "$set" "$doc" || return 0
+  [[ "$CS_SCOPE" != ambiguous ]] || return 0
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -782,6 +907,61 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
+# Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
+# loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
+# `reaping`) unlinks them with the row: `.compactset` (PreCompact writes it,
+# PostCompact consumes it), `.compactcard` (PreCompact writes it when the tree
+# has a graph the gate would trust; SessionStart(compact) serves it ONCE and
+# deletes it), `.compactions` (the per-session journal PostCompact appends,
+# never read here). The same dot-free shape is what `_ws_slug_free` scans, so
+# every arm removes what it will not serve — an aged card, an aged set — and
+# PreCompact sweeps this id's stale `.compact*.tmp` temps, which lead with a
+# dot and are therefore invisible to `_reg_purge`.
+# The kill-switch is the same shape as GRAPH_GATE_OFF and CCRC_CARD_OFF: a file
+# the operator touches by hand, honoured by all three arms.
+COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
+COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"
+COMPACT_CARD_MAX_CHARS=4000
+# DERIVED, NEVER A THIRD BUDGET. `CARD_MAX_CHARS` above stays the FIRST clip
+# and the standing subjects' whole ceiling — it is the only defence for the
+# ungated `GM_NODES` (D-1899) and must not move. The compact subject is
+# appended AFTER that clip, under its own ceiling, and this is a pin on the SUM
+# the emitter may print: it cannot cut what the two clips admitted, and
+# `session-hook.test.ts` holds it under the harness's 10,000-char spill
+# (2.1.266 spills SessionStart context to disk above `Pdr=1e4`).
+CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))
+# THE IN-FLIGHT WINDOW. A card or a set older than this belongs to no
+# compaction that can still arrive and is removed unread; an unconsumed set
+# YOUNGER than this at PreCompact means another compaction of this session is
+# in flight (spec §3.0, overlap). Argued from the longest compaction measured
+# on this fleet — 826 s, gpt lane, 2026-09-08 — times 1.45.
+COMPACT_CARD_MAX_AGE=1200
+# LIVENESS (spec §3.0). A transcript written inside this window is a live
+# context. Measured: a working agent writes a row every 4–6 s and pauses over
+# 79 s in 1–2% of rows; a compacting context writes nothing for ≥79 s; a parent
+# waiting on a fan-out writes nothing at all; and at its own auto-compaction the
+# parent's last row is 0.8 s old at p50, 3.7 s at p95, never 120 s (n=216).
+# Used as `find -mmin` minutes.
+COMPACT_LIVE_S=120
+# THE ONE WAIT THIS FILE ALLOWS (spec §6, amendment R2 of the header's
+# contract): both helper calls run under `timeout` for at most this many
+# seconds, off the hot path — PreCompact and PostCompact bracket a compaction
+# of at least 79 s — and after the hookstate write has landed. Argued from
+# measured inputs (node startup ~0.05 s, a 70 MB graph parsed and indexed in
+# ~1.5 s, a 16 MiB window mined in well under a second through a basename
+# index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
+# before it shipped — the p95 and peak RSS are recorded here by Task 6 of
+# plans/2026-09-10-graphify-compaction-card-plan-a.md: <p95> s / <RSS> MB.
+COMPACT_HELPER_TIMEOUT=8
+COMPACT_WORKSET_MAX=12
+# ONE SPELLING of the shape a `compaction` object must have to reach
+# `--argjson` (spec §3.4, "shape gates, both directions"): the helper's stdout
+# passes it before the hook adds `n`, and the value read back from hookstate
+# passes it again before it is re-emitted. Anything else degrades to `null`
+# AND THE WRITE PROCEEDS — a hook that writes nothing is the worst shape this
+# file can fail in (header). Concatenated into two jq programs; never re-spelled.
+COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|type)=="number" and (.at|type)=="number" and (.trigger=="auto" or .trigger=="manual") and (.steered|type)=="boolean" and (.served|type)=="boolean" and ((.filesChars|type)=="number" or .filesChars==null) and ((.cited|type)=="number" or .cited==null) and ((.setSize|type)=="number" or .setSize==null) and (.scope=="main" or .scope=="subagent" or .scope=="ambiguous" or .scope==null))'
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
 # value this refuses is UNSPEAKABLE and the card says nothing, rather than
@@ -1263,4 +1443,8 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# PreCompact's card work runs LAST, after the `working` stamp is on disk: the
+# helper it will call (Task 6) is bounded by `timeout`, and the state write
+# must never wait on it. Nothing below prints.
+if [[ "$event" == PreCompact ]]; then _hook_compact_pre || true; fi
 exit 0
