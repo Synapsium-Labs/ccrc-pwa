@@ -1196,8 +1196,8 @@ export class CoordStore {
     // parked by a statement that did nothing for it. Split into its own
     // single-line-signature method (below) rather than inlined here — a
     // departure from the brief's own text, which put this `UPDATE` inline;
-    // recorded as **D-2338**, because D-1425/D-2059 (above) argue the SQL and
-    // the role-generalisation, not this method's existence: this
+    // recorded as **D-2338**, because D-1425 (above) and D-2059 (below) argue
+    // the SQL and the role-generalisation, not this method's existence: this
     // method's own signature is a DECLARED multi-line exemption on the
     // premise that it reaches delivery rows only through `queueDelivery` and
     // `setDeliveryEnvelope` — an `UPDATE mail_deliveries` inlined here would
@@ -1469,18 +1469,24 @@ export class CoordStore {
    * already addressed to the outgoing occupant would sit in a mailbox nobody
    * reads, and `sweepMail` would go on injecting it there.
    *
-   * SAID HONESTLY: NO ROUTE RE-BINDS A LIVE RUN TODAY. The fresh-spawn arm runs
-   * only when `run.sessionId` is null (`dispatch.ts`) and the resume arm reuses
-   * the id it finds, so the `rebound` branch below is reached by the store test
-   * that drives it directly and by nothing else. The funnel exists so that when
-   * such a recovery is written, the promise holds without anyone remembering to
-   * add it — which is the same reason `bindSession` returns what it did rather
-   * than `void`: a caller that cannot see a re-issue cannot report one.
+   * MEASURED, NOT ASSUMED: a route DOES re-bind a live run today. `routes.ts`
+   * (the open route, :1123) calls `setSession` unconditionally whenever the
+   * request names a `sessionId`, and `openRun`'s dup arm (store.ts:592-599)
+   * keys its reuse on `(program, wave, waveOf, claimedBy, state = 'planned')`
+   * — NOT on `sessionId`. So a second open of the same still-`planned` wave,
+   * naming a DIFFERENT sessionId than the first, finds the dup row, returns
+   * it unchanged, and the open route's unconditional `setSession` call then
+   * re-binds it — re-issuing (or parking) whatever worker mail the
+   * predecessor session was owed. The `rebound` branch below is reached by
+   * this live path, not only by the store test that drives it directly.
    *
-   * NO `tx()` OF ITS OWN. `DatabaseSync` transactions do not nest, and
-   * `markDispatched` reaches this from inside `commitDispatch`'s transaction.
-   * Every statement here is synchronous and nothing can interleave between
-   * them, the property this whole class rests on.
+   * NO `tx()` OF ITS OWN. `DatabaseSync` transactions do not nest, so whether
+   * a call here sits inside a transaction depends entirely on the caller:
+   * `markDispatched` reaches this from inside `commitDispatch`'s own `tx()`,
+   * so its re-issue is part of that transaction. The open route's
+   * `setSession` call above is NOT wrapped in any `tx()` of its own, so the
+   * re-bind and re-issue it triggers run OUTSIDE any transaction — nothing
+   * rolls them back if a later statement on that request fails.
    */
   bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
@@ -1623,7 +1629,7 @@ export class CoordStore {
    *  `RunSummary.dispatchStartedAt`, which names both conditions, and the pin
    *  in `run-routes.test.ts` that makes the scope cost a test to change.
    *
-   *  `setSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
+   *  `bindSession`/`setClearedAt`/`setHandoffCommit`'s single-column `UPDATE`,
    *  and deliberately touching NOTHING else — least of all `state`, which is a
    *  separate write with its own `run_events` attribution. Takes `at` rather
    *  than reading a clock, on `markDispatched`'s precedent: the caller owns the
@@ -1751,7 +1757,7 @@ export class CoordStore {
    * not "fix" it.
    *
    * Nothing at this layer prevents two open runs naming one session
-   * (`setSession`/`markDispatched` are bare UPDATEs with no uniqueness
+   * (`bindSession`/`markDispatched` are bare UPDATEs with no uniqueness
    * constraint) and that is CORRECT — the coordinator protocol deliberately
    * creates that state by opening wave N+1 before closing wave N.
    *
