@@ -97,6 +97,23 @@ describe('readWindow — the transcript since the last boundary (spec §3.2)', (
     expect(isBoundaryLine(JSON.stringify({ type: 'system', subtype: 'turn_duration' }))).toBe(false);
     expect(isBoundaryLine('not json')).toBe(false);
   });
+
+  it('a boundary further back than `cap` bytes from EOF is not found — the boundary path honours the byte budget too', () => {
+    // Regression for the review's Finding 2: a file smaller than one chunk
+    // but bigger than `cap`, with the boundary at its HEAD, used to be read
+    // wholesale in the first (only) chunk — the read length consulted
+    // `chunkSize` and `pos` but never `cap` — so the found-boundary return
+    // carried the whole file regardless of `cap`. The fix bounds each read to
+    // `cap - total`, so the backward search never looks past `cap` bytes from
+    // EOF; a boundary further back than that is correctly treated as absent
+    // and the result falls back to the (already-capped) tail window.
+    const text = [boundary, ...Array.from({ length: 2000 }, (_, i) => row(i))].join('\n') + '\n';
+    const p = write('t.jsonl', text);
+    const cap = 500;
+    expect(Buffer.byteLength(text)).toBeGreaterThan(cap);
+    const w = readWindow(p, cap);
+    expect(Buffer.byteLength(w.text)).toBeLessThanOrEqual(cap);
+  });
 });
 
 describe('the CLI contract', () => {
@@ -113,5 +130,20 @@ describe('the CLI contract', () => {
       expect(r.stdout).toBe('');
       expect(r.stderr).toMatch(/^compact-card: /);
     }
+  });
+
+  it('invoked through a symlink, the entry guard still fires — the same usage exit as the direct path', () => {
+    // Regression for the review's Finding 1: the entry guard compared
+    // `resolve(process.argv[1])` (path-resolved, symlinks left alone)
+    // against `import.meta.url` (which Node resolves through symlinks for
+    // the main module), so through a symlink the two never matched, `main`
+    // was never called, and the process exited 0 having done nothing —
+    // silent, because the hook discards stderr and reads only the exit code.
+    const link = path.join(dir, 'compact-card-link.mjs');
+    fs.symlinkSync(HELPER, link);
+    const r = spawnSync(process.execPath, [link], { encoding: 'utf8' });
+    expect(r.status).toBe(EXIT.USAGE);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/^compact-card: /);
   });
 });

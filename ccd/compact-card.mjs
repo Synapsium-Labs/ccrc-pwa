@@ -19,7 +19,7 @@
 // with `files: []`, no card); 2 usage; 1 any failure. `card` prints nothing on
 // stdout; `measure` prints exactly one JSON object. Every failure names itself
 // on stderr, which the hook discards — the hook's contract is silence.
-import { openSync, readSync, closeSync, fstatSync, statSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { openSync, readSync, closeSync, fstatSync, statSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -89,7 +89,7 @@ export function readWindow(path, cap = WINDOW_CAP, chunkSize = CHUNK) {
     // the chunk edge is matched in `chunk + carry`, never lost.
     let carry = Buffer.alloc(0);
     while (pos > 0 && total < cap) {
-      const len = Math.min(chunkSize, pos);
+      const len = Math.min(chunkSize, pos, cap - total);
       pos -= len;
       const chunk = Buffer.alloc(len);
       readSync(fd, chunk, 0, len, pos);
@@ -172,6 +172,6 @@ export function main(argv) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = main(process.argv.slice(2));
 }
