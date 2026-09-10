@@ -2040,3 +2040,102 @@ their three on their own merge resolution, and my two self-corrections tonight (
 authored, and the false history clause I endorsed by comparing it to my own draft instead of to the
 history). **Adversarial review of someone else's work finds less than adversarial review of your own,
 because only the author knows which claims were never measured.**
+
+---
+
+## 2026-09-10 07:22 — **PR #69 MERGED at `24f32a18`** — and the gate I cleared it against was not the gate
+
+**The merge.** Squash, hand-written body, by the worker via `--admin`. Verified on `origin/main` by
+CONTENT, not ancestry (a squash merge cannot fail `--is-ancestor`, so that test proves nothing):
+`_undecidable_cause` 7, `! _pool_untaggable` 5, `Pinned in both directions` 1; #73's
+`_pane_auto_continue_armed` still 5; one marker verifying `ccrc-unmodified`; census stated 133/109
+against measured 133/109. The worker adds `git diff f27c4d50 origin/main -- ccd/ccd` EMPTY, six test
+files and the plan at zero differing lines, and **402/402 on the #69+#74 union** — the tree neither
+PR's CI ever tested (D-2309).
+
+### My branch-protection measurement was wrong TWICE, in opposite directions
+
+The entry above this one says *"measured branch protection carries `required_approving_review_count: 0`
+… Five green checks plus MERGEABLE is the whole gate."* **Both halves are false, and the merge is what
+found it** — `gh pr merge` answered *"the base branch policy prohibits the merge."*
+
+GitHub has **two rule surfaces**, and I measured one:
+
+| surface | says |
+|---|---|
+| `branches/main/protection` (classic — what I measured) | `required_approving_review_count: 0`; contexts = **four**: `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`; `strict:false`; `enforce_admins:true`; `required_conversation_resolution:true` |
+| `rules/branches/main` (rulesets — what I never opened) | ruleset **22520257**, active, created **2026-09-08T08:11:31Z**, *"main: one approval, Admin and Maintain bypass on pull requests"*, `required_approving_review_count: **1**`, `bypass_actors` = RepositoryRole 5 (Admin) and 2 (Maintain), mode `pull_request` |
+
+Rulesets are **additive** to classic protection and the stricter value wins. The real gate is
+**checks + MERGEABLE + conversations resolved + (one approval OR a bypassing role)**. The worker merged
+through the ruleset's own named Admin bypass — the same path all seven prior merges took.
+
+**Error two, the opposite way: I said FIVE required checks. There are four.** `test-macos` is not
+required by either surface, and `.github/workflows/ci.yml:129` says so in its own comment — *"`test-macos`
+is additive and non-required — a red here blocks nothing."* I had been reading the *rollup* (what ran)
+as the *requirement* (what gates). **`required_conversation_resolution: true` is a real gate I never
+named at all**, and is the likeliest reason `mergeStateStatus` read `BLOCKED` — which I had written off
+as cosmetic.
+
+### Why my instance evidence could not have caught it — the part worth keeping
+
+I argued from instances: #70, #68 and #67 merged at zero reviews, so approvals must not be required. The
+worker widened it to all seven merges since the ruleset existed — #62, #66, #67, #68, #70, #73, #74 —
+and **every one merged with `reviews=0`.** A perfect record, and it discriminates nothing: those seven
+are equally consistent with *"no approval is required"* and with *"an approval is required and this
+actor bypasses it."* Only the rules endpoint separates the two hypotheses.
+
+`measure-the-rule-not-just-the-instance` was already a memory of mine, and I still failed it — because
+I believed I HAD measured the rule. **The upgrade: when a platform has more than one rule surface,
+measuring one surface is still measuring an instance.** A rule read is only a rule read if it enumerates
+every surface that can impose the constraint. I have widened that memory rather than adding a new one.
+
+### The claim has a blast radius outside this program — reported, not edited
+
+`required_approving_review_count` is asserted as **policy** in three docs that are not mine:
+
+- `docs/superpowers/plans/2026-08-23-stage5-flip-checklist.md:55` — *"stays 0 by explicit choice (single maintainer; revisit at the first outside contributor)"*
+- `docs/superpowers/specs/2026-08-21-stage5-oss-decision-brief.md:33` — *"is 0 today"*
+- `docs/superpowers/specs/2026-08-22-stage5-oss-polish-design.md:181` — *"stays 0 by explicit choice"*
+
+All three predate 2026-09-08T08:11Z and were **true when written**. The ruleset's creation IS the
+"revisit" those docs schedule, and it left no trace in any of them — a green-test-goes-stale-untouched
+in prose. They belong to the Stage 5 OSS programme, which is closed and has no live coordinator, so I
+am **reporting them, not editing them**: silently rewriting another programme's approved design docs is
+exactly the move this program has been refusing all week. Flagged to the operator.
+
+### D-2348 — booked, killed by its own author, deliberately NOT in the merge
+
+The worker allocated and defined D-2348 (git's `@@` hunk headers naming a function the change is not
+in), committed it locally, then pointed three opus lenses at it. All three killed something —
+**eleven corrections in a 28-line entry whose own subject is tool-generated false anchors.** Two are
+structural: the stated mechanism was self-refuting (git searches strictly ABOVE the hunk start, and the
+preimage, so a function the commit ADDS can never be named by any `xfuncname`), and *"no configuration
+reaches this class"* is simply false (`diff.<name>.command` prints the right name for both shapes) —
+the conclusion survives only on **reach**, since GitHub's PR view, the PWA's diff surface and plain
+`git show` honour none of it. Also: `* diff=bash` is not neutral on the real corpus but **worse**
+(wrong-function 4 → 5 of 12), generalised from a one-hunk fixture when the corpus was one command away;
+"6 of 12" pads; and *"a 15.8k-line file"* is a bare cardinal already false on its own commit (16,848).
+**It stays allocated and unlanded until rewritten**, and it was never going into a cleared merge at the
+last second. That is the right call and I have told them so.
+
+### Queue after the merge
+
+1. **Wave-4 close** — `ws/clear-meadow` must reach `24f32a18` before the done-fingerprint runs or it
+   reads `stale-tip`. Worker's act, at close time.
+2. **D-2347 — MINE now.** The worker accepted the ruling and asked me to take it so they can stay on
+   wave 4. My blast radius is what decided its shape: four consumers, only `_redrive_after_spawn` opens
+   the file; the other three embed the guessed path in a **manifest, an audit row and a tombstone** — so
+   fixing the reader's `-r` alone leaves three durable records naming a path the function measured is
+   not a transcript. It goes into the ccd queue plan, and it is live on a deployed fleet.
+3. **D-2341** — the citation sweep, frozen tree, worker's.
+4. **Spawn the ccd workspace** against `2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`
+   (D-2187–D-2193, D-2224, now plus D-2347). **Note for that plan's Part A:** it fixes a Darwin arm in
+   the platform block, and `test-macos` — the only job that runs on a real macOS runner — **is not a
+   required check.** The pin that does gate it is `macos-platform.test.ts`, which rides `test (server)`
+   and compares the two files' bytes; it cannot observe Darwin behaviour. Part A must ship its guard
+   with a test that reds under `test (server)`, not under `test-macos`.
+
+**Two merges, two lessons, same shape.** Round 4's ugrep false zero was a measurement whose TOOL I had
+not identified; this was a measurement whose SURFACE I had not enumerated. Neither was a wrong reading —
+both were correct readings of the wrong thing, reported as facts about the world.
