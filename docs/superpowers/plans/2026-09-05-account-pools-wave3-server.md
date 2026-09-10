@@ -3224,6 +3224,7 @@ git commit -m "feat(pools): the server refuses a crossing with a slug, and a dec
 
 ---
 
+### Task 11 — DONE 2026-09-10 (1/1 mutation red, after the pin was re-aimed — D-2383)
 ### Task 11: the remote-mode isolation pin — the server never reads its OWN box
 
 **Files:**
@@ -3548,3 +3549,28 @@ block above.
   `POOL_NAME_RE` ever admits a NUL, if the cap is ever applied to the STRIPPED value, or if this
   reader ever stops holding the whole string. Same treatment as C1's M19 — document the no-op, never
   write a case that cannot fail.
+
+- **D-2382 (2026-09-10)** (Task 11) — **the snippet's second case could not run: no roster on the
+  fixture home.** Task 11's step 1 gives the describe verbatim and its step 2 says *"Expected: PASS on
+  the first run"*. Measured, it does not: `makeFixture()` builds `.cc-sessions`, `.cc-limits`,
+  `.cc-clips` and `.claude` and no `.ccrc/accounts.json`, while `seedRoster` is called only on
+  `serverHome` — so `the FLEET box's own pools/ IS what a remote read answers` threw
+  `RosterError: no account roster at <fixture>/.ccrc/accounts.json` at `config.ts:218`. One line
+  (`seedRoster(fixture.home)`) fixes it, and it plants no `pools/`, so what the pin measures is
+  untouched. Booked rather than silently repaired because **a plan that states its own expected
+  result is making a claim, and this one was never run.**
+- **D-2383 (2026-09-10)** (Task 11) — **the pin as specified could not see the mutation it names, and
+  a live control is what proved it.** Step 3 says to plant a `localIO` shortcut in `readProjectPools`
+  and expect `a pools/ planted on the SERVER box is invisible` to go RED. Measured: with the shortcut
+  planted it **PASSED**, while three sibling cases went red — so the mutation was applied and
+  reachable, and the new case simply was not sensitive to it (a green mutation with a live control,
+  which is what makes this a finding rather than an ambiguity). The cause is upstream of the mutation:
+  the snippet passed `await io.readdir(cfg.registryDir)` as `rootNames`, the agent refuses that path
+  (it is outside its read roots), and `readProjectPools` returns `{listed:false}` at its FIRST guard —
+  never reaching either read a `localIO` shortcut corrupts. **The case asserted `{listed:false}` and
+  got it from the test's own refused listing, not from the reader crossing the agent.** Re-aimed by
+  supplying `[POOLS_DIR_NAME]`, which clears both early guards and puts the reader's own reads under
+  the assertion. Re-measured both directions: RED with the shortcut —
+  `expected { listed: true, tags: Map{ …(1) } } to deeply equal { listed: false }`, which is the exact
+  message step 3 predicted and never got — and GREEN 16/16 with it reverted. The row this pins,
+  §11 row 17 server half, is now a mechanism rather than a request.

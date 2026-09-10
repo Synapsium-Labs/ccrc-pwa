@@ -5,7 +5,7 @@
 // plays for `-disabled` markers. Getting that split wrong in the permissive
 // direction silently LIFTS every project's pool constraint, which is the whole
 // class of defect this feature exists inside.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -17,6 +17,7 @@ import {
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { bootAgent, connectToAgent, makeFixture } from './remoteHelpers.js';
 
 let home: string;
 let reg: string;
@@ -206,5 +207,84 @@ describe('poolsWire', () => {
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced',
     });
     expect(poolsWire({ listed: false }, 'unknown')).toEqual({ listed: false, enforcement: 'unknown' });
+  });
+});
+
+// §11 row 17, server half. Under `CCRC_FLEET=remote` — the live server's
+// standing config — every registry read crosses the agent to the FLEET box.
+// A `pools/` on the SERVER box is not policy; it is a directory nobody's `ccd`
+// reads, and a reader that fell back to local fs would enforce it anyway.
+describe('remote mode reads the FLEET box, never the server box', () => {
+  let agent: Awaited<ReturnType<typeof bootAgent>> | undefined;
+  let fleet: ReturnType<typeof connectToAgent> | undefined;
+  let fixture: ReturnType<typeof makeFixture> | undefined;
+  let serverHome: string;
+
+  beforeEach(async () => {
+    serverHome = mkTmp('ccrc-pools-serverbox-');
+    seedRoster(serverHome);
+    // The tag the server box must NOT see: a complete, well-formed marker on
+    // this process's own disk, at exactly the path `cfg.registryDir` names.
+    mkdirSync(path.join(serverHome, '.cc-sessions', POOLS_DIR_NAME), { recursive: true });
+    writeFileSync(path.join(serverHome, '.cc-sessions', POOLS_DIR_NAME, 'demo'), 'pool-a');
+    fixture = makeFixture();
+    // `makeFixture` builds `.cc-sessions`/`.cc-limits`/`.cc-clips`/`.claude` and
+    // no roster, so the second case's `loadConfig` over the FIXTURE home threw
+    // `RosterError` until this line existed. The plan's Task 11 snippet omitted
+    // it and asserted the describe passes on the first run; measured, it does
+    // not. Seeding a roster is config, not policy — it plants no `pools/`, so
+    // what the pin measures is untouched.
+    seedRoster(fixture.home);
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port);
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+  });
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (agent) await agent.close();
+    agent = undefined;
+    if (fixture) {
+      rmSync(fixture.home, { recursive: true, force: true });
+      rmSync(fixture.projectsRoot, { recursive: true, force: true });
+    }
+    fixture = undefined;
+    rmSync(serverHome, { recursive: true, force: true });
+  });
+
+  it('a pools/ planted on the SERVER box is invisible, and reads unreadable — never tagged, never untagged', async () => {
+    const cfg = loadConfig({ CCRC_HOME: serverHome, CCRC_FLEET: 'remote' });
+    const io = fleet!.io;
+    // THE ROOT LISTING IS SUPPLIED, NOT TAKEN THROUGH `io`, AND THAT IS THE
+    // WHOLE POINT. The plan's snippet passed `await io.readdir(cfg.registryDir)`
+    // here, which the agent refuses (this path is outside its read roots), so
+    // the reader returned `{listed:false}` at its FIRST guard and never reached
+    // the two reads a `localIO` shortcut would corrupt. Measured: with the
+    // shortcut planted, that version PASSED while three sibling cases went red —
+    // a green mutation with a live control, i.e. a pin that cannot see the
+    // defect it names. Supplying a listing that clears both early guards is what
+    // puts the reader's own reads under the assertion.
+    const read = await readProjectPools(io, cfg, [POOLS_DIR_NAME]);
+    // `io` is the REMOTE io, so this read crosses to the fleet box and is
+    // refused there -> null -> `listed:false`. UNREADABLE, not untagged: a
+    // whitelist regression must refuse to decide, not silently lift every
+    // constraint on the fleet. A reader that fell back to local fs would answer
+    // `tagged pool-a` off the marker planted on THIS box in `beforeEach`.
+    expect(read).toEqual({ listed: false });
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+    expect(poolFor(read, 'demo')).not.toEqual({ state: 'tagged', name: 'pool-a' });
+  });
+
+  it('the FLEET box\'s own pools/ IS what a remote read answers', async () => {
+    // The other direction, so the case above cannot pass by the reader being
+    // broken outright: a tag on the agent's home reads back correctly.
+    const dir = path.join(fixture!.home, '.cc-sessions', POOLS_DIR_NAME);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'quiet-basin'), 'pool-b');
+    const cfg = loadConfig({ CCRC_HOME: fixture!.home, CCRC_FLEET: 'remote' });
+    const io = fleet!.io;
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir));
+    expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
   });
 });
