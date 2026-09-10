@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f858ac005f6aac94c2c44312244fd638ba771f512057072336f1094e0c727e29
+# ccrc:generated 1 sha256=4f130ffa16cba8329e67d59c4329b3151a96d362d4675667f98d1dce7ac86f5a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13974,8 +13974,10 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
     # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
-    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryHigh=20G /
-    # MemoryMax=24G) hangs one level in, on `app-claude\x2dsession.slice`.
+    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryMax=24G;
+    # MemoryHigh deliberately `infinity` since 2026-09-09 — an aggregate
+    # MemoryHigh throttles the whole slice instead of killing one task)
+    # hangs one level in, on `app-claude\x2dsession.slice`.
     # Ubuntu's tmux is built with systemd support: it mints a transient
     # `tmux-spawn-<uuid>.scope` per pane and DERIVES that scope's slice from
     # its own, so placing the server placed all seventeen panes with it. This

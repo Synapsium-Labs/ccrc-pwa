@@ -556,3 +556,93 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(rows[0]!.state).toBe('stale');
   });
 });
+
+
+// ── The instance guard's second half: `askAt` ADVANCED under a live dialog.
+//
+// The mint stores the child's hookstate `updatedAt` as `askAt`, and
+// `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals it.
+// `session-hook.sh` stamps `updatedAt` on EVERY write, and its subagent arm
+// re-reads `.ask` straight back off the file — so a subagent event under an
+// open dialog rewrites the identical envelope under a new number and, with
+// nothing re-stamping the row, refused every parent answer for the row's
+// whole life. `server/test/ask-instance-guard.test.ts` measures that at the
+// hook and at the CAS; THIS suite measures the thing neither of those can —
+// that the watcher actually calls the re-stamp on an ordinary tick. A CAS
+// nothing invokes is decoration.
+describe('the ask instance guard advances under a live dialog', () => {
+  /** The hookstate write `session-hook.sh`'s `SubagentStart`/`SubagentStop`
+   *  arm performs: the SAME ask envelope, the same `waiting` state, a fresh
+   *  `updatedAt`. `at` is passed explicitly because two `Date.now()` calls in
+   *  one test can land in the same millisecond, which would make the
+   *  assertion vacuous rather than false. */
+  const bump = (home: string, id: string, ask: unknown, at: number): void => {
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', sessionId: `u-${id}`, pid: 1, updatedAt: at,
+      ask, subagents: [{ name: 'reviewer', startedAt: at - 1000 }],
+    }));
+  };
+
+  const heldRow = (f: ReturnType<typeof fixture>) => {
+    const rows = f.coord.asksForParent('coord-1', 'held');
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
+
+  /** Mint one held ask against a live menu, and hand back everything the
+   *  assertions below need. */
+  const minted = async (): Promise<{
+    f: ReturnType<typeof fixture>; ask: ReturnType<typeof oneQuestion>; askAt: number;
+  }> => {
+    const push = { notify: async () => { /* deferred; never called here */ } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    await f.tick();                                     // priming: no menu
+    const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
+    f.writeAsk('cc-a', ask);
+    f.showMenu('cc-a');
+    await f.tick();                                     // the mint edge
+    return { f, ask, askAt: heldRow(f).askAt };
+  };
+
+  it('a bump that leaves the menu on screen re-stamps the row', async () => {
+    const { f, ask, askAt } = await minted();
+    const later = askAt + 5_000;
+    bump(f.home, 'cc-a', ask, later);                   // the subagent event
+    await f.tick();                                     // same pane, same question
+
+    // The row now names the child's CURRENT hookstate, so the parent's next
+    // answer measures equal instead of refusing `ask-moved`.
+    expect(heldRow(f).askAt).toBe(later);
+    expect(f.coord.takeAskForAnswer(heldRow(f).id, later).ok).toBe(true);
+  });
+
+  it('a bump does NOT re-stamp when the question itself changed', async () => {
+    const { f, askAt } = await minted();
+    // Same pane (so the dialog witness still says "unchanged"), different
+    // envelope — the case the guard exists for. `askKey` is the second
+    // witness and it refuses: the row keeps the `askAt` it was minted with.
+    bump(f.home, 'cc-a', oneQuestion([{ label: 'Green' }, { label: 'Violet' }]), askAt + 5_000);
+    await f.tick();
+
+    expect(heldRow(f).askAt).toBe(askAt);
+    expect(f.coord.takeAskForAnswer(heldRow(f).id, askAt + 5_000)).toEqual(
+      expect.objectContaining({ ok: false, why: 'ask-moved' }),
+    );
+  });
+
+  it('a bump does NOT re-stamp once the dialog has left the pane', async () => {
+    const { f, ask, askAt } = await minted();
+    f.showMenu('cc-a', 'ready\n❯ \n');                  // the operator escaped it
+    bump(f.home, 'cc-a', ask, askAt + 5_000);
+    await f.tick();
+
+    // The clear branch settled the row `stale`; nothing is held, so there is
+    // nothing to advance and the CAS could not have applied anyway.
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+  });
+});

@@ -987,6 +987,19 @@ export const UNMEASURED_ASK_AT = -1;
  * actually moves between them, and `takeAskForAnswer`'s CAS refuses
  * `ask-moved` unless this still matches the row's own `askAt`.
  *
+ * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
+ * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
+ * near sufficient for one: `ccd/session-hook.sh` stamps it on EVERY write,
+ * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
+ * off the file, so a subagent event on a session blocked at a dialog rewrites
+ * the identical envelope under a fresh number. Read alone, this function
+ * therefore refused parents over bumps nobody made — permanently, because
+ * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
+ * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the
+ * SAME menu carrying the SAME `askKey`, so the equality this returns is
+ * measured against a row the watcher has been keeping current. Do not read
+ * the strictness here as the whole guard.
+ *
  * `UNMEASURED_ASK_AT` on anything unmeasurable — no session record, no
  * measured identity, no readable hookstate — because that value can never
  * equal a stored `askAt` (`insertAsk` always takes it from a REAL

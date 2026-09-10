@@ -167,8 +167,11 @@ describe('the placement must land in the fleet slice, or the ceiling stops apply
     expect(conf).toMatch(/^\[Slice\]$/m);
     expect(conf, 'a hard aggregate ceiling is the whole point of placing the server here')
       .toMatch(/^MemoryMax=\d+[GM]$/m);
-    expect(conf, 'the soft ceiling is what throttles before the hard one kills')
-      .toMatch(/^MemoryHigh=\d+[GM]$/m);
+    // 2026-09-09: an aggregate MemoryHigh throttles the WHOLE slice (99% sys,
+    // oom_kill 0 — the fleet froze). Soft ceilings live per pane scope
+    // (ccd-cap-scopes); at slice level only the hard MemoryMax may bite.
+    expect(conf, 'a finite aggregate MemoryHigh freezes every session instead of killing one task')
+      .not.toMatch(/^MemoryHigh=\d+[KMGT]?$/m);
   });
 });
 
