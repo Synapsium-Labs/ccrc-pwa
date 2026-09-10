@@ -4841,7 +4841,11 @@ const ALL = [model('gpt-5.6-luna'), model('gpt-5.6-terra'), model('gpt-5.6-sol')
  *  has to be a registry the validator would accept. */
 const registry = (
   classes: Partial<Record<'haiku' | 'sonnet' | 'opus' | 'fable', string>>,
-  subagent: 'haiku' | 'sonnet' | 'opus' | 'fable' = 'sonnet',
+  // Fix round 2A (N11): narrowed to the two classes fix round 1, v2
+  // (2026-09-09) allows `subagent` to name — `opus`/`fable` are refused, at
+  // write and at render, so a fixture typed to offer them would advertise a
+  // value the doctor check's `modelEnvBlock` call throws on.
+  subagent: 'haiku' | 'sonnet' = 'sonnet',
 ): Registry => ({
   probe: 'codex',
   classes: {
@@ -5334,7 +5338,7 @@ function seedClassedLane(home: string, over: {
         ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
         ANTHROPIC_MODEL: 'gpt-5.6-sol',
         ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
-        CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
       },
     }, null, 2));
   }
@@ -5410,7 +5414,7 @@ describe('ccrc doctor: models', () => {
       ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
       ANTHROPIC_MODEL: 'gpt-5.6-sol',
       ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
-      CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
     } });
     const out = runDoctor(home).stdout;
     expect(lineFor(out, 'models')).toMatch(/^FAIL models: .*ANTHROPIC_DEFAULT_OPUS_MODEL/);

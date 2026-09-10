@@ -73,7 +73,7 @@ const writeWeeklyOnly = (w: string, seven: number): void => {
  *  only ("A non-home-able account deliberately gets NO stub"), so a case about an
  *  INSTALLED one has to say so itself — and a case that forgets to gets a green
  *  `not.toContain` for the wrong reason, which is the defect the negative case
- *  below was relabelled for. Deliberately NOT hoisted into `beforeEach`: five
+ *  below was relabelled for. Deliberately NOT hoisted into `beforeEach`: the
  *  hard-coded strand-reason strings elsewhere in this file, and the `_strand_mark`
  *  banner assertion, all enumerate the census and would shift. */
 const install = (w: string): void => {
@@ -652,9 +652,9 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     // Before wave 2b, `_auto_swap_check`'s bare `|| return 0` after
     // `_swap_target` reached this state with every account at the ceiling and
     // returned with no marker, no line and no stamp, retrying every 5 s for
-    // ever. (Cited as `ccd:11243` until the fix round after the merge review,
-    // D-1966: that line number now lands on an unrelated comment about git's
-    // trailing newline — the grep form is what survives an edit above it.)
+    // ever. (Cited as a bare `ccd:` line number until the fix round after the
+    // merge review, D-1966; a line number here goes stale with any edit above
+    // it — the grep form is what survives.)
     seed(); plantNotify();                       // deliberately no tag at all
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
     tick(BLOCKED, 10);
@@ -700,13 +700,25 @@ describe('_reg_purge`s dot-free inventory', () => {
     // registry fields under the one-dot rule and purge with the row; that is
     // exactly why they need no lifecycle-manifest entry of their own, and this
     // is the only place that claim is written down.
+    // THE ANCHOR MOVED WITH THE CLAIM (#69 review round 3). The sentence said
+    // "measured against every registry file a session has today", and it was
+    // not: `$REG/.<id>.starts` leads with a dot, so `_reg_purge`'s
+    // `"$REG/$id".*` glob cannot match it and no explicit `rm -f` names it.
+    // The comment now scopes itself to the `$REG/<id>.<field>` SHAPE — which
+    // is what it always measured — and discloses the one file outside it, so
+    // this anchor tracks the corrected words rather than the wrong ones.
     const src = fs.readFileSync(CCD, 'utf8');
-    const from = src.indexOf('The dot-free claim, measured against every registry file');
+    const from = src.indexOf('The dot-free claim, measured against every `$REG/<id>.<field>` file');
     expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
-    const block = src.slice(from, from + 1400);
+    const block = src.slice(from, from + 2400);
     for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
       expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
     }
+    // AND THE DISCLOSURE IS PART OF THE CLAIM, not a footnote to it: a scoped
+    // sentence with no statement of what it excludes is the same defect in a
+    // narrower costume.
+    expect(block, 'the sentence scopes itself but never names the file it excludes')
+      .toContain('.starts');
   });
 });
 

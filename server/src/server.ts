@@ -32,7 +32,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
@@ -45,7 +45,7 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
-import { toRunSummary, type CoordStore } from './coord/store.js';
+import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -58,7 +58,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1018,7 +1018,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const snap = await loadSnapshot(stateCachePath);
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
-    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()) };
+    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord) };
   });
 
   // The digest of the projection THIS box's roster produces, computed once:
@@ -1219,7 +1219,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then((sessions) => {
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord).then((sessions) => {
       onFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
@@ -1308,6 +1308,44 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true };
   });
 
+  // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
+  // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
+  // routes further down this file (where they used to live) — Task 9's
+  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
+  // both routes agree on the one per-session lock. `knownId` stays where it
+  // was: nothing here depends on it.
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
+  // serialize through the ONE per-session lock, not independent ones.
+  const askDeps: AskDeps = {
+    ...sendDeps,
+    // C0.3: one session's own row, not the whole registry — see
+    // `registry.ts`'s `readSessionRecord`.
+    readAsk: async (id: string) => {
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return null;
+      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
+      // look up hookstate under a value that matches no real file, reading
+      // as "no ask" rather than "we don't know" — null here is the honest
+      // answer and this route is polled, so it heals on the next read.
+      const identity = measuredIdentity(read.record);
+      if (identity === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
+      return hs === null ? null : { ask: hs.ask, state: hs.state };
+    },
+  };
+
+  // `freshAskAt` (D-2170's fail-shut re-measurement `takeAskForAnswer`'s CAS
+  // is checked against) is `registry.ts`'s export, fix round 1 finding 2 —
+  // this route and `coord/routes.ts`'s `POST /api/asks/:id/answer` both
+  // close over the SAME `Deps` object (`registerCoordRoutes` below is
+  // handed this function's own `deps`, unmodified), so a security-relevant
+  // fail-shut guard had no business existing as two copies that could
+  // silently drift. See `registry.ts`'s own doc comment on it for the full
+  // reasoning, and this route's own comment below for why a lost CAS here
+  // never refuses the operator regardless of which unmeasurable arm fired.
+
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
   // sharing one token+attribution gate inline here would be a second copy of
@@ -1317,7 +1355,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // and authenticates for itself, because the coordinator skill reads it
   // cookieless from the fleet host with the box token. The session half of that
   // decision can only be made here, where `authStore` lives.
-  registerCoordRoutes(app, deps, bus, sessionAuth);
+  //
+  // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
+  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
+  // independent queues would let a parent's pre-emption race a child's own
+  // in-flight prompt against the identical tmux pane.
+  //
+  // The 6th argument (Task 10) is this function's own `watcher` parameter,
+  // passed straight through: `POST /api/asks/:id/release` calls
+  // `watcher?.releaseHeldAsk` to drop the in-memory hold and fire the
+  // deferred push the moment a parent declines, rather than making the
+  // operator wait out the rest of the grace window. `Deps` deliberately does
+  // not carry the watcher (this function's own third argument), so there is
+  // no second place this wiring could come from.
+  registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -1377,7 +1429,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
-  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
+  // `registerCoordRoutes` — see that call site's own comment.
+  //
   // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) and previously called
   // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
@@ -1399,26 +1453,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const knownId = async (id: string): Promise<boolean> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     return names !== null && names.includes(`${id}.uuid`);
-  };
-
-  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
-  // serialize through the ONE per-session lock, not independent ones.
-  const askDeps: AskDeps = {
-    ...sendDeps,
-    // C0.3: one session's own row, not the whole registry — see
-    // `registry.ts`'s `readSessionRecord`.
-    readAsk: async (id: string) => {
-      const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) return null;
-      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
-      // look up hookstate under a value that matches no real file, reading
-      // as "no ask" rather than "we don't know" — null here is the honest
-      // answer and this route is polled, so it heals on the next read.
-      const identity = measuredIdentity(read.record);
-      if (identity === null) return null;
-      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
-      return hs === null ? null : { ask: hs.ask, state: hs.state };
-    },
   };
 
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
@@ -1596,6 +1630,42 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
+  /**
+   * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
+   * lock-screen route every ask goes through, PWA and pre-emption lane
+   * alike. Before this task it never consulted the `asks` table at all: if
+   * the operator answered first, the row stayed `'held'`, the parent's
+   * later `POST /api/asks/:id/answer` CAS'd it to `'answering'`, got
+   * refused by `answerAsk` below (the menu was already gone), and rolled
+   * back to `'held'` via `untakeAsk` — asserting the question was STILL
+   * pre-emptible when it had in fact just been answered, and never naming
+   * who answered it. Both routes serialize through the ONE per-session
+   * `KeyedQueue` (`askDeps`, built once per server, above), so exactly one
+   * digit ever reaches the pane regardless of this route's own logic — this
+   * is a RECORD defect, not a safety one, and everything below is in
+   * service of the record alone.
+   *
+   * `heldAskFor` returning null — no row for this child, the overwhelming
+   * majority of asks — takes EXACTLY the pre-Task-12 path: one `answerAsk`
+   * call, same refusal shape, no added read once a row exists nowhere to
+   * look up (a coord-less box skips `heldAskFor` entirely). This is the
+   * single most important property of this route: it is not new behaviour
+   * layered onto the common case, it is new behaviour reached only on the
+   * lane's own minority path.
+   *
+   * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
+   * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
+   * `registry.ts`'s `freshAskAt`, imported above, shared with that route)
+   * BEFORE the keystroke: the row is the mutex, so
+   * taking it after the press would be decorative. Unlike the parent's own
+   * route, though, a LOST race here never refuses the caller — the operator
+   * is the authority this row exists to protect against being locked out
+   * of, not a third party mediated by it, so losing the CAS only means this
+   * request cannot claim the record; the press still goes through on its
+   * own merits (`answerAsk`'s own twelve pre-send guards plus its two
+   * post-send `sendKey` checks, D-2177, are the only refusal that still
+   * applies).
+   */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -1605,8 +1675,133 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         !body.optionIndexes.every((n) => typeof n === 'number')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await answerAsk(askDeps, id, body.askKey, body.optionIndexes);
-    return res.ok ? res : reply.code(409).send(res);
+    const optionIndexes = body.optionIndexes as number[];
+    // Narrowed to `string` by the guard above, but that narrowing does not
+    // cross into `pressPlain`'s own closure below — a fresh `const` of the
+    // narrowed type carries it there.
+    const key = body.askKey;
+
+    // The plain press, byte-identical to every line this route ran before
+    // Task 12 existed — reached by BOTH "no coord configured" and "coord
+    // configured, nothing held for this child" below, deliberately the same
+    // call rather than two copies that could drift apart.
+    const pressPlain = async () => {
+      const res = await answerAsk(askDeps, id, key, optionIndexes);
+      return res.ok ? res : reply.code(409).send(res);
+    };
+
+    const coord = deps.coord;
+    if (coord === undefined) return pressPlain();
+
+    // GUARDED, BOTH OF THEM (whole-branch review F3). `heldAskFor` is an
+    // ordinary read and `takeAskForAnswer` runs `tx()` -> `BEGIN IMMEDIATE`,
+    // and `node:sqlite` throws SYNCHRONOUSLY — a closed handle, a lock race,
+    // a corrupt file. Both sit BEFORE `answerAsk`, so an unguarded throw
+    // turns THE OPERATOR'S OWN LOCK-SCREEN ANSWER into a 500 with no
+    // keystroke — the one path the design doc promises is untouched (§2.7)
+    // and whose degradation is supposed to be free (D-2169: "its loss is
+    // free: every held ask degrades to an immediate push"). Every other new
+    // coord touchpoint on this branch already fails this way on purpose
+    // (`sweepAsks`, both `detectDialogs` writes, `settleAsk` on both routes,
+    // `recordFeedEvent`, `fleet.ts`'s `readCurrentAsks`); these two did not,
+    // and they are the pair carrying a shipped promise.
+    //
+    // The degrade is `pressPlain()` — the byte-identical pre-Task-12 path,
+    // the same call the "no coord configured" and "nothing held" arms take.
+    // What is lost is the RECORD (the row is not taken, not settled, and no
+    // second feed event is written); what is NOT lost is the digit. That is
+    // exactly the trade D-2169 rules on, applied to a database that is
+    // present but broken rather than absent.
+    let held: AskRow | null;
+    try {
+      held = coord.heldAskFor(id);
+    } catch (err) {
+      console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    if (held === null) return pressPlain();
+
+    let taken: AskTakeResult;
+    try {
+      // `freshAskAt` is inside the guard too: it is registry+hookstate IO,
+      // not `node:sqlite`, but a throw from it would refuse the operator for
+      // exactly the same non-reason.
+      taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
+    } catch (err) {
+      console.warn(`ccrc-server: takeAskForAnswer(${held.id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    const res = await answerAsk(askDeps, id, key, optionIndexes);
+
+    if (!taken.ok) {
+      // Lost the CAS — another principal already holds the row (mid-answer)
+      // or the instance moved since the mint. Nothing was taken, so there is
+      // nothing to roll back and nothing this request may settle. The
+      // operator is never refused for this: the press above already ran on
+      // its own merits.
+      return res.ok ? res : reply.code(409).send(res);
+    }
+
+    if (!res.ok) {
+      // No digit landed here either — not because every `answerAsk` guard
+      // returns before its send loop (since D-2177 a failed `sendKey`
+      // refuses too), but because a HELD row only ever exists for a
+      // single-select ask (`askActions` returns null on `multiSelect`, the
+      // sole eligibility gate `hold` checks before minting one — D-2173),
+      // which makes exactly one `sendKey` call and no Enter. Roll the row
+      // back to `held`, not stranded `answering`: the same rollback verb
+      // `/api/asks/:id/answer` uses on its own refused press; see
+      // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
+      if (!coord.untakeAsk(held.id)) {
+        console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
+          "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return reply.code(409).send(res);
+    }
+
+    // The digit landed. D-2172's second durable record — written BEFORE
+    // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
+    // `settleAsk` then throws, at least one durable trace of the answer
+    // survives. Independently optional, same as that route: a box with no
+    // `notifyLog` configured still answers the request.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: id,
+          title: 'question answered',
+          body: `operator answered ${id}'s question: ${held.question} → ` +
+                `${held.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    // GUARDED (Task 9's own lesson): the digit already landed above, so a
+    // failure to record it must never turn a successful press into a 500.
+    // The row is held exclusively by this request (CAS'd to `'answering'`
+    // above), so this is a genuine infra fault if it throws, not a lost
+    // race — but left unguarded it would strand the row `'answering'` and
+    // 500 a press that actually succeeded. The digit is pressed either way,
+    // so the response below is unconditional.
+    try {
+      coord.settleAsk(held.id, ASK_OPERATOR_PRINCIPAL, held.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +
+        'the feed record above (if it landed) is the surviving audit trace');
+    }
+
+    return res;
   });
 
   app.get('/api/sessions/:id/commands', async (req, reply) => {
@@ -1854,7 +2049,31 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
+    // D-2177: `cmd_swap` stops the supervisor unit and kills the tmux pane
+    // (`remote/runner.ts`'s own comment on its budget) — the one live-pane
+    // -destroying operation that was NOT routed through the per-session
+    // `KeyedQueue` every other write (`sendPrompt`, `answerDialog`,
+    // `answerAsk`) already shares via `sendDeps`/`askDeps` above. Unserialized,
+    // a swap reaching THIS route could land between `answerAsk`'s pane
+    // capture and its keystroke and tear the pane down mid-answer. Through
+    // the SAME queue key (`id`), it now cannot run until any in-flight write
+    // for this session has finished, exactly like the PR-open route below —
+    // deterministically, for a swap that arrives here.
+    //
+    // That closes only the IN-PROCESS path. `cmd_swap` also fires from
+    // `_auto_swap_check` (`ccd/ccd:12510`) on `cmd_supervise`'s 5-second
+    // tick, on the fleet box, entirely outside this server and this queue —
+    // the HTTP chokepoint this queue lives behind is a contract the PWA
+    // honours, not an OS wall around the tmux pane (CLAUDE.md's own words
+    // for the exec whitelist apply here just as much). Nothing server-side
+    // can queue a swap that never asks the server. `answerAsk`'s own
+    // `sendKey` return check (`inject/ask.ts`, same commit) is what actually
+    // covers that box-local case: it is what turns the auto-swap's keystroke
+    // loss into a refusal instead of a false ok:true, and it is the only one
+    // of the two halves that reaches it.
+    const wrapper = body.wrapper;
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(CCD_ARGV.swap(id, wrapper)));
+    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────

@@ -119,7 +119,7 @@ Copied verbatim from the spec and the skeleton. Every task's requirements implic
 - **Comment discipline.** Comments state measured facts and the WHY. A comment must not spell a helper's name before its definition where a test locates that helper by first occurrence (`deploy/deploy.sh`, `agent/test/deploy-verify.test.ts`).
 - **`shared/` is L0.** Files under `shared/` import nothing but other L0 `shared/*` files — pinned by `server/test/peers-claims-l0.test.ts:155-161`. No `node:*` anywhere in `shared/`. `shared/api.ts` keeps exactly ONE import line and it stays `import type { Hue } from './roster.js';`.
 - **The four class names.** `CLASSES = ['haiku', 'sonnet', 'opus', 'fable']` (`shared/models.ts`, Plan 1). Class order in code is always `CLASSES` order; class order in every CHOOSER is the reading order `opus, sonnet, fable, haiku`, spelled once as `CLASS_ORDER` (Task 8).
-- **`subagent` is an explicit class name**, never derived (spec §4.1, round 2 item 3): the registry names which class `CLAUDE_CODE_SUBAGENT_MODEL` resolves to, and naming a class whose slot is `null` is refused by the verb.
+- **`subagent` is an explicit class name**, never derived (spec §4.1, round 2 item 3): the registry names which class `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as, and naming a class whose slot is `null` is refused by the verb.
 - **`discovery`, never `shortlist`** (round 2 item 4). The word is `discovery` in every type, verb, wire field and piece of UI copy. It is NOT the account-connections `selectable`, which is a picker permission (spec §2).
 - **The sentinel.** `UNAVAILABLE_PREFIX = 'ccrc-unavailable-'` (`shared/models.ts`, Plan 1) lives in the settings `env` block and nowhere else. Every branching reader takes availability from `available` (spec §4.3) or from the third column of `<id>.classes.tsv` — never from an env value, and no surface ever shows a sentinel to a human as a model name.
 - **Spec §15.2:** auto-swap for a session whose class is unavailable on a lane **skips the lane** — never a silent downgrade. A downgrade is only ever an explicit `--as-class` (Plan 2 + Plan 3b).
@@ -320,7 +320,7 @@ export interface AccountModels {
    *  (spec §5). It names the DISCOVERY mechanism, not an auth provider. */
   probe: string;
   classes: { haiku: string | null; sonnet: string | null; opus: string | null; fable: string | null };
-  /** The class `CLAUDE_CODE_SUBAGENT_MODEL` resolves to on this lane — an
+  /** The class `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as on this lane — an
    *  explicit choice the operator set, never derived (spec §4.1). */
   subagent: string;
   /** `'catalogue'` (the whole advertised set) or the explicit id list discovery
@@ -1355,9 +1355,13 @@ export const CCRC_ARGV = {
     argv(['models', id, 'set-class', cls, modelId ?? 'none']),
   /** A CLASS NAME, never a model id (spec §4.1): `subagent` is the operator's
    *  explicit class-to-slot choice, and the verb refuses a class whose slot is
-   *  null. There is no "clear" form — a lane always resolves
-   *  `CLAUDE_CODE_SUBAGENT_MODEL` to some class. */
-  modelsSetSubagent: (id: string, cls: ModelClass) =>
+   *  null. There is no "clear" form — `CLAUDE_CODE_SUBAGENT_MODEL` always
+   *  carries some class. Typed to the two `SUBAGENT_CLASSES` members, not all
+   *  four `ModelClass` values: fix round 1, v2 (2026-09-09) measured that a
+   *  subagent set to opus or fable runs on the sonnet slot's model regardless,
+   *  so the verb refuses them and this type keeps the server from building an
+   *  argv the box always refuses. */
+  modelsSetSubagent: (id: string, cls: 'haiku' | 'sonnet') =>
     argv(['models', id, 'set-subagent', cls]),
   /** `level === null` returns the class to the provider's own default for that
    *  model (spec §4.1) — `default`, and not the empty string, for
@@ -1802,20 +1806,24 @@ describe('PATCH /api/accounts/:id/models', () => {
 
   it('sends set-subagent AFTER the class sets, and set-effort last', async () => {
     // Spec §4.1: naming a class whose slot is null is refused. A body that
-    // fills fable and points subagent at it only survives in that order — and
+    // fills haiku and points subagent at it only survives in that order — and
     // an effort level is validated against the classed model's own `efforts`,
-    // so the class must already be what the body says it is.
+    // so the class must already be what the body says it is. `haiku`, not
+    // `fable`: fix round 1, v2 (2026-09-09) restricts `subagent` to
+    // `SUBAGENT_CLASSES` (haiku, sonnet) — opus and fable are refused by the
+    // verb (`subagent-class-unsupported`), so a body naming either there could
+    // never reach set-subagent at all.
     const b = box();
     const app = await buildServer(b.deps);
     try {
       const res = await app.inject({
         method: 'PATCH', url: '/api/accounts/gpt/models',
-        payload: { classes: { fable: 'gpt-6-astra' }, subagent: 'fable', effort: { opus: 'xhigh', haiku: null } },
+        payload: { classes: { haiku: 'gpt-6-astra' }, subagent: 'haiku', effort: { opus: 'xhigh', haiku: null } },
       });
       expect(res.statusCode).toBe(200);
       expect(ccrcCalls(b.calls)).toEqual([
-        ['models', 'gpt', 'set-class', 'fable', 'gpt-6-astra'],
-        ['models', 'gpt', 'set-subagent', 'fable'],
+        ['models', 'gpt', 'set-class', 'haiku', 'gpt-6-astra'],
+        ['models', 'gpt', 'set-subagent', 'haiku'],
         ['models', 'gpt', 'set-effort', 'haiku', 'default'],
         ['models', 'gpt', 'set-effort', 'opus', 'xhigh'],
       ]);
@@ -1976,8 +1984,8 @@ export function modelsPatchPlan(
     }
   }
 
-  // A CLASS NAME, and there is no "clear" form: a lane always resolves
-  // `CLAUDE_CODE_SUBAGENT_MODEL` to some class (spec §6.1), so `null` here is a
+  // A CLASS NAME, and there is no "clear" form — `CLAUDE_CODE_SUBAGENT_MODEL`
+  // always carries some class (spec §6.1), so `null` here is a
   // client bug rather than an instruction.
   if (subagent !== undefined && !isModelClass(subagent)) {
     return { ok: false, detail: `subagent: not one of ${CLASSES.join(', ')}` };
@@ -2034,7 +2042,18 @@ export function modelsPatchPlan(
   for (const [c, v] of byClassOrder(setClasses)) if (v === null) argv.push(CCRC_ARGV.modelsSetClass(id, c, null));
   for (const [c, v] of byClassOrder(setClasses)) if (v !== null) argv.push(CCRC_ARGV.modelsSetClass(id, c, v));
   for (const m of removes) argv.push(CCRC_ARGV.modelsDiscoveryRm(id, m));
-  if (isModelClass(subagent)) argv.push(CCRC_ARGV.modelsSetSubagent(id, subagent));
+  // `subagent` is validated above against the full vocabulary (`isModelClass`,
+  // all four), not narrowed to `SUBAGENT_CLASSES` here: an opus/fable body
+  // still reaches the verb, which is where it is refused
+  // (`subagent-class-unsupported`) — the route hands back the verb's own
+  // sentence rather than pre-empting it (this describe's own "stops at the
+  // first refusal" case). `CCRC_ARGV.modelsSetSubagent`'s param type is
+  // narrower than `ModelClass` only to stop OTHER callers — the PWA chooser
+  // among them — from building an argv the box always refuses; this one call
+  // site widens back deliberately.
+  if (isModelClass(subagent)) {
+    argv.push(CCRC_ARGV.modelsSetSubagent(id, subagent as 'haiku' | 'sonnet'));
+  }
   for (const [c, v] of byClassOrder(setEfforts)) argv.push(CCRC_ARGV.modelsSetEffort(id, c, v));
   return { ok: true, argv };
 }
@@ -2137,7 +2156,7 @@ Expected: PASS, 8 tests.
 
 Edit `server/src/models.ts` and move the `set-subagent` push ABOVE the class-sets loop.
 Run from `server/`: `npx vitest run test/models-routes.test.ts -t "set-subagent AFTER"`
-Expected: FAIL — the received array has `set-subagent fable` before `set-class fable gpt-6-astra`, which on the box is the refusal "subagent names a class whose slot is null".
+Expected: FAIL — the received array has `set-subagent haiku` before `set-class haiku gpt-6-astra`. Two different box refusals are at stake here, not one: naming opus or fable in `subagent` is refused outright, `subagent-class-unsupported`, independent of ordering (fix round 1, v2, 2026-09-09 restricts `subagent` to `SUBAGENT_CLASSES`) — the case this mutation itself exercises names `haiku`, a class the verb still accepts, and the box refusal it protects against is the pre-existing one, "subagent names a class whose slot is null", which fires whenever a class fill and the subagent assignment pointing at it arrive out of order in the same request.
 Restore. Re-run: PASS.
 
 - [ ] **Step 7: Measured mutation #2 — discovery removals go after the class clears**
@@ -3551,16 +3570,22 @@ describe('ModelsSection — the subagent chooser (spec §4.1, §6.1)', () => {
     mount(MODELS());
     const sel = screen.getByRole('combobox', { name: /subagent class/i }) as HTMLSelectElement;
     expect(sel.value).toBe('sonnet');
+    // Two options, not four: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to `SUBAGENT_CLASSES` (haiku, sonnet) — opus and fable are measured to
+    // run the subagent on the sonnet slot's model regardless, so the verb
+    // refuses them and this chooser no longer offers them at all. `Sonnet`
+    // before `Haiku`: CLASS_ORDER's reading order (opus, sonnet, fable,
+    // haiku) filtered down to the two SUBAGENT_CLASSES members.
     expect([...sel.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
-      'Opus · GPT-5.6 Sol', 'Sonnet · GPT-5.6 Terra', 'Fable · unassigned', 'Haiku · GPT-5.6 Luna',
+      'Sonnet · GPT-5.6 Terra', 'Haiku · GPT-5.6 Luna',
     ]);
   });
 
   it('offers an unavailable class as a DISABLED option — the verb refuses a null slot', () => {
-    mount(MODELS());
+    mount(MODELS({ classes: { haiku: null, sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: null } }));
     const sel = screen.getByRole('combobox', { name: /subagent class/i });
-    const fable = [...sel.querySelectorAll('option')].find((o) => o.value === 'fable')!;
-    expect(fable.hasAttribute('disabled')).toBe(true);
+    const haiku = [...sel.querySelectorAll('option')].find((o) => o.value === 'haiku')!;
+    expect(haiku.hasAttribute('disabled')).toBe(true);
   });
 
   it('writes the class name and announces the model it resolves to', async () => {
@@ -3631,7 +3656,7 @@ Expected: FAIL — `Failed to resolve import "../src/fleet/ModelsSection"`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountModels } from '../../../shared/api';
-import { CLASSES, isModelClass, type ModelClass } from '../../../shared/models';
+import { CLASSES, SUBAGENT_CLASSES, isModelClass, type ModelClass } from '../../../shared/models';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { api, modelsErrorText } from '../lib/api';
 // `CLASS_ORDER`/`CLASS_TITLE` are IMPORTED, not respelled: one reading order in
@@ -3875,13 +3900,23 @@ export function ModelsSection({
       </ul>
 
       {/* The lane's subagent class (spec §4.1). A LANE control, not a row one:
-          it names a CLASS, and `CLAUDE_CODE_SUBAGENT_MODEL` resolves through
-          `classes[subagent]` (spec §6.1). Each option shows the model the class
-          currently resolves to, because "subagents run Sonnet-class" is a
-          promise about a concrete model and the operator is entitled to see
-          which. A class whose slot is null is DISABLED rather than hidden: the
-          verb refuses it (spec §4.1), and a chooser that silently omitted a
-          class would look like the class does not exist. */}
+          it names a CLASS, and `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as
+          that class alias itself, which Claude Code resolves to that class's
+          own slot on a materialised lane — `haiku` follows the haiku slot only
+          while that model is also `ANTHROPIC_SMALL_FAST_MODEL`, which the
+          materialiser guarantees (§6.1 amendment) — landing on
+          `classes[subagent]` (spec §6.1, amended 2026-09-09). Each option
+          shows the model the class currently resolves to, because "subagents
+          run Sonnet-class" is a promise about a concrete model and the
+          operator is entitled to see which. Only `SUBAGENT_CLASSES` — haiku,
+          sonnet — are offered at all, not the four: fix round 1, v2
+          (2026-09-09) measured that opus and fable both run the subagent on
+          the sonnet slot's model regardless of their own slot, so the verb
+          refuses them, and a chooser that still offered them as if they
+          worked would mislead the operator. A class whose slot is null is
+          DISABLED rather than hidden: the verb refuses it (spec §4.1), and a
+          chooser that silently omitted a class would look like the class
+          does not exist. */}
       <div className="models-subagent">
         <label className="models-subagent-label" htmlFor={`subagent-${wrapper}`}>Subagent class</label>
         <select
@@ -3895,7 +3930,7 @@ export function ModelsSection({
               `Subagents run ${CLASS_TITLE[cls]}-class (${id === null ? 'unassigned' : labelOf(shown, id)}).`);
           }}
         >
-          {CLASS_ORDER.map((c) => {
+          {CLASS_ORDER.filter((c) => (SUBAGENT_CLASSES as readonly string[]).includes(c)).map((c) => {
             const id = shown.classes[c];
             return (
               <option key={c} value={c} disabled={id === null}>

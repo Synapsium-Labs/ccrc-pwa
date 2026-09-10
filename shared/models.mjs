@@ -39,6 +39,36 @@
  *  agree element-for-element, so a change to one alone reds. */
 export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
 
+/** Fix round 1, v2 (2026-09-09 measurement): the subset of `CLASSES` a lane's
+ *  `subagent` field, and so `CLAUDE_CODE_SUBAGENT_MODEL`, may name. Measured
+ *  on a fleet host running Claude Code 2.1.267, on the gpt lane, in headless
+ *  `-p` turns that call the Agent tool, with the env overridden per run:
+ *   - `sonnet` runs the subagent on the sonnet slot's model, following that
+ *     slot when it moves.
+ *   - `haiku` runs the subagent on the haiku slot's model when that model is
+ *     also `ANTHROPIC_SMALL_FAST_MODEL` — which the materialiser guarantees,
+ *     since it writes `ANTHROPIC_SMALL_FAST_MODEL` as the haiku slot whenever
+ *     that slot is non-null — and on the sonnet slot's model when the haiku
+ *     default is pointed elsewhere.
+ *   - `opus` and `fable` run the subagent on the sonnet slot's model
+ *     regardless of their own slot's value.
+ *   - Mechanism, from the client's own strings only (not measured further):
+ *     an `availableModels` allowlist with a family step-down.
+ *  Writing `opus` or `fable` would be a choice Claude Code silently overrides
+ *  — the same shape as the null-slot refusal below — so this list carries
+ *  only the two classes that are honoured. Fix round 2A (N1): `parseRegistry`
+ *  does NOT gate on this list — a registry already on disk with `subagent`
+ *  set to `opus`/`fable` (legal before this ruling) must stay READABLE, or
+ *  every verb on that lane bricks the moment this ships. The refusal lives
+ *  where a value is about to be ACTED on instead: `shared/modelenv.mjs`'s
+ *  `modelEnvBlock` (the renderer) and `deploy/models-op.mjs`'s
+ *  `set-subagent` (the verb) both gate on `SUBAGENT_CLASSES` and both name
+ *  `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy — a command
+ *  the parse gate above lets run, since it only ever writes `haiku` or
+ *  `sonnet`. This ruling is tied to Claude Code 2.1.267; lifting it needs a
+ *  re-measurement of the opus/fable rows. */
+export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);
+
 /** Same arrangement as `CLASSES` above, for `shared/models.ts`'s own
  *  `PROBE_KINDS`. */
 export const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
@@ -146,6 +176,20 @@ export function parseCatalogue(json) {
  * there is nothing yet to point at. Both apply in full the moment any slot is
  * filled, and the materialiser refuses to write an env block for such a lane
  * anyway ("a lane needs at least one class"), so nothing routes to it meanwhile.
+ *
+ * READING IS NOT WRITING (fix round 2A, N1): `subagent` here is gated on
+ * `CLASSES` alone, exactly as before the 2026-09-09 `SUBAGENT_CLASSES`
+ * narrowing — a registry written under the earlier contract, with `subagent`
+ * set to `opus` or `fable`, parses today exactly as it did then. Refusing it
+ * HERE would brick every verb on that lane, including the one that repairs
+ * it, the moment this file ships: `readRegistry` runs before any op dispatch
+ * (`deploy/models-op.mjs`), so a parse-time refusal leaves no path forward but
+ * a destructive `rm` or a hand edit. The narrowing is enforced only where a
+ * value is about to be ACTED on: `shared/modelenv.mjs`'s `modelEnvBlock`
+ * refuses to materialise an env block for `opus`/`fable`, and
+ * `deploy/models-op.mjs`'s `set-subagent` refuses to WRITE one — both naming
+ * `ccrc models <id> set-subagent <haiku|sonnet>` as the remedy, a command the
+ * gate below lets run because it only ever writes `haiku` or `sonnet`.
  */
 export function parseRegistry(json, catalogue) {
   if (!isObj(json)) throw new RegistryInvalid('', 'a class registry must be a JSON object');
@@ -172,7 +216,8 @@ export function parseRegistry(json, catalogue) {
     if (!CLASSES.includes(key)) {
       throw new RegistryInvalid(`classes.${key}`,
         `classes has an unknown key "${key}" — the four are ${CLASSES.join(', ')}. "subagent" is not `
-        + 'one of them: it is a sibling field naming which of those four the subagents run as.');
+        + "one of them: it is a FIELD naming which class subagents run as — haiku or sonnet; run "
+        + "'ccrc models <id> set-subagent <haiku|sonnet>' to change it.");
     }
   }
   const classes = {};

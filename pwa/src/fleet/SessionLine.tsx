@@ -20,7 +20,9 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  ctxPressure, graphGateCount, graphReadCount, substrateFault, turnStall, unmeasuredFields,
+  ASK_OPERATOR_PRINCIPAL,
+  ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
+  unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -83,6 +85,58 @@ function subagentElapsed(startedAt: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
+/**
+ * The ask chip's two lines of text — the cell and its `title` — for one
+ * folded ask.
+ *
+ * WHO RULED IS `answeredBy`, NEVER `parentId` (whole-branch review F1). The
+ * chip was built from `parentId` alone for one wave, on a premise
+ * `shared/api.ts` asserted and Task 12 had already falsified: the operator's
+ * own lock-screen answer settles the same row with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered themselves, from
+ * their own phone, inside the grace window, said "ruled by <parent-session-id>"
+ * — a false attribution on the one surface this lane exists to make honest.
+ *
+ * THREE `answered` sentences, because there are three different facts:
+ *   - the operator's own answer -> "answered by you". The person reading this
+ *     card IS that principal, so the second person is truer here than the
+ *     role word the row stores; and the chip's whole job — "why were you not
+ *     buzzed about this?" — is answered by "because you had already answered
+ *     it", which no third-person spelling says as plainly.
+ *   - a parent's answer -> "ruled by <id>", the design doc's own words (§2.8),
+ *     naming `answeredBy` (which the route guarantees equals `parentId` on
+ *     that path — but it is read from the field that MEANS it).
+ *   - a row that names nobody -> "answered", flat. Reachable: `settleAsk` is
+ *     guarded on both routes precisely because it can throw after the digit
+ *     has landed. Saying less is the honest move; substituting `parentId` is
+ *     the defect above, reintroduced.
+ */
+function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
+  { label: string; title: string } {
+  if (ask.state === 'held') {
+    return {
+      label: `held — ${ask.parentId} may answer`,
+      title: `${ask.parentId} may answer this question before the operator is notified`,
+    };
+  }
+  if (ask.answeredBy === ASK_OPERATOR_PRINCIPAL) {
+    return {
+      label: 'answered by you',
+      title: 'you answered this question yourself, before its parent pre-empted it',
+    };
+  }
+  if (ask.answeredBy === null) {
+    return {
+      label: 'answered',
+      title: 'this question was answered before the operator was notified; the row names no principal',
+    };
+  }
+  return {
+    label: `ruled by ${ask.answeredBy}`,
+    title: `${ask.answeredBy} answered this question before the operator was notified`,
+  };
+}
+
 export function SessionLine({
   session,
   onOpen,
@@ -137,6 +191,26 @@ export function SessionLine({
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
+
+  // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
+  // `session.ask` directly — the live `fleet` frame is cast, not revived
+  // (see `sessionAsk`'s own docstring), so a server predating this field
+  // can omit the key at runtime despite the type calling it required.
+  //
+  // Fix round 1 (coordinator review, item 2's own finding): `sessionAsk`
+  // reads the wire HONESTLY — it passes `released`/`stale`/`unknown`
+  // through unchanged, same as `held`/`answered`, because deciding which
+  // states the design doc has words for is not that function's job (its own
+  // docstring, `shared/api.ts`). A THIS-BUILD server never sends those four
+  // (`fleet.ts`'s `fleetAsk` folds them server-side before they ever reach
+  // the wire), but `sessionAsk` exists precisely for a server that is NOT
+  // this build — so trusting "only held/answered ever come back" here would
+  // reintroduce, client-side, exactly the gap `sessionAsk` was written to
+  // close. The fold happens here instead: only `held`/`answered` become a
+  // chip; anything else reads as no ask, the same "no chip" a genuinely
+  // absent `ask` gets.
+  const askRaw = sessionAsk(session);
+  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
 
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
@@ -449,6 +523,25 @@ export function SessionLine({
                 {session.held}
               </button>
             )
+          )}
+
+          {/* Task 19: the ask pre-emption lane's chip (design doc §2.8).
+              Informational only — no action, no navigation, the operator's
+              existing answer path is untouched. Same quiet register as
+              .sess-held next door (mono, truncating, ink-tertiary — joins
+              its shared rule in fleet.css rather than minting a new pair),
+              because it is the same KIND of cell: a short, verbatim fact
+              about who else is involved with this session right now. The
+              full sentence lives in `title`, past the cell's own ellipsis,
+              same contract as .sess-held. */}
+          {ask !== null && (
+            <span
+              className="sess-ask-state"
+              data-ask-state={ask.state}
+              title={askWords(ask).title}
+            >
+              {askWords(ask).label}
+            </span>
           )}
 
           {/* WHICH KIND of dead, as a cell rather than a bucket (spec §4.4,
