@@ -39,7 +39,8 @@ band, one tick of permission trouble. A five-second tick lives in the transient.
 **Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
 2), D-2194–D-2207 (round 3), D-2212–D-2219 (round 3's #70 merge pass) and
 D-2254–D-2261 (round 4), D-2283–D-2309 (round 5, the coordinator's round-4 gate) and
-D-2312–D-2326 (round 5's own refute pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
+D-2312–D-2326 (round 5's own refute pass), D-2339–D-2341 (round 5's merge gate) and D-2343–D-2347
+(the #73 merge's refute pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
 sentence claimed only the first band for two rounds while the file went on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
@@ -1155,3 +1156,68 @@ Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six 
   two sites; the M13/M4/M5 rows falsified by this commit's own changes; `cmd_start`'s "the paragraph
   below calls it" where that paragraph was corrected in the SAME commit to say the opposite; "ONE of its
   five sentences" now six; and "creation-only" left standing at one site after D-2317 retracts it.
+
+---
+
+## Deviations found — the #73 merge, and the refute pass on its resolution
+
+`main` moved under the PR: `e227329e` (#73) landed and touched `ccd/ccd`, so #69 went CONFLICTING. The
+conflict was **exactly one line** — the provenance marker — which is the recurrence D-2294 was written
+for, arriving one commit after the pin that catches it. Resolved by dropping BOTH markers with the
+conflict block and re-running `markGenerated`; D-2216 is what the other resolution looks like.
+
+**The `_reg_get` census pin fired on the raw merge, by itself, on a change from outside this PR.** #73
+adds one `_reg_get "` call, and the suite failed with "ccd/ccd now makes 133 calls, but the census still
+claims 132. Re-measure the sentence, do not re-measure this test." A citation on this branch went false
+in the seconds it took an unrelated PR to land, and the only reason anyone knows is that one number had
+a mechanism. That is the case for a pin over a sweep, and it is now written into the block itself.
+
+Three lenses were then pointed at the resolution. The first could not kill it — measured by rebuilding
+the mechanical three-way merge of all 23 touched files and diffing against the commit: 21 byte-identical
+to the union, `ccd/ccd`'s only non-mechanical hunk the disclosed census prose, 237 function definitions
+and 237 distinct, zero lines lost from either parent, no conflict residue. The other two found this.
+
+- **D-2343 (2026-09-10)** — **the history clause was rewritten false, in the paragraph celebrating the
+  pin.** Three claims, all measured wrong. "It has moved five times" — it has moved **six**. The
+  enumeration was mis-ORDERED: round 3 (`391b3e1f`) is an ancestor of the #70 merge (`1714038a`), so the
+  drop to 133 came FIRST and the merge pushed it back to 135, not the reverse. And "#73 … THE FIRST MOVE
+  NOBODY HERE MADE" is false — the #70 merge already moved it 133 → 135 from `main`'s compactor sites,
+  which this same block names twenty lines up. The half the commit actually earned is narrower and is
+  what it says now: **#73 is the first move the PIN CAUGHT**, because it is the first that happened
+  after the pin existed. Two of six moves came from outside, which makes the argument stronger, not
+  weaker.
+- **D-2344 (2026-09-10)** — **a correction with the polarity backwards, inherited from round 5's own
+  refute pass.** That pass corrected "133 at C1" to 134 and added a cause: "133 is what C1's own
+  sentence claimed, so the figure was inherited rather than measured". Measured: `db580771:1611` says
+  **134**, and 134 is the true count at that ref. C1 measured correctly; what inherited a wrong 133 was
+  this branch's own prose. A parenthetical written to close a misattribution, misattributing.
+- **D-2345 (2026-09-10)** — **the excluded span is the one unread place in the block, and every false
+  claim landed there.** The pin's cardinal scan reads up to the dated list and stops; the merge commit
+  moved the end anchor forward by 128 characters and those characters are exactly the new false
+  sentence. Structural fix rather than another correction: the causal sentences now live ABOVE the
+  anchor, where the scan reaches them, and what is allowed inside the list is a bare measured figure
+  with the ref it was measured at — one command per entry, and nothing that argues.
+- **D-2346 (2026-09-10)** — **an ordinal is a restated census wearing a suffix.** The scan matched
+  `\d{2,4}\b` and so could not see `the 132nd call site`; the refute pass planted one and it passed.
+  Widened to `\d{2,4}(?:st|nd|rd|th)?` — and it immediately found a live one this branch had carried
+  since round 3, `"the 135th is the one C1's own _tick_strand_undecidable added"`, now gone by the
+  block's own delete-or-point rule. Word-spelled figures remain a hole and are DISCLOSED rather than
+  papered over: the other census in this file spells its numbers as words, which is exactly why nothing
+  ever caught THAT one going stale, and a word-matcher here would be a second vocabulary to keep in
+  step. The third case pins that census by its words instead.
+- **D-2347 (2026-09-10)** — **an unguarded read-by-name arrives from #73, one function from the rung
+  #69 exists to establish. Its own PR.** `_transcript_stalled_pair` tests `[[ -r "$f" ]]` and then reads
+  `$f` by name; `-r` is true for a FIFO and for an unbounded character device, so that read blocks in
+  `open(2)`/`read(2)` for ever. It is the identical class this PR's round 3 closed for `_reg_get`,
+  `_auto_swap_check`'s `$sf` and `_auto_compact_check`'s `$sf`, and its caller sits on a worse path:
+  `_redrive_after_spawn` runs from `_spawn_settle`, which `cmd_supervise` reaches BEFORE its watch loop,
+  on every spawn, swap landing and restart. **INHERITED, not introduced** — byte-identical on
+  `origin/main` — so it is not this resolution's defect, and it is not fixed at merge time either: the
+  remedy is one line (`[[ -f "$f" && -r "$f" ]]`, behaviour-identical for every input that answers
+  today, since absent already returns 2 and rc 2 already has the right operator sentence) plus the
+  red-first FIFO case `ccd-redrive.test.ts` has no equivalent of. A one-line behavioural change to
+  another PR's code, made at merge time, is what "designs made at merge time ship wrong" is about.
+  **A refutation is a claim, and half of this one did not survive:** the lens also reported that #69's
+  comment "claims that rung as shared". It does not — it names one specific sibling lane,
+  "`_auto_compact_check` carries the same rung over the same path and a DIFFERENT arm", and that
+  sentence is still true. No edit there.

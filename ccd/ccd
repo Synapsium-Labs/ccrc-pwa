@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cd7cba01d600f5ac58e3f2fa246332c7808be3b834af0e68ab87c2c746a5f97b
+# ccrc:generated 1 sha256=b3d80cb908ba3a72d02b1194b60dd27b430e5f569fe2a68abd368b42036084dd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1810,14 +1810,30 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # invocations across 109 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
-# review round 4 gate). It has moved five times now — **134** at C1
-# (`db580771`; this said 133, and 133 is what C1's own sentence claimed, so the
-# figure was inherited rather than measured — corrected at round 5's refute
-# pass), 135 once this branch and then the #70 merge had added sites, 133 when
-# round 3 converted the two tick `.project` reads to `_reg_read`, 132 when
-# rounds 4 and 5 converted the three verb readers, and 133 again when #73 landed
-# on `main` and added one — THE FIRST MOVE NOBODY HERE MADE, and the first one
-# something SAID. Every earlier move left a stale cardinal
+# review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
+# merge and the #73 merge each landed `_reg_get` sites from `main` — and only
+# the second was CAUGHT, because only the second happened after this pin
+# existed. That is the whole argument for spending a test on a number, and it is
+# a narrower claim than the one that stood here, which called #73 "the first
+# move nobody here made" while the #70 merge is named as having done exactly
+# that twenty lines up in this same block (#69 review round 5, the #73 merge's
+# refute pass).
+#
+# THE CAUSAL SENTENCES LIVE ON THIS SIDE OF THE ANCHOR ON PURPOSE. The pin's
+# cardinal scan reads everything up to the dated list and nothing inside it, so
+# the list is the one unread place in this block — and every false claim that
+# refute pass found had landed there, in the paragraph celebrating the pin. What
+# is allowed inside it is therefore a bare measured figure with the ref it was
+# measured at, one command per entry, and nothing that argues.
+# It has moved six times, measured at each ref rather than remembered:
+# **134** at C1 (`db580771` — and C1's own sentence said 134 too, at its
+# ccd:1611: it MEASURED correctly, and the round-5 clause claiming C1 "inherited
+# rather than measured" had the polarity backwards; what inherited a wrong 133
+# was this branch's own prose), 133 at round 3 (`391b3e1f`, the two tick
+# `.project` reads), 135 at the #70 merge (`1714038a`, main's compactor sites —
+# round 3 came FIRST and the merge pushed it back up, which the round-5 ordering
+# reversed), 133 at round 4 (`c3e69b41`), 132 at round 5 (`47824849`), 133 at
+# the #73 merge (`f065c8bb`). Every earlier move left a stale cardinal
 # somewhere in this block. Four of them stood in the paragraphs directly above,
 # where a reader hits them first, and they read as the live figure. "Re-measure
 # it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
@@ -1834,10 +1850,13 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # spending a test on a number, and it is why the answer to a census going stale
 # is another pin rather than another sweep: a sweep is a snapshot of a tree the
 # next commit moves. CORRECTED (#69 review round 3): the
-# round-2 sentence said "the 135th is the one C1's own
-# `_tick_strand_undecidable` added". That function does not exist in C1's commit
-# at all — it was added by this PR's own pre-review commit — so the site was
-# this branch's, not C1's. Two spellings that do NOT answer this question, both tried
+# round-2 sentence attributed the NEWEST call site to "C1's own
+# `_tick_strand_undecidable`". That function does not exist in C1's commit at
+# all — it was added by this PR's own pre-review commit — so the site was this
+# branch's, not C1's. (The ordinal that stood here is gone by this block's own
+# rule: it was a restated census wearing a suffix, and the round-5 scan could
+# not see it until the refute pass added `st|nd|rd|th` — which then found this
+# one immediately, which is the mechanism working on the commit that widened it.) Two spellings that do NOT answer this question, both tried
 # while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
 # prose too, including this line's own quoting of it, and `grep -c` counts
 # LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`

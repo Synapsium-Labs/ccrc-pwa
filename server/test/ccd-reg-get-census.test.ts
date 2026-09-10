@@ -85,7 +85,7 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     expect(from, 'the hang-surface header could not be found').toBeGreaterThan(-1);
     expect(to, 'the end of the census block could not be found').toBeGreaterThan(from);
     const block = src.slice(from, to);
-    const history = block.indexOf('It has moved five times now');
+    const history = block.indexOf('It has moved six times');
     expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1);
     const outsideHistory = block.slice(0, history)
       + block.slice(block.indexOf('\n', block.indexOf('Every earlier move left a stale cardinal')));
@@ -104,9 +104,17 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     const { calls, lines } = statedCensus(src);
     const near = (n: number): boolean =>
       Math.abs(n - calls) <= 25 || Math.abs(n - lines) <= 25;
-    const cardinals = (outsideHistory.match(/(?:D-|#|ccd:)?\d{2,4}\b/g) ?? [])
+    // ORDINALS COUNT TOO. `the 132nd call site` restates the census as surely as
+    // `132` does and slipped past the bare `\b` form — a hole the refute pass
+    // planted and measured. Word-spelled figures ("one hundred and thirty-two")
+    // are still a hole, and are DISCLOSED rather than papered over: the other
+    // census in this file spells its numbers as words, which is exactly why no
+    // scanner ever caught that one going stale, and a word-matcher here would
+    // be a second vocabulary to keep in step. `ccd-reg-get-census`'s third case
+    // pins that census by its words instead.
+    const cardinals = (outsideHistory.match(/(?:D-|#|ccd:)?\d{2,4}(?:st|nd|rd|th)?\b/g) ?? [])
       .filter((t) => !/^(?:D-|#|ccd:)/.test(t))
-      .filter((t) => near(Number(t)));
+      .filter((t) => near(Number(t.replace(/(?:st|nd|rd|th)$/, ''))));
     expect(cardinals,
       `the census block restates a figure within 25 of the one sentence that owns it `
       + `(${cardinals.join(', ')}) — say "every call site" and let the pin above hold the number`)
