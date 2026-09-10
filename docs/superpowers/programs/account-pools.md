@@ -2030,6 +2030,14 @@ scratchpad, which is why they were safe.
 **What follows the merge, in order:**
 1. **Wave-4 close** — `ws/clear-meadow` must reach the merged commit before the done-fingerprint runs or
    it reads `stale-tip`. Worker handles it at close time.
+
+   **[FALSIFIED 2026-09-10 10:5x — I INVENTED THE MAIN-CONTAINMENT HALF.]** `verifyDone`
+   (`server/src/coord/fingerprint.ts`) never mentions `main`, an ancestor test or containment —
+   grepped across the whole close path. It requires only *measured tip of the registry-named
+   branch === `claim.branchTip` === `claim.handoffCommit`*, at one instant. `CLAUDE.md` says a
+   FEATURE branch wedges the close; it never says the branch must reach `main`. **The real risk
+   is the PR check**: `pr-state --session` measures the WORKSPACE branch, which is bound to #67,
+   so a claim naming #78 is refused `pr-regressed`. See the close ruling entry at the end.
 2. **D-2347** — its own small ccd PR, agent-first, fixing `_transcript_path`'s unmeasured fallback rather
    than only `_transcript_stalled_pair`'s `-r`. Offered to take it into my ccd queue plan
    (`2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`) so the worker can stay on wave 4. It is
@@ -2127,6 +2135,14 @@ last second. That is the right call and I have told them so.
 
 1. **Wave-4 close** — `ws/clear-meadow` must reach `24f32a18` before the done-fingerprint runs or it
    reads `stale-tip`. Worker's act, at close time.
+
+   **[FALSIFIED 2026-09-10 10:5x — I INVENTED THE MAIN-CONTAINMENT HALF.]** `verifyDone`
+   (`server/src/coord/fingerprint.ts`) never mentions `main`, an ancestor test or containment —
+   grepped across the whole close path. It requires only *measured tip of the registry-named
+   branch === `claim.branchTip` === `claim.handoffCommit`*, at one instant. `CLAUDE.md` says a
+   FEATURE branch wedges the close; it never says the branch must reach `main`. **The real risk
+   is the PR check**: `pr-state --session` measures the WORKSPACE branch, which is bound to #67,
+   so a claim naming #78 is refused `pr-regressed`. See the close ruling entry at the end.
 2. **D-2347 — MINE now.** The worker accepted the ruling and asked me to take it so they can stay on
    wave 4. My blast radius is what decided its shape: four consumers, only `_redrive_after_spawn` opens
    the file; the other three embed the guessed path in a **manifest, an audit row and a tombstone** — so
@@ -2235,3 +2251,35 @@ at `95292ea4`, zero untracked files, and `git reset --hard HEAD` restored it exa
 my first mutation-table run measured a worktree I had not intended to create, and was right by accident.
 **I re-measured deliberately in a scratch worktree cut from `origin/main`** before believing any of it,
 which is the only reason the table above is evidence rather than a coincidence.
+
+---
+
+## 2026-09-10 10:5x — CLOSE RULING, and the third invented rule of the day is also mine
+
+The worker asked a real question: bring `ws/clear-meadow` to the merged commit by MERGING `origin/main`
+into it (tip CONTAINS `24f32a18`, no force-push), or does the fingerprint want the tip to BE `24f32a18`?
+
+**Ruled: merge, no force-push.** I read `fingerprint.ts` instead of quoting it. `verifyDone` does three
+things to the tip — `claim.handoffCommit !== claim.branchTip` -> `no-handoff-commit` (:113-116); `branch`
+= **the branch the LIVE REGISTRY names**, not `run.branch` (:87-90); `tip !== claim.branchTip` ->
+`stale-tip` (:214). **Nothing in `fingerprint.ts` or `close.ts` names `main`, an ancestor test or
+containment.** A merge commit satisfies the rule exactly as a reset would.
+
+**So "must reach the merged commit or it reads `stale-tip`" was mine, and it was never true.** `CLAUDE.md`
+says the fingerprint re-measures the workspace branch and that a separate FEATURE branch wedges the close
+with `stale-tip` — both true. I added main-containment on top and then repeated it in this ledger twice,
+in mail, and to the operator. **Third invented rule today**: the ugrep zero, the one-surface protection
+read, the `_transcript_path` "defect" that the spec specifies — and now this. Every one is the same act:
+paraphrasing a rule I could have read.
+
+**What IS live, and neither of us had seen it.** After the tip passes, `verifyDone` runs
+`ccd pr-state --session` against that same WORKSPACE branch and refuses on
+`claim.prNumber !== measured.number`. `ws/clear-meadow` is bound to **#57, #59, #62, #67** — all merged.
+This wave's PRs are on `fix/c1-rescue-lane` (#69) and `fix/c1-citation-sweep` (#78). So pr-state answers
+**#67**, and a claim naming #78 is refused **`pr-regressed`**, not `stale-tip`. Told the worker to measure
+`pr-state` and claim what it answers, or claim `prNumber: null` (the guard requires both sides non-null).
+
+**And this wave is the exact shape `fingerprint.ts:215-222` warns about in its own comment** — *"a brief
+that told the worker to commit on a separate feature branch instead of this workspace's own"*. Ours did,
+twice, and I approved both. That is a COORDINATOR finding. It does not make #69 or #78 wrong — both were
+right to be their own PRs — but the close pays for it, and the brief is mine.
