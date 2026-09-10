@@ -2283,3 +2283,74 @@ This wave's PRs are on `fix/c1-rescue-lane` (#69) and `fix/c1-citation-sweep` (#
 that told the worker to commit on a separate feature branch instead of this workspace's own"*. Ours did,
 twice, and I approved both. That is a COORDINATOR finding. It does not make #69 or #78 wrong — both were
 right to be their own PRs — but the close pays for it, and the brief is mine.
+
+---
+
+## 2026-09-10 11:0x — #78 MERGED `29e634b3`. **Wave-done REFUSED on a measurement.** And the worker overruled me, correctly, twice
+
+### #78 — verified on `main`, not on the branch
+
+`29e634b3`. 7 files, **204 changed lines across `ccd/ccd` and `server/test`, ZERO of them non-comment**,
+one marker. My classifier and the worker's agree. Before the merge I had verified 61/61 comment lines in
+`ccd/ccd`, three sampled citations (`stranded` 0/0/12; `_auto_swap_check` does test `-eq 2`;
+`_swap_target` has four non-zero returns), and the nine comment-scanning + touched suites at 402/402 —
+those being the ONLY suites a comment-only diff can break.
+
+### The wave-done is refused, and the run stays open
+
+Run 35's fourteen items are Tasks 0, 0b and 1–12 of the wave-3 server plan. **Task 11 names exactly one
+artifact** — one `describe` appended to `server/test/project-pools-read.test.ts`, importing `bootAgent`
+and `connectToAgent` from `remoteHelpers.ts`. Measured on `ws/clear-meadow` at `d01e8f1e`, file-scoped:
+
+    210 lines, 4 describes — 'never the server box' 0, 'bootAgent' 0, 'remoteHelpers' 0
+
+The pin is unwritten, and `project-pools-read.test.ts` is not on `origin/main` either, so it did not ship
+elsewhere. **The worker's own mail says the same twice** (*"Tasks 11 and 12 and D-2000 are still open"*);
+the only sentence disagreeing is "Wave 4 is complete". Taking their measurement over their summary.
+
+**Refusing costs nothing here, and that is why this is the right shape.** I simply do not call
+`runs advance`: run 35 stays `dispatched`, items stay `pending`, the branch is untouched, and the same
+fingerprint will verify later against a new tip. **Re-scoping the run ROW is what would be destructive** —
+no update route, so it means abandon-and-reopen, and with run 34 `done` that retires the program.
+
+**A methodological near-miss inside this call, worth more than the call.** My first check was
+`git grep -F "never the server box"` across every ref — it "found" the string on ~70 refs and told me
+nothing, because it was matching the PLAN, which quotes the test verbatim. **A search for a test's text
+will always match the document that specifies it.** Only the file-scoped read is evidence.
+
+### The worker overruled me twice today, and was right both times
+
+1. **The catch-up merge.** I ruled "merge `origin/main` into `ws/clear-meadow` — do it", in the same mail
+   in which I had just proved the fingerprint never looks at `main`. They measured what I had not: a
+   trial merge gives **35 conflicted files**, none of them this wave's — `auth/gate.ts`, `server.ts`,
+   `watch.ts`, `shared/api.ts`, `ccd/ccd` and 25 PWA test files. **Their refusal stands.** I issued a
+   directive whose cost I had not measured, one sentence after proving it unnecessary.
+2. **The ruleset**, this morning. Same shape: I asserted, they measured.
+
+**The standing instruction I am giving them is to keep doing it**, and the reason belongs in this ledger:
+a coordinator who is wrong three times in a day is only safe if the worker treats a ruling as a claim.
+
+### Their finding, and it is the best operational one of the day
+
+**A D-number is quotable only from the tree that defines it.** Citing my issued-but-unmerged `D-2381`
+from their plan turned `deviation-refs.test.ts` RED — *"a tracked file names a global D-ref above the
+ledger high-water D-2348 … expected 2398 to be 2431"*. The floor seed is the highest `D-` TOKEN anywhere
+in this project's plans and specs and **a mere mention counts**, so quoting another branch's allocation
+raises the floor off YOUR tree and burns the band between — however properly it was allocated. What
+matters is which tree the token lands in first. They described the row without the number; I would have
+cited it.
+
+### The rule from my own near-miss, paired
+
+Their mutation table said two suites were "120 at the head"; my `grep -cE '^\s*it\('` answered 108 and I
+was one keystroke from filing it. I ran vitest instead: **120**, exact. `it.each` expands at runtime, so
+a grep and a vitest count are not comparable instruments. **One count discrepancy with an unknown method
+is a guess, not a finding — measure their method before doubting their number.** Third time between us
+(the "65 files", the "68 / 1954"), three for three in their favour. It is the mirror of D-2340, *a
+measurement quoted from a review is a claim*, and the pair belongs together.
+
+### What is open
+
+Tasks 11 and 12 of the wave-3 server plan, and D-2000 which may be why they stalled — the worker's call
+whether they finish them or hand them on with a written reason. The ccd queue plan's Part D
+(D-2347 + D-2376–D-2381) is written and waiting on the workspace spawn.
