@@ -51,14 +51,38 @@ const tag = (project: string, bytes: string): void => {
   writeFileSync(path.join(dir, project), bytes);
 };
 
+/**
+ * A `KeyedQueue` that records the keys it was asked to run under. The swap
+ * route's serialization is then observable WITHOUT a timeout: a test can wait
+ * until the route has enqueued rather than sleeping long enough that it
+ * probably has. That distinction is the point — see the both-arms case at the
+ * bottom of this file.
+ */
+class RecordingQueue extends KeyedQueue {
+  readonly keys: string[] = [];
+  override run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    this.keys.push(key);
+    return super.run(key, fn);
+  }
+}
+
+/** Poll until `pred` holds. Fails the test on the cap rather than hanging. */
+const waitFor = async (pred: () => boolean, what: string, capMs = 2_000): Promise<void> => {
+  const started = Date.now();
+  while (!pred()) {
+    if (Date.now() - started > capMs) throw new Error(`waitFor timed out: ${what}`);
+    await new Promise((r) => setTimeout(r, 1));
+  }
+};
+
 const open = async (
-  opts: { ccdVerbs?: string[] | null; io?: FleetIO } = {},
+  opts: { ccdVerbs?: string[] | null; io?: FleetIO; queue?: KeyedQueue } = {},
 ): Promise<FastifyInstance> => {
   calls = [];
   const run: Runner = async (_cmd, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
   const cfg = loadConfig({ CCRC_HOME: home });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(),
+    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: opts.queue ?? new KeyedQueue(),
     ...(opts.ccdVerbs !== undefined
       ? { fleetState: { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs, rosterFp: null, build: null } }
       : {}),
@@ -141,8 +165,11 @@ describe('POST /api/sessions/:id/swap — the deliberate crossing', () => {
   it('501s crossPool when the box has not advertised pools-v1 — REFUSE on no evidence', async () => {
     // `capSupported`, not `verbSupported`: for a FLAG a wrong guess is a silent
     // success (an old ccd binds `--cross-pool` somewhere harmless and exits 0,
-    // which `runCcdOr502` renders as `200 {ok:true}`), so the no-evidence
-    // default is refuse.
+    // which this route's own `res.ok ? { ok: true }` mapping renders as
+    // `200 {ok:true}`), so the no-evidence default is refuse. That mapping is
+    // named rather than `runCcdOr502` because the wave-3/D-2177 composition
+    // hoisted BOTH arms into one queued call, and neither arm reaches the
+    // helper any more — the `/stop` and `/archive` routes still do.
     tag('demo', 'pool-a');
     for (const verbs of [null, ['swap']] as const) {
       app = await open({ ccdVerbs: verbs === null ? null : [...verbs] });
@@ -234,5 +261,55 @@ describe('POST /api/sessions — creation-only, revival passes through', () => {
     });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'malformed' });
+  });
+});
+
+// THE MERGE'S OWN INVARIANT, and it belongs to neither parent. On
+// `ws/clear-meadow` the crossPool arm returned `runCcdOr502(reply,
+// CCD_ARGV.swapCross(...))` outside any queue; on `origin/main` there was no
+// crossPool arm at all and the ordinary swap went straight into
+// `sendDeps.queue.run` (D-2177). Composing them hoisted BOTH arms behind ONE
+// queued call — a decision this merge made, which until this case was asserted
+// only in a comment. A comment is a request; a red suite is a mechanism.
+//
+// MEASURED RED, and the message is the one the mutation actually produced,
+// not the one predicted for it: with the crossPool arm reverted to a direct
+// `return runCcdOr502(reply, CCD_ARGV.swapCross(id, body.wrapper))` this case
+// fails `Error: waitFor timed out: the swap route to enqueue` — the route
+// answers 200 from outside the queue and `queue.keys` never reaches two, so
+// the wait is what fires first. GREEN 14/14 with the arm restored.
+describe('POST /api/sessions/:id/swap — both arms ride the per-session queue (D-2177)', () => {
+  it('a declared crossing is serialized exactly like an ordinary swap', async () => {
+    tag('demo', 'pool-a');
+    const queue = new RecordingQueue();
+    app = await open({ ccdVerbs: ['swap', POOLS_CAP], queue });
+
+    // Stand in for an `answerAsk` between its pane capture and its keystroke.
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const order: string[] = [];
+    const heldRun = queue.run(ID, async () => { order.push('held-start'); await held; order.push('held-end'); });
+    await waitFor(() => order.length === 1, 'the held slot to start');
+
+    const post = app.inject({
+      method: 'POST', url: `/api/sessions/${ID}/swap`, payload: { wrapper: 'claude-b', crossPool: true },
+    });
+
+    // NOT a timeout. `origin/main`'s own D-2177 case sleeps 20 ms and argues
+    // that an unserialized swap "has nothing async blocking it before its ccd
+    // call" — true there, FALSE after this merge, whose ordinary arm awaits
+    // `readSessionRecord`, a registry `readdir` and `readProjectPools` first.
+    // Waiting for the ENQUEUE itself is the observation that survives both
+    // shapes and a loaded box.
+    await waitFor(() => queue.keys.length === 2, 'the swap route to enqueue');
+    expect(queue.keys).toEqual([ID, ID]);
+    expect(calls, 'ccd ran while another write for this session held the slot').toEqual([]);
+
+    release();
+    await heldRun;
+    const res = await post;
+    expect(res.statusCode).toBe(200);
+    expect(order).toEqual(['held-start', 'held-end']);
+    expect(calls).toEqual([CCD_ARGV.swapCross(ID, 'claude-b') as unknown as string[]]);
   });
 });

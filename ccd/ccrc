@@ -822,6 +822,47 @@ _svc_run_detached() {   # <cmd> [args...]
 # sits inside the sentinels, so an appended-below helper is a red suite, not
 # a quiet gap.
 
+# `deploy/models-op.mjs` is this design's node half — a NEW file, because
+# `main` has no node helper for account state to add ops to (`deploy/
+# account-op.mjs` is the account-connections branch's and is not here).
+# `$CCRC_HERE/..` is `cmd_wrappers`' own idiom (its `local gen=`): true in a
+# checkout and at ~/ccrc on a deployed box, because both deploy lanes land
+# `deploy/` there.
+#
+# NOTHING IS RE-WORDED HERE: stdout is the caller's answer and stderr is the
+# caller's remedy.
+_models_node() { node "$CCRC_HERE/../deploy/models-op.mjs" "$@"; }
+
+# The empty-body seam: a half-updated box can carry a ccrc that knows `models`
+# beside a `deploy/models-op.mjs` that does not, and that condition must not
+# reach the caller as a bare exit code.
+_models_answer() {
+  local body rc
+  body="$(_models_node "$@")"; rc=$?
+  [ -n "$body" ] \
+    || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE SHAPE, not just the emptiness — round 1 review, Important 1. A
+  # half-updated box's node half can print something NON-EMPTY and still not
+  # be "the answer": measured with a stub that writes a two-line stack to
+  # stdout and exits 7, the emptiness check alone let both lines through as
+  # if they were the JSON object this verb promises, on exactly the
+  # half-updated-box path this seam's own comment invokes. jq is already
+  # proven present by `_models_deps`, so this costs nothing new.
+  printf '%s' "$body" | jq -e 'type=="object"' >/dev/null 2>&1 \
+    || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc and printed something that is not one JSON object, so this run has nothing reliable to tell you — its first line was: $(printf '%s\n' "$body" | head -n1). ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE EXIT CODE, clamped to this file's own 0/1/2 contract (the header's
+  # EXIT CODES table) — round 1 review, Important 1. A node half that prints a
+  # VALID object but exits some fourth code (a crash right after answering,
+  # say) must not leak that code past ccrc's own promise to whatever scripted
+  # on `ccrc models …; case $? in 0|1|2)`.
+  case "$rc" in
+    0|1|2) : ;;
+    *) _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc, outside this build's 0/1/2 contract, after printing a JSON object — its own exit code broke, not yours. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written." ;;
+  esac
+  printf '%s\n' "$body"
+  return "$rc"
+}
+
 PROG=ccrc
 
 # Where the rest of the shipped tree is, relative to THIS FILE rather than to
@@ -1068,9 +1109,40 @@ GRAPHIFY_PIN=0.9.9  # installed as graphifyy==$GRAPHIFY_PIN — the pip spec's o
 # into the next.
 INST_DEGRADED=()
 
+# ── the model-class registry (spec §10) ───────────────────────────────────
+# The per-lane subcommands this build implements, spelled ONCE at file scope:
+# the dispatcher and the refusal that lists what exists must read one string,
+# or a subcommand can dispatch while the refusal claims it does not exist.
+MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
+
+# The BOX-WIDE subcommands this build implements — a different question from a
+# lane's own classes, on a different cadence (§5).
+MODELS_BOX_SUBS="refresh litellm"
+
+# The words that are never read as an account id in `ccrc models <here>`.
+# It is the GRAMMAR and not the implementation, so it lists both box-wide
+# subcommands from the start: `ID_RE` allows an account literally named
+# `refresh`, and one reading has to win. An account with such an id is refused
+# by name (deviation B-4) rather than being silently unreachable.
+MODELS_RESERVED="refresh litellm"
+
+# The probe kinds a lane's registry can name (spec §4.1). Here so `init` can
+# refuse a typo at exit 2 — a USAGE error — before node is asked to interpret
+# it as a box condition.
+MODELS_PROBES="codex openrouter compatible"
+
+# The four classes, in `shared/models.ts`'s CLASSES order.
+MODELS_CLASSES="haiku sonnet opus fable"
+
+# The two classes `set-subagent` accepts (`shared/models.mjs`'s
+# SUBAGENT_CLASSES): measured 2026-09-09 on Claude Code 2.1.267, a subagent
+# set to opus or fable runs on the sonnet slot's model regardless, so the
+# node op refuses those two — this is the usage-text spelling only.
+MODELS_SUBAGENT_CLASSES="haiku sonnet"
+
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|update|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|models|install|update|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1088,6 +1160,18 @@ already running).
             "generated", and REFUSE every file ccrc did not write itself.
             Backs up before any overwrite; never touches an upstream or
             external account. [--dry-run] [--adopt] [--force]
+  models    the model-class registry: which concrete model each of the four
+            classes (haiku, sonnet, opus, fable) means on a lane, and which
+            class subagents run as. "ccrc models <id> show" reports it,
+            "init" seeds it, and set-class/set-subagent/set-effort/discovery
+            change it — each re-writing that lane's own settings.json.
+            "ccrc models refresh <id>|--all" probes the provider catalogues
+            those classes are classified against
+            . "ccrc models litellm <id>" regenerates the Codex lane's
+            LiteLLM model list from that catalogue — one entry per visible
+            model and no reasoning keys, because effort has exactly one
+            owner — and restarts the proxy only if it is holding the
+            previous rendering
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -1155,6 +1239,17 @@ _ccrc_die() { echo "$PROG: $*" >&2; exit 1; }
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
 _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
+
+# The models verbs' refusal envelope: exactly one JSON object on stdout, the
+# human sentence on stderr, on EVERY path. An exit code with an empty body is
+# "the box said no" and "this build cannot answer you" arriving as the same two
+# bytes, and the server parses stdout.
+_models_refuse() {   # <error> <exit code> <detail…>
+  local err="$1" code="$2"; shift 2
+  printf '{"ok":false,"error":"%s","detail":%s}\n' "$err" "$(printf '%s' "$*" | jq -Rs .)"
+  echo "$PROG: $*" >&2
+  exit "$code"
+}
 # `_ccrc_not_implemented` lived here and is GONE (Task 8), with the last verb
 # that reached it. It was the deliberate middle refusal between "you typed it
 # wrong" (exit 2) and a real answer, for verb names that were reserved before
@@ -3678,6 +3773,648 @@ _exp_status() {
 # backwards in either direction is the worst thing this verb could do: one way
 # it destroys an operator's config, the other it leaves a stale bash roster
 # describing accounts the box no longer has.
+
+# ── cmd_models — the model-class registry's verb group (spec §10) ─────────
+# A TOP-LEVEL verb, not a subcommand of `ccrc account`: that verb belongs to the
+# account-connections branch and is not on `main` (round-2 ruling 5, mail 280).
+#
+# The grammar is two-shaped, and the shape is decided by the FIRST token:
+#   ccrc models <id> <sub> …     — one lane's own classes
+#   ccrc models refresh|litellm … — the catalogues those classes are classified
+#                                   against, and the config generated from them
+# `$MODELS_RESERVED` is what makes that decidable; an account whose id is one of
+# those words is refused by name rather than silently unreachable.
+_models_deps() {
+  # `cmd_install`'s own `command -v node` guard, for this verb: node runs the
+  # JSON emitter, so its absence is the ONE refusal this verb cannot phrase as
+  # JSON. jq is checked second, with node already proven present.
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc models' — it runs ${CCRC_HERE%/*}/deploy/models-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON."
+  command -v jq >/dev/null 2>&1 \
+    || _ccrc_die "jq is required by 'ccrc models' — it renders this verb's answers and reads its own JSON back — but is not on PATH. Install jq, then re-run. Nothing was written."
+}
+
+# `$HOME/.ccrc/accounts.json`, spelled the way every other reader in this file
+# spells it (`cmd_wrappers`' own manifest-generator call; `cmd_install`'s
+# `_inst_roster`/`_inst_accounts_sh`) — a helper rather than eleven copies,
+# because five functions below need it and `models-op.mjs` is handed it as
+# `--file`. No override: this file has no `CCRC_ROSTER` idiom, and inventing
+# one here would be a second way to name the roster.
+_models_roster_path() { printf '%s' "$HOME/.ccrc/accounts.json"; }
+
+_models_summary() {   # <json body> — the human sentences, on STDERR
+  # STDERR, not stdout, and that is the whole point: this verb's contract is
+  # exactly one JSON object on stdout (the server parses it), and a person still
+  # needs a sentence. `--json` suppresses this function; it does not change what
+  # stdout carries.
+  printf '%s' "$1" | jq -r '
+    "account \(.id)\(if .anthropic then " — an Anthropic lane" else "" end)",
+    (if .registry == null then
+       (if .anthropic then
+          "  the four classes are Claude Code'"'"'s own defaults on this lane; there is nothing to classify."
+        else
+          "  no class registry yet — every class is unavailable. Run: ccrc models \(.id) init <codex|openrouter|compatible>"
+        end)
+     else
+       ("  probe: \(.registry.probe)"),
+       (["haiku","sonnet","opus","fable"]
+         | map("  \(.)\t\($reg.classes[.] // "—")") | .[]),
+       (if .renderRefusal == null then
+          "  subagents run as \(.registry.subagent) (\($reg.classes[.registry.subagent] // "—"))"
+        else
+          "  subagents run as \(.registry.subagent) — NOT in force; see below"
+        end),
+       (if .renderRefusal != null then
+          "  the env block cannot be materialised: \(.renderRefusal)"
+        else empty end)
+     end),
+    (if .catalogue == null then "  catalogue: never probed — run: ccrc models refresh \(.id)"
+     else "  catalogue: \(.catalogue.count) models\(if .catalogue.stale then " (STALE)" else "" end)" end),
+    (if (.derived.unclassified | length) > 0 then
+       "  unclassified (\(.derived.unclassified | length)): \(.derived.unclassified | join(", "))" else empty end),
+    (if (.derived.retired | length) > 0 then
+       "  RETIRED, and unavailable for routing: \(.derived.retired | join(", "))" else empty end),
+    (if (.derived.available | length) == 0 and (.anthropic | not) then
+       "  no class is available, so ccd will place nothing here" else empty end),
+    (if (.settingsDrift | length) > 0 then
+       "  this lane'"'"'s settings.json has drifted from the registry on: \(.settingsDrift | join(", ")) — re-materialise by running any models mutation, e.g. ccrc models \(.id) set-subagent \(.registry.subagent)"
+     else empty end)
+  ' --argjson reg "$(printf '%s' "$1" | jq -c '.registry // {classes:{}}')" >&2
+}
+
+# A class typo is a USAGE error and is answered here, at exit 2, before node is
+# asked to interpret it as a box condition — and "subagent" gets a sentence of
+# its own, because it is a real field of the registry (the class subagents run
+# as) and refusing it as merely "unknown" would be a lie about this file's
+# vocabulary.
+_models_class_ok() {   # <class>
+  local c
+  for c in $MODELS_CLASSES; do [ "$c" = "$1" ] && return 0; done
+  [ "$1" != "subagent" ] \
+    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which class subagents run as — ${MODELS_SUBAGENT_CLASSES// / or }; run 'ccrc models <id> set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>' to change it."
+  _models_refuse unknown-class 2 "\"$1\" is not a class: the four are ${MODELS_CLASSES// /, }."
+}
+
+# The OpenRouter ownership question (§5), asked ONCE per discovery-add and only
+# on a lane whose registry names `openrouter`: that is the only lane whose
+# traffic goes through `handoff-proxy`'s `provider.only` injection, so it is the
+# only lane on which "which providers serve this model" decides anything. The
+# probe does the network; node does the whitelist comparison. The answer lands
+# in a temp file that is removed on every path, because it is one question's
+# answer and not state.
+# It sets a GLOBAL rather than printing the path, and the caller invokes it
+# directly rather than in `$( )`. That is not style: `_models_refuse` ends in
+# `exit`, and an `exit` inside a command substitution kills only the SUBSHELL —
+# the caller would carry on with the refusal's own JSON as the "temp file
+# path". Every helper in this group that can refuse is called this way.
+#
+# THE PROBE IS A BOX-LEVEL EXECUTABLE WITH NO LANE CONTEXT: it reads
+# ANTHROPIC_AUTH_TOKEN out of its own environment, and only THIS helper knows
+# which lane is asking. The roster row for `<accountId>` is read for exactly
+# one fact, `exec.secretsFile`, and — when it has one — that file is sourced in
+# a SUBSHELL that runs the probe and nothing else, never the verb's own shell,
+# which must never carry the lane's key past this one call. The line is
+# `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
+# `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
+# credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
+# (the two arms that send it — openrouter --endpoints and compatible; the
+# codex arm sends its own bearer header too, but via `_fetch_codex`'s
+# litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
+# variable) and, on the codex arm only,
+# CHATGPT_TOKEN_DIR (it names the directory `_fetch_codex` reads `auth.json`
+# from) — measured fix, C3 of the final wave: without this, a lane with no
+# secrets file ran the probe against whatever this shell already had,
+# which on this fleet is ordinarily the CALLING lane's own key (every
+# wrapper-started session sources it before exec'ing `claude`), so `ccrc
+# models refresh --all` could ship that key, or another lane's codex token
+# directory, to a lane it was never issued for. Scrubbed first, a lane with a
+# secrets file gets only what that file sets, and a lane with none gets NO
+# credential, ever, regardless of what the calling session is carrying — and
+# its own refusal ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what
+# surfaces — captured here, not reworded, and never containing the
+# credential's VALUE, only its name. ANTHROPIC_API_KEY is unset alongside them
+# as defence in depth, not because the probe honours it — it does not; nothing
+# in `ccrc-models-probe` reads it.
+#
+# ONE SEAM, TWO CALLERS: `_models_endpoints` (the ownership-whitelist
+# question, on a single model) and `_models_refresh_one` (a lane's whole
+# catalogue fetch) both need the SAME lane key reaching the SAME probe — a
+# `compatible` lane's catalogue fetch sends `ANTHROPIC_AUTH_TOKEN` as a Bearer
+# header exactly like the endpoints call does (`ccrc-models-probe`'s
+# `compatible` fetch arm) — so the sourcing lives here once, not copied.
+_models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit code, run in the lane's secrets env
+  local id="$1"; shift
+  local secrets
+  secrets="$(jq -r --arg id "$id" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
+  if [ -n "$secrets" ]; then
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
+      [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+      exec "$@" )
+  else
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
+      exec "$@" )
+  fi
+}
+
+MODELS_ENDPOINTS_TMP=""
+_models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
+  local probe="$CCRC_HERE/ccrc-models-probe"
+  [ -x "$probe" ] \
+    || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
+  local tmp
+  tmp="$(_plat_mktemp)" || _models_refuse unwritable 1 "could not create a temp file for the OpenRouter endpoints answer. Nothing was written."
+  local msg rc
+  msg="$(_models_run_probe "$1" "$probe" "$1" openrouter --endpoints "$2" --out "$tmp" 2>&1 1>/dev/null)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$tmp"
+    _models_refuse endpoints-unreachable 1 "the OpenRouter endpoints call for \"$2\" failed, so this box cannot say which providers serve it — and the ownership whitelist is what decides whether it may be added at all.${msg:+ $msg} Nothing was written."
+  fi
+  MODELS_ENDPOINTS_TMP="$tmp"
+}
+
+_models_id_ok() {   # <token> — a usage-level gate, before node
+  # `$WRAPPER_ID_RE`, NOT a hand-copied literal — round 1 review, Important 3.
+  # `ccrc-wrapper-shape` is sourced once, at the top of `cmd_models` (below),
+  # the same idiom `cmd_wrappers` uses; a fourth typed-out copy of
+  # `shared/roster.ts`'s ID_RE is exactly the drift that file's own header
+  # exists to prevent. `deploy/models-op.mjs` re-validates its own `--id`
+  # against the identical shape too, at every op's entry, before any path is
+  # built (C6, added since this comment first shipped) — so this is no longer
+  # the only guard standing between a bad id and a write outside
+  # ~/.ccrc/models/. The shell keeps its own anyway: this is the
+  # usage-level gate, checked before `deploy/models-op.mjs` is ever invoked,
+  # so a bad id here is a clean usage refusal (exit 2) rather than a
+  # subprocess spin-up whose only job would be to say no.
+  local id="$1" w
+  for w in $MODELS_RESERVED; do
+    [ "$w" = "$id" ] && return 1
+  done
+  [[ "$id" =~ $WRAPPER_ID_RE ]] || return 2
+  return 0
+}
+
+_models_lane_sub() {   # <accountId> <subcommand> [args…]
+  local id="$1" sub="$2" file; shift 2
+  file="$(_models_roster_path)"
+  case "$sub" in
+    show)
+      local as_json=0
+      case "${1:-}" in --json) as_json=1; shift ;; esac
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id show takes only --json, and got \"$1\""
+      # THE BODY IS PRINTED FIRST AND UNCONDITIONALLY, so the "exactly one JSON
+      # object on stdout" contract holds on a refusal as much as on an answer.
+      # The summary is only attempted for a successful body, because there is
+      # nothing to summarise otherwise.
+      local body rc
+      body="$(_models_answer show --file "$file" --id "$id")"; rc=$?
+      printf '%s\n' "$body"
+      [ "$rc" -eq 0 ] || return "$rc"
+      [ "$as_json" -eq 1 ] || _models_summary "$body"
+      return 0
+      ;;
+    init)
+      local probe="${1:-}"
+      [ -n "$probe" ] || _models_refuse missing-argument 2 "ccrc models $id init needs a probe kind: one of ${MODELS_PROBES// /, }"
+      shift
+      local base=""
+      case "${1:-}" in
+        --base-url) [ $# -ge 2 ] || _models_refuse missing-argument 2 "--base-url needs a value"; base="$2"; shift 2 ;;
+      esac
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id init takes a probe kind and an optional --base-url, and got \"$1\""
+      # A TYPO IS A USAGE ERROR AND IS ANSWERED HERE, at exit 2, before node is
+      # asked to interpret it as a fact about the box. The two near-misses get
+      # their own sentences, because each is a real name for something else and
+      # "unknown" would be a lie about this box's vocabulary.
+      [ "$probe" != "openai" ] \
+        || _models_refuse unknown-probe 2 "\"openai\" is a PROVIDER on the account-connections branch, not a probe kind: the Codex probe is spelled \"codex\" (spec §4.1). Nothing was written."
+      [ "$probe" != "anthropic" ] \
+        || _models_refuse unknown-probe 2 "anthropic lanes carry no class registry: those four classes are Claude Code's own defaults, shown read-only. Nothing was written."
+      local ok=0 p
+      for p in $MODELS_PROBES; do [ "$p" = "$probe" ] && ok=1; done
+      [ "$ok" -eq 1 ] \
+        || _models_refuse unknown-probe 2 "\"$probe\" is not a probe kind this build knows: use one of ${MODELS_PROBES// /, }"
+      if [ -n "$base" ]; then
+        _models_answer init --file "$file" --id "$id" --probe "$probe" --base-url "$base" || exit $?
+      else
+        _models_answer init --file "$file" --id "$id" --probe "$probe" || exit $?
+      fi
+      return 0
+      ;;
+    set-class)
+      local cls="${1:-}" model="${2:-}"
+      [ -n "$cls" ] && [ -n "$model" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-class needs a class and a model: ccrc models $id set-class <${MODELS_CLASSES// /|}> <modelId|none>"
+      shift 2
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-class takes a class and a model, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-class --file "$file" --id "$id" --class "$cls" --model "$model" || exit $?
+      return 0
+      ;;
+    set-subagent)
+      local cls="${1:-}"
+      [ -n "$cls" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_SUBAGENT_CLASSES// /|}>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-subagent takes one class, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-subagent --file "$file" --id "$id" --class "$cls" || exit $?
+      return 0
+      ;;
+    set-effort)
+      local cls="${1:-}" level="${2:-}"
+      [ -n "$cls" ] && [ -n "$level" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-effort needs a class and a level: ccrc models $id set-effort <${MODELS_CLASSES// /|}> <level|default>"
+      shift 2
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-effort takes a class and a level, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-effort --file "$file" --id "$id" --class "$cls" --level "$level" || exit $?
+      return 0
+      ;;
+    discovery)
+      local action="${1:-}"
+      [ -n "$action" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id discovery needs an action: add <modelId>, rm <modelId>, or catalogue"
+      shift
+      case "$action" in
+        catalogue)
+          [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id discovery catalogue takes no model id, and got \"$1\" — it means the WHOLE advertised set"
+          _models_answer discovery --file "$file" --id "$id" --action catalogue || exit $?
+          ;;
+        add|rm)
+          local model="${1:-}"
+          [ -n "$model" ] \
+            || _models_refuse missing-argument 2 "ccrc models $id discovery $action needs a model id"
+          shift
+          [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id discovery $action takes one model id, and got \"$1\""
+          # THE OWNERSHIP CHECK IS OPENROUTER'S, IS ADD'S ALONE, AND HAPPENS
+          # BEFORE THE WRITE. The lane's probe kind is read from its own
+          # registry rather than assumed, so a Codex or `compatible` lane never
+          # pays for a question that decides nothing about it — and `rm` never
+          # asks it, because removing a model needs no permission.
+          local probe showbody
+          # The show body is captured WHOLE and then read, rather than piped
+          # straight into jq: `_models_answer`'s own refusal exits with a
+          # non-zero status, and a pipe would hand jq that refusal's JSON and
+          # succeed on it, losing the failure.
+          #
+          # ON A REFUSAL, THAT BODY IS NODE'S OWN — passed through UNCHANGED,
+          # never re-labelled `no-answer`: `no-answer` is the empty-body seam's
+          # reserved code for "the build is broken, redeploy" (`_models_answer`
+          # itself), and `$showbody` here is guaranteed a valid JSON object
+          # with rc in {1,2} — `_models_answer` already exits on anything else.
+          # The most common refusal reachable here is `no-such-account` on a
+          # typo'd or already-removed id, and re-labelling it would tell an
+          # operator to redeploy for their own typo.
+          showbody="$(_models_answer show --file "$file" --id "$id")" \
+            || { local srr=$?; printf '%s\n' "$showbody"; exit "$srr"; }
+          probe="$(printf '%s' "$showbody" | jq -r '.registry.probe // ""')"
+          if [ "$action" = "add" ] && [ "$probe" = "openrouter" ]; then
+            _models_endpoints "$id" "$model"
+            _models_answer discovery --file "$file" --id "$id" --action add --model "$model" --endpoints "$MODELS_ENDPOINTS_TMP"
+            local rc=$?
+            rm -f "$MODELS_ENDPOINTS_TMP"
+            [ "$rc" -eq 0 ] || exit "$rc"
+          else
+            _models_answer discovery --file "$file" --id "$id" --action "$action" --model "$model" || exit $?
+          fi
+          ;;
+        *) _models_refuse unknown-action 2 "ccrc models $id discovery has no action \"$action\": it takes add <modelId>, rm <modelId>, or catalogue" ;;
+      esac
+      return 0
+      ;;
+    rm)
+      # A REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): no arguments,
+      # and no class or endpoints gate above it — it delegates straight to the
+      # node op and answers with its own JSON, on an ORPHAN id exactly as much
+      # as on one the roster has a row for.
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id rm takes no arguments, and got \"$1\""
+      _models_answer rm --file "$file" --id "$id" || exit $?
+      return 0
+      ;;
+    *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
+  esac
+}
+
+MODELS_REFRESH_REASON=""
+_models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fresh catalogue; sets MODELS_REFRESH_REASON on failure
+  local probe="$CCRC_HERE/ccrc-models-probe" args=()
+  [ -x "$probe" ] \
+    || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
+  [ -z "$3" ] || args=(--base-url "$3")
+  local msg rc
+  # THE SAME SECRETS-SOURCING SUBSHELL `_models_endpoints` uses (above): a
+  # `compatible` lane's catalogue fetch sends `ANTHROPIC_AUTH_TOKEN` as a
+  # Bearer header exactly like the endpoints call does, so it needs the same
+  # lane key reaching the same probe. Stdout is discarded (the probe writes
+  # its catalogue to a file, never stdout, on success); stderr is CAPTURED
+  # rather than merely discarded, because Fix round 1, Finding 2's `reason`
+  # on a failed row is the probe's own first stderr line.
+  msg="$(_models_run_probe "$1" "$probe" "$1" "$2" ${args[@]+"${args[@]}"} 2>&1 1>/dev/null)"
+  rc=$?
+  MODELS_REFRESH_REASON="$(printf '%s\n' "$msg" | head -n1)"
+  return "$rc"
+}
+
+# Where a box keeps LiteLLM's config, and the template it is rendered from. The
+# destination is the ONE thing `ccgpt` and this verb must agree about
+# (`infra/handoff/ccgpt:20` reads `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`),
+# so the same override is honoured here.
+_models_litellm_path()     { printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }
+_models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
+
+# "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
+# starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
+# "$CONFIG" …` — cited by shape, not by line number, because it lives in the
+# monorepo branch and drifts independently of this one). NOT a port check:
+# the port answering says something is listening, not that it
+# is listening on THESE bytes, and the question here is exactly whether the
+# process holds a config this run just replaced.
+_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
+
+# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is
+# owed only when BOTH halves are true: the bytes changed AND a proxy is
+# holding the old ones — but deciding that and acting on it has to happen
+# BEFORE the new bytes land on disk, or a stop that fails leaves the config
+# already rewritten: the next run compares equal bytes, reports "unchanged",
+# and never retries the restart, while the box keeps serving the stale
+# rendering with no operator signal. So this is TWO calls into the op, not
+# one: PHASE 1 asks it to render and compare only (never write); if a restart
+# is owed and cannot be had, this function REFUSES here, before PHASE 2 —
+# the write — is ever asked for, so the next run sees the same difference and
+# retries. In-flight gpt turns fail once and retry (§6.3), which is a cost
+# worth paying for a config that has changed and not one for a config that
+# has not.
+_models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
+  local file check crc
+  file="$(_models_roster_path)"
+  check="$(_models_answer litellm --file "$file" --id "$1" \
+             --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; crc=$?
+  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
+  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
+    printf '%s\n' "$check"
+    return 0
+  fi
+  local restarted=false
+  if _models_litellm_running; then
+    if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
+      restarted=true
+      echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
+    else
+      # Refuse HERE, before PHASE 2: nothing is written, so the bytes on disk
+      # stay exactly what they were, and the NEXT run sees the same
+      # difference and retries the whole decision rather than silently
+      # reporting "unchanged" forever after.
+      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand, then re-run this command — until then this box serves the old model list. Nothing was written."
+    fi
+  fi
+  local body
+  body="$(_models_answer litellm --file "$file" --id "$1" \
+            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)" --commit true)"; crc=$?
+  if [ "$crc" -eq 0 ]; then
+    printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
+  else
+    printf '%s\n' "$body"
+  fi
+  return "$crc"
+}
+
+# The box-wide half of the verb group: the CATALOGUES the class registries are
+# classified against, which is a different question from a lane's own classes
+# and runs on a different cadence — a timer runs `--all` hourly
+# (`deploy/systemd/ccrc-models.timer`), and the PWA's refresh button runs one
+# lane. `ccgpt-usage.timer` is untouched: telemetry and catalogue are different
+# questions on different cadences (§5).
+_models_box_sub() {   # <subcommand> [args…]
+  local sub="$1"; shift
+  local file; file="$(_models_roster_path)"
+  case "$sub" in
+    refresh)
+      local target="${1:-}"
+      [ -n "$target" ] \
+        || _models_refuse missing-argument 2 "ccrc models refresh needs a lane id or --all: ccrc models refresh <id> | --all"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models refresh takes one lane id or --all, and got \"$1\""
+
+      # THE LANE LIST COMES FROM THE ONE OP THAT KNOWS WHICH LANES HAVE A
+      # REGISTRY AT ALL. An anthropic lane has none by design, and a lane
+      # nobody has run `init` on has no PROBE KIND — round-2 ruling 10 puts
+      # that on the registry file, so probing such a lane would be asking a
+      # question with no answer.
+      #
+      # Fix round 1, Finding 1: this capture must not swallow a REFUSAL body.
+      # `_models_answer` can return non-zero with a legitimate JSON refusal
+      # already printed into `$lanes` (a corrupt accounts.json, or the
+      # half-updated-box `no-answer` seam) — a bare `|| exit $?` here exits
+      # with that body captured and NEVER PRINTED, violating "one JSON object
+      # on stdout, on every path". `_models_lane_sub`'s `discovery` arm's own
+      # pre-check (`showbody`, above) is the same shape.
+      local lanes rc
+      lanes="$(_models_answer lanes --file "$file")" || { rc=$?; printf '%s\n' "$lanes"; exit "$rc"; }
+      # C2: `_models_answer`'s three clamps (non-empty, object, rc in 0/1/2)
+      # verify the ENVELOPE, not that this op's own answer carries the
+      # FIELD it reads next. A valid-but-fieldless body (a half-updated box
+      # whose node half does not know the `lanes` op yet) used to fail the
+      # `.lanes[]` jq below silently: the loop variable and its count both
+      # went empty, the `while` loop never ran, and the tail printed
+      # `all(.ok)` over an empty array — `ok:true` at exit 0, over a body
+      # this seam's own comment says "must not reach the caller as a bare
+      # exit code". Guarded here, before that jq ever runs.
+      printf '%s' "$lanes" | jq -e 'has("lanes") and (.lanes|type=="array")' >/dev/null 2>&1 \
+        || _models_refuse no-answer 1 "deploy/models-op.mjs's \"lanes\" op answered without a \"lanes\" array, so this run has nothing to tell you. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+      # `hasRegistry` now reflects the REGISTRY FILE's presence alone (Fix
+      # round 1, Finding 2, ruling): a corrupt CATALOGUE no longer excludes a
+      # lane from this list — `registryInvalid`/`catalogueInvalid` are
+      # separate facts a row can carry now, and `probe` is null only when
+      # there is no VALID registry.
+      lanes="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.hasRegistry)]')"
+
+      local wanted="$lanes"
+      if [ "$target" != "--all" ]; then
+        wanted="$(printf '%s' "$lanes" | jq -c --arg id "$target" 'map(select(.id == $id))')"
+        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] \
+          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry on this box. Anthropic lanes have none — their four classes are Claude Code's own defaults, so there is nothing to probe. For any other lane run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
+        # A lane WITH a registry that does not parse or validate is a
+        # DIFFERENT fact from "no registry at all" (Fix round 1, Finding 2,
+        # ruling): named directly, with the same error code the general op
+        # path uses for the same condition (`registry-invalid`), rather than
+        # the generic no-such-lane sentence.
+        local invalid
+        invalid="$(printf '%s' "$wanted" | jq -r '.[0].registryInvalid // empty')"
+        [ -z "$invalid" ] \
+          || _models_refuse registry-invalid 1 "$invalid"
+      fi
+
+      local rows=() failed=0 n i id probe baseurl count reginvalid row lit
+      n="$(printf '%s' "$wanted" | jq 'length')"
+      i=0
+      while [ "$i" -lt "$n" ]; do
+        id="$(printf '%s' "$wanted" | jq -r ".[$i].id")"
+        probe="$(printf '%s' "$wanted" | jq -r ".[$i].probe")"
+        baseurl="$(printf '%s' "$wanted" | jq -r ".[$i].baseUrl // \"\"")"
+        reginvalid="$(printf '%s' "$wanted" | jq -r ".[$i].registryInvalid // \"\"")"
+        if [ -n "$reginvalid" ]; then
+          # A registry that exists but does not parse/validate names no
+          # VALID probe kind (`probe` is null on this row) — reported as a
+          # failure and never handed to the probe, per the ruling: the
+          # hourly run names the real problem instead of asking the probe to
+          # make sense of the literal string "null".
+          row="$(jq -cn --arg id "$id" --arg reason "$reginvalid" '{id:$id, ok:false, reason:$reason}')"
+          failed=1
+        elif _models_refresh_one "$id" "$probe" "$baseurl"; then
+          # Re-materialise: the effort map is validated against the catalogue
+          # (§4.1) and the TSV's third column is derived from it (§7), so a
+          # lane whose catalogue just changed can have a lane default that
+          # has stopped being offered and a class that has just been retired
+          # — and the files ccd and the shim read have to learn that in the
+          # same run. C7: its failure used to be swallowed (`|| true`), so a
+          # lane whose catalogue had just refreshed kept serving a STALE
+          # TSV/env block under an `ok:true` row with no operator signal — the
+          # same silent-drift shape the STOP-THEN-WRITE ruling below already
+          # refuses for LiteLLM. Captured the same way: stdout only (2>/dev/
+          # null — the JSON is the contract, not the human sentence on
+          # stderr), and a failure here makes this row ok:false and skips the
+          # LiteLLM step, which reads the same freshly-materialised state.
+          local mreason="" mat_body mat_rc=0
+          mat_body="$(_models_node materialise --file "$file" --id "$id" 2>/dev/null)" || mat_rc=$?
+          if [ "$mat_rc" -ne 0 ]; then
+            mreason="$(printf '%s' "$mat_body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
+            [ -n "$mreason" ] || mreason="materialise exited $mat_rc with no answer"
+          fi
+          count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
+          # §5: the LiteLLM step runs for a CODEX lane, and the RENDERER
+          # decides whether anything changed — comparing bytes it just
+          # produced against the bytes on disk is a stronger question than
+          # "did the visible set change", and it is the same question,
+          # because the visible set is the only input the rendering has.
+          lit="skipped"
+          local lreason=""
+          if [ -z "$mreason" ] && [ "$probe" = "codex" ]; then
+            local lbody
+            if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
+              [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
+                && lit="rendered" || lit="unchanged"
+            else
+              # STOP-THEN-WRITE (fix round 1, this task's controller ruling):
+              # `_models_litellm` REFUSED — a proxy was running the previous
+              # config and could not be stopped, so nothing was written and
+              # this box still serves the STALE model list with no operator
+              # signal unless this row says so. That is a FAILURE of this
+              # lane's refresh as a whole, not a skipped optional step — the
+              # catalogue probe and the materialise above already succeeded
+              # and their effects stand, but `litellm: "failed"` is retired
+              # from this row's vocabulary (rendered|unchanged|skipped only):
+              # an `ok:true` row that quietly named a failure was exactly the
+              # bug this ruling fixes.
+              lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail')"
+            fi
+          fi
+          if [ -n "$mreason" ]; then
+            row="$(jq -cn --arg id "$id" --arg reason "$mreason" '{id:$id, ok:false, reason:$reason}')"
+            failed=1
+          elif [ -n "$lreason" ]; then
+            row="$(jq -cn --arg id "$id" --arg reason "$lreason" '{id:$id, ok:false, reason:$reason}')"
+            failed=1
+          else
+            row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
+              '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
+          fi
+        else
+          # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
+          # probe's own first stderr line, captured by `_models_refresh_one`.
+          # No `litellm` field here — the step never ran, and Fix round 1's
+          # own ruling already dropped `count` from a failed row for the same
+          # reason: neither is a fact about a lane the probe never reached.
+          row="$(jq -cn --arg id "$id" --arg p "$probe" --arg reason "$MODELS_REFRESH_REASON" \
+            '{id:$id, probe:$p, ok:false, reason:$reason}')"
+          failed=1
+        fi
+        rows+=("$row")
+        i=$((i + 1))
+      done
+
+      # ONE JSON OBJECT, on every path — including the mixed one. A run where
+      # three lanes refreshed and one did not is not a failure to report; it is
+      # four facts, and the exit code says whether any of them was bad.
+      printf '%s\n' "$(jq -cn --argjson rows "$(printf '%s\n' "${rows[@]+${rows[@]}}" | jq -cs 'map(select(. != null))')" \
+        '{ok: ($rows | all(.ok)), op: "refresh", refreshed: $rows}')"
+      [ "$failed" -eq 0 ] || return 1
+      return 0
+      ;;
+    litellm)
+      local id="${1:-}"
+      [ -n "$id" ] || _models_refuse missing-argument 2 "ccrc models litellm needs a lane id: ccrc models litellm <id>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models litellm takes one lane id, and got \"$1\""
+      _models_litellm "$id" || exit $?
+      return 0
+      ;;
+    *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
+  esac
+}
+
+cmd_models() {
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+  esac
+  _models_deps
+  # The shape contract, sourced rather than restated — `cmd_wrappers`' own
+  # idiom (its `local shape=`/`. "$shape"` sourcing), for the same reason:
+  # `_models_id_ok` needs `WRAPPER_ID_RE`, and a second, hand-typed copy of
+  # `shared/roster.ts`'s ID_RE is how a validator drifts from the rule it is
+  # supposed to enforce.
+  # Sourced ONCE, here, rather than inside `_models_id_ok` itself: the file
+  # defines `_wrap_*`/`WRAPPER_*` names (its own header — no path lookups, no
+  # namespace collision with `_models_*`/`MODELS_*`), and re-sourcing it on
+  # every id check would just re-run the same assignments for nothing.
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  [[ -f "$shape" ]] \
+    || _ccrc_die "the wrapper shape contract is missing: $shape — is this a complete ccrc install?"
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _ccrc_die "the wrapper shape contract failed to load: $shape"
+  local first="${1:-}"
+  [ -n "$first" ] \
+    || _models_refuse missing-argument 2 "ccrc models needs a lane id or a subcommand: ccrc models <id> {${MODELS_SUBS// /|}}, or ccrc models {${MODELS_RESERVED// /|}}"
+  shift
+
+  # THE RESERVED WORDS DECIDE THE GRAMMAR (deviation B-4). An account whose id
+  # is one of them is refused by name here — before anything reads the roster
+  # for a different purpose — so the collision is a sentence and not a lane
+  # nobody can reach.
+  local w
+  for w in $MODELS_RESERVED; do
+    if [ "$w" = "$first" ]; then
+      if jq -e --arg id "$w" '.accounts // [] | any(.id == $id)' "$(_models_roster_path)" >/dev/null 2>&1; then
+        _models_refuse reserved-account-id 2 "this box has an account named \"$w\", and \"$w\" is also a subcommand of 'ccrc models' — so 'ccrc models $w …' cannot mean both; rename that account in $(_models_roster_path) (it is yours; nothing else on this box depends on the name), or address it through the PWA. Nothing was written."
+      fi
+      local known=0 s
+      for s in $MODELS_BOX_SUBS; do [ "$s" = "$w" ] && known=1; done
+      [ "$known" -eq 1 ] \
+        || _models_refuse unknown-subcommand 2 "ccrc models has no subcommand \"$w\" in this build. It implements: ${MODELS_BOX_SUBS:-(none yet)}"
+      # NOT `return 0`: `_models_box_sub`'s `refresh` arm can return 1 on a
+      # mixed run (some lanes failed) without calling `_models_refuse`'s own
+      # `exit` — a bare `return 0` here would swallow that and report success
+      # on stdout while the JSON on stdout says otherwise.
+      _models_box_sub "$w" "$@"
+      return $?
+    fi
+  done
+
+  _models_id_ok "$first"
+  case $? in
+    2) _models_refuse bad-account-id 2 "\"$first\" is not an account id: a lowercase letter followed by up to 31 of letters, digits and \"-\". Run 'ccrc status' to see this box's accounts." ;;
+  esac
+  local sub="${1:-}"
+  [ -n "$sub" ] || _models_refuse missing-subcommand 2 "ccrc models $first needs a subcommand. This build implements: $MODELS_SUBS"
+  shift
+  local known=0 s
+  for s in $MODELS_SUBS; do [ "$s" = "$sub" ] && known=1; done
+  [ "$known" -eq 1 ] \
+    || _models_refuse unknown-subcommand 2 "ccrc models has no subcommand \"$sub\". This build implements: $MODELS_SUBS"
+  _models_lane_sub "$first" "$sub" "$@"
+}
+
 cmd_install() {
   # `cmd_wrappers`' loop (:1040-1048), minus the three flags it has and this
   # verb does not have yet. `-h`/`--help` prints usage at exit 0 rather than
@@ -4863,6 +5600,16 @@ _inst_units() {
     # sweep above it — a server box holds no account wrappers to keep alive.
     _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.timer" "$dir/ccd-telemetry-keepalive.timer" 644
+    # C5: the model-class registry's hourly refresh, role-gated exactly as its
+    # three siblings above — a server box holds no account lanes and no
+    # `~/.ccrc/models` registries to refresh. Before this fix these two names
+    # appeared in neither `_inst_units`, the enable block below, nor
+    # `cmd_uninstall` — `deploy.sh agent` was the only installer, so `ccrc
+    # install --role fleet` shipped the verbs and the probe but no timer to
+    # ever run them (measured), and `ccrc uninstall` after `deploy.sh agent`
+    # left the timer enabled and orphaned.
+    _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
@@ -4942,6 +5689,11 @@ _inst_enable() {
   # well-informed, it is not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-telemetry-keepalive.timer \
     || echo "install: keepalive: could not enable ccd-telemetry-keepalive.timer — run: systemctl --user enable --now ccd-telemetry-keepalive.timer" >&2
+  # C5: same gate, same DEGRADE-rather-than-die idiom — a server box has no
+  # lanes to refresh, and a systemd that will not take this one timer must not
+  # turn an otherwise converged install into a failed one.
+  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccrc-models.timer \
+    || echo "install: models: could not enable ccrc-models.timer — run: systemctl --user enable --now ccrc-models.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:719-721` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -6265,7 +7017,8 @@ _uninst_units() {
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
-      ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service; do
+      ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
+      ccrc-models.timer ccrc-models.service; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -6278,6 +7031,7 @@ _uninst_units() {
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
+    "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -6581,6 +7335,7 @@ case "$VERB" in
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
+  models)  cmd_models "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;

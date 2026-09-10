@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f7a7964547cec578320f32866b5ee4afff33ca09883f2f558c98718e919484ed
+# ccrc:generated 1 sha256=f858ac005f6aac94c2c44312244fd638ba771f512057072336f1094e0c727e29
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -949,6 +949,27 @@ SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
+# D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
+# On `--resume`, Claude Code classifies a tail whose last turn died in an API
+# error (a limit banner) as an interrupted turn, writes a META user prompt
+# ("Continue from where you left off.") and a synthetic "No response requested."
+# — and submits that prompt ONLY when CLAUDE_CODE_RESUME_INTERRUPTED_TURN is set.
+# Measured 2026-09-09: four rescued sessions, four idle landings, four manual
+# "resume" messages (spec §2). The value is the string "1", which is what Claude
+# Code's own runner sets for a respawned worker. It is a third-party flag, so it
+# ships with a measurement and a fallback: `_redrive_after_spawn` (D-2231).
+RESUME_INTERRUPTED_TURN=1
+# The prompt Claude Code submits. It starts with the sentence Claude Code's own
+# default uses (the PWA parser matches that prefix, shared/api.ts
+# RESUME_PROMPT_PREFIX) and then says what only ccd knows: the previous process
+# is gone, and with it every background task it owned. NO SINGLE QUOTE: the
+# string is single-quoted into the tmux command line (ccd-resume-flag.test.ts).
+RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this session (an account swap or a supervisor revival) after its previous process was stopped mid-turn, and the operator has not sent a new message since. Any background task, Workflow or subagent of the previous process is gone: re-check their journals and outputs, and re-verify anything time-sensitive (branch state, running processes, prior partial work) before continuing."
+# D-2230 — empty = no age cap on the re-drive (ruling R5). Set to a number of
+# milliseconds to make Claude Code suppress the re-drive of a turn older than that.
+RESUME_REDRIVE_MAX_AGE_MS=""
+REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
+REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -1150,8 +1171,8 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # inside ACCOUNT loops (`_swap_target`, `_ws_least_loaded`): one bad file wedges
 # the tick of EVERY row that reaches the loop, not just the row on that account.
 # MEASURED on the shipped body: a FIFO with no writer and a symlink to
-# `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, 17 inputs
-# all answer in under 0.05 s.
+# `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, every
+# input below answers in under 0.05 s.
 #
 # IT NARROWS NOTHING, measured across those 14 inputs: absent, empty, garbage, a
 # leading space, `chmod 000`, a directory, a dangling symlink, a symlink loop and
@@ -1221,8 +1242,9 @@ _pool_untaggable() {   # rc 0 = no project can be in any pool, whatever its name
 # there is none". Round 2 retracted that closing sentence and left its premise
 # standing — "its own two direct `_pool_ok` calls … each test only `-eq 1`" —
 # so the paragraph asserted P three lines above ¬P. Both halves were false:
-# `_auto_swap_check` tests `-eq 2` twice, and the `prc` it tests is the one
-# assigned by the `aff_verb` call the sentence named as testing only `-eq 1`.
+# `_auto_swap_check` DOES test `-eq 2` — the census command above counts
+# them — and the `prc` it tests is the one assigned by the `aff_verb` call the
+# sentence named as testing only `-eq 1`.
 # A correction that leaves the falsehood in place is not a correction; it is
 # two claims and no way to pick. That is no longer an
 # obligation on a later wave; it landed at every site named above. The two
@@ -1733,8 +1755,11 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # overstated a hang surface this paragraph exists to bound honestly;
 # `_strand_mark`, itself on the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
 # rather than three — and it included `wrapper`, the very field the strand arm
-# exists to report on. `project` has since left this list entirely: it reads
-# through `_reg_read` now, because there the fold decided something (R3).
+# exists to report on. `project` left this list at both DECIDERS — they read
+# through `_reg_read` now, because there the fold decided something (R3) —
+# but not at `_tick_strand_undecidable`, which still reads it through
+# `_reg_get` (`grep -n '_reg_get "\$1" project' ccd/ccd`) for a value that
+# only names a file in a sentence.
 #
 # THIS IS NOT THE WIDENING THE PARAGRAPH BELOW WARNS ABOUT, and the two must not
 # be confused. That warning is about turning `_reg_get` into a THREE-ANSWER read,
@@ -1785,28 +1810,57 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 132
-# invocations across 108 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 133
+# invocations across 109 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
-# review round 4 gate). It has moved four times in five rounds — **134** at C1
-# (`db580771`; this said 133, and 133 is what C1's own sentence claimed, so the
-# figure was inherited rather than measured — corrected at round 5's refute
-# pass), 135 once this branch and then the #70 merge had added sites, 133 when
-# round 3 converted the two tick `.project` reads to `_reg_read`, 132 when
-# rounds 4 and 5 converted the three verb readers — and every move left a stale
-# cardinal
+# review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
+# merge and the #73 merge each landed `_reg_get` sites from `main` — and only
+# the second was CAUGHT, because only the second happened after this pin
+# existed. That is the whole argument for spending a test on a number, and it is
+# a narrower claim than the one that stood here, which called #73 "the first
+# move nobody here made" while the #70 merge is named as having done exactly
+# that twenty lines up in this same block (#69 review round 5, the #73 merge's
+# refute pass).
+#
+# THE CAUSAL SENTENCES LIVE ON THIS SIDE OF THE ANCHOR ON PURPOSE. The pin's
+# cardinal scan reads everything up to the dated list and nothing inside it, so
+# the list is the one unread place in this block — and every false claim that
+# refute pass found had landed there, in the paragraph celebrating the pin. What
+# is allowed inside it is therefore a bare measured figure with the ref it was
+# measured at, one command per entry, and nothing that argues.
+# It has moved six times, measured at each ref rather than remembered:
+# **134** at C1 (`db580771` — and C1's own sentence said 134 too, at its
+# ccd:1611: it MEASURED correctly, and the round-5 clause claiming C1 "inherited
+# rather than measured" had the polarity backwards; what inherited a wrong 133
+# was this branch's own prose), 133 at round 3 (`391b3e1f`, the two tick
+# `.project` reads), 135 at the #70 merge (`1714038a`, main's compactor sites —
+# round 3 came FIRST and the merge pushed it back up, which the round-5 ordering
+# reversed), 133 at round 4 (`c3e69b41`), 132 at round 5 (`47824849`), 133 at
+# the #73 merge (`f065c8bb`). Every earlier move left a stale cardinal
 # somewhere in this block. Four of them stood in the paragraphs directly above,
 # where a reader hits them first, and they read as the live figure. "Re-measure
 # it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
 # numbers out of the file and compares them to the live count, which is a
 # MECHANISM — the same shape `ccd-pool-ok.test.ts` already carries for the
 # `_pool_ok` header one function away. The paragraphs above carry no cardinal at
-# all now: one number, one place, one test. CORRECTED (#69 review round 3): the
-# round-2 sentence said "the 135th is the one C1's own
-# `_tick_strand_undecidable` added". That function does not exist in C1's commit
-# at all — it was added by this PR's own pre-review commit — so the site was
-# this branch's, not C1's. Two spellings that do NOT answer this question, both tried
+# all now: one number, one place, one test.
+#
+# AND THE TEST HAS NOW PAID FOR ITSELF AGAINST A CHANGE FROM OUTSIDE THIS PR.
+# Merging `main` for #73 moved the count by one, and the suite failed on that
+# merge alone with "re-measure the sentence, do not re-measure this test" — a
+# citation that had gone stale in the seconds it took an unrelated PR to land,
+# reported loudly instead of shipping quietly. That is the whole argument for
+# spending a test on a number, and it is why the answer to a census going stale
+# is another pin rather than another sweep: a sweep is a snapshot of a tree the
+# next commit moves. CORRECTED (#69 review round 3): the
+# round-2 sentence attributed the NEWEST call site to "C1's own
+# `_tick_strand_undecidable`". That function does not exist in C1's commit at
+# all — it was added by this PR's own pre-review commit — so the site was this
+# branch's, not C1's. (The ordinal that stood here is gone by this block's own
+# rule: it was a restated census wearing a suffix, and the round-5 scan could
+# not see it until the refute pass added `st|nd|rd|th` — which then found this
+# one immediately, which is the mechanism working on the commit that widened it.) Two spellings that do NOT answer this question, both tried
 # while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
 # prose too, including this line's own quoting of it, and `grep -c` counts
 # LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`
@@ -12830,6 +12884,15 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   [[ -n "$obest" ]] && echo "$obest"
 }
 
+_pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
+  # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
+  # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
+  # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
+  # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
+  # injection, and the fallback re-drive — must not.
+  grep -qiE "continuing automatically|continuing shortly" <<<"$1"
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
@@ -12841,9 +12904,10 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
 # round 4, B5). `_tick_undecidable` writes the WORD into `.tickstuck` and into
-# swap.log; `_strand_mark` writes the SENTENCE into `.stranded`, read TODAY by
-# the banner and, once account-pools wave 3 lands its reader, carried verbatim
-# as `SessionRecord.stranded.reason` to every ccrc surface. SAID IN TWO HALVES
+# swap.log; `_strand_mark` writes the SENTENCE into `.stranded` AND fires the
+# SAME sentence at `notify.sh`; the marker itself has no reader until
+# account-pools wave 3 lands one, when it is carried verbatim as
+# `SessionRecord.stranded.reason` to every ccrc surface. SAID IN TWO HALVES
 # ON PURPOSE (#69 review round 4 gate): the sentence that stood here put that
 # reader in the PRESENT tense, and `git grep -c stranded server/src/registry.ts`
 # answers 0 on `origin/main` and on this branch — the third instance of exactly
@@ -12870,8 +12934,9 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 # review round 5, caught by its own refute pass). It cited
 # `grep -n 'could not be computed' ccd/ccd`, which returns exactly ONE line —
 # itself — because every arm below ends "so no destination could BE computed",
-# never "could NOT be". A self-counting anchor offered as proof, 118 lines from
-# the entry that corrects one. The census that measures is
+# never "could NOT be". A self-counting anchor offered as proof, in the same
+# file that books the same trap at `_pool_ok`'s census and at `_reg_get`'s
+# (`grep -n "counting itself" ccd/ccd`). The census that measures is
 # `grep -n '_undecidable_cause "' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`,
 # which answers TWO: the tick's late arm and `_tick_strand_undecidable`.
 #
@@ -13230,9 +13295,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # residue means the verdict and the refusal exchanging their words, and no
     # measured case asks for that yet.
     # The sentence that stood here said "measured, not guessed" and was false:
-    # `_swap_target` refuses for FOUR conditions, not three, it does not test
-    # `hrc` at all, and the caller re-derived the word from `hrc` and `prc` —
-    # two measurements of two DIFFERENT moments than the one that refused. So a
+    # `_swap_target` refuses for FOUR conditions, not three, and NONE of those
+    # refusals keys on `hrc` — it tests `hrc` only to pick the home arm
+    # (`grep -n 'hrc" -eq 0' ccd/ccd`) — and the caller re-derived the word from
+    # `hrc` and `prc`, two measurements of two DIFFERENT moments than the one
+    # that refused. So a
     # `.project` that turned unreadable inside the tick, which is precisely the
     # race round 3 added the inner read for, stranded the row naming
     # `.crosspool` — a file that in the fixture did not even exist — and stamped
@@ -13506,6 +13573,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
   [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
   [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
+  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
   [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
   # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
@@ -13978,6 +14046,12 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
+_resume_env() {   # -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227)
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT'"
+  [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
+  printf '%s' "$out"
+}
+
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -13994,7 +14068,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -14036,6 +14110,13 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
   _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
+  # non-home-able lane the vars `_resume_env` composes are simply inert (the
+  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
+  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
+  # which only ever names a Claude Code JSONL) fails closed there regardless —
+  # so gating this line would buy nothing and cost a second home-ability check.
+  resenv=$(_resume_env)
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -14043,7 +14124,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -14084,7 +14165,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -14175,6 +14256,16 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
   _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  # D-2231 — after the effort injection, so its local-command chatter is already
+  # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
+  # (a keystroke there is the swap's job), rc 2 is a login screen.
+  #
+  # UNGATED on home-ability, unlike `_inject_spawn_effort` above — deliberately:
+  # a non-home-able lane never has `_resume_env`'s flag set, so its transcript
+  # never carries the resume pair `_transcript_stalled_pair` looks for, and the
+  # measurement fails closed (rc 1, not-stalled) rather than needing a second
+  # home-ability check here to reach the same silence.
+  [[ "$prompt_rc" == 0 ]] && _redrive_after_spawn "$id" "$tname" "$fromswap"
   return "$prompt_rc"
 }
 
@@ -14200,6 +14291,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
   local t="$1" cur
+  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
+    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+  fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
@@ -14213,6 +14307,87 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
     tmux send-keys -t "$t" Enter
   fi
+  return 0
+}
+
+_transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is the unsubmitted resume pair | 1 not | 2 unreadable (D-2231)
+  # THE MEASUREMENT BEHIND THE FLAG. Claude Code's `--resume` writes a META user
+  # "Continue from where you left off." and a synthetic "No response requested."
+  # and, without CLAUDE_CODE_RESUME_INTERRUPTED_TURN, stops there. A tail whose
+  # newest user/assistant rows are exactly that pair — local-command chatter,
+  # system rows and attachments after it do not count — is a stall. Anything
+  # else after the pair (a real reply, a human prompt) means someone drove it.
+  # Only `"type":"user"`/`"type":"assistant"` rows are read; a false hit on that
+  # substring inside quoted content can only break the pair, i.e. read "not
+  # stalled" — the status quo, never a spurious keystroke.
+  local f="$1" line state=0
+  [[ -r "$f" ]] || return 2
+  while IFS= read -r line; do
+    [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
+    if [[ "$line" == *'"isMeta":true'* && "$line" == *'Continue from where you left off.'* ]]; then state=1; continue; fi
+    if [[ "$state" -eq 1 && "$line" == *'"model":"<synthetic>"'* && "$line" == *'No response requested.'* ]]; then state=2; continue; fi
+    if [[ "$state" -eq 2 ]]; then
+      case "$line" in *'<local-command-caveat>'*|*'<command-name>'*|*'<local-command-stdout>'*) continue ;; esac
+    fi
+    state=0
+  done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
+  [[ "$state" -eq 2 ]]
+}
+
+_redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
+  # catch the redrive flag itself failing (rc 1 the pair is not on disk, rc 2 the transcript is
+  # unreadable) used to stand `_redrive_after_spawn` down with zero swap.log evidence. Logged ONLY
+  # on a swap landing (`fromswap`, threaded from `_spawn_settle`'s own positional) — an ordinary
+  # new spawn also carries CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 but writes no pair, so rc 1 there
+  # is the routine case, not news.
+  local id="$1" fromswap="$2" rc="$3" f="$4"
+  [[ "$fromswap" == 1 ]] || return 0
+  case "$rc" in
+    1) echo "$(date '+%F %T') redrive-skip $id: not-stalled" >> "$REG/swap.log" ;;
+    2) echo "$(date '+%F %T') redrive-skip $id: no transcript at $f" >> "$REG/swap.log" ;;
+  esac
+}
+
+_redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume prompt when the flag wrote the pair and drove nothing.
+  # Measured on the TRANSCRIPT, not on hookstate (D-2237): `working` proves tool
+  # calls, not that the re-drive took. Gives Claude Code REDRIVE_WAIT_S seconds
+  # first — a running turn ("esc to interrupt") or a real row after the pair ends
+  # the wait — then stands down on an armed auto-continue, a hard-blocked pane
+  # or a draft in the box, each with its own swap.log line.
+  #
+  # PANE WINDOW IS `tail -8`, EVERYWHERE BELOW BUT `_pane_box_draft` (D-2264).
+  # Every other established consumer of `esc to interrupt`/`_pane_auto_continue_armed`/
+  # `_pane_hard_blocked` narrows first — `_auto_swap_check` (ccd:12715) and `_auto_compact_check`
+  # (ccd:12929) both `| tail -8` — and ccd:12915-12924 already documents why: a full ~50-row
+  # capture lets `grep -q "esc to interrupt"` match a STALE banner further up the scrollback, and
+  # `_pane_hard_blocked`'s `limit reached|API Error: 429|rate limit` alternation is exactly what a
+  # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
+  # outside the last 8 lines while still being well inside a full capture, so widening this
+  # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_draft` alone keeps the
+  # full `-e` capture: it already reads only the LAST `❯` line, so a wider window costs it nothing.
+  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane cur
+  f=$(_transcript_path "$id") || return 0
+  for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
+    _transcript_stalled_pair "$f"; rc=$?
+    [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+    echo "$pane" | grep -q "esc to interrupt" && return 0
+    sleep 1
+  done
+  # Re-measure both loop conditions once more: the loop's own last check was one
+  # second ago, and Claude Code's own re-drive (or the operator) can start a turn
+  # in that gap. Typing into a turn that started here would be exactly the
+  # spurious keystroke the header comment promises never happens (D-2263).
+  _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  echo "$pane" | grep -q "esc to interrupt" && return 0
+  _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
+  _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  [[ -n "$cur" ]] && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  tmux send-keys -t "$t" -l "$RESUME_PROMPT"; sleep 1; tmux send-keys -t "$t" Enter
   return 0
 }
 
@@ -14515,9 +14690,10 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # same reason ruling 5 gives the mismatch one — a revival must not be refused
   # for a placement the auto-swapper moves at the next idle boundary.
   #
-  # AND `-z "$regw"` IS NOT A FORM TEST, which the paragraph below calls it and
-  # this one used to (#69 review round 5, its own refute pass). `regw` comes
-  # from `_reg_get`, so it is EMPTY for a row whose `.wrapper` is absent,
+  # AND `-z "$regw"` IS NOT A FORM TEST, which this paragraph and the one below
+  # both used to call it (both corrected in the same edit — #69 review round 5,
+  # its own refute pass). `regw` comes from `_reg_get`, so it is EMPTY for a
+  # row whose `.wrapper` is absent,
   # unreadable OR blank — the overloaded null this whole PR is about. Saying
   # "creation-only" turns a measured claim about ONE path into a false claim
   # about the branch. The narrow statement above is the one that holds, and
@@ -15488,11 +15664,12 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # banner recomputes its sentence from a freshly measured reason on every
   # firing, so it already tells the truth. WHEN account-pools wave 3 lands its
   # reader, the marker's reason becomes `SessionRecord.stranded.reason` and is
-  # carried VERBATIM to every ccrc surface — measured,
-  # `git grep -c stranded server/src/registry.ts` is 0 on `origin/main` and on
-  # this branch, 17 on the wave-3 branch. The fix earns its place on the first
-  # half alone; claiming the second in the present tense is the exact defect
-  # this round keeps booking.
+  # carried VERBATIM to every ccrc surface — measured: `git grep -c stranded
+  # server/src/registry.ts` is 0 on `origin/main` and on this branch; non-zero
+  # only on the wave-3 branch, where that reader lands (`git grep -c stranded
+  # ws/clear-meadow -- server/src/registry.ts`). The fix earns its place on
+  # the first half alone; claiming the second in the present tense is the
+  # exact defect this round keeps booking.
   #
   # A MARKER REWRITE CANNOT STORM, which is why it takes no floor of its own:
   # `_reg_set` is one tmp-plus-rename over one file. The reason string CAN
@@ -15979,8 +16156,9 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # `<unmeasured>` literal (grepped), so no assertion moves.
   # THE SENTENCE COMES FROM `_undecidable_cause`, NOT FROM HERE (#69 review
   # round 4 gate, finding 3). This line built its own string — `"$2 could not be
-  # measured, …"` — while the LATE path, 900 lines down, rendered the same
-  # condition through `_undecidable_cause`. Measured: an unreadable `.project`
+  # measured, …"` — while the LATE path — `_auto_swap_check`'s rc>=2 arm,
+  # `grep -n '_undecidable_cause "' ccd/ccd` — rendered the same condition
+  # through `_undecidable_cause`. Measured: an unreadable `.project`
   # caught here said "project could not be measured" and caught there said "the
   # project's own registry field could not be read ($REG/<id>.project)", and
   # these two call sites are the EARLY RETURNS, so the common case was the one

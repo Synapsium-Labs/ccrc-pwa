@@ -657,9 +657,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 8 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(8);
-    expect(MIGRATIONS.length).toBe(8);
+  it('COORD_SCHEMA_VERSION derives to 9 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(9);
+    expect(MIGRATIONS.length).toBe(9);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {

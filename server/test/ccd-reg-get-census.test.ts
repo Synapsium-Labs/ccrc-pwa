@@ -10,20 +10,22 @@ import { CCD } from './ccdWsHelpers.js';
  * `_reg_get`'s header argues that widening it to a three-answer read is a
  * fleet-wide change, and the argument is a COUNT: how many call sites would
  * inherit the duty of deciding what to do with rc 2. A count is a claim about
- * the file, and this one has been wrong in four of the five review rounds that
- * touched it — 133 at C1, 135 once this branch and the #70 merge had added
- * sites, 133 when round 3 converted the two tick `.project` reads, 132 when
- * rounds 4 and 5 converted the three verb readers. Each move left the previous
- * figure standing somewhere in the same comment block, and round 4's gate found
- * four stale cardinals sitting ABOVE the corrected one, where a reader hits
- * them first.
+ * the file, and this one has gone stale in most of the rounds that touched it.
+ * The moves are enumerated once, each with the ref it was measured at, in
+ * `ccd/ccd`'s own `_reg_get` header (`grep -n 'It has moved six times' ccd/ccd`);
+ * they are not restated here. Each move left the previous figure standing
+ * somewhere in the same comment block, and round 4's gate found four stale
+ * cardinals sitting ABOVE the corrected one, where a reader hits them first.
  *
  * The header's instruction was "re-measure it". That is a request. This is the
  * mechanism: it reads the two numbers out of the sentence that states them and
  * compares each to the thing that sentence says it counted. `ccd-pool-ok.test.ts`
- * carries the identical pin for the `_pool_ok` header one function away, and
- * that pin is why the `_pool_ok` census never went stale through the same five
- * rounds.
+ * carries the identical pin for the `_pool_ok` header in the same file, and
+ * that pin is why the `_pool_ok` census never went stale across the moves this
+ * one did. ("the same five rounds" stood here until the account-pools merge
+ * took `ccd/ccd`'s swept header, whose own count is SIX moves — the antecedent
+ * this clause leaned on was in the paragraph above, and that paragraph now
+ * delegates the history rather than enumerating it.)
  *
  * WHY TWO NUMBERS AND NOT ONE: the header's own cited commands are
  * `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l` for
@@ -85,10 +87,10 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     expect(from, 'the hang-surface header could not be found').toBeGreaterThan(-1);
     expect(to, 'the end of the census block could not be found').toBeGreaterThan(from);
     const block = src.slice(from, to);
-    const history = block.indexOf('It has moved four times in five rounds');
+    const history = block.indexOf('It has moved six times');
     expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1);
     const outsideHistory = block.slice(0, history)
-      + block.slice(block.indexOf('\n', block.indexOf('converted the three verb readers')));
+      + block.slice(block.indexOf('\n', block.indexOf('Every earlier move left a stale cardinal')));
     // WHAT THIS REFUSES, STATED NARROWLY ENOUGH TO BE TRUE. An earlier cut
     // matched `/\b1[0-9]{2}\b/` and its failure message claimed to refuse "any
     // new three-digit cardinal" — measured, a restated 98 or 260 sailed
@@ -104,9 +106,17 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     const { calls, lines } = statedCensus(src);
     const near = (n: number): boolean =>
       Math.abs(n - calls) <= 25 || Math.abs(n - lines) <= 25;
-    const cardinals = (outsideHistory.match(/(?:D-|#|ccd:)?\d{2,4}\b/g) ?? [])
+    // ORDINALS COUNT TOO. `the 132nd call site` restates the census as surely as
+    // `132` does and slipped past the bare `\b` form — a hole the refute pass
+    // planted and measured. Word-spelled figures ("one hundred and thirty-two")
+    // are still a hole, and are DISCLOSED rather than papered over: the other
+    // census in this file spells its numbers as words, which is exactly why no
+    // scanner ever caught that one going stale, and a word-matcher here would
+    // be a second vocabulary to keep in step. `ccd-reg-get-census`'s third case
+    // pins that census by its words instead.
+    const cardinals = (outsideHistory.match(/(?:D-|#|ccd:)?\d{2,4}(?:st|nd|rd|th)?\b/g) ?? [])
       .filter((t) => !/^(?:D-|#|ccd:)/.test(t))
-      .filter((t) => near(Number(t)));
+      .filter((t) => near(Number(t.replace(/(?:st|nd|rd|th)$/, ''))));
     expect(cardinals,
       `the census block restates a figure within 25 of the one sentence that owns it `
       + `(${cardinals.join(', ')}) — say "every call site" and let the pin above hold the number`)

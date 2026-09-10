@@ -842,9 +842,9 @@
 .sess-line--active .sess-acct-away,
 .sess-line--active .sess-ask,
 .sess-line--active .sess-subagent-row,
-/* The five ink-tertiary meta cells (.sess-held / .sess-lifecycle /
-   .sess-swapblocked share one rule; .sess-unmeasured and .sess-substrate
-   each have their own). Being
+/* The six ink-tertiary meta cells (.sess-held / .sess-lifecycle /
+   .sess-swapblocked / .sess-ask-state share one rule; .sess-unmeasured and
+   .sess-substrate each have their own). Being
    INSIDE .sess-meta is not enough for them: a child's own `color` beats the
    colour it would inherit from its parent, so on the selected row they went
    on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
@@ -853,11 +853,12 @@
    .sess-held shipped that way on main; .sess-lifecycle and .sess-swapblocked
    joined its declarations later and inherited the omission with them, which
    is what widened it — .sess-lifecycle renders on every non-running row.
-   No new pair for design/contrast-check.mjs: they join the pair this rule
-   already declares. */
+   .sess-ask-state (Task 19) joins already knowing better — no new pair for
+   design/contrast-check.mjs: it joins the pair this rule already declares. */
 .sess-line--active .sess-held,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
+.sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
 /* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
@@ -1305,6 +1306,9 @@
    separate rule would be a new colour pair for design/contrast-check.mjs to
    price for no gain. If either ever needs its own ink it needs its own
    audited pair first: do not fork the declarations and keep the token.
+   .sess-ask-state (Task 19, the ask pre-emption lane's chip) joins them for
+   the same reason — a short, verbatim, ink-tertiary fact with its full text
+   in `title`.
 
    The `color` below is UNSELECTED ink only. Setting a colour here at all is
    what takes these cells out of .sess-meta's inheritance, so each one also
@@ -1312,7 +1316,8 @@
    comment on that rule for the ratios this cost while they were not. */
 .sess-held,
 .sess-lifecycle,
-.sess-swapblocked {
+.sess-swapblocked,
+.sess-ask-state {
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;

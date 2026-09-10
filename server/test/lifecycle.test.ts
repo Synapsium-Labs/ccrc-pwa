@@ -289,6 +289,82 @@ describe('lifecycle routes', () => {
     expect(res.json()).toEqual({ ok: false, stderr: 'boom' });
     await app.close();
   });
+
+  // D-2177: `cmd_swap` was NOT serialized against `answerAsk`'s
+  // capture-then-send window — every other write route (`sendPrompt`,
+  // `answerDialog`, `answerAsk` itself) already shares ONE per-session
+  // `KeyedQueue` (`sendDeps`/`askDeps`, built once in server.ts). Modelled
+  // directly rather than by inspecting source: hold the queue slot for this
+  // session with a pending function (standing in for an in-flight `answerAsk`
+  // between its pane capture and its keystroke) and prove the swap route's own
+  // `ccd swap` call does not run until that function resolves — the pre-fix
+  // shape, where swap bypassed the queue entirely, would run its ccd call
+  // immediately instead.
+  //
+  // CORRECTED: this entry originally called `cmd_swap` "the one
+  // live-pane-destroying operation" outside the queue, and it is not the one.
+  // `POST /api/sessions/:id/stop` and `POST /api/sessions/:id/archive` both
+  // reach ccd verbs that end in the same `_ws_unsupervise` + `tmux
+  // kill-session` pair (`grep -n '^cmd_stop()\|^cmd_ws_archive()' ccd/ccd`)
+  // and both still go straight through `runCcdOr502`. What is narrower and
+  // true is that a swap is the pane-destroying write that is supposed to
+  // PRESERVE the conversation it interrupts.
+  it('POST /api/sessions/:id/swap serializes through the SAME per-session KeyedQueue as answerAsk (D-2177)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedDefault(home);
+    const order: string[] = [];
+    const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    // Recording, so the enqueue itself is observable — see the wait below.
+    const enqueued: string[] = [];
+    const queue = new (class extends KeyedQueue {
+      override run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+        enqueued.push(key);
+        return super.run(key, fn);
+      }
+    })();
+    const app = await buildServer({
+      cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue,
+    });
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const heldRun = queue.run(ID, async () => { order.push('held-start'); await held; order.push('held-end'); });
+
+    const swapPromise = app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ID}/swap`,
+      payload: { wrapper: 'claude' },
+    });
+
+    // WAIT FOR THE ENQUEUE, NOT FOR A CLOCK. This used to sleep 20 ms and
+    // argue that "an unserialized swap has nothing async blocking it before
+    // its ccd call, so this is ample time for it to have run if it bypassed
+    // the queue". That premise was true when this case was written and is
+    // FALSE since account-pools wave 3 landed: the route now awaits
+    // `readSessionRecord`, a registry `readdir` and `readProjectPools` before
+    // it reaches the queue, so on a loaded box a bypassing mutant could still
+    // be inside those reads at the 20 ms mark and this case would pass
+    // vacuously. Waiting until the route has ENQUEUED under this session's key
+    // is the same observation with no clock in it.
+    const capMs = 5_000;
+    const started = Date.now();
+    while (enqueued.length < 2) {
+      if (Date.now() - started > capMs) throw new Error('the swap route never enqueued');
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(enqueued).toEqual([ID, ID]);
+    expect(order).toEqual(['held-start']);   // swap has NOT touched ccd yet
+
+    release();
+    await heldRun;
+    const res = await swapPromise;
+
+    expect(res.statusCode).toBe(200);
+    expect(order).toEqual(['held-start', 'held-end', `swap ${ID} claude`]);
+    await app.close();
+  });
 });
 
 // Fix round 3 (task 14 follow-up, Important #1-#3): the LOCAL-MODE skew

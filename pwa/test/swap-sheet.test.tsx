@@ -40,7 +40,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
   version: null,
   ...patch,
 });
