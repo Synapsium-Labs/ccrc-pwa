@@ -736,12 +736,13 @@ describe('cmd_swap refuses a crossing that was not asked for', () => {
       // so both `die` arms were skipped and the session moved out of its pool
       // silently, with no crossing marker.
       //
-      // THREE OF THESE SHAPES ALREADY DID THIS ON `origin/main`; two could not,
-      // because they HUNG instead. This branch's `-f` on `_reg_get` turned those
-      // two hangs into the same silent move — so it widened the hole from three
-      // shapes to five rather than opening it. Said here because the first draft
-      // of the fix's own comment claimed the branch created all five, and that is
-      // false for three of them.
+      // Of the five shapes ccd's own comment measures (`grep -n 'MEASURED on
+      // five shapes' ccd/ccd`), three already did this on `origin/main` and two
+      // HUNG instead; this branch's `-f` on `_reg_get` turned those two hangs
+      // into the same silent move. The `chmod 000` shape is in that population
+      // and not in the list above. Said here because the first draft of the
+      // fix's own comment claimed the branch created all five, and that is false
+      // for three of them.
       const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
       const p = reg(`${ID}.project`);
       fs.rmSync(p, { force: true, recursive: true });
@@ -1127,8 +1128,8 @@ describe('cmd_prefer', () => {
     //     test/pools-existence-pairing.test.ts \
     //     test/ccd-lifecycle-contain.test.ts test/lifecycle-wire.test.ts \
     //     test/ccd-archive.test.ts test/ccd-workspaces.test.ts
-    // — the union of every suite naming `cmd_prefer` or `cmd_start`, so the
-    // set covers the CHANGED CALL SITES rather than this file alone.
+    // — the suites listed above, chosen because they exercise the changed
+    // call sites rather than this file alone.
     // Baseline: 7 files / 296 tests / 0 failed. Delete any ONE of the three
     // verbs' two-line `[[ "$prc" -eq 2 ]] && die …` and it is 2 failed /
     // 294 passed — the semantic red being that verb's own case here
@@ -1601,8 +1602,9 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
   it('every non-regular field type answers instead of blocking, through BOTH readers', () => {
     // C1 closed the hang for `_reg_read` and then added a new unguarded read to
     // the supervise loop through `_reg_get` — so the class was half closed, and
-    // the half left open is the one with 135 call sites. `timeout` in a child
-    // shell is the assertion: a test for a hang must not be able to hang.
+    // the half left open is the one with every call site — the census
+    // `ccd-reg-get-census.test.ts` holds honest. `timeout` in a child shell is
+    // the assertion: a test for a hang must not be able to hang.
     seedRow();
     const cases: Array<[string, () => void]> = [
       ['fifo', () => execFileSync('mkfifo', [reg(`${ID}.project`)])],
@@ -2284,8 +2286,11 @@ describe('R4 — the strand marker is a CURRENT-STATE claim and follows the trut
     // a HEALTHY pane — and when the unreadable field recovers while the pane
     // stays blocked, `_strand_mark`'s `-e` debounce swallows the genuine strand
     // that follows, so the operator reads a registry fault that lasted one tick
-    // for the rest of a five-hour window. The marker is what `registry.ts`
-    // ships VERBATIM to every surface.
+    // for the rest of a five-hour window. The marker is what account-pools
+    // wave 3's reader will carry to every surface as
+    // `SessionRecord.stranded.reason`;
+    // `git grep -c stranded server/src/registry.ts` is 0 on this tree, so the
+    // banner is what carries it until that reader lands.
     seedRow(); tagPool('demo', 'pool-a'); plantNotify();
     // EVERY account at the ceiling, because the finding is about a row with
     // NOWHERE TO GO: leave one free and a destination exists, the tick clears
@@ -2381,13 +2386,14 @@ describe('B6 — the round-4 guards nothing could red, and the sentences nothing
   });
 
   it('and an UNTAGGABLE box still PREFERS — `cmd_prefer` carries the gate `cmd_swap` was measured on', () => {
-    // THE CONTROL IS WHAT MAKES THIS A FINDING. Four sites carry
-    // ` && ! _pool_untaggable`; dropping it at `cmd_prefer` left the whole
-    // ccd+pools set green, and dropping the byte-identical text at `cmd_swap`
-    // redded `but an UNTAGGABLE box still swaps` immediately. Same guard, same
-    // line, one verb measured and one not — and the case that DOES name
-    // `cmd_prefer` two describes up tags the pool, so `_pool_untaggable` is
-    // false there and the gate cannot change its verdict.
+    // THE CONTROL IS WHAT MAKES THIS A FINDING. The same guard text sits at
+    // several sites (`grep -n '&& ! _pool_untaggable' ccd/ccd`); dropping it
+    // at `cmd_prefer` left the whole ccd+pools set green, and dropping the
+    // byte-identical text at `cmd_swap` redded `but an UNTAGGABLE box still
+    // swaps` immediately. Same guard, same line, one verb measured and one
+    // not — and the case that DOES name `cmd_prefer` two describes up tags
+    // the pool, so `_pool_untaggable` is false there and the gate cannot
+    // change its verdict.
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
     expect(fs.existsSync(reg('pools')), 'this case is about a box with no pools').toBe(false);
     const p = reg(`${ID}.project`);
@@ -2402,10 +2408,11 @@ describe('B6 — the round-4 guards nothing could red, and the sentences nothing
     // B3'S THIRD VERB READER. `_reg_get` folded the unreadable field to `""`,
     // `_project_pool_state ""` answers `untagged`, and `untagged` permits every
     // account — so the pool block decided "in pool" and printed nothing. What
-    // it silences here is the WARNING and not the die: the die is creation-only
-    // (`-z "$regw"`), and this read runs only on the id form, where an empty
-    // `regw` has already died at `no wrapper recorded`. `run` rather than
-    // `shFail` because the warning rides a ZERO exit.
+    // it silences here is the WARNING and not the die: the die sits on the
+    // `-z "$regw"` arm, and `regw` is non-empty on every path that reaches
+    // this read, so the die is unreachable from HERE — 'creation-only' is the
+    // wrong name for that test (D-2317: `regw` comes from `_reg_get`). `run`
+    // rather than `shFail` because the warning rides a ZERO exit.
     seedRow(); tagPool('demo', 'pool-a');
     const p = reg(`${ID}.project`);
     fs.rmSync(p, { force: true }); fs.mkdirSync(p);
