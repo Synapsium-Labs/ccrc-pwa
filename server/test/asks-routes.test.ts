@@ -69,7 +69,14 @@ const seed = (home: string, id: string, uuid: string): void => {
 const seedHookstate = (home: string, id: string, uuid: string, updatedAt: number): void => {
   const reg = path.join(home, '.cc-sessions');
   writeFileSync(path.join(reg, `${id}.hookstate.json`), JSON.stringify({
-    v: 1, state: 'waiting', event: 'Notification', sessionId: uuid, pid: 4242,
+    // D-2405: `PermissionRequest`, not `Notification`. `session-hook.sh` can
+    // never write the latter (`*) exit 0` at `:1009`) and
+    // `install-session-hooks.sh:37` registers it nowhere — measured against
+    // all six live wrapper HOMEs, whose hook keys are identical and carry no
+    // `Notification`. No assertion here reads `event`, which is exactly why
+    // the fiction survived: a fixture teaching the next reader that an event
+    // exists when it does not.
+    v: 1, state: 'waiting', event: 'PermissionRequest', sessionId: uuid, pid: 4242,
     updatedAt, ask: { questions: [QUESTION] }, subagents: [],
   }));
 };

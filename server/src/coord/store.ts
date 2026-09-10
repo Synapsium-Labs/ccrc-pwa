@@ -4038,4 +4038,52 @@ export class CoordStore {
     ).run(now, dialogId, childId);
     return Number(res.changes) > 0;
   }
+
+  /** `askAt` ADVANCED, CAS'd on the two witnesses that say the instance did
+   *  not change (D-2403). The other half of D-2170's guard, and the half it
+   *  shipped without.
+   *
+   *  `askAt` is a snapshot of the child's hookstate `updatedAt` at mint, and
+   *  `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals
+   *  it. `freshAskAt`'s docstring argues that correctly for SUBSTITUTION —
+   *  `askKey` hashes CONTENT, so a child looping over identical questions
+   *  mints the same key twice and `updatedAt` is what tells instance 1 from
+   *  instance 2. What it does not say is that `updatedAt` moves for reasons
+   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamps it
+   *  unconditionally on EVERY write, and its `SubagentStart`/`SubagentStop`
+   *  arm re-reads `.ask` straight back off the file (`:1227` — D-2404: it is
+   *  that re-read, NOT the `:1233` ask-clear exemption two reviewers named,
+   *  since `state` is `waiting` on this path and the clear never applies) and
+   *  restores `prev_state`, so a subagent event on a session blocked at a dialog
+   *  rewrites the identical envelope under a fresh number. Nothing re-stamped
+   *  the row, so ONE such bump refused every parent answer for the row's
+   *  whole life and the lane degraded, silently and greenly, to the
+   *  pre-feature behaviour it was built to replace. Measured across the seam
+   *  in `server/test/ask-instance-guard.test.ts` — the real hook writing, the
+   *  real CAS refusing, with the control that says the bump is why.
+   *
+   *  WHY THIS IS NOT A WEAKENING. The `WHERE` demands both witnesses the
+   *  guard actually cares about: `dialogId` — the sha1 of the menu painted in
+   *  the pane, which `detectDialogs` re-scrapes every tick and which no hook
+   *  event can move — and `askKey`, the content the parent would be
+   *  answering. The caller passes them from THIS tick's scrape and THIS
+   *  tick's hookstate, so an advance is a positive observation that the same
+   *  menu is still on screen carrying the same question, not an assumption
+   *  that nothing happened. Repaint the dialog, change the question, or lose
+   *  the pane, and zero rows change: the stale `askAt` stands and the CAS
+   *  refuses exactly as designed. `'held'` alone, never `'answering'`: a
+   *  principal mid-answer already took the row against a specific `askAt`,
+   *  and moving it under them would be the race this guard exists to lose.
+   *
+   *  The residual, stated rather than discovered: the scrape is a 2 s poll,
+   *  so a bump landing between the last re-stamp and the route's own fresh
+   *  read still refuses once. That is a refusal a retry wins — which is what
+   *  `wave-lifecycle.md` already tells a coordinator `ask-moved` means —
+   *  rather than the permanent wedge it replaces. */
+  restampAsk(a: { id: number; dialogId: string; askKey: string; askAt: number }): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
+    ).run(a.askAt, a.id, a.dialogId, a.askKey);
+    return Number(res.changes) > 0;
+  }
 }
