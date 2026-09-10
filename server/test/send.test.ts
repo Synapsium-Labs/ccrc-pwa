@@ -736,6 +736,21 @@ describe('holdIfAutoContinueArmed (D-2368)', () => {
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
   });
+  // Final review finding 2 (2026-09-10): the whole `captureAnsi` output is not the
+  // decision window — a 220x50 pane routinely carries the ordinary English phrase
+  // ("continuing automatically") scrolled off above the fold (swap.log, this very
+  // file, a prior limit episode on screen), which is not Claude Code's own armed
+  // banner. Decided on the LAST 8 LINES, matching ccd's `_pane_auto_continue_armed`
+  // window, so a stale phrase far above the input box must not hold mail.
+  it('a phrase above the fold does not hold — decided on the last 8 lines, matching ccd\'s tail -8 window', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const filler = Array.from({ length: 15 }, (_, i) => `pane row ${i}`);
+    const paneAboveFold = [stale, ...filler, '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([paneAboveFold, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
+  });
 });
 
 // F3 / bug #21 (build4 dogfood, docs/superpowers/programs/build4.md): the

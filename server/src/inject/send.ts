@@ -501,7 +501,16 @@ export function sendPrompt(
     const plain = pane.replace(SGR, '');
     // D-2368: before the menu check — on an armed screen the limit is the reason
     // nothing may be typed, whatever else is drawn.
-    if (opts.holdIfAutoContinueArmed && autoContinueArmed(plain)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
+    //
+    // DECIDED ON THE LAST 8 LINES, matching ccd's own window (`_pane_auto_continue_armed`
+    // is fed `tail -8` at both its call sites, ccd/ccd), not the whole `plain` capture
+    // (final review finding 2, 2026-09-10). `AUTO_CONTINUE_RE`'s phrases ("continuing
+    // automatically", "continuing shortly") are ordinary English a ccrc session routinely
+    // has scrolled into its 220x50 pane — swap.log, this file, an earlier limit episode —
+    // and testing the WHOLE capture against them held mail on a false positive that could
+    // never expire (the sweep's back-off counts no attempt for this error, by design).
+    const armWindow = plain.split('\n').slice(-8).join('\n');
+    if (opts.holdIfAutoContinueArmed && autoContinueArmed(armWindow)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
     // A menu owns the keyboard and there is no input box to type into — the only
     // `❯` on screen is the cursor resting on the selected OPTION. draftOf would
     // read that row ("1. Forward-fill per class ┌────…") as a half-typed draft
