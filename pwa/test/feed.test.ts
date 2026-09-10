@@ -47,6 +47,21 @@ describe('reviveNotifyEvents', () => {
     expect(events[0]!.runId).toBe(42);
   });
 
+  it('folds a non-number `runId` to null — a string or an explicit null is "about no run", never a typed lie', () => {
+    // shared/api.ts's own sentence: "Anything that is not a number — absent,
+    // null, a string — becomes `null`". Only the absent case was measured
+    // (PR #75 review round 1, MUT-4); a `?? null` fold keeps the absent case
+    // green while a wire frame carrying `runId: 'nope'` puts a string into
+    // `NotifyEvent.runId: number | null` and every programme join misses.
+    for (const runId of ['nope', null] as const) {
+      const { events, dropped } = reviveNotifyEvents([
+        { ...e({}), runId } as unknown as Record<string, unknown>,
+      ]);
+      expect(dropped, String(runId)).toBe(0);
+      expect(events[0]!.runId, String(runId)).toBeNull();
+    }
+  });
+
   it('lands a kind from a NEWER build on `unknown` rather than typing it as something it is not', () => {
     // shared/api.ts's isNotifyKind: a kind this build does not recognise
     // becomes the client-side we-do-not-know member, not a fourth event

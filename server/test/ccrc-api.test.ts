@@ -449,7 +449,7 @@ describe('a query key rides only if its row declared it', () => {
   });
 
   it('exercises `all` and `limit` on mail list together — neither is a bare flag', async () => {
-    // The generic `--*` arm (`:269`–`:277`) always consumes a VALUE — there is
+    // The generic `--*` arm (`:279`–`:287`) always consumes a VALUE — there is
     // no bare-flag form on this client — so `--all` rides as `--all 1`, exactly
     // like `GET /api/mail?to=`'s existing `all` key.
     await run(['mail', 'list', '--program', 'build4', '--all', '1', '--limit', '20']);

@@ -97,8 +97,9 @@ declare -A ROUTES=(
   # coordinator reached the settle call with four titles and no ids, guessed 1,
   # and was refused `unknown-item`.
   [runs.items-list]='GET|/api/runs/{id}/items|yes|-'
-  # `--program` joins through `runs.program`; `to` becomes optional once it is
-  # given (routes.ts's own `(to === null) === (program === null)` guard, not
+  # `--program` joins through `runs.program`; `--to` and `--program` are
+  # MUTUALLY EXCLUSIVE — exactly one, both or neither is a 400 (D-2057;
+  # routes.ts's own `(to === null) === (program === null)` guard, not
   # this client's). `--all` has no bare-flag form on this client — the generic
   # `--*` arm always consumes a value — so it rides as `--all 1`, exactly as
   # `GET /api/mail?to=`'s existing `all` key always has.
