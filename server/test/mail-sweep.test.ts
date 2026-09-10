@@ -284,6 +284,15 @@ const keyPresses = (calls: string[][]): string[] =>
 
 const advance = (ms: number): void => { vi.setSystemTime(Date.now() + ms); };
 
+/** A `push` double that records every notification sent through it. Module
+ *  scope: originally local to `'sweepMail: a blocked delivery reaches its
+ *  SENDER'`, hoisted so the D-2369 hold suite (also a `tellSender` consumer)
+ *  can share it rather than growing a second copy. */
+const pushSpy = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
+  const sent: PushPayload[] = [];
+  return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
+};
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
@@ -1865,11 +1874,6 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
   // and NO `notifyLog` and asserts nothing about either — so the notification
   // is purely additive here and a test that wants to observe it wires its own,
   // the way push-copy.test.ts does.
-  const pushSpy = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
-    const sent: PushPayload[] = [];
-    return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
-  };
-
   /** A recipient the sweep's gate will accept: a registry row, a hookstate and
    *  a livestate that read idle and quiet. Composed from this file's three
    *  seeders rather than reinventing them, and run AFTER `primedWatcher` per
@@ -2067,6 +2071,55 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // writer of `run_events`.
     const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
     expect(eventsAfter.n).toBe(eventsBefore.n);
+  });
+});
+
+describe('an armed auto-continue holds the nudge (D-2369)', () => {
+  const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n';
+  const seedAll = (h: Harness): void => {
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    seedRegistry(h.home, FROM_ID, FROM_UUID);
+  };
+  it('no keystroke; held five minutes; no attempt counted; the sender told once', async () => {
+    const h = harness({ panes: [ARMED] });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedAll(h);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(keyPresses(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.lastError).toBe('auto-continue-armed');
+    expect(row.attempts).toBe(0);
+    expect(row.nextAttemptAt).toBe(Date.now() + 300_000);
+    expect(sent.filter((p) => p.tag === `mail-blocked-${id}`)).toHaveLength(1);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(sent.filter((p) => p.tag === `mail-blocked-${id}`)).toHaveLength(1);
+    // A THIRD sweep, now past the whole `MAIL_ARMED_HOLD_MS` hold: this is the
+    // one that actually re-selects the row (`nextAttemptAt` is +300_000, so
+    // `PAST_SWEEP_MS` alone — 11s — never brings it back into `dueDeliveries`,
+    // and the sweep above touches nothing). Still armed, `d.lastError` now
+    // reads back as 'auto-continue-armed' from the row itself — the shape the
+    // `d.lastError !==` guard exists to recognise as a REPEAT, not a new one.
+    advance(300_000); await w.sweepMail();
+    expect(sent.filter((p) => p.tag === `mail-blocked-${id}`)).toHaveLength(1);
+  });
+  it('a delivery one attempt short of the ceiling is NOT parked by a hold', async () => {
+    const h = harness({ panes: [ARMED] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.db.prepare('UPDATE mail_deliveries SET attempts = ? WHERE id = ?').run(MAIL_MAX_ATTEMPTS - 1, id);
+    await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(MAIL_MAX_ATTEMPTS - 1);
+    expect(row.rejectCode).toBeNull();
   });
 });
 

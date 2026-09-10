@@ -289,6 +289,13 @@ const MAIL_REPLAY_MS = 600_000;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
 
+/** D-2369: how long a nudge is held when the recipient's own auto-continue is
+ *  armed. Not a backoff step: the recipient is not failing, it is waiting, so
+ *  the hold counts no attempt and `MAIL_MAX_ATTEMPTS` cannot park it. Five
+ *  minutes against a reset that may be hours away: cheap re-reads, and the
+ *  first sweep after the session resumes delivers. */
+const MAIL_ARMED_HOLD_MS = 300_000;
+
 /** The ceiling on successful, UNACKED replays (review finding 20) — see
  *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
  *  this role. At `MAIL_REPLAY_MS` (10 min) between replays, 20 attempts is
@@ -2835,7 +2842,7 @@ export class FleetWatcher {
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -2919,6 +2926,17 @@ export class FleetWatcher {
             recordAlways: true,
           }, projects);
         };
+
+        if (res.error === 'auto-continue-armed') {
+          // D-2369. Before the attempts ceiling on purpose: a held delivery is
+          // not a failed one. Told once per hold, like draft-present.
+          if (d.lastError !== 'auto-continue-armed') {
+            tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
+              `mail-blocked-${d.id}`);
+          }
+          store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          continue;
+        }
 
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
