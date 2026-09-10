@@ -12889,6 +12889,31 @@ _pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waitin
   grep -qiE "continuing automatically|continuing shortly" <<<"$1"
 }
 
+_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner and nobody is typing (D-2363)
+  # THE PANE FIRST, UNCHANGED. `_pane_hard_blocked` is the detector every landing,
+  # rescue and strand verdict has run on since Wave 3 and it stays primary — its
+  # contract (a visible banner swaps, draft or not) is not touched here. The
+  # transcript is the SECOND detector, for the two shapes the pane cannot see:
+  #   - a BLANK capture (`compact-skip … pane-blank` is a measured condition on
+  #     this fleet), which used to return before any verdict;
+  #   - a banner whose TEXT the regex does not match and no "continuing
+  #     automatically" line beside it — auto-resume off, its re-arm cap hit, a
+  #     human's Esc. D-2364 records why the regex is NOT widened for that instead.
+  # Two stand-downs of its own:
+  #   - a running turn ("esc to interrupt") cannot be sitting on a banner, and the
+  #     fleet's busy steady state should not pay a transcript read every 5 s;
+  #   - a NON-EMPTY INPUT BOX. `cmd_swap` carries the transcript and never the box,
+  #     so a human mid-sentence on a limited account would lose the sentence to
+  #     the rescue. `-e` capture, like every other `_pane_box_draft` site.
+  local id="$1" pane="$2" f cur
+  _pane_hard_blocked "$pane" && return 0
+  grep -q "esc to interrupt" <<<"$pane" && return 1
+  f=$(_transcript_path "$id") || return 1
+  _transcript_limit_banner "$f" >/dev/null || return 1
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)")
+  [[ -z "$cur" ]]
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
@@ -13249,7 +13274,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     return 0
   fi
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
-  [[ -n "$pane" ]] || return 0
+  # THE VERDICT BEFORE THE BLANK-PANE RETURN (D-2363): a blank capture used to
+  # return here, ahead of any classifier, and a limited session with a blank
+  # pane was never rescued. `_session_hard_blocked` reads the transcript for
+  # that case; a blank pane that is NOT blocked still stands still, as before.
+  _session_hard_blocked "$id" "$pane" && hard_blocked=1
+  [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
   #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
   #  rotation on 2026-09-07 through `_default_pool`, as an ordinary candidate
@@ -13264,7 +13294,6 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # and the rescue below would never fire. `force` skips straight to the
   # must-leave candidate loop so a hard block always finds a destination when
   # one exists, regardless of what telemetry has to say about cur/home.
-  _pane_hard_blocked "$pane" && hard_blocked=1
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
@@ -13381,7 +13410,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _is_valid_wrapper "$wrapper" && ! _is_home_able "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$(_pane_hard_blocked "$pane" || printf ' via=transcript')" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -16106,13 +16135,14 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # replicating the cooldown tests here, now removes only 6 of those 18 cells —
   # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
   # one, with every case green.
-  local pane
+  local pane blocked=""
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE CLEARS NOTHING, and this line stays a BARE return
   # (#69 review, S2). An empty capture is a pane nobody could read; clearing on
   # it would be the fabricated clear C1 exists to prevent, and it is the one
   # place the clear below must NOT move up to.
-  [[ -n "$pane" ]] || return 0
+  _session_hard_blocked "$1" "$pane" && blocked=1
+  [[ -n "$pane" || -n "$blocked" ]] || return 0
   # THE MARKER MUST FOLLOW THE TRUTH — `_strand_mark`'s own docstring says so,
   # and until this line it could not, from here. The caller returns at the
   # `wrapper` guard ABOVE the tick's only automatic healthy-pane clear, so a
@@ -16127,7 +16157,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # classifier, same refusal to act on an empty one. `_strand_clear`'s own `-e`
   # guard keeps the steady state silent, so a healthy row with an unreadable
   # field writes nothing at all.
-  _pane_hard_blocked "$pane" || { _strand_clear "$1"; return 0; }
+  [[ -n "$blocked" ]] || { _strand_clear "$1"; return 0; }
   # THE GROUP CARRIES THE REDIRECT (#69 review, S6), same spelling and same
   # reason as `_tick_undecidable` above: `_strand_mark`'s two `_reg_set` writes
   # and its own `swap.log` append are unwrapped, and this caller runs every five

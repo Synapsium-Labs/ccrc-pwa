@@ -144,13 +144,18 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
   // with `-e`; a plain `-p` read is the regression measured above.
   it('every call site hands it an ANSI capture', () => {
     const src = readFileSync(CCD, 'utf8');
-    const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane[^)]*\)"/g) ?? [];
-    // Three sites: the two injectors (`_auto_compact_check`'s drafting guard,
-    // `_inject_spawn_effort`'s empty-box guard) plus `_redrive_after_spawn`'s
+    // Greedy to the LAST `)"` on the line, not `[^)]*` to the first: D-2363's
+    // site resolves its own tmux target (`-t "$(_tmux "$id")"`), so a nested
+    // `)"` sits mid-call, ahead of the real close — a class excluding `)`
+    // truncates there and silently drops the trailing ` -e` from the match.
+    const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane.*\)"/g) ?? [];
+    // Four sites: the two injectors (`_auto_compact_check`'s drafting guard,
+    // `_inject_spawn_effort`'s empty-box guard), `_redrive_after_spawn`'s
     // input-box-not-empty stand-down (D-2264) — the re-drive's own box-draft
     // check is the one place inside that function NOT narrowed to `tail -8`
-    // (see the comment above `_redrive_after_spawn` in ccd/ccd).
-    expect(calls, 'the two injector call sites plus the redrive stand-down').toHaveLength(3);
+    // (see the comment above `_redrive_after_spawn` in ccd/ccd) — plus
+    // `_session_hard_blocked`'s own non-empty-box stand-down (D-2363).
+    expect(calls, 'the two injector call sites, the redrive stand-down and _session_hard_blocked').toHaveLength(4);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
 });

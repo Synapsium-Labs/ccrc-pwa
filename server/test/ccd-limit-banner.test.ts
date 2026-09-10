@@ -128,3 +128,75 @@ describe('_transcript_stalled_pair pairs -f with -r (D-2370, closing D-2347)', (
     expect(detectTimed('_transcript_stalled_pair', f)).toBe('rc=2');
   });
 });
+
+describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363)', () => {
+  const PROMPT = '? for shortcuts\n❯ ';
+  const BUSY = 'Reading files… (esc to interrupt)\n';
+  const BANNER_PANE = 'API Error: 429 Too Many Requests\n❯ ';
+  /** tmux answers ONE pane for every capture (plain and `-e` alike), `_pane_box_draft`
+   *  answers `$BOX_DRAFT`, and the swap decision is stubbed so the test is about the
+   *  verdict, never the fixture roster's telemetry. */
+  const STUBS = (pane: string, target = 'claude2'): string => `
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in
+      capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
+    _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
+    _swap_target() { echo ${target}; }; _avail() { return 0; };
+    _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
+  const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
+  const swapLog = (): string => {
+    const f = path.join(h.home, '.cc-sessions', 'swap.log');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  const stranded = (): boolean => fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`));
+
+  it('a banner newest in the transcript rescues a session whose pane shows only a prompt; the line says via=transcript', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+  });
+  it('a BLANK pane no longer blinds the rescue: the transcript decides', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS('')} _auto_swap_check ${ID}`);
+    expect(dispatches()).toHaveLength(1);
+  });
+  it('a non-empty input box stands the transcript arm down — cmd_swap carries the transcript, never the box', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'half a sentence' });
+    expect(dispatches()).toEqual([]);
+  });
+  it('a running turn is never read for a banner', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(BUSY)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+  });
+  it('control: a transcript whose newest row is a real turn does not rescue a prompt pane', () => {
+    seed(); writeTranscript([L.banner(), L.assistant()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+  });
+  it('control: the pane arm is unchanged — a visible banner line rescues, draft or not, with no via= suffix', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'typing' });
+    expect(dispatches()).toHaveLength(1);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\]$/m);
+  });
+  it('no destination: a transcript banner marks the row stranded, like a pane banner does', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(PROMPT, '')} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+    expect(stranded()).toBe(true);
+  });
+  it('the strand half of an undecidable tick reads the same verdict', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(PROMPT)} _tick_strand_undecidable ${ID} wrapper claude`);
+    expect(stranded()).toBe(true);
+    h.sh(`${STUBS(PROMPT)} _strand_clear ${ID}; _tick_strand_undecidable ${ID} wrapper claude`, { BOX_DRAFT: 'typing' });
+    expect(stranded()).toBe(false);
+  });
+  it('both call sites go through _session_hard_blocked (source pin)', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src).toContain('_session_hard_blocked "$id" "$pane" && hard_blocked=1');
+    expect(src).toContain('_session_hard_blocked "$1" "$pane" && blocked=1');
+  });
+});
