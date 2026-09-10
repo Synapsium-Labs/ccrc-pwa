@@ -968,7 +968,11 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   `_session_hard_blocked` is the pane's verdict OR that row, only when no turn is running and
   the box is empty. The rescue arm and the strand verdict both use it; a blank pane no longer
   blinds the rescue, and the `auto-rescue` line says ` via=transcript` when the pane alone
-  would not have fired. The pane regex is deliberately not widened (D-2364).
+  would not have fired. The pane regex is deliberately not widened (D-2364). A third stand-down
+  is the transcript arm's own: a FRESH `$REG/<id>.stalepress` stamp holds it off for
+  `STALE_RESUME_GRACE=30` seconds, so the same-tick rescue cannot swap out the continuation a
+  stale-press Enter (above) just submitted, microseconds before Claude Code has appended the
+  resumed turn's row (D-2443).
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses

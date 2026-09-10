@@ -1112,3 +1112,24 @@ Numbers D-2360..D-2374 ISSUED 2026-09-10 by `POST /api/ledger/deviations` (alloc
   arm's `{"five":100,"seven":0,"ts":now}` for a non-home-able wrapper could carry the banner's
   `resetsAt`; the gpt lane's 429 carries no Anthropic-shaped `quotaLimits` to read, and the
   home-able lanes report for themselves through `statusline-command.sh`. Recorded, not done.
+
+Numbers below were ISSUED after the block above, by the final-review fix wave that closed the
+whole-branch review's findings — same allocator, same act-of-definition discipline.
+
+- **D-2443** — *`STALE_RESUME_GRACE` — the transcript arm stands down while a stale-press Enter
+  is still in flight (Task 3 fix round 1, closing the round's own finding 1).* Nothing stopped
+  the rescue arm from swapping the session on the SAME supervise tick `_auto_stale_check` pressed
+  Enter for a stale auto-continue: `_session_hard_blocked`'s transcript arm could still read the
+  old rate-limit banner as the transcript's newest real row microseconds later, in the same tick,
+  before Claude Code had appended the resumed turn's row — and fire a rescue swap that discarded
+  the continuation the Enter press just submitted. `STALE_RESUME_GRACE=30` (beside
+  `STALE_PRESS_COOLDOWN`, ccd/ccd) stands the transcript arm down for 30s after a FRESH
+  `$REG/<id>.stalepress` stamp — several supervise ticks beyond the same-tick race, short
+  relative to the 120s press cooldown so a genuinely failed resume is still caught within one
+  cycle. The pane arm (`_pane_hard_blocked`) is untouched — it still decides on what is on screen
+  NOW, stale press or not. Implemented and tested (`ccd-limit-banner.test.ts`, three mutations:
+  the stand-down dropped entirely, the grace zeroed, the bound removed) under the original
+  finding's own citation ("fix-round 1 finding 1") because the plan's own "nobody writes a
+  placeholder token" discipline forbids `D-TBD-<slug>` even provisionally; the whole-branch
+  review that followed flagged the missing number and this entry, plus the ccd comments and test
+  titles it names, is the correction.

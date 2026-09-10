@@ -170,7 +170,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     h.sh(`${STUBS(BUSY)} _auto_swap_check ${ID}`);
     expect(dispatches()).toEqual([]);
   });
-  it('a fresh stalepress stands the transcript arm down — the Enter _auto_stale_check just pressed does not lose the race to a same-tick rescue (fix-round 1 finding 1)', () => {
+  it('a fresh stalepress stands the transcript arm down — the Enter _auto_stale_check just pressed does not lose the race to a same-tick rescue (D-2443)', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
@@ -217,7 +217,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     h.sh(`${STUBS('')} _tick_strand_undecidable ${ID} wrapper claude`);
     expect(stranded()).toBe(true);
   });
-  it('the strand half stands down on a fresh stalepress too — one verdict, one stand-down (fix-round 1 finding 1)', () => {
+  it('the strand half stands down on a fresh stalepress too — one verdict, one stand-down (D-2443)', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
     h.sh(`${STUBS(PROMPT)} _tick_strand_undecidable ${ID} wrapper claude`);

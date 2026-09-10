@@ -971,7 +971,7 @@ RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
-STALE_RESUME_GRACE=30            # fix-round 1 finding 1 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
+STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -12907,7 +12907,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   #   - a NON-EMPTY INPUT BOX. `cmd_swap` carries the transcript and never the box,
   #     so a human mid-sentence on a limited account would lose the sentence to
   #     the rescue. `-e` capture, like every other `_pane_box_draft` site.
-  # A THIRD STAND-DOWN, the transcript arm's own (fix-round 1 finding 1): a FRESH
+  # A THIRD STAND-DOWN, the transcript arm's own (D-2443): a FRESH
   # `$REG/<id>.stalepress` stamp. `_auto_stale_check` runs earlier in the SAME
   # supervise tick and, on a stale auto-continue, presses Enter and stamps
   # `stalepress` BEFORE this function is ever reached from `_auto_swap_check`
