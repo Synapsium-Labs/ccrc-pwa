@@ -3504,15 +3504,30 @@ export class FleetWatcher {
             }
             if (!held) raise();
           }
-        } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
-          // The amendment. Same question, same tag — `push-sw.js` sets
-          // `renotify` from the tag, so this REPLACES the un-answerable
-          // notification in its slot rather than stacking a second one under
-          // it. It is a second raise, so `pushOne` records a second event in
-          // the catch-up ring: the ring is a record of what was raised, and
-          // two really were, which is the honest cost of not leaving the
-          // question un-answerable.
-          raise();
+        } else {
+          // SAME DIALOG, STILL PAINTED (D-2403). The continuity observation
+          // the instance guard needs and never had: `last === dialog.id` means
+          // this tick re-scraped the very menu the row was minted against, so
+          // any movement in the child's hookstate `updatedAt` since the mint
+          // was a write that did NOT change the question on screen. Advance
+          // `askAt` to match, or the next parent answer refuses `ask-moved`
+          // over a bump nobody made — see `restampAsk`'s own docstring for
+          // the writer that does this (`session-hook.sh`'s subagent arm) and
+          // for why re-stamping is not a weakening. Runs BEFORE the
+          // amendment gate, and independent of it: a held ask goes stale on
+          // a subagent event whether or not its notification is being
+          // replaced.
+          this.restampHeldAsk(r.id, dialog.id);
+          if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+            // The amendment. Same question, same tag — `push-sw.js` sets
+            // `renotify` from the tag, so this REPLACES the un-answerable
+            // notification in its slot rather than stacking a second one
+            // under it. It is a second raise, so `pushOne` records a second
+            // event in the catch-up ring: the ring is a record of what was
+            // raised, and two really were, which is the honest cost of not
+            // leaving the question un-answerable.
+            raise();
+          }
         }
       } else if (last !== undefined) {
         this.dialogIds.delete(r.id);
@@ -3558,6 +3573,43 @@ export class FleetWatcher {
       }
     }
     return pending;
+  }
+
+  /** Advance a held ask's `askAt` to the child's CURRENT hookstate, but only
+   *  where this tick has just proved the menu on screen is unchanged.
+   *
+   *  Called from the `last === dialog.id` arm of `detectDialogs`, so the
+   *  pane witness is already established by the caller; this adds the second
+   *  one, `askKey`, from the same tick's hookstate (`this.hookStates` is
+   *  rebuilt by `sweepHookStates` immediately before `detectDialogs` — see
+   *  the ordering note in `tick()`). Both are handed to `restampAsk`'s CAS
+   *  rather than trusted here, so a row that has moved on for any reason
+   *  changes zero rows and keeps the `askAt` it had.
+   *
+   *  Every early return is a REFUSAL TO ADVANCE, which is the fail-shut
+   *  direction: no held row, an unreadable or stale hookstate, an ask that
+   *  has gone from the envelope, or an envelope `askKey` will not hash — each
+   *  leaves the stored `askAt` exactly where it was, so the guard stays as
+   *  strict as it was before this method existed.
+   *
+   *  Guarded, for the same reason its two neighbours in `detectDialogs` are:
+   *  a synchronous `node:sqlite` UPDATE sitting directly on the 2 s poll, on
+   *  every tick shape rather than a mint edge, where an unguarded throw would
+   *  take the whole process down. */
+  private restampHeldAsk(id: string, dialogId: string): void {
+    const held = this.heldAsks.get(id);
+    if (held === undefined) return;
+    const hs = this.hookStates.get(id) ?? null;
+    if (hs === null || hs.ask === null) return;
+    const key = askKey(hs.ask);
+    if (key === null) return;
+    try {
+      this.deps.coord?.restampAsk({
+        id: held.askId, dialogId, askKey: key, askAt: hs.updatedAt,
+      });
+    } catch (err) {
+      console.warn(`ccrc-server: re-stamping the ask hold failed for ${id} (${err instanceof Error ? err.message : String(err)}) — a parent answer may refuse ask-moved until the next tick`);
+    }
   }
 
   /** Fire every held ask whose grace window has lapsed. The payload pushed is
