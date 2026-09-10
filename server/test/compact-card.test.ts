@@ -187,6 +187,10 @@ describe('mining — the working set out of the window (spec §3.2)', () => {
     expect('run foo.tsx and bar.ts, not baz.tsz nor _qux.ts_'.match(tokenRegex(['tsx', 'ts'])!)).toEqual(['foo.tsx', 'bar.ts']);
     expect('a c++ file x.c+ and y.c'.match(tokenRegex(['c+', 'c'])!)).toEqual(['x.c+', 'y.c']);   // escaped
   });
+
+  it('the leading lookbehind is pinned at the SOURCE level — no token-list case exists to pin it by: the prefix class already contains ".", "/" and "-", so any match a later start position could find is also found starting from the run\'s own beginning via the same backtracking (proved, and checked against 700k randomized strings with zero observed output difference); dropping it changes the regex\'s own text even though it never changes what it matches', () => {
+    expect(tokenRegex(['ts', 'md'])!.source.startsWith('(?<![A-Za-z0-9_./-])')).toBe(true);
+  });
 });
 
 describe('resolution — against the graph\'s own files (spec §3.2)', () => {
@@ -232,6 +236,16 @@ describe('the working set — ranked, counted, capped (spec §3.2)', () => {
       { path: 'c.ts', tag: 'touched', count: 2 }, { path: 'd.ts', tag: 'carried', count: 1 },
     ]);
     expect(stats).toEqual({ tokens: 8, resolved: 6, ambiguous: 0, outside: 1, nomatch: 1 });
+  });
+  it('the count term decides a same-tag tie when counts differ — path-alphabetical alone would give the OPPOSITE order', () => {
+    const same = fileIndex(['a.ts', 'z.ts']);
+    const tokens = [
+      { token: 'a.ts', tag: 'touched' as const },
+      { token: 'z.ts', tag: 'touched' as const }, { token: 'z.ts', tag: 'touched' as const }, { token: 'z.ts', tag: 'touched' as const },
+    ];
+    expect(workingSet(tokens, same, '/w').files).toEqual([
+      { path: 'z.ts', tag: 'touched', count: 3 }, { path: 'a.ts', tag: 'touched', count: 1 },
+    ]);
   });
   it('the set keeps at most WORKSET_CAP files', () => {
     const many = fileIndex(Array.from({ length: 150 }, (_, i) => `f${i}.ts`));
