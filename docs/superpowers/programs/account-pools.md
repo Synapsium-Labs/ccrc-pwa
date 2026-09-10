@@ -1946,3 +1946,56 @@ reviews. Green checks plus MERGEABLE is the whole gate.
 enclosing-symbol GUESS from preceding context, not a claim about what changed) and the ugrep zero. Both
 are false anchors no amount of author care prevents, which is what distinguishes them from the rest of
 the citation class.
+
+---
+
+## 2026-09-10 00:2x — #69 cleared again at `f27c4d50`; D-2347 ruled; and I endorsed a false clause
+
+Worker's three refute lenses on the merge resolution: **the resolution survived** — one lens rebuilt the
+three-way merge of all 23 touched files from the true base `ee1d6228` and found 21 byte-identical to the
+mechanical union, every one of #73's 137 added lines and #69's 1075 inside its own enclosing function,
+zero lines lost, no conflict residue. Verified here at `f27c4d50`: server **280 / 7753 / 56, zero
+failures**, agent 18, pwa 80 + typecheck clean, one marker verifying, census stated 133/109 against
+measured 133/109, platform block `e7f0696d` still identical to `ccd/ccrc`.
+
+**I ENDORSED A FALSE CLAIM, and it is the cleanest instance of my own recurring failure this week.** My
+mail 391 said the worker's census history clause "beats my minimal fix" and singled out the exact
+sentence — *"named the one nobody here made"* — that their own D-2343 has now measured false (six moves
+not five, mis-ordered, and the #70 merge had already moved it from main's side). **I compared their prose
+change against MY prose change, judged which was more thorough, and never measured either against the
+history.** A diff between two versions of a claim tells you which is more DETAILED, never which is TRUE.
+I spent the week telling the worker to open what a citation cites, and reviewed a citation by comparing
+it to my own draft. Their D-2344 verified independently: `db580771:1611` reads "134 call sites", so C1
+measured correctly and the branch's prose inherited a wrong 133.
+
+**D-2345 is the best finding of the round and generalises past this pin.** *"Every false claim landed in
+the one span the pin cannot read."* That is a property of ANY scanner with an END anchor: the unread
+region is exactly where the prose that ARGUES lives, so edits gravitate there — **the blind spot and the
+churn are the same region by construction.** The remedy shape (causal sentences above the anchor; the
+list bare, dated, one command per entry, nothing that argues) is a rule for the next pin anyone writes,
+not a fix to this one.
+
+**RULING — D-2347 (#73's inherited FIFO hang): NOT in #69, its own PR, and the fix belongs upstream of
+where it was filed.** The worker declined to take it, citing my own "designs made at merge time ship
+wrong". Right, and the decisive reason is stronger: it is **byte-identical on `origin/main`, and main is
+already deployed on both lanes** — holding #69 reduces live exposure by exactly zero seconds and merging
+it increases exposure by zero. Orthogonal.
+
+**But `-r` in `_transcript_stalled_pair` is the SECOND line of defence.** `_transcript_path` has THREE
+arms that all gate on `-f` — the munged path, the raw path, and `_transcript_matches`'s own
+`[[ -f "$f" ]] || continue` — and then a FALLBACK that returns `$cfg/projects/$munged/$uuid.jsonl`
+**unconditionally: the exact path arm 1 rejected three lines earlier for failing `-f`.** Three arms
+measure and the fallback guesses, and it guesses the path the measurement already refused. That is a
+measured function with an unmeasured tail, not a missing test in a reader.
+
+Blast radius measured before ruling: four consumers — `_ws_archive_manifest`, `cmd_ws_audit`,
+`_ws_tombstone`, `_redrive_after_spawn` — and **only the last opens the file**, so the worker's hang
+analysis is exactly right. The other three embed the path in a manifest, an audit row and a tombstone;
+fixing the fallback also stops three durable records naming a path the function itself measured is not a
+transcript. Offered to take it into my own ccd queue plan
+(`2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`) if the worker would rather stay on wave 4.
+**What it must not do is sit as a booked number: it is live on a deployed fleet.**
+
+Also noted: their correction that TWO files carried non-mechanical merge content, not one. That matters
+more than they framed it — a reviewer told "one file" does not go looking at the test that pins the very
+sentence, which is precisely the reviewer I was.
