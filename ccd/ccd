@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5f9caf0c99e2300ed68f05d1aabac51ea3d6bf578f340154971022c63248c3d7
+# ccrc:generated 1 sha256=af79434f87772bfad73848aad1b602a946ca84e22ebab9b353ed27219fa02ea5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13462,12 +13462,11 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
 #     the merge): when this was written `_strand_mark` wrote its marker only when ABSENT, so "when
 #     the episode began" and "when this reason became current" were one sentence and `stranded`
 #     fairly stood for both. R4 then added the rewrite arm that replaces a CHANGED cause while
-#     PRESERVING the original epoch, because that epoch is "since when" — the sense wave 3's
-#     reader will carry as `stranded.at`, which is NOT on this tree (#69 review round 4 gate:
-#     this sentence said "is shipped", the third present-tense claim about that reader in a
-#     file that has corrected the same claim twice) — and re-stamping it would make a
-#     four-hour strand read as new on every tick. `compactskip` has no
-#     such reader and wants the opposite. Two markers, one shape, two epoch contracts — said here
+#     PRESERVING the original epoch, because that epoch is "since when" — the sense the merged
+#     server reader carries as `FleetSession.stranded.at` on both REST and WebSocket fleet
+#     payloads — and re-stamping it would make a four-hour strand read as new on every tick.
+#     `compactskip` instead anchors when its CURRENT refusal reason became current. Two markers,
+#     one shape, two epoch contracts — said here
 #     because the shape is what invites a third one to copy the wrong half.
 #   • THE ANCHOR OUTLIVES THE MARKER. `$REG/<id>.compactnote` is a bare epoch: WHEN WE LAST SAID
 #     IT OUT LOUD in `$REG/swap.log`, and nothing else. `_compact_note_clear` must not touch it.

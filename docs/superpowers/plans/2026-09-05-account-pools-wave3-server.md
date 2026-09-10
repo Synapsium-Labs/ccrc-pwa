@@ -40,7 +40,7 @@ there would leave its own branch tip unmoved and wedge every close with `stale-t
 - No account name, account label, pool name, host name or IP that belongs to any real fleet appears in any source file, test or document. Fixture names only: pools `pool-a`, `pool-b`; projects `demo`, `quiet-basin`, `acct-a-demo`; accounts `claude`, `claude-a`, `claude-b` (label `team·b`), `gpt`, `claude-d` (`server/test/helpers.ts:60`, `DEFAULT_TEST_ROSTER`).
 - Wire discipline is ADDITIVE-ONLY: `FLEET_PROTO` stays 1 and `FLEET_PROTO_MIN` stays 1 (`shared/api.ts:2876-2877`). A new frame type, a new optional field and a new required-with-`| null` field are all additive; a bump is not.
 - No overloaded null at a seam: two conditions a caller handles differently must not collapse to one value. `unreadable` is never folded into `untagged`; `absent` is never folded into `unlistable`.
-- Every change under `ccd/` is AGENT-FIRST at deploy time. **This wave touches no file under `ccd/`** — it consumes what waves 2a/2b shipped there — so it carries no deploy step of its own.
+- Every change under `ccd/` is AGENT-FIRST at deploy time. The planned implementation consumes what waves 2a/2b shipped and changes no `ccd/` behavior, but #81's merged-tree review corrected authoritative history in `ccd/ccd`; any eventual deployment is therefore AGENT-FIRST. D-2000 still forbids deploying this wave.
 - `EXEC_COMMANDS` stays `['tmux','ccd']`. No `gh` grant, ever. The server writes nothing on the fleet box.
 - L0 (`shared/*.ts`) imports nothing, not even `node:*` — the PWA bundles those files.
 - Mutation-table discipline: every guard ships WITH a test measured RED before and GREEN after. Each test step below names the exact mutation and the exact expected red.
@@ -3341,7 +3341,7 @@ git commit -m "test(pools): the reader crosses the agent, so a tag on the server
 
 **Spec:** the brief's whole-branch step; `CLAUDE.md`'s "Build / test / deploy".
 
-**No deploy step:** this wave touches no file under `ccd/`, `session-hook.sh` or `ccd/coordinator-skill/`, so the AGENT-FIRST rule does not bind it. Waves 2a and 2b carry that ordering; this wave ships on the ordinary server lane behind them.
+**No deploy step in this task:** the planned implementation touched no `ccd/` behavior, `session-hook.sh` or `ccd/coordinator-skill/`. The later #81 merged-tree review did correct authoritative history in `ccd/ccd`, so AGENT-FIRST now binds any eventual deployment; D-2000 still forbids deploying this wave.
 
 - [ ] **Step 1: Run the three package suites, in the foreground**
 
@@ -3447,8 +3447,9 @@ is never a ledger number.
 
 The brief listed five carries plus two W3 items and asked which are taken. Answered once, here,
 rather than a decision per task. **Every "not taken" below is a scope answer, not a judgement that
-the finding is wrong** — four of the five are `ccd/` behaviour and plan:21 makes this wave
-server-only.
+the finding is wrong** — four of the five require `ccd/` behavior changes and the implementation
+scope was server-only. Later review-only corrections to `ccd/ccd` history do not reopen those behavior
+carries.
 
 | Carry | Taken? | Why |
 |---|---|---|
@@ -3795,3 +3796,17 @@ block above.
   under `server/` rather than enumerating claim holders. A future claim must opt into the tag, but once
   tagged its location cannot fall outside a hand-maintained corpus. **A derived guard must discover its
   population; a list of today's holders is another unguarded census.**
+
+- **D-2464 (2026-09-10)** (the #81 coordinator verification of exact head
+  `65b5cb2a`) — **Correcting several merge-tree absence claims does not prove the authoritative source
+  carries no residual copy of the same false claim.** The D-2013 history in `ccd/ccd` still said the
+  reader carrying `stranded.at` was not on this tree, but the composed tree's `server/src/fleet.ts`
+  maps the preserved strand epoch to `FleetSession.stranded.at` for both REST and WebSocket fleet
+  payloads. The paragraph now states the actual distinction: `stranded` preserves when the episode
+  began, while `compactskip` anchors when its current refusal reason became current. This corrects
+  authoritative shipped-source history only; it changes no Bash or server behavior and introduces no
+  runtime guard. The existing generated-file ownership gate is re-stamped because the committed
+  `ccd/ccd` bytes changed, but an ornamental source assertion for one corrected sentence would not
+  discover the next residual absence claim. **A review that finds a merge-authored falsehood must
+  search for the claim class, then distrust any surviving absence statement until the composed tree
+  proves it.**
