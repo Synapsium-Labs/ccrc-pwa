@@ -114,21 +114,17 @@ export type DispatchOutcome =
       limit?: number; running?: number; used?: number; candidates?: number;
       /** WHICH project the measured party belongs to — `project-mismatch`'s
        *  own field, and the only refusal on this union that carries a string.
-       *  PRESENT exactly when a registry record was found and its project
-       *  differs from the run's; absent otherwise, never `''`, because
-       *  presence is the distinction and an empty string would collapse "no
-       *  comparison was made" into "the project is nothing". The open
-       *  route's own refusal already carries a `by` (`routes.ts`), so the
-       *  two sites of one code answer one shape.
-       *
-       *  THE CONTENT READ, never `record.project`. `SessionRecord.project`
-       *  is `registry.ts`'s `project ?? id` over a collapsing read, so an
-       *  absent or unreadable `.project` would arrive as the session id and
-       *  name a project nobody measured; the guard below therefore reads
-       *  `<id>.project` through `fieldMeasured` itself and `by` is that
-       *  file's content — present exactly when the file was measured with a
-       *  name and it differs from the run's. Unreadable answers
-       *  `registry-unmeasurable` instead; absent answers nothing at all. */
+       *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
+       *  that differs from the run's — never `record.project`, whose
+       *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
+       *  session id on an absent or unreadable field and name a project
+       *  nobody measured, which is why the guard below reads `<id>.project`
+       *  through `fieldMeasured` itself instead. Unreadable answers
+       *  `registry-unmeasurable` instead; absent answers nothing at all; an
+       *  empty string is never sent, because presence is the distinction and
+       *  `''` would collapse "no comparison was made" into "the project is
+       *  nothing". The open route's own refusal already carries a `by`
+       *  (`routes.ts`), so the two sites of one code answer one shape. */
       by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
