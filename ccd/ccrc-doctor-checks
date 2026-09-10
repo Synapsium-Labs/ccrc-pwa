@@ -4172,7 +4172,7 @@ _check_memory() {
       # spelling with a branch in front of it. `single-definition.test.ts`
       # compares all three literals and reds on a drift. `_mem_is_scratch` in
       # `ccrc` carries the rule and the measurement (D-2375).
-      case "$slug" in -tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*) continue ;; esac
+      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) continue ;; esac
       link="${d}memory"
       [ -e "$link" ] || [ -L "$link" ] || continue
       store="$HOME/.ccrc/memory/$slug"

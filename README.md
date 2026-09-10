@@ -984,9 +984,11 @@ roster describes the accounts ccrc places work on and was never a census of home
 can carry config dirs no roster entry names. **Scratch slugs are skipped**, because the harness
 mints one for every throwaway directory a session was started in — four prefixes, because the OS
 scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
-`-private-tmp*` and `-var-folders-*`/`-private-var-folders-*` (macOS `/tmp` resolves through
+`-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
 `/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
-this rule — POSIX makes it persistent — so a project kept there is censused like any other.
+this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
+slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
 
 **`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
 home is copied across; a byte-identical collision stays one file; a same-named file whose

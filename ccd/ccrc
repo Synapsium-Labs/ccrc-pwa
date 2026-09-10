@@ -2995,17 +2995,28 @@ _mem_homes() {   # -> one agent-home path per line
 # — and it takes four prefixes to ask it on both platforms `ccrc` ships to. It
 # shipped as a bare `-tmp*`, which is the LINUX spelling alone: on Darwin
 # `/tmp` is a symlink to `/private/tmp`, `$TMPDIR` is a per-user
-# `/var/folders/<x>/<y>/T`, and every site that DERIVES a slug resolves
-# physically (the hook's `pwd -P`; the harness resolves too — measured, no
-# `-data-...` slug exists on a box where `/data` is a symlink to `/mnt/...`).
-# So no real macOS scratch path can produce a `-tmp...` slug: the guard never
-# fired there, and the hook minted a store for every throwaway directory a
-# Darwin session was started in. The `test-macos` leg found it, which is the
-# class that leg exists to catch.
+# `/var/folders/<x>/<y>/T`, and the one site that DERIVES a slug resolves
+# physically — the hook's `pwd -P`, whose own note carries the measurement
+# behind it (30 of 30 live session workdirs slugify to a project directory
+# that exists only once a symlinked path is resolved; `session-hook.sh`, just
+# above its `slug=` line).
 #
-# `-var-folders-*` AS WELL AS the resolved `-private-var-folders-*`, because
-# the harness's resolution is measured on Linux only — a `/var/folders` path
-# is scratch under either spelling, and that directory exists off Darwin
+# So no real macOS scratch path can produce a `-tmp...` slug — AND THAT IS A
+# STATEMENT ABOUT THE HOOK, the one site the platform reaches through a path:
+# the guard never fired there, so the hook minted a store for every throwaway
+# directory a Darwin session was started in. The two callers below are a step
+# removed; they match a directory NAME the harness already wrote, so what they
+# under-matched on a Darwin box is whatever that harness had produced there.
+#
+# FOUND BY THE `test-macos` LEG, though NOT by the mechanism that leg's own
+# comment claims for itself (the Darwin ARMS — `describe.skipIf(!IS_DARWIN)`,
+# `itDarwin`; nothing here is one). What caught it was an ordinary
+# cross-platform test whose fixture derives a path from `os.tmpdir()`. The leg
+# is therefore worth more than its comment says, and this is the evidence.
+#
+# `-var-folders*` AS WELL AS the resolved `-private-var-folders*`, because the
+# harness's resolution is measured on Linux only — a `/var/folders` path is
+# scratch under either spelling, and that directory exists off Darwin
 # nowhere.
 #
 # `/var/tmp` IS DELIBERATELY ABSENT, and this is the one prefix a widening
@@ -3013,12 +3024,32 @@ _mem_homes() {   # -> one agent-home path per line
 # reboot, unlike `/tmp`, and `session-hook.test.ts` roots its own project
 # fixtures there precisely because this rule must not skip them.
 #
-# NOT DERIVED FROM `$TMPDIR` either: unset, it would skip nothing; `/`, it
-# would skip every project on the box; and the two callers below never see a
-# cwd at all — they enumerate slugs the harness already wrote, so a prefix
-# list is the only form of the question they can ask.
+# ONE ANCHORING CONVENTION, and the four arms did not share it for one round:
+# `-var-folders-*` was separator-anchored while `-tmp*` was not, so the same
+# literal both over-matched (`-tmpfs-…`, `-tmpl-…`) and under-matched (the
+# scratch root spelled bare, `-var-folders`). All four are unanchored now.
+# That KEEPS the `-tmp*` over-match, deliberately: tightening it to
+# `-tmp|-tmp-*` would stop skipping slugs a live fleet is skipping today, and
+# that is a behaviour change to measure against the real registry first, not
+# to smuggle in behind a platform fix.
+#
+# NOT DERIVED FROM `$TMPDIR` either — and this is the seam the completeness
+# critic argued (C1, 2026-09-10), so the reason is recorded rather than
+# implied. Slug space IS lossy: measured with the shipped alphabet,
+# `/tmp/work/project`, `/tmp-work/project` and `/tmp.work/project` all produce
+# `-tmp-work-project`, so no prefix list can separate "inside the OS scratch
+# root" from "a directory whose name merely starts with tmp". The HOOK holds
+# the un-lossy value (`$root`, physical) and could ask an exact question of
+# it. It does not, because THE TWO CALLERS BELOW CANNOT: they enumerate slugs
+# the harness already wrote, the slugify has no inverse, and a hook that
+# skipped exactly while the census skipped approximately would converge pairs
+# the census never lists and the doctor never reports — an invisible fork,
+# which is the one thing this check exists to prevent. Sharing the lossiness
+# is what keeps the four mechanisms agreeing. If that trade is ever revisited,
+# the hook's arm moves and `single-definition.test.ts`'s site list shrinks to
+# two: a deliberate edit, not a drift.
 _mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
-  case "$1" in -tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*) return 0 ;; esac
+  case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) return 0 ;; esac
   return 1
 }
 
@@ -3094,13 +3125,23 @@ cmd_memory() {
       *) _ccrc_usage_die "$1" ;;
     esac
   done
-  local h b slug d state n=0 forked=0
+  local h b slug d state n=0 forked=0 skipped=0
   for h in $(_mem_homes); do
     b=$(basename -- "$h")
     for d in "$h"/projects/*/; do
       [ -d "$d" ] || continue
       slug=$(basename -- "${d%/}")
-      _mem_is_scratch "$slug" && continue
+      if _mem_is_scratch "$slug"; then
+        # COUNTED, NOT JUST DROPPED (completeness critic C3, 2026-09-10). The
+        # skip used to collapse into the same silent `continue` as "this home
+        # holds no memory for this project", so the printed total was not the
+        # population and nothing named the difference — in the one output the
+        # operator reads to PREDICT what `--apply` will do. The count is taken
+        # AFTER the pair test, so it counts only rows that would otherwise have
+        # been pairs and the three numbers reconcile against one unit.
+        { [ -e "${d}memory" ] || [ -L "${d}memory" ]; } && skipped=$((skipped+1))
+        continue
+      fi
       [ -e "${d}memory" ] || [ -L "${d}memory" ] || continue
       state=$(_mem_state "$h" "$slug")
       n=$((n+1))
@@ -3108,7 +3149,7 @@ cmd_memory() {
       printf '%-18s %-50s %s\n' "$b" "$slug" "$state"
     done
   done
-  printf '\n%s pairs, %s forked\n' "$n" "$forked"
+  printf '\n%s pairs, %s forked, %s scratch skipped\n' "$n" "$forked" "$skipped"
   # R9 (fix round 1), corrected at the final whole-branch review: this
   # comment used to say "three failure paths" and name them; two review
   # rounds since (D-2241's `could not absorb` refusals, R27/D-2238's `cannot

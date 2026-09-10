@@ -2716,14 +2716,29 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
   //     from this tree at all.
   //
   // So the agreement cannot be structural, and this is the mechanism that
-  // holds it instead. It matters more than the usual drift argument does:
-  // the hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can
-  // only ever be exercised on the platform the suite runs on — a Linux-only
+  // holds it instead. It matters more than the usual drift argument does: the
+  // hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can only
+  // ever be exercised on the platform the suite runs on — a Linux-only
   // spelling was invisible to every ubuntu leg and to five task reviews, and
   // only `test-macos` caught it. The two read-side sites read a directory
   // NAME, so they are measurable everywhere; this pin is what carries their
   // coverage across to the one site that is not.
-  const PRED = '-tmp*|-private-tmp*|-var-folders-*|-private-var-folders-*';
+  //
+  // THE SITE LIST IS THREE BECAUSE THE HOOK ASKS IN SLUG SPACE. It holds the
+  // un-lossy value and could ask an exact question of it instead (the
+  // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
+  // records why it does not. If that is ever revisited, this list shrinks to
+  // two — a deliberate edit, not a drift.
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+
+  /** The guard line at one site, found by the one token no other line in
+   *  these tools carries. Exactly one per file, or the row that reads it is
+   *  measuring something it did not mean to. */
+  const guardLine = (f: string): string => {
+    const hits = codeLines(f).filter((l) => l.includes('-var-folders'));
+    expect(hits, `${rel(f)}: expected exactly one scratch-guard code line`).toHaveLength(1);
+    return hits[0] ?? '';
+  };
 
   it('is spelled identically at exactly three sites, each named here BY NAME', () => {
     expect(holdersOf(PRED)).toEqual([
@@ -2733,45 +2748,86 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
     ]);
   });
 
-  it('no site carries the narrower Linux-only spelling', () => {
-    // THE RED CONTROL for the widening. Narrowing any one site back to a bare
-    // `-tmp*)` arm — which is what shipped, and what `test-macos` caught — is
-    // a red suite here rather than a silent Darwin-only regression, on a
-    // platform whose scratch root no `-tmp…` slug can name.
+  it('each site carries the WHOLE alternation and nothing appended to it', () => {
+    // EQUALITY, NOT CONTAINMENT, and the difference is the whole value of this
+    // row. `holdersOf` matches with `String.includes`, so the row above stays
+    // green when a site APPENDS an alternative — measured 2026-09-10: adding
+    // `|-private-var-*` to `session-hook.sh` alone left every Linux-visible
+    // row in the tree green while, on Darwin, it would have swept up
+    // `/private/var/tmp` and skipped every fixture in `session-hook.test.ts`'s
+    // memory-convergence block. Capturing the arm closes both directions at
+    // once, and it is what makes the row above's title true.
+    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']) {
+      const m = /case "\$(?:1|slug)" in ([^)]*)\)/.exec(guardLine(path.join(ccrcRoot, f)));
+      expect(m, `${f}: the scratch guard is not a case arm this row can read`).toBeTruthy();
+      expect(m?.[1], f).toBe(PRED);
+    }
+  });
+
+  it('no site anywhere in the corpus carries the narrower Linux-only spelling', () => {
+    // The row above pins the three KNOWN sites. This one has a different
+    // population: a FOURTH site, written anywhere in these tools with the
+    // pre-D-2375 rule — which named the OS scratch root on Linux and nothing
+    // at all on Darwin.
     for (const f of BASH) {
       const narrow = codeLines(f).filter((l) => /in\s+-tmp\*\)/.test(l));
       expect(narrow, rel(f)).toEqual([]);
     }
   });
 
-  it('no site sweeps up /var/tmp — POSIX persistent scratch is not the scratch root', () => {
+  it('no site anywhere in the corpus sweeps up /var/tmp, in either spelling', () => {
     // The widening's UPPER BOUND, and the prefix a careless one takes first:
-    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots
-    // every project fixture it owns there, and skipping it would hide a real
+    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots its
+    // memory-convergence fixtures there, and skipping it would hide a real
     // fork from the operator.
-    for (const f of BASH) {
-      // The needle is `-var-tmp` BARE, not `-var-tmp*`. Measured 2026-09-10:
-      // an over-widening mutation that added `-var-tmp-*` — a dash before the
-      // star, which is the spelling a careless hand actually writes — left the
-      // anchored form of this row GREEN while both behaviour controls went
-      // red. No bash file in the corpus mentions the path at all, so the bare
-      // needle has no false positive to trade against.
-      const swept = codeLines(f).filter((l) => /-var-tmp/.test(l));
-      expect(swept, rel(f)).toEqual([]);
+    //
+    // BOTH SPELLINGS, and bare rather than glob-anchored. Measured
+    // 2026-09-10, twice: an over-widening written `-var-tmp-*` — a dash before
+    // the star, which is what a hand actually writes — slipped a needle
+    // anchored as `-var-tmp*`; and `-private-var-tmp` is the spelling a real
+    // Darwin box produces, which a Linux-only control cannot see at all.
+    for (const needle of ['-var-tmp', '-private-var-tmp']) {
+      for (const f of BASH) {
+        const swept = codeLines(f).filter((l) => l.includes(needle));
+        expect(swept, `${rel(f)} (${needle})`).toEqual([]);
+      }
     }
   });
 
-  it('the TypeScript mirror in session-hook.test.ts carries the same four prefixes', () => {
-    // That file states its fixtures' preconditions against this predicate and
-    // cannot import a bash `case`, so it mirrors the list. This is what keeps
-    // the mirror from drifting in either direction — a mirror that is merely
-    // "close" would let the scratch test pass while measuring a shape the
-    // shipped guard does not skip, which is exactly the failure at bb23a9f1.
-    const src = readFileSync(path.join(ccrcRoot, 'server/test/session-hook.test.ts'), 'utf8');
-    const m = /const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
-    expect(m, 'session-hook.test.ts declares no SCRATCH_PREFIXES').toBeTruthy();
+  // KNOWN BOUND, stated rather than implied: a FOURTH site written in some
+  // other shell shape — a `[[ ]]` test, a helper of its own — is caught by
+  // neither the equality row (it reads three sites by name) nor the narrowing
+  // row (it looks for the old `case` spelling). Nothing here scans for an
+  // arbitrary re-implementation of the question.
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+    // Three suites state fixture preconditions against this rule and none can
+    // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
+    // they share. The first cut of D-2375 put a copy in each suite and pinned
+    // one of the three; this row is why that is now impossible.
+    const src = readFileSync(path.join(ccrcRoot, 'server/test/scratchSlugs.ts'), 'utf8');
+    const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
+    expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
     const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
     const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
     expect(mirror).toEqual(shipped);
+  });
+
+  it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
+    // The same two directories the scans above enumerate rather than name:
+    // an unscanned sibling is the "clean and unchecked becomes dirty and
+    // unchecked with nothing saying so" shape this file already refuses.
+    const holders = [path.join(ccrcRoot, 'server', 'test'),
+      path.join(ccrcRoot, 'server', 'test-e2e')]
+      .flatMap(sources)
+      // ANCHORED TO A DECLARATION, not a mention, and that is not cosmetic:
+      // the bare needle read the regex literal in the row above and reported
+      // THIS file as a second holder (measured). A declaration is what the
+      // row claims anyway.
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+        .test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/scratchSlugs.ts']);
   });
 });

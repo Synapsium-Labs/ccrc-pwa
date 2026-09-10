@@ -46,6 +46,9 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+// One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
+// for the rule, and for why the /var/tmp control needs both spellings.
+import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
@@ -6471,8 +6474,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // unlike the hook's own copy, which derives its slug from a live cwd and can
   // only be measured where it runs. That asymmetry is why the Linux-only
   // spelling survived to `test-macos`.
-  for (const slug of ['-tmp-scratch', '-private-tmp-scratch',
-    '-var-folders-zz-8gk0000gn-T-scratch', '-private-var-folders-zz-8gk0000gn-T-scratch']) {
+  for (const slug of SCRATCH_SLUGS) {
     it(`skips the scratch project slug ${slug} even when it looks forked`, () => {
       const home = healthy('ccrc-doctor-mem-tmp-skip-');
       const d = join(home, '.claude', 'projects', slug, 'memory');
@@ -6490,15 +6492,18 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // hide a real fork from the operator, which is the one thing this check
   // exists to report. Without this row, widening the list has no upper bound
   // any suite can see.
-  it('still WARNs about a forked /var/tmp slug — persistent scratch is not the scratch root', () => {
-    const home = healthy('ccrc-doctor-mem-vartmp-');
-    const d = join(home, '.claude', 'projects', '-var-tmp-project', 'memory');
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'a.md'), 'x');
-    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
-    const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-var-tmp-project/m);
-  });
+  for (const slug of PERSISTENT_SLUGS) {
+    it(`still WARNs about a forked ${slug} — persistent scratch is not the scratch root`, () => {
+      const home = healthy('ccrc-doctor-mem-vartmp-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(
+        new RegExp(`^WARN memory: memory is forked across agent homes: .*\\.claude:${slug}`, 'm'));
+    });
+  }
 
   // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch
   // review round 3 — reached independently for this file's own reason, see

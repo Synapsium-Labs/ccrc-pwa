@@ -3,6 +3,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+// The scratch vocabulary has ONE home: server/test/scratchSlugs.ts. Its
+// comment carries the rule, why /var/tmp is the negative control, and why
+// the Darwin spelling of that control is the one a Linux-only pin misses.
+import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 
 const CCRC = path.resolve(__dirname, '../../ccd/ccrc');
 let home: string;
@@ -22,29 +26,6 @@ function seed(homeSuffix: string, slug: string, files: Record<string, string>): 
   fs.mkdirSync(d, { recursive: true });
   for (const [n, c] of Object.entries(files)) fs.writeFileSync(path.join(d, n), c);
 }
-
-/** FOUR PREFIXES, ONE RULE — "the OS scratch root", which the two platforms
- *  ccrc ships to do not spell alike: `/tmp` on Linux; on Darwin `/tmp` is a
- *  symlink to `/private/tmp` and `$TMPDIR` is a per-user
- *  `/var/folders/<x>/<y>/T`. D-2375.
- *
- *  SEEDED AS LITERAL SLUGS, and that is exactly what makes the Darwin
- *  spellings measurable HERE, on a Linux runner: the census and `--apply`
- *  read a directory NAME the harness already wrote, never a live cwd. The
- *  hook's copy of this guard derives its slug from a real path with `pwd -P`,
- *  so it can only ever be measured on the platform it runs on — which is how
- *  a Linux-only guard shipped past five reviews, and what `test-macos`
- *  caught. */
-const SCRATCH_SLUGS = ['-tmp-scratch', '-private-tmp-scratch',
-  '-var-folders-zz-8gk0000gn-T-scratch', '-private-var-folders-zz-8gk0000gn-T-scratch'];
-
-/** THE NEGATIVE CONTROL for that list, and the prefix a careless widening
- *  sweeps up first. `/var/tmp` is POSIX *persistent* scratch — it survives a
- *  reboot, unlike `/tmp` — so it is not the OS scratch root, and
- *  `session-hook.test.ts` roots every project fixture it owns there. A guard
- *  that skipped it would drop those fixtures, and any real project kept
- *  there, out of the census in silence. */
-const PERSISTENT_SLUG = '-var-tmp-project';
 
 describe('ccrc memory — the census', () => {
   it('names a home that holds a plain memory directory', () => {
@@ -156,7 +137,8 @@ describe('ccrc memory — the census', () => {
   //
   // Fix round 2 (R13): the original version of this test asserted
   // `toMatch(/forked/)` against the WHOLE output, which is vacuous — the
-  // summary line (`printf '\n%s pairs, %s forked\n'`) always contains the
+  // summary line (`printf '\n%s pairs, %s forked, %s scratch skipped\n'`)
+  // always contains the
   // literal substring "forked" (e.g. "0 forked"), so the assertion passed
   // even while the row itself was silently dropped. Assert against the ROW
   // (slug followed by its state at end of line) and carry the negative, the
@@ -189,10 +171,28 @@ describe('ccrc memory — the census', () => {
     });
   }
 
-  it('does NOT ignore a /var/tmp slug — persistent scratch is not the scratch root', () => {
-    seed('.claude', PERSISTENT_SLUG, { 'a.md': 'x' });
-    expect(run(['memory']).out).toContain(PERSISTENT_SLUG);
+  // THE MECHANISM FOR THE THIRD NUMBER (completeness critic C3). A scratch
+  // slug carrying a real `memory` directory is dropped from the census — but
+  // it is now COUNTED and named, because the operator reads this output to
+  // predict `--apply`, and a total that silently excluded part of its own
+  // population made that prediction unfalsifiable. Counted only where a pair
+  // would otherwise have existed: the bare scratch slug in the second row has
+  // no `memory` entry and must not inflate the number.
+  it('counts the scratch pairs it dropped, and does not count scratch slugs that are not pairs', () => {
+    seed('.claude', SCRATCH_SLUGS[0] as string, { 'a.md': 'x' });
+    fs.mkdirSync(path.join(home, '.claude', 'projects', SCRATCH_SLUGS[1] as string),
+      { recursive: true });
+    const out = run(['memory']).out;
+    expect(out).toMatch(/\n0 pairs, 0 forked, 1 scratch skipped\n/);
+    for (const s of SCRATCH_SLUGS) expect(out).not.toContain(s);
   });
+
+  for (const slug of PERSISTENT_SLUGS) {
+    it(`does NOT ignore the /var/tmp slug ${slug} — persistent scratch is not the scratch root`, () => {
+      seed('.claude', slug, { 'a.md': 'x' });
+      expect(run(['memory']).out).toContain(slug);
+    });
+  }
 
   // Fix round 1, Important 2a (R11): `_ccrc_usage_die` (ccd/ccrc:1162)
   // already supplies the "$PROG: unknown argument: " prefix — passing it a
@@ -234,7 +234,7 @@ describe('ccrc memory — the census', () => {
   it('the summary forked count is a real count, not a permanently-zero counter', () => {
     seed('.claude', '-p-a', { 'a.md': 'A' });
     seed('.claude', '-p-b', { 'b.md': 'B' });
-    expect(run(['memory']).out).toMatch(/\n2 pairs, 2 forked\n/);
+    expect(run(['memory']).out).toMatch(/\n2 pairs, 2 forked, 0 scratch skipped\n/);
   });
 });
 
@@ -529,11 +529,14 @@ describe('ccrc memory --apply — the union', () => {
     expect(r.out).toMatch(/0 forked/);
   });
 
-  // Important (final whole-branch review): the census's own `-tmp*` skip
-  // (ccd/ccrc:2965-ish) has a red test ('ignores scratch slugs' above); its
-  // sibling in `_mem_apply` did not — deleting the apply-side guard left
-  // the whole suite green while `--apply` happily converged a throwaway
-  // scratch slug into the shared store.
+  // Important (final whole-branch review): the census's own scratch skip
+  // (`_mem_is_scratch`, reached from `cmd_memory`) has red tests — the
+  // 'ignores the scratch slug …' rows above; its sibling in `_mem_apply` did
+  // not, and deleting the apply-side guard left the whole suite green while
+  // `--apply` happily converged a throwaway scratch slug into the shared
+  // store. Both guards are the four-prefix rule now (D-2375), so each row
+  // below is one prefix; the citation this comment used to carry named a line
+  // number and a test title that D-2375 both moved and renamed.
   for (const slug of SCRATCH_SLUGS) {
     it(`--apply ignores the scratch slug ${slug} — never converges it`, () => {
       seed('.claude', slug, { 'a.md': 'A' });
@@ -545,14 +548,16 @@ describe('ccrc memory --apply — the union', () => {
     });
   }
 
-  it('--apply DOES converge a /var/tmp slug — the negative control for that list', () => {
-    seed('.claude', PERSISTENT_SLUG, { 'a.md': 'A' });
-    const r = run(['memory', '--apply']);
-    expect(r.code).toBe(0);
-    expect(fs.existsSync(path.join(home, '.ccrc', 'memory', PERSISTENT_SLUG, 'a.md'))).toBe(true);
-    expect(fs.lstatSync(path.join(home, '.claude', 'projects', PERSISTENT_SLUG, 'memory'))
-      .isSymbolicLink()).toBe(true);
-  });
+  for (const slug of PERSISTENT_SLUGS) {
+    it(`--apply DOES converge the /var/tmp slug ${slug} — the negative control`, () => {
+      seed('.claude', slug, { 'a.md': 'A' });
+      const r = run(['memory', '--apply']);
+      expect(r.code).toBe(0);
+      expect(fs.existsSync(path.join(home, '.ccrc', 'memory', slug, 'a.md'))).toBe(true);
+      expect(fs.lstatSync(path.join(home, '.claude', 'projects', slug, 'memory'))
+        .isSymbolicLink()).toBe(true);
+    });
+  }
 
   // Important (final whole-branch review): R27's "already canonical, do
   // nothing" short-circuit (`[ "$(readlink -- "$link")" = "$store" ] &&

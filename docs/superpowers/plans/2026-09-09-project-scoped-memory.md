@@ -297,7 +297,7 @@ record the failing assertion text, then restore.
 |---|---|---|
 | M1 | delete the `rmdir ... \|\| return 0` guard and replace with `rm -rf -- "$link"` | "LEAVES a non-empty plain directory alone" |
 | M2 | change the `[ -L "$link" ]` arm to re-point instead of returning | "LEAVES a symlink pointing elsewhere alone" |
-| M3 | remove the `case "$slug" in -tmp*)` guard | "skips a scratch slug" |
+| M3 | remove the scratch guard (`case "$slug" in -tmp*\|…)`) | "skips a scratch slug — /tmp work accumulates no durable memory" — **on Linux only**; on Darwin the same row reds for the `-private-var-folders*` arm, and D-2375 records why no Linux fixture can red the Darwin arm |
 | M4 | compute the slug from `.cwd` instead of reading `dirname(transcript_path)` | at least one create/replace case |
 
 M4 is the important one: it is the exact defect the plugin's #294 records, and it must be
@@ -504,7 +504,7 @@ Expected: PASS, 5/5.
 |---|---|---|
 | M1 | `_mem_homes` enumerates a hardcoded roster list instead of globbing | "enumerates homes from the FILESYSTEM, not the roster" |
 | M2 | `_mem_state` returns `converged` for any symlink, ignoring the target | "reports a converged pair as converged" (seed a wrong-target link) |
-| M3 | remove the `-tmp*` skip | "ignores scratch slugs" |
+| M3 | remove the census scratch skip | the four "ignores the scratch slug …" rows (one per prefix), and "counts the scratch pairs it dropped …" *(row titles updated by D-2375, which split the single `-tmp*` row into one per prefix)* |
 
 - [ ] **Step 7: Commit**
 
@@ -746,6 +746,7 @@ Expected: PASS, 13/13.
 | M3 | absorb `MEMORY.md` like any other file instead of rebuilding | "rebuilds MEMORY.md from frontmatter" |
 | M4 | drop the backup `mv` and `rm -rf` the source instead | "backs up each source directory" |
 | M5 | skip the `[ -L "$link" ]` arm so a foreign link is left in place | "re-points a symlink that targets another HOME" |
+| M6 | delete `_mem_is_scratch "$slug" && continue` from `_mem_apply` | the four "--apply ignores the scratch slug …" rows — *added by D-2375; the apply-side guard had NO mutation row in this table even though `ccrc-memory.test.ts` records that deleting it left the whole suite green* |
 
 M1 is the one that matters most: it is the silent-winner behaviour the whole rule exists to forbid,
 and it must be demonstrated red rather than argued.
@@ -1016,6 +1017,11 @@ Audited: nothing this branch prints does that.
    and the union's shape — distinct names, and the same-name-different-content collisions, which are the
    only files `--apply` will ever suffix.
 
+   The census's summary line carries a THIRD number since D-2375 — `N pairs, M forked, K scratch
+   skipped`. `K` counts pairs the scratch rule dropped, so it is part of the population and not part
+   of `N`: `--apply` will not touch those, and a `K` that moves between the census and the run means
+   a session created or removed a scratch pair while you were reading.
+
 3. **Predict, then compare.** Write down what the census says BEFORE running, and what `--apply` should
    therefore print: one `converged` line per un-converged pair, one `normalised` line per pair whose link
    resolved correctly but named another home, a `NOTE:` only where entries were not migrated, and a
@@ -1110,7 +1116,11 @@ number up; do not invent one.
   read. All three mechanisms skip a slug beginning `-tmp`, and the census filter, the hook guard and
   the doctor guard use the same rule. Tasks 1, 2 and 4.
   **Widened 2026-09-10 by D-2375:** "a slug beginning `-tmp`" was the LINUX spelling of the rule, not
-  the rule. Read D-2375 for what the guard skips now.
+  the rule. Read D-2375 for what the guard skips now. That entry also fixes the count vocabulary this
+  one muddles: there are **four mechanisms** (the hook, the census, `--apply`, the doctor) across
+  **three files** — `--apply` and the census share `_mem_is_scratch` — asking **one four-prefix
+  rule**. "All three mechanisms" above should read four, and "Tasks 1, 2 and 4" should read 1, 2, 3
+  and 4, for the same reason: `_mem_apply` is Task 3's.
 
 - **D-2182** — the spec's §3 says the pre-existing symlinks are "re-pointed" to the neutral store,
   but a symlink pointing at another HOME has that home's real directory behind it and its contents
@@ -1124,7 +1134,7 @@ number up; do not invent one.
   `_mem_apply` prints the resolved target's own location in its `NOTE:` line whenever the symlink arm
   leaves entries uncounted, rather than discarding that path once the link is dropped.
 
-### Found during execution, 2026-09-09
+### Found during execution, 2026-09-09 (and 2026-09-10 from D-2375 on)
 
 The five above were found while writing the plan. These fifteen were found while executing it, each by
 a review that measured the defect rather than argued it. They are recorded here because the shipped
@@ -1264,21 +1274,53 @@ blocks say.
   slug**: the guard never fired there, and the hook minted a store for every throwaway directory a
   Darwin session started in. The predicate is now four prefixes — `-tmp*`, `-private-tmp*`,
   `-var-folders-*`, `-private-var-folders-*` — byte-identical at all three sites and pinned by
-  `single-definition.test.ts`, which also reds if any site narrows back. `/var/tmp` is deliberately
-  **not** in the list (POSIX *persistent* scratch, and where `session-hook.test.ts` roots its own
-  project fixtures), and each mechanism now carries that negative control as well as the four
-  positives. Not derived from `$TMPDIR`: unset it skips nothing, `/` it skips every project, and the
+  `single-definition.test.ts`, which reds if any site narrows back AND — after the review round below
+  — if any site appends to the alternation. `/var/tmp` is deliberately **not** in the list (POSIX
+  *persistent* scratch, and where `session-hook.test.ts` roots its **memory-convergence block's**
+  project fixtures; payload cwds elsewhere in that file sit under `os.tmpdir()` and are skipped on
+  purpose). Each READ-SIDE mechanism carries that negative control in both spellings as well as the
+  four positives; the hook carries neither on Linux, for the reason the next paragraph gives. Not derived from `$TMPDIR`: unset it skips nothing, `/` it skips every project, and the
   two read-side callers see a slug with no cwd to compare against at all.
 
   **HOW IT WAS FOUND, and the asymmetry that hid it:** the `test-macos` leg, on PR #76's own merge
   commit `bb23a9f1` — non-required, so it blocked nothing, and it is the only reason this is not on
-  `main`. The assertion that failed was a *fixture precondition*
+  `main`. Not by that leg's own stated mechanism either: its comment claims the Darwin *arms*
+  (`describe.skipIf(!IS_DARWIN)`, `itDarwin`), and the test that caught this is an ordinary
+  cross-platform one whose fixture derives a path from `os.tmpdir()`. The assertion that failed was a *fixture precondition*
   (`expect(tmpSlug.startsWith('-tmp')).toBe(true)`), and it was measuring the shipped guard correctly
-  when it failed. Five task reviews, a 31-agent whole-branch review and every ubuntu leg missed it,
+  when it failed. Every task review, the whole-branch review and every ubuntu leg missed it,
   because the hook DERIVES its slug from a live cwd — its copy of the guard can only ever be exercised
   on the platform the suite runs on, and no Linux fixture can name a Darwin scratch root. The two
   read-side sites read a directory NAME, so their four-prefix rows are real on Linux; the pin is what
-  carries that coverage across to the site that cannot have it. Tasks 1, 2 and 4.
+  carries that coverage across to the site that cannot have it. Tasks 1, 2, **3** and 4 — Task 3's
+  `_mem_apply` guard and its describe are changed too, and D-2181's own "Tasks 1, 2 and 4" carries
+  the same undercount for the same reason.
+
+  **THE MUTATION TABLE, as measured on Linux 2026-09-10** (mutations applied to a committed tree and
+  reverted with `git checkout -- <path>`; each row is one run, and the mutation was applied at ALL
+  THREE sites at once except where the row says otherwise):
+
+  | mutation | behaviour controls | source pin |
+  |---|---|---|
+  | narrow `_mem_is_scratch` to `-tmp*` | `ccrc-memory` 6 failed | `single-definition` 2 failed |
+  | narrow `_check_memory` to `-tmp*` | `ccrc-doctor` 3 failed | `single-definition` 2 failed |
+  | narrow the HOOK to `-tmp*` | **`session-hook` GREEN** — by construction, on Linux | `single-definition` 2 failed |
+  | append `-var-tmp-*` (all three) | `ccrc-memory` 2, `ccrc-doctor` 1 failed | 1 failed — *only after the needle was un-anchored; it was GREEN first, which is why the second commit exists* |
+  | append `-private-var-*` to the HOOK alone | **all GREEN on Linux** | **GREEN before the equality row existed; red after** |
+
+  The third row is the finding, not a gap: it MEASURES the asymmetry the entry argues, rather than
+  asserting it. The fifth is the review round's own: containment could not see an append, so the pin
+  now captures each site's whole alternation and compares it for equality.
+
+  **KNOWN BOUND.** A FOURTH site, written in some other shell shape (a `[[ ]]` test, a helper of its
+  own), is caught by neither the equality row (which reads three named sites) nor the narrowing row
+  (which looks for the old `case` spelling). Nothing scans for an arbitrary re-implementation, and
+  nothing pretends to.
+
+  **NOT VERIFIED ON DARWIN AT THE TIME OF WRITING.** Both fix commits were unpushed when this entry
+  was written, so the branch's only `test-macos` run is the red one that found the defect. The
+  Darwin behaviour is argued from the platform's own resolution rules and pinned by source
+  equality, not observed. What settles it is the next `test-macos` run.
 
 ---
 
