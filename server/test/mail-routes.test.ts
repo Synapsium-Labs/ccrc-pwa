@@ -424,6 +424,7 @@ describe("POST /api/mail — the 'worker' role", () => {
     const res = await send(app, { ...GOOD, toId: 'worker', runId: null });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain('needs a runId');
     expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
   });
 
