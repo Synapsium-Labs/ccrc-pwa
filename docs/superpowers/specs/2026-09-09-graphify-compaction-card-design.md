@@ -2,8 +2,10 @@
 
 **Date:** 2026-09-09
 **Status:** design approved in five sections by the operator (2026-09-09); **amended 2026-09-10** after the
-payload measurement of §4 came back negative — the subagent guard became the scope rule of §3.0, on the
-operator's direction that compaction works for a subagent exactly as for the main thread; no implementation yet
+payload measurement of §0.2 came back negative — the subagent guard became the scope rule of §3.0, on the
+operator's direction that compaction works for a subagent exactly as for the main thread. The first draft of
+§3.0 (newest file wins) was refuted by an adversarial review the same day and replaced by the liveness rule,
+which answers `ambiguous` where it cannot answer; no implementation yet
 **Branch:** `ws/graphify-compaction-card`
 **Predecessors:** `2026-08-27-graphify-fleet-integration-design.md` (App. B),
 `2026-09-02-graphify-read-side-ccrc-level-design.md` (R1, R4, R5), and the gpt-lane wedge plan
@@ -77,15 +79,29 @@ least reliable — code paraphrased from memory, line numbers that drift — and
 - **Subagent compactions fire all three hooks with payloads identical to the main thread's** — the
   *parent's* `session_id` and `transcript_path`, and **no `agent_type` or `agent_id` key at all**.
   Measured 2026-09-09 on 2.1.266: five headless runs through a fixture-HOME lane, the three payloads
-  captured for five main-thread and two subagent compactions; the key sets are byte-identical. The
-  subagent's own transcript is `<dirname transcript_path>/<session_id>/subagents/agent-<agent_id>.jsonl`
-  for an `Agent`-tool subagent and `…/subagents/workflows/<run>/agent-<agent_id>.jsonl` for a Workflow
-  agent (this session's own directory: 0 direct, 42–78 under `workflows/` per lane), and while it
-  compacts it is the most recently written transcript of the session — the parent is idle, waiting on
-  it. The parent's transcript does **not** yet carry the new `compact_boundary` when any of the three
-  hooks fire, so a boundary count cannot tell the two apart either; and the summariser's own
-  `SubagentStop`, which fires during a main-thread compaction, writes no transcript. §3.0 stands on
-  exactly these facts.
+  captured for five main-thread and two subagent compactions; the key sets are byte-identical
+  (PreCompact: `custom_instructions cwd hook_event_name prompt_id session_id transcript_path trigger`;
+  PostCompact: the same with `compact_summary` for `custom_instructions`; SessionStart(compact): `cwd
+  hook_event_name model prompt_id session_id source transcript_path`). `prompt_id` does not help either:
+  a subagent's rows carry the *parent's* `promptId` (two Workflow agents and fourteen parent rows of this
+  session share one), and no `CLAUDE_*` environment variable in the binary names an agent.
+- **Where a subagent's compaction lands, measured on the same runs.** The subagent's transcript is
+  `<dirname transcript_path>/<session_id>/subagents/agent-<agent_id>.jsonl` for an `Agent`-tool
+  subagent and `…/subagents/workflows/<run>/agent-<agent_id>.jsonl` for a Workflow agent (this session's
+  own directory: 0 direct, 42–78 under `workflows/` per lane). A subagent that compacted twice wrote
+  **both `compact_boundary` rows and both `isCompactSummary` rows into its own transcript** (the parent's
+  carried none), and the SessionStart(compact) hook context landed there too, as
+  `hook_additional_context` attachments — the card reaches the context that compacted. The parent's
+  transcript does **not** yet carry a new `compact_boundary` when any of the three hooks fire, and the
+  summariser's own `SubagentStop`, which fires during a main-thread compaction, writes no transcript.
+- **What the filesystem can and cannot say about who is compacting** (measured 2026-09-10 on this box's
+  own corpus): a compacting context writes nothing for the whole compaction (≥79 s, the floor above),
+  so it is never the newest file for long; a parent waiting on a Workflow fan-out writes nothing at all
+  (16 minutes without a row in one run of this session); Workflow agents start seven and eight at a
+  time within 3 ms and run concurrently for 13–39 minutes, writing a row every 4–6 s with gaps over
+  79 s in 1–2% of rows; and 5 of 197 main-thread compaction boundaries had a subagent transcript newer
+  than the parent's last row. §3.0 is built on exactly these facts, and it is why "newest file" was
+  refuted and liveness is the rule.
 - **Every hook payload carries `transcript_path`**, empty for served sessions.
 
 ### 0.3 The prototypes
@@ -115,7 +131,7 @@ least reliable — code paraphrased from memory, line numbers that drift — and
 compaction — the main thread's or a subagent's; the summariser is told it will be; and the summary is
 measured for whether it changed.**
 
-Goals: (1) *fidelity* — the files, symbols and dependents a session was working in survive compaction
+Goals: (1) *fidelity* — the files, symbols and dependents a context was working in survive compaction
 exactly, not as the model remembers them; (2) *size* — the summary stops pasting code it can cite;
 (3) *measured* — the effect is a number per compaction on the wire, never an assertion.
 
@@ -133,17 +149,18 @@ one new ccrc-owned helper, `ccd/compact-card.mjs`, does the work that needs a JS
 events; `install-session-hooks.sh`'s event list is unchanged.
 
 ```
-(every arm below is inert while ~/.ccrc/compact-card-off exists; each first resolves WHICH
- transcript is compacting — the main thread's or a subagent's — by the scope rule of §3.0)
-PreCompact ──► scope ──► $REG/<id>.compactset            (JSON: scope, agent, transcript; files null)
-   │          └► helper `card` ──► $REG/<id>.compactcard  (text, ≤ COMPACT_CARD_MAX_CHARS)
-   │                            └─► $REG/<id>.compactset  (rewritten: files, tags, counts, steered)
+(every arm below is inert while ~/.ccrc/compact-card-off exists. ONLY PreCompact decides WHICH
+ context is compacting — main, subagent or ambiguous — by the liveness rule of §3.0; the two later
+ arms read that decision from the set and never resolve)
+PreCompact ──► scope + overlap check ──► $REG/<id>.compactset   (JSON: at, scope, agent, transcript; files null)
+   │          └► helper `card` (never for ambiguous) ──► $REG/<id>.compactcard  (line 1: the set's `at`; then the text)
+   │                                                   └─► $REG/<id>.compactset  (rewritten: files, tags, counts, steered)
    └─ stage 2: prints STEER_TEXT iff the helper exited 0 and the steer switch is absent
 summariser  (Claude Code; reads Additional Instructions)
-SessionStart(compact) ──► scope again; iff the set names the same transcript, appends .compactcard
-                          as the 4th subject of the ONE envelope and deletes it
-PostCompact ──► helper `measure` (compact_summary on stdin, .compactset) ──► hookstate.compaction
-                                                                        └─► $REG/<id>.compactions (journal)
+SessionStart(compact) ──► iff the card's line 1 is the set's `at`: appends the card as the 4th subject
+                          of the ONE envelope and deletes it; an aged card is removed instead
+PostCompact ──► helper `measure` (compact_summary on stdin; the set iff inside the window) ──► hookstate.compaction
+                                                                                            └─► $REG/<id>.compactions (journal)
 server hookstate reader ──► FleetSession.compaction ──► PWA chip `compact 17k · cites 7/12`
                                                         (`sub·compact …` for a subagent's)
 ```
@@ -165,8 +182,9 @@ unit-tested by vitest directly. The fleet box already runs node 22+ for `ccrc-ag
 | `CARD_MAX_CHARS` | 2400 | hook (exists) — the emitter's clip today, kept as the **first** of two clips | the standing subjects' ceiling; the only defence for the ungated `GM_NODES` (D-1899), so it stays |
 | `CARD_TOTAL_MAX_CHARS` | 6401 = `CARD_MAX_CHARS` + 1 (the join) + `COMPACT_CARD_MAX_CHARS`, derived | hook, the emitter's **second** clip, after the compact subject is appended | a pin on the sum, never a third budget: it cannot cut what the two clips admitted; pinned `< HARNESS_CONTEXT_SPILL_CHARS` |
 | `HARNESS_CONTEXT_SPILL_CHARS` | 10000 | test constant, documented harness fact (2.1.266 `Pdr=1e4`) | above it the harness spills the context to disk |
-| `COMPACT_CARD_MAX_AGE` | 3600 s | hook | a card older than this is never served |
-| `COMPACT_HELPER_TIMEOUT` | 20 s | hook | `timeout` around both helper calls; measured 0.2–1.5 s |
+| `COMPACT_CARD_MAX_AGE` | 1200 s | hook | the in-flight window: a card or a set older than this belongs to no compaction that can still arrive and is removed unread; an unconsumed set *younger* than this at PreCompact means overlap (§3.0). Argued from the longest measured compaction, 826 s on the gpt lane, ×1.45 |
+| `COMPACT_LIVE_S` | 120 s | hook | a transcript written inside this window is a live context (§3.0); measured cadence 4–6 s per row, gaps over 79 s in 1–2% of rows |
+| `COMPACT_HELPER_TIMEOUT` | 5 s | hook | `timeout` around both helper calls, argued in §3.1 from the worst measured inputs; the R2 amendment of §6 |
 | `COMPACT_WINDOW_CAP` | 64 MiB | helper | the transcript window when no boundary exists |
 | `COMPACT_WORKSET_MAX` | 12 | helper | files on the card; the set file keeps up to 100 |
 | `GRAPH_GATE_MAX_BEHIND` | 10 | hook (exists) | the freshness predicate, shared with the gate |
@@ -179,56 +197,104 @@ unit-tested by vitest directly. The fleet box already runs node 22+ for `ccrc-ag
 
 Compaction is **one mechanism for the main thread and for every subagent** (operator direction,
 2026-09-10: a subagent's context fills and compacts the same way, and its summary has the same fidelity
-problem). The payload cannot say which one fired the hook (§0.2), so the hook decides it from the
-filesystem, once per arm, with one function, `_hook_compact_scope "$tp" "$sid"`:
+problem). The payload cannot say which one fired the hook (§0.2), and **only PreCompact can find out**:
+from that moment the compacting context writes nothing for at least 79 s (§0.2, the floor over 905
+compactions), so any later arm looking at the filesystem sees the compactor as the *quietest* context of
+the session, not the newest. So the scope is decided ONCE, at PreCompact, and persisted in the set; the
+two later arms read it and never resolve.
 
-1. `dir="$(dirname "$tp")/$sid/subagents"` — the session's own subagent directory.
-2. The **newest** `agent-*.jsonl` under `$dir`, at any depth, that is **newer than `$tp`**:
-   `find "$dir" -name 'agent-*.jsonl' -newer "$tp" -printf '%T@ %p\n' | sort -n | tail -1` — one
-   fork, 0.00 s measured over 621 entries; a missing `$dir` is the empty result. Any depth, because
-   `Agent`-tool subagents sit directly in it and Workflow agents one `workflows/<run>/` deeper (§0.2).
-3. Found → scope **`subagent`**, transcript that file, `agent` its `<agent_id>`. Not found → scope
-   **`main`**, transcript `$tp`, `agent` null.
+The rule, `_hook_compact_scope "$tp" "$trigger"`, answers one of **`main`**, **`subagent`** (with the
+agent's transcript and id) or **`ambiguous`** — and `ambiguous` is an answer, not a failure: it means no
+card, and a measurement that says so.
 
-Every downstream step takes the *resolved* transcript: the card is mined from the subagent's own work,
-`carried` from the subagent's own previous summary, the set and the journal record `scope`, `agent`
-and `transcript`, and hookstate `compaction` carries `scope`. Nothing is skipped and nothing is
-main-only. **The scope is a tag the console renders, not a gate.**
+1. `trigger == manual` → `main`. Only the main thread can take a `/compact` (typed by the operator or by
+   ccd's compactor at idle); no subagent ever does.
+2. Otherwise the candidates are the parent transcript `$tp` and every `agent-*.jsonl` under
+   `${tp%.jsonl}/subagents/`, at any depth (`Agent`-tool subagents sit directly in it, Workflow agents
+   under `workflows/<run>/`; `${tp%.jsonl}` IS `<dirname>/<session_id>`, the transcript's basename being
+   the session id, so no second payload read is needed). A candidate is **live** when its mtime is
+   within `COMPACT_LIVE_S` (120 s) of now — `find … -mmin -2`, POSIX-portable (`-printf` is not).
+3. **No live agent → `main`.** An auto-compaction fires right after a write, so the compactor is live;
+   with no live agent the parent is the only context that can be compacting.
+4. **Exactly one live agent and the parent NOT live → `subagent`, that file.** The parent is quiet while
+   it waits on a foreground subagent (measured: 16 minutes without a row during one Workflow run, §0.2),
+   so the one live writer is the compactor.
+5. **Anything else → `ambiguous`**: the parent and an agent both live, or two or more live agents. Two
+   contexts wrote within the window and nothing in the payload or on disk says which one stopped to
+   compact. This is the honest answer for a Workflow fan-out — measured on this fleet, seven and eight
+   agents of one session start within 3 ms and run concurrently for 13–39 minutes, writing a row every
+   4–6 s — and for a main-thread compaction with a background subagent still running.
 
-**Why this rule and not another.** `agent_type`/`agent_id`: absent from all three payloads (§0.2). A
-boundary count in `$tp`: not yet written at hook time (§0.2). Hookstate's own `subagents` list, which the
-`SubagentStart`/`SubagentStop` arms maintain: measured to carry stale entries — a `SubagentStop` does not
-always arrive, and the summariser fires one of its own — so it cannot say whether a subagent is
-*running*, let alone compacting. The mtime rule is exact whenever one context is active: a foreground
-subagent compacts while its parent waits on it, and the main thread compacts between subagents. The
-transcripts keep the truth for any later check.
+Downstream: a `main` or `subagent` scope mines the card from **that** transcript and `carried` from
+that transcript's own previous summary; the set, the journal and hookstate carry `scope`, `agent` and
+`transcript`; an `ambiguous` scope writes a set with `transcript: null`, no card, and PostCompact still
+measures `chars`, `filesChars` and `fences` with `cited`/`setSize` null. **The scope is a tag the console
+renders, not a gate; `ambiguous` is the one value that also withholds the card**, because a card built
+from a sibling's transcript is wrong context, and wrong context is worse than none.
 
-**Residual, stated.** With a *background* subagent writing while another context compacts, the newest
-file is the writer, not the compactor, and for that one compaction the scope, the card and the journal
-line describe a sibling context of the same session. It is bounded (one compaction; a card of a sibling
-in the same session, never another session's), it is visible (the journal line's `transcript`, checked
-offline against that transcript's own `compact_boundary` stamps — the compactor's carries one just after
-the line's `at`, the writer's does not), and it is measured on the first live corpus before it is fixed.
-If it is not rare, the fix is a card file per transcript, which needs `_reg_purge` to learn a second
-suffix shape; not before the number says so.
+**Why this rule and not another — every candidate measured.** `agent_type`/`agent_id`: absent from all
+three payloads. `prompt_id`: present on all three, but a subagent's rows carry the *parent's* prompt id
+(measured on this session: two Workflow agents and fourteen parent rows share one `promptId`). A boundary
+count in `$tp`: the boundary is not yet written at hook time, and a subagent's boundary lands in the
+subagent's own transcript (§0.2). "Newest file wins" (the first draft of this section): a race — the
+compactor is silent for ≥79 s, siblings write every 4–6 s, and 5 of 197 main-thread boundaries on this
+box's corpus had a subagent transcript newer than the parent's last row. Hookstate's own `subagents`
+list: stale entries, and the summariser fires a `SubagentStop` of its own. An environment variable naming
+the agent: none in the 2.1.263 binary's `CLAUDE_*` set. Liveness is what is left, and it is exact where it
+answers and silent where it cannot.
+
+**What the corpus measures about the rule itself.** Two false directions, both counted on the first
+live journal: **false ambiguity** — a sibling that finished inside the last `COMPACT_LIVE_S`, or a
+foreground subagent that filled its context within two minutes of its spawn — costs a card, never a
+wrong one; **false exactness** — a live sibling that happened to pause longer than `COMPACT_LIVE_S`
+(gaps over 79 s are 1–2% of rows in the measured agents) — mislabels one compaction, and is checkable
+offline: the journal line names a subagent transcript whose file carries no `compact_boundary` near the
+line's `at`. If `ambiguous` turns out common, the fix is a discriminator Claude Code does not carry today
+(an agent id on the three payloads); nothing in this design can conjure one, and the journal is what
+says whether asking for it is worth it.
+
+**One slot, two contexts — overlap.** The card and the set are one file each per session id, and every
+context of the session writes them. When PreCompact finds an **unconsumed set younger than
+`COMPACT_CARD_MAX_AGE`**, another compaction of this session is in flight (or failed inside the window),
+and no later arm can tell which context it serves. So BOTH degrade: this PreCompact writes its set as
+`ambiguous` and removes the card; the earlier compaction's SessionStart(compact) finds no card and its
+PostCompact reads an `ambiguous` set. A failed compaction followed within the window by another costs
+that one its card (consecutive boundaries under an hour are 1% of intervals on this box; failures are
+rarer). The card and the set are additionally **paired by a nonce** — the set's `at`, written as the
+card's first line — so a crossed pair from the helper's own write racing an overlapping PreCompact
+(milliseconds against a 79 s window) is unservable rather than served.
 
 ### 3.1 PreCompact arm (hook)
 
-Guard chain, in order, every failure silent and total (nothing written, nothing printed):
+Runs from the very end of the hook, **after** the hookstate rename: the `working` stamp lands first and
+never waits on any of this. Guard chain, in order, every failure silent and total for what follows:
 
 1. `~/.ccrc/compact-card-off` absent.
 2. `.transcript_path` non-empty and a readable regular file.
-3. `_hook_compact_scope` (§3.0) resolves the compacting transcript, and the resolved file is readable.
-   **The set file is written here, always** — `{v, at, scope, agent, transcript, cwd, files: null,
-   stats: null, steered: false}`, by the hook (`jq -cn --arg …`, temp-then-rename) — so PostCompact has
-   the scope whether or not anything below runs. `files: null` means *not mined*; the helper's
-   `files: []` means *mined, empty*: two conditions, two values.
-4. `_hook_graph_measure` returns 0 **and** `_hook_gate_tree` holds — the tree has a graph no more than
-   `GRAPH_GATE_MAX_BEHIND` commits behind HEAD. Same predicate as the search gate, so the card and the
-   gate agree about which trees count.
-5. `node` on `PATH` and `$HOME/.cc-sessions/compact-card.mjs` present.
+3. `_hook_compact_scope "$tp" "$trigger"` (§3.0) answers; then the **overlap check** of §3.0 (an
+   unconsumed set younger than `COMPACT_CARD_MAX_AGE` → `ambiguous`, card removed).
+4. `_hook_graph_measure` runs — for its `GM_CWD`, `GM_BUILT` and `GM_FRESH`, which the set records
+   whatever comes next — and **the set is written here, always**, by the hook (`jq -cn --arg …`,
+   temp-then-rename, the temp `$REG/.<id>.$$.compactset.tmp`):
 
-Then, with `--transcript` the **resolved** file of guard 3, never the payload's:
+   ```json
+   {"v":1,"at":1789330000000,"scope":"main","agent":null,
+    "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
+    "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh","steered":false,"files":null,"stats":null}
+   ```
+
+   `at` is the nonce every later step pairs on. `files: null` means **not mined**; the helper's
+   `files: []` means **mined, empty** — two conditions, two values. `cwd`, `built` and `fresh` are
+   `null` when the measurement had nothing to say. An `ambiguous` scope has `transcript: null`,
+   `agent: null`, and the arm **stops here**.
+5. The graph gate: `_hook_graph_measure` returned 0 **and** `_hook_gate_tree` holds — a graph no more
+   than `GRAPH_GATE_MAX_BEHIND` commits behind HEAD, the same predicate as the search gate, so the card
+   and the gate agree about which trees count.
+6. `node`, `timeout` and `find` on `PATH` (the file's own `command -v jq` idiom; `timeout` and `find`
+   are new to this file and `timeout` is not on a BSD userland — there the feature is inert and says so
+   in §4) and `$HOME/.cc-sessions/compact-card.mjs` present.
+
+Then, with `--transcript` the resolved file of step 3 — never the payload's — and `--at` the nonce:
 
 ```
 timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
@@ -236,25 +302,34 @@ timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
   --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
   --out "$REG/$id.compactcard" --set "$REG/$id.compactset" \
   --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
-  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" [--agent "$agent"] [--steer]
+  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" --at "$at" [--agent "$agent"] [--steer]
 ```
 
 `--steer` is passed when stage 2 is built and `~/.ccrc/compact-steer-off` is absent; the helper records
-it in the set file, so the *intent* to steer and the *fact* of steering are one bit. Exit 0: the card
-was written, and the set rewritten with the working set; in stage 2 the hook then prints `STEER_TEXT`
+it in the set file, so the *intent* to steer and the *fact* of steering are one bit (the hook's own set
+says `steered: false`, and that is correct: a helper that never exited 0 never steered). Exit 0: the card
+was written and the set rewritten with the working set; in stage 2 the hook then prints `STEER_TEXT`
 (§3.5) — one line, plain text, the second and last deliberate stdout site in the file. Exit 3: the
 working set was empty — the set is rewritten with `files: []`, no card. Any other exit, or the timeout:
-nothing more; the hook's own set from guard 3 stands. The existing `state="working"` write is
-unchanged.
+nothing more; the hook's own set stands. The existing `state="working"` write is unchanged.
 
-Cost is not on the hot path — the compaction that follows takes 79 s at minimum on this fleet — but it
-is bounded by the timeout and pinned by a test (§5).
+**Cost, and the contract it amends (§6, R2).** The helper is bounded by `COMPACT_HELPER_TIMEOUT` = 5 s,
+argued from the worst measured inputs — node startup ~0.05 s, the 70 MB MekWarLive graph parsed in
+1.15 s, a 64 MiB no-boundary window scanned in about a second — at roughly twice their sum; the scope
+`find`s and the set write sit outside it and are bounded by construction (two `find`s over one session
+directory, one `jq`, one rename). None of it is on the hot path: PreCompact brackets a compaction of at
+least 79 s. It is still a wait the hook's header forbids, and §6 declares it.
 
 ### 3.2 Helper subcommand `card`
 
 **Input.** `--transcript` is whichever file §3.0 resolved — the parent's or a subagent's. The helper
-neither knows nor cares which, beyond copying `--scope` and `--agent` into the set; a subagent transcript
-has the same line shapes (`assistant` rows with `tool_use` items, `compact_boundary`, `isCompactSummary`).
+neither knows nor cares which, beyond copying `--scope`, `--agent`, `--transcript` and `--at` into the
+set and writing `--at` as the **first line of the card file** (the nonce §3.3 pairs on; the hook strips
+it before injecting). A subagent transcript has the same line shapes as the parent's, measured: an
+`assistant` row is `{type:"assistant", message:{content:[{type:"tool_use", name, input}]}}`; the boundary
+row is `{type:"system", subtype:"compact_boundary", compactMetadata:{trigger,…}}`; the previous summary
+is `{type:"user", isCompactSummary:true, message:{content:"<string>"}}` — a string in 1,307 of 1,307
+summaries on this box, with an array of `{type:"text", text}` blocks tolerated.
 
 **Window.** The transcript since the last compaction boundary. Found by scanning the file *backwards*
 from EOF in 1 MiB chunks for a line containing `"compact_boundary"` and confirming that the line parses
@@ -277,8 +352,9 @@ since the last one (§0.3 measured 2 files without it).
 | the previous summary (`isCompactSummary`, any role) | tokens of its text, same regex | `carried` |
 
 `<ext>` is the alternation of every extension the graph's own `source_file` values carry, derived, never
-typed. Files with no extension (`ccd/ccd`, `ccd/ccclip` — 11 of this repo's 820) cannot be mined from
-shell text and are a stated limitation, not a bug.
+typed (this repo's graph: `ts md tsx mjs json sh mts js`). Files with no extension (`ccd/ccd`,
+`ccd/ccclip` — 11 of this repo's 852) cannot be mined from shell text and are a stated limitation, not a
+bug.
 
 **Resolution**, against the set of `source_file` values in `graph.json`: strip a leading `<cwd>/` or
 `./`; exact match first; else a suffix match on a path-segment boundary that is **unique** in the set.
@@ -293,10 +369,17 @@ file carries. The **carded files** are the first `COMPACT_WORKSET_MAX` of them �
 `used by` lists and the blast-radius count are computed against the *working set*: a dependent that is
 in the working set but not carded is not "outside" and is not counted.
 
+**The graph.** `graph.json` is networkx node-link JSON (measured on this repo's 0.9.9 graph: 8,914
+nodes, 17,452 links): `nodes[]` carry `id`, `label`, `source_file`, `source_location` (`L<n>`),
+`community`, and the edges are under **`links[]`** as `{source, target, relation, …}` — thirteen
+relations, of which `imports`, `imports_from`, `calls`, `references` and `indirect_call` mean "depends
+on". `.graphify_labels.json` is `{"<community>": "<label>"}`. `built_at_commit` is the file's last key;
+the helper parses the whole file once (0.13–0.18 s at 9 MB).
+
 **The card.** File-centric, one line per file, terse, no markdown tables:
 
 ```
-graphify card — this session's working set at compaction, from graphify-out/ (built at 40706e0c, fresh):
+graphify card — this context's working set at compaction (subagent a43142b934b4bf501), from graphify-out/ (built at 40706e0c, fresh):
 - server/src/pane/statusline.ts [edited] · community "watch.ts" · symbols parseStatusline:L132 parseCtxPct:L105 segmentAfter:L120 · used by server/src/watch.ts server/src/fleet.ts (+1)
 - pwa/src/lib/models.ts [edited] · community "SessionScreen.tsx" · symbols modelOptions:L29 effortOptions:L54 · used by pwa/src/session/ModelSheet.tsx (+2)
 - ccd/session-hook.sh [touched] · community "session-hook" · symbols _hook_graph_card:L278 _hook_emit_context:L59 _hook_graph_measure:L157 · used by server/test/session-hook.test.ts (+1)
@@ -306,31 +389,36 @@ Re-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rat
 ```
 
 (Format example, rendered from the 9-file whole-transcript set of §0.3 — all nine in the working set,
-three carded before the budget cut; the symbol lines and counts are illustrative.) Per file: path; tag; the community label of the file node from `.graphify_labels.json` (omitted when the
-file is absent from it); its top five symbols by total degree among nodes whose `source_file` is the
-file, as `label:L<line>` from `source_location`; and the top three files *outside the working set* that carry an
-`imports`, `imports_from`, `calls`, `references` or `indirect_call` link **into** any node of the file,
-by link count, with `(+n)` for the rest. Then one blast-radius line with the total count of dependent
-files outside the working set. Then the fixed footer. The header carries the graph's commit (8 chars) and the
-freshness word `_hook_graph_measure` produced, so a card from a graph built at another commit says so
-the way the graph card does.
+three carded before the budget cut; the symbol lines and counts are illustrative.) The header says
+**this context's**, never "this session's", and carries `(subagent <id>)` on the subagent arm — it is
+the one line that tells a summariser whose work the card describes. Per file: path; tag; the community
+label of the file node (the node whose `metadata.kind` is `file`, else the file's top-degree node) from
+`.graphify_labels.json` (omitted when its community has no label); its top five symbols by total degree
+among the file's other nodes, as `label:L<line>` from `source_location`; and the top three files
+*outside the working set* that carry a depends-on link **into** any node of the file, by link count then
+path, with `(+n)` for the rest. Then one blast-radius line with the total count of dependent files
+outside the working set. Then the fixed footer. The header carries the graph's commit (8 chars, or
+`unknown` for an unstamped graph) and the freshness word `_hook_graph_measure` produced, verbatim — `fresh
+— same content as HEAD`, `3 commits behind HEAD`, `freshness unmeasured` — so a card from a graph built at
+another commit says so the way the graph card does, in the graph card's own vocabulary.
 
 **Truncation** drops whole files from the bottom until the text fits `--max-chars`, then collapses
 `used by` lists to their `(+n)`, never mid-line, and **always** prints `(+k files not shown)` when
 anything was dropped — a short card must never read as a small working set (the prototype's `(not in
 graph)` sentinel meant both, and the repo calls that an overloaded null).
 
-**Files.** Both written to a dot-prefixed temp name in `$REG` and renamed into place, the hook's own
-idiom. Names carry **no second dot** on purpose: `_reg_purge` removes `$REG/<id>.<suffix>` only when the
-suffix has no dot (its nested-id guard), and removes `hookstate.json` by an explicit line; these three
-are purged with the session by the loop, no explicit line needed.
-
-`.compactset`:
+**Files.** Both written to a dot-prefixed temp name carrying the writer's pid
+(`$REG/.<name>.<pid>.tmp`, the hook's own `$$` idiom, so two writers never share a temp) and renamed
+into place. Names carry **no second dot** on purpose: `_reg_purge` unlinks `$REG/<id>.<suffix>` for every
+dot-free suffix except `archived` and `reaping` (which it removes last, in that order) plus the one
+explicitly named `<id>.hookstate.json`; these three are purged with the row by the loop, no explicit
+line needed. The set the helper writes — key order is part of the contract: `at` and `transcript`
+sit in the first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`:
 
 ```json
 {"v":1,"at":1789330000000,"scope":"main","agent":null,
- "transcript":"/home/u/.claude/projects/-home-u-worktrees-ccrc-pwa-amber-prairie/<session>.jsonl",
- "cwd":"/home/u/worktrees/ccrc-pwa/amber-prairie","built":"40706e0c","fresh":"fresh",
+ "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
+ "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh",
  "steered":false,
  "files":[{"path":"server/src/pane/statusline.ts","tag":"edited","count":7}, ...],
  "stats":{"tokens":152,"resolved":87,"ambiguous":0,"outside":43,"nomatch":22}}
@@ -343,29 +431,35 @@ stands). Reads only the three input files; writes only the two named outputs.
 ### 3.3 SessionStart(compact) arm (hook)
 
 Inside the existing `SessionStart` arm, **only when `src == compact`**, after the three standing
-subjects are built and before the D-306 `exit 0`:
+subjects are built and before the D-306 `exit 0`. **No scope resolution here** — this arm cannot tell
+which context it serves (§3.0), so it serves the card iff the card is the set's own:
 
 0. `~/.ccrc/compact-card-off` absent — **before the file is touched**.
-1. `f="$REG/$id.compactcard"`; require a regular file younger than `COMPACT_CARD_MAX_AGE` (a
-   `find -newermt`/`stat` age check, one syscall).
-2. **The card must be this context's.** `_hook_compact_scope` (§3.0) is evaluated again, and the set
-   file's `transcript` must equal the resolved one. A missing set, or a different transcript, serves
-   nothing and leaves the card on disk untouched — it belongs to a compaction still in flight, or to
-   nobody, and the age bound retires it. Wrong context is worse than no context.
-3. Read it, clip at `COMPACT_CARD_MAX_CHARS` (defence in depth behind the helper's bound), `rm -f` it.
-   Consume-once: a card is never served to two contexts.
-4. **Two clips, one per budget.** The three standing subjects are joined and clipped at
-   `CARD_MAX_CHARS` exactly as today — that clip is the *only* defence for the ungated `GM_NODES`
-   (`_hook_graph_measure`, D-1899: 3,000 digits in the report head measured a 3,437-char graph card), and
-   it must not move. The compact subject is then appended as the **fourth and last** subject with the
-   same one-space join, and the emitter clips the result at `CARD_TOTAL_MAX_CHARS`, which is *derived* as
-   the two ceilings plus the join — a pin on the sum, not a third budget — and pinned under
-   `HARNESS_CONTEXT_SPILL_CHARS`.
+1. `f="$REG/$id.compactcard"` exists; younger than `COMPACT_CARD_MAX_AGE` (`find -mmin`, one fork) —
+   an older card belongs to no compaction that can still arrive and is **removed**, never served.
+2. **The pair.** The set exists, and its `at` (a bounded `read -N 4096` of the set's head, fork-free)
+   equals the card's first line. A set naming another nonce, or no set, is a crossed pair — a card that
+   is not this compaction's — and nothing is served; the card stays for §3.0's overlap check or step 1
+   to retire.
+3. Read the rest of the card (bounded `read -N`, clipped at `COMPACT_CARD_MAX_CHARS` — defence in depth
+   behind the helper's bound), `rm -f` it. Consume-once: a card is never served to two contexts.
+4. **Two clips, one site.** `_hook_emit_context` takes two arguments now: the standing join, which it
+   clips at `CARD_MAX_CHARS` exactly as today — that clip is the *only* defence for the ungated
+   `GM_NODES` (`_hook_graph_measure`, D-1899: 3,000 digits in the report head measured a 3,437-char graph
+   card), and it stays the first clip — and the compact subject, appended after it with the same
+   one-space join under `COMPACT_CARD_MAX_CHARS`, the result clipped at `CARD_TOTAL_MAX_CHARS`, *derived*
+   as the two ceilings plus the join — a pin on the sum, not a third budget — and pinned under
+   `HARNESS_CONTEXT_SPILL_CHARS`. Both clips live inside the one emitter, which is the rule its own
+   comment states ("a per-subject clip is one each new subject can forget; this one cannot be").
 
-Startup, resume and clear **never** read the file: a card describes the compacted context and nothing
-else. Hookstate is **not** written — D-306 holds exactly as today, and its test extends to a run with a
-card present. Cost is one `find`, one `jq` read of the set, one stat and one read; the existing
-"SessionStart ≤ 4× the cheap arm" ratio test gains a compact-with-card run.
+Where the context lands is **measured** (§0.2): a subagent's SessionStart(compact) context is attached
+to the subagent's own transcript, beside its own boundary and summary. Startup, resume and clear
+**never** read the file: a card describes the compacted context and nothing else. Hookstate is **not**
+written — D-306 holds exactly as today, and its test extends to a run with a card present. Cost is one
+`find`, two bounded reads, one `rm` and the emit; the arm gets its **own** interleaved ratio test against
+the cheap arm, with its own array and a ceiling argued from a measured shipped-vs-mutated band the way
+D-1898 argued the startup arm's (folding one compact run into the startup array would put it at the max,
+where a p95 read cannot see it).
 
 Nothing new is reachable: with a pathological `GM_NODES` the standing join is clipped at 2,400 exactly
 as today (the graph card loses its tail, unchanged behaviour) and the compact card is intact; the
@@ -374,17 +468,24 @@ a red.
 
 ### 3.4 PostCompact arm (hook) and helper subcommand `measure`
 
-Guard: `~/.ccrc/compact-card-off` absent; `.compact_summary` present and a string. The set file is
-**expected** — PreCompact writes it whenever a transcript resolved (§3.1 guard 3) — but **optional**: a
-served session, or a PreCompact that could not read its transcript, is still measured, with `scope`,
-`cited` and `setSize` **null** — not 0, and not `"main"` — because "no set" and "cited nothing" are
-different conditions, and an unknown scope is not the main thread. A set with `files: null` (no graph,
-no node, helper failure) yields `cited` and `setSize` null with `scope` known.
+Guard: `~/.ccrc/compact-card-off` absent; `.compact_summary` present and a string; `node`, `timeout` and
+the helper present. **No scope resolution here either** — the scope is the set's. The set is
+**expected** (PreCompact writes it whenever a transcript resolved, §3.1 step 4) but **optional**: a served
+session, or a PreCompact that could not read its transcript, is still measured, with `scope`, `cited`
+and `setSize` **null** — not 0, and not `"main"` — because "no set" and "cited nothing" are different
+conditions, and an unknown scope is not the main thread. **A set older than `COMPACT_CARD_MAX_AGE` was
+left by a compaction that never finished: removed, never read, measured as no set.** A set with
+`files: null` (no graph, no node, helper failure, or `ambiguous`) yields `cited` and `setSize` null with
+`scope` known.
 
 ```
 timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" measure [--set "$REG/$id.compactset"] \
    --trigger "$trig" < <(jq -r '.compact_summary' <<<"$payload")
 ```
+
+(`jq -r` appends one newline; the helper trims before measuring, so `chars` counts the text and not the
+plumbing. Under `pipefail` a failed `jq` fails the pipeline and the arm stops — a zero is never
+recorded for a summary that was never read.)
 
 The helper prints one JSON object. **Normalisation first**, mirroring what the binary does before
 injecting: drop the first `<analysis>…</analysis>` block (non-greedy, no global flag); replace
@@ -398,41 +499,44 @@ On the normalised text:
 | field | meaning | type |
 | --- | --- | --- |
 | `chars` | length | integer |
-| `filesChars` | chars from the "Files and Code Sections" heading to the next numbered heading; the heading regex tolerates `**`, a trailing colon and case (the corpus carries both `Errors and fixes` and `Errors and Fixes`); **null** when no such heading exists (19% of summaries are not in the nine-section format) | integer or null |
-| `fences` | count of fenced code blocks (pairs of triple backticks) | integer |
+| `filesChars` | chars from the "Files and Code Sections" heading to the next numbered heading; the heading regex tolerates `#`, `**`, a trailing colon and case (the corpus carries both `Errors and fixes` and `Errors and Fixes`); **null** when no such heading exists (19% of summaries are not in the nine-section format) | integer or null |
+| `fences` | count of fenced code blocks (pairs of triple backticks; an odd count floors) | integer |
 | `cited` | working-set files named in the summary: the file's repo-relative path appears, or a path-segment-aligned suffix of it of at least two segments that is unique *within the set* appears — computed from the set file alone, no graph needed | integer or null |
 | `setSize` | `files.length` of the set | integer or null |
 | `steered` | copied from the set; `false` when there is no set | boolean |
 | `trigger` | `auto` or `manual`, from the payload | string |
-| `scope` | `main` or `subagent`, copied from the set; **null** without a set | string or null |
+| `scope` | `main`, `subagent` or `ambiguous`, copied from the set; **null** without a set | string or null |
 | `at` | epoch ms | integer |
-| `n` | **added by the hook, not the helper**: the journal's line count before the append, plus one — merged into the object before both writes, so hookstate and the journal carry the same `n`; it counts compactions of **either scope**, because the journal is the session's and a subagent's compaction is the session's compaction | integer |
+| `n` | **added by the hook, not the helper**: the journal's line count before the append, plus one — merged into the object before both writes, so hookstate and the journal carry the same `n`; it counts compactions of **every scope**, because the journal is the session's and a subagent's compaction is the session's compaction | integer |
 
 `agent` and `transcript` are copied from the set into the **journal line only** (below); hookstate and
 the wire carry `scope`, which is what a chip can render.
 
 **Shape gates, both directions** — the hookstate writer is one `jq -cn --argjson …` whose failure is
 `|| exit 0`, and a hook that writes nothing is "the worst shape this file can fail in" (its own header).
-So the helper's stdout is accepted only if it parses as exactly one JSON object (`jq -e 'type=="object"'`
-into a variable; anything else, including exit 0 with garbage, carries the previous value); and the
-value read back from hookstate is re-validated the same way before it reaches `--argjson`, degrading to
-`null` — the same `^[0-9]+$` discipline the counters already have, for an object. On any failure the
-write proceeds without the member, never not at all.
+So the helper's stdout is accepted only if it parses as exactly one JSON object of the pinned shape
+(`COMPACT_SHAPE_PRED`, spelled once in the hook and concatenated into both jq programs; anything else,
+including exit 0 with garbage, carries the previous value); and the value read back from hookstate is
+re-validated by the same predicate inside the read-back `jq` — as a sixth positional line placed
+**before** `subagents`, which stays last because it is the one field that can carry unbounded text
+(D-1249) — degrading to `null`. On any failure the write proceeds without the member, never not at all.
 
 The hook adds `n`, then merges the object into hookstate as **`compaction`** — read back on every
 event and re-emitted like the counters, so it survives state transitions; **reset to `null` on `SessionStart` with
 any source but `resume`** (the same boundary and reason as the counters, D-1248: a stale last-compaction
 would describe the previous context as current); carried on `resume` and, structurally, on `compact`;
-overwritten by the next PostCompact. Then the same object plus `cwd`, `built`, `agent` and `transcript`
-from the set is appended as one line (< 1 KB, a single `>>` write, no lock) to
-**`$REG/<id>.compactions`**, the study corpus; the set file is deleted. If the helper fails, `compaction` is carried unchanged and no journal line is written — a
-measurement that did not happen is not a zero. Nothing is printed. The existing done/working transition
-is unchanged.
+overwritten by the next PostCompact; **carried, not cleared, while `compact-card-off` is present** — the
+chip shows the last measurement until the next non-resume SessionStart. Then the same object plus
+`cwd`, `built`, `agent` and `transcript` from the set (`null` each without a set) is appended as one
+line (< 1 KB, a single `>>` write, no lock) to **`$REG/<id>.compactions`**, the study corpus; the set
+file is deleted. If the helper fails, `compaction` is carried unchanged and no journal line is written —
+a measurement that did not happen is not a zero. Nothing is printed. The existing done/working
+transition is unchanged.
 
 ### 3.5 Stage 2: the steering text (hook constant, pinned verbatim)
 
 > ccrc: after compaction a structural card from this repository's knowledge graph will be re-injected,
-> naming the files this session touched, their symbols as path:symbol:line, and the files that depend on
+> naming the files this context touched, their symbols as path:symbol:line, and the files that depend on
 > them. In "Files and Code Sections" cite path:symbol:line with one sentence on why it matters; do not
 > paste code snippets, the session re-reads them on demand and can run `graphify explain "<symbol>"`.
 > Keep verbatim: decisions and their reasons, errors and their fixes, the user's messages, pending
@@ -451,7 +555,7 @@ server's hookstate reader; `single-definition.test.ts` gains a holder pin
 
 ```ts
 export interface CompactionMeas {
-  n: number; at: number; trigger: 'auto' | 'manual'; scope: 'main' | 'subagent' | null;
+  n: number; at: number; trigger: 'auto' | 'manual'; scope: 'main' | 'subagent' | 'ambiguous' | null;
   chars: number; filesChars: number | null; fences: number;
   cited: number | null; setSize: number | null; steered: boolean;
 }
@@ -463,24 +567,28 @@ export interface CompactionMeas {
 | assembly | `server/src/fleet.ts` — `compaction: hs?.compaction ?? null` | no hook data and a hook without the field collapse to one `null`, right here because the console does the same with both |
 | wire | `shared/api.ts` — `FleetSession.compaction: CompactionMeas \| null`, required member, **additive, `FLEET_PROTO` stays 1** | an older PWA ignores the key; an older server omits it and the tolerant reader answers `null` |
 | persisted revive | `reviveFleetSession`: one `asObj` block on the `reviveSubstrate` model | absent → `null`; present-but-malformed → `MalformedSnapshot`. Two separate guarantees: `FleetSession.compaction` being a **required member** is what stops every full object literal typed `FleetSession` compiling until it names the key (about 25 fixture builders in `pwa/test` and one in `server/test/fleetstate.test.ts`, whose three spread literals compile unchanged — re-measure at plan time), and the reviver's literal return is what stops a revival path forgetting to compute it |
-| live-frame reader | `compactionInfo(session)` beside `graphReadCount` | the ONE reader every PWA surface uses; the `tolerantCount` ladder, whole-object: no finite `chars` → `null`, never a partial chip; the `number \| null` members (`filesChars`, `cited`, `setSize`) are then read individually through the same tolerance, a non-boolean `steered` reads `false`, and a `scope` that is neither of the two literals nor `null` reads the whole object `null` |
-| chip | `pwa/src/fleet/SessionLine.tsx`, `.sess-compact` in the same conditional run as `.sess-graph`; `RunsScreen.tsx` reuses class and reader | gated on the reader being non-null: `compact 17k` — `sub·compact 17k` when `scope` is `subagent` — then `· cites 7/12` when `setSize` is non-null; `steered` on the `title` attribute |
+| live-frame reader | `compactionInfo(session)` beside `graphReadCount` | the ONE reader every PWA surface uses; the `tolerantCount` ladder, whole-object: no finite `chars` → `null`, never a partial chip; the `number \| null` members (`filesChars`, `cited`, `setSize`) are then read individually through the same tolerance, a non-boolean `steered` reads `false`, and a `scope` that is none of the three literals nor `null` reads the whole object `null` |
+| chip | `pwa/src/fleet/SessionLine.tsx`, `.sess-compact` in the same conditional run as `.sess-graph`; `RunsScreen.tsx` reuses class and reader | gated on the reader being non-null: `compact 17k` — `sub·compact 17k` when `scope` is `subagent`, plain for `main`, `ambiguous` and `null` — then `· cites 7/12` when `setSize` is non-null; `scope` and `steered` on the `title` attribute |
 
 ## 4. Failure modes, each silent by contract, each stated
 
 | condition | behaviour |
 | --- | --- |
-| served session (`transcript_path` empty) | no card, no steering; PostCompact still measures, citations null |
-| transcript unreadable, or no tool calls in the window | helper exits 1/3, nothing written, nothing printed |
-| no graph, or > `GRAPH_GATE_MAX_BEHIND` behind | no card, no steering; the standing graph card still says why |
+| served session (`transcript_path` empty) | no set, no card, no steering; PostCompact still measures, with `scope`, `cited` and `setSize` null |
+| transcript unreadable | nothing written (§3.1 guard 2), nothing printed |
+| no tool calls in the window | helper exit 3: the set stands with `files: []`, no card |
+| no graph, or > `GRAPH_GATE_MAX_BEHIND` behind | no card, no steering; the set stands with `files: null`; the standing graph card still says why |
 | graph built at another commit but same content as HEAD, or ≤ `GRAPH_GATE_MAX_BEHIND` behind | the card header carries the same freshness word the graph card uses |
-| helper or node missing; helper timeout | silent; temp-then-rename leaves nothing partial |
-| compaction blocked or failed after PreCompact | card and set remain; card served once within the hour or never; set overwritten by the next PreCompact. **Residual:** a failed compaction followed within the hour by one whose PreCompact could not write measures citations against the older set |
-| subagent compaction | §3.0 resolves the subagent's own transcript; card, steering and measurement proceed exactly as for the main thread, tagged `scope:"subagent"` with the `agent` id. The payload still carries the parent's transcript and id — which is why the rule exists |
-| a background subagent writes while another context compacts | the mtime rule names the writer: that one compaction's scope, card and journal line describe a sibling context of the same session (§3.0 residual). Recorded in the journal's `transcript`, checkable against that transcript's own `compact_boundary` stamps; measured on the first live corpus before any fix |
-| the set names a transcript other than the one SessionStart(compact) resolves, or there is no set | the card is not served and stays on disk until the age bound retires it (§3.3 step 2) |
-| `agent_type` / `agent_id` on the payloads | **measured absent** (2026-09-09, §0.2); the design once gated on the field and no longer does — the measurement was the first task of Plan A and was taken before it |
-| `~/.ccrc/compact-card-off` present | all three arms inert: no card, no steering, no measurement, no journal line; a card already on disk is never served |
+| `node`, `timeout` or `find` missing; helper missing or timing out | silent; the hook's own set stands (`files: null`); temp-then-rename leaves nothing partial. On a userland with no `timeout` (BSD) the whole feature is inert — no card, no measurement, no journal line — which §6's R2 states |
+| compaction blocked or failed after PreCompact | card and set remain. Inside `COMPACT_CARD_MAX_AGE` the next PreCompact reads them as overlap (§3.0): that compaction is `ambiguous`, no card. After the window the card is removed at the next SessionStart(compact) and the set at the next PostCompact, both unread |
+| a second PreCompact inside the in-flight window (overlap) | both compactions degrade: the later set is `ambiguous` and the card is removed; the earlier one gets no card and an `ambiguous` measurement (§3.0) |
+| `compact-card-off` flipped between PreCompact and PostCompact | the pair stays until the window retires it; nothing served, nothing measured |
+| subagent compaction, the one live agent beside a quiet parent | §3.0 resolves the subagent's own transcript; card, steering and measurement proceed exactly as for the main thread, tagged `scope:"subagent"` with the `agent` id. The payload still carries the parent's transcript and id — which is why the rule exists |
+| two contexts live at PreCompact — a Workflow fan-out, or a background subagent beside its parent | scope `ambiguous`: a set with `transcript: null`, no card, a measurement with `cited`/`setSize` null; counted on the corpus (§3.0) |
+| a live sibling paused longer than `COMPACT_LIVE_S` while another context compacted | one mislabelled compaction (false exactness, §3.0); checkable offline — the journal names a subagent transcript that carries no `compact_boundary` near the line's `at` |
+| the card's first line is not the set's `at`, or there is no set | a crossed pair: not served (§3.3 step 2); the overlap check or the age bound retires it |
+| `agent_type` / `agent_id` on the payloads | **measured absent** (2026-09-09, §0.2); the approved design gated on the field and no longer does — the measurement it named as Plan A's first task was taken before any plan was written (§7.1) |
+| `~/.ccrc/compact-card-off` present | all three arms inert: no card, no steering, no measurement, no journal line; a card already on disk is never served; a `compaction` already in hookstate is carried, not cleared — the chip persists until the next non-resume SessionStart |
 | helper prints non-JSON with exit 0 | the shape gate carries the previous `compaction`; hookstate is still written |
 | stage 2 forfeits precomputed compaction | measured never used here; `steered` recorded; steer switch exists |
 | card text reaches the model | repo-controlled labels and paths only, bounded twice, passed through `jq --arg`, never interpolated into shell |
@@ -498,17 +606,24 @@ export interface CompactionMeas {
 | stage 1 prints on PreCompact | stdout-empty test (the existing `printed on stdout` pin, PreCompact included) |
 | stage 2 prints without exit 0 | transcript with no tool calls → exit 3 → stdout `''` |
 | stage 2 text edited | verbatim pin of `STEER_TEXT` |
-| scope resolution dropped (always `main`) | a fixture session directory whose `subagents/agent-x.jsonl` is newer than the parent transcript: the set reads `scope:"subagent"`, `agent:"x"`, `transcript` that file, and a path named only in the subagent transcript is on the card |
-| scope resolution stops at one depth | the same, with the agent file under `subagents/workflows/wf_1/` |
-| scope resolution ignores mtime | the same fixture with the parent transcript touched newer → `scope:"main"` and the parent's path on the card |
-| set not written without a graph | graphless fixture tree → set present with `files: null` and `scope` set; the PostCompact journal line carries `scope` with `cited`/`setSize` null |
+| the liveness rule dropped (always `main`) | one live `subagents/agent-x.jsonl` beside a quiet parent: the set reads `scope:"subagent"`, `agent:"x"`, `transcript` that file, and a path named only in the agent's transcript is on the card |
+| liveness stops at one depth | the same, with the agent file under `subagents/workflows/wf_1/` |
+| liveness ignores mtime (every agent file counts) | a dead agent file (older than `COMPACT_LIVE_S`) beside a live parent → `scope:"main"` and the parent's path on the card |
+| two live contexts not ambiguous | a live parent beside a live agent → `scope:"ambiguous"`, `transcript: null`, no card; two live agents → the same |
+| manual trigger not `main` | `trigger:"manual"` with a live agent → `scope:"main"` |
+| overlap check dropped | a second PreCompact inside `COMPACT_CARD_MAX_AGE` → the set reads `ambiguous` and the card is gone |
+| the nonce not written, or not compared | a card whose first line is not the set's `at` → not served, still on disk; a served card never contains the nonce line |
+| aged card not removed | a card older than `COMPACT_CARD_MAX_AGE` → removed at SessionStart(compact), not served |
+| PostCompact reads an aged set | a set older than the window → removed; measurement with `scope`/`cited`/`setSize` null |
+| `find`/`timeout` guard dropped | a fixture PATH with no `timeout` → no card, no journal line, the state write intact |
+| set not written without a graph | graphless fixture tree → set present with `files: null` and `scope` set; the PostCompact journal line carries `scope` with `cited`/`setSize` null and `built` null |
 | helper exit 3 writes no set | transcript with no tool calls → set present with `files: []`, no card |
 | `transcript_path` guard removed | empty path writes nothing |
-| freshness predicate dropped | fixture built at a non-ancestor sha writes nothing |
+| freshness predicate dropped | fixture built at a non-ancestor sha writes no card; the set stands with `files: null` |
 | `compact-card-off` ignored in any arm | card + set absent; no fourth subject served with a card on disk; hookstate `compaction` unchanged and no journal line after a PostCompact |
 | `compact-steer-off` ignored | card yes, stdout `''`, set `steered:false` |
-| SessionStart step 2 dropped | `source:"compact"` with a set naming a transcript other than the resolved one → the card stays on disk and no fourth subject is printed; the same with no set at all |
-| `scope` not carried | after a subagent-scoped compaction, hookstate `compaction.scope == "subagent"` and the journal line carries `agent` and `transcript` |
+| SessionStart step 2 dropped | `source:"compact"` with no set at all → the card stays on disk and no fourth subject is printed |
+| `scope` not carried | after a subagent-scoped compaction, hookstate `compaction.scope == "subagent"` and the journal line carries `agent` and `transcript`; after an ambiguous one, `"ambiguous"` with both null |
 | card not served on compact | envelope lacks the 4th subject; card served on startup → must not be |
 | card not consumed | file still present after the compact SessionStart |
 | age bound dropped | a card older than `COMPACT_CARD_MAX_AGE` is served |
@@ -525,18 +640,20 @@ export interface CompactionMeas {
 | journal not appended / set not deleted | line count and file presence |
 | `carried` mining dropped | a window holding only a previous summary that names two files → set has both, tagged `carried` |
 | `compaction` reset on resume, or not reset on clear | reset-boundary tests mirroring D-1248's |
-| PreCompact cost unbounded | absolute p95 budget on the fixture (node startup + tiny graph), load caveat as the existing tests' |
-| compact SessionStart with a card slows | the existing 4× ratio test, with the card present |
+| the helper not under `timeout` | a stub `timeout` on the fixture PATH records the constant and the argv; deleting the wrapper reds it. An absolute-ms budget is NOT used: session-hook.test.ts records why it was rejected for a hook arm (D-1898) |
+| compact SessionStart with a card slows | its own interleaved ratio test against the cheap arm — own array, own ceiling argued from a measured shipped-vs-mutated band, D-1898's method; never folded into the startup array, where one slow run hides at the max |
 
 **Helper** (`server/test/compact-card.test.ts`, importing the `.mjs`): backwards boundary scan, the
 literal-in-a-body false positive, the 64 MiB cap realigned to a line, tag and token mining, exact and
-unique-suffix resolution with `ambiguous`/`outside`/`nomatch` counts, ranking, card format, `(+k files
-not shown)` on any drop, the ceiling, `measure` normalisation, every exit code.
+unique-suffix resolution with `ambiguous`/`outside`/`nomatch` counts, ranking, the graph's node-link
+shape (edges under `links`), card format with the scope in the header, `(+k files not shown)` on any
+drop, the ceiling, the copy of `--scope`/`--agent`/`--transcript`/`--at` into the set and the nonce as
+the card's first line, pid-suffixed temps, `measure` normalisation, every exit code.
 
 **Installer/deploy**: `deploy.sh` ships the helper by `install_atomic` beside the hook (pinned like the
 hook's own line); `install-session-hooks.sh` unchanged — the derived wiring test stays untouched.
 
-**Wire and console** (one row per §3.6 hop):
+**Wire and console** (the §3.6 hops, and the two scope behaviours):
 
 | mutation | expected red |
 | --- | --- |
@@ -545,6 +662,8 @@ hook's own line); `install-session-hooks.sh` unchanged — the derived wiring te
 | `reviveFleetSession` widens instead of returning a literal | the fixture-builder compile check; a malformed persisted object must throw `MalformedSnapshot` |
 | `compactionInfo` returns a partial object | a frame with `chars: "17k"` reads `null` |
 | chip renders `cites` with `setSize` null | session-line test |
+| `scope` tolerance dropped | a frame with `scope: "parent"` reads the whole object `null` |
+| chip drops the `sub·` prefix | a `scope: "subagent"` frame renders `sub·compact`; an `ambiguous` one renders plain |
 | a second `CompactionMeas` declaration | `single-definition.test.ts` holder pin |
 
 ## 6. Rings, invariants, and the one amendment
@@ -555,8 +674,19 @@ hook's own line); `install-session-hooks.sh` unchanged — the derived wiring te
   rather than a folded object.
 - **Wire discipline.** Additive; `FLEET_PROTO` 1; one tolerant reader per field; `reviveFleetSession`
   literal.
-- **The hook's standing contract** (exit 0 on every path, atomic writes, no network, no locks, no
-  waiting) is unchanged. The helper runs under `timeout`; every call site is `|| true`-shaped.
+- **The hook's standing contract** (exit 0 on every path, atomic writes, no network, no locks) is
+  unchanged in every clause but one — and **amendment R2** names it: *no waiting* gains the two
+  compaction arms, which wait on the helper for at most `COMPACT_HELPER_TIMEOUT` (5 s, argued in §3.1),
+  off the hot path (each brackets a compaction of at least 79 s) and never for the hookstate write,
+  which lands first. The hook header's contract sentence is corrected to say so in Plan A. Every call
+  site is `|| true`-shaped; `find` and `timeout` are guarded like `jq`.
+- **The three registry names are dot-free suffixes, and that is a coupling, not a convenience.**
+  `_reg_purge`'s loop removes every dot-free `$REG/<id>.<suffix>` except `archived` and `reaping` (last,
+  in that order) and the explicitly named `<id>.hookstate.json` — so `compactcard`, `compactset` and
+  `compactions` go with the row. The same dot-free shape is what `_ws_slug_free`/`_ws_slug_residue`
+  scan, so a file that outlived its row would hold the slug; every arm therefore removes what it will
+  not serve — the aged card (§3.3), the aged set (§3.4), the consumed pair — and the destructive verbs
+  stop the session before they purge, so no hook writes after the purge.
 - **Amendment to the read-side spec, R1.** It rules that *"the card path is the only `printf` to stdout
   in the file"* and the hook's own header says the two events it prints on are SessionStart and
   PreToolUse. Both become three: **PreCompact stdout is a second, deliberate site, and its stdout is
@@ -591,9 +721,10 @@ This spec yields **three plans at two explicit seams**, each independently usefu
 4. Deviation numbers are minted at plan time through `ccrc-api ledger allocate`; this spec defines none.
    Candidates the plans will number: the R1 sentence and hook-header correction (§6); the `(not in
    graph)` overloaded sentinel the prototype produced, recorded so nobody re-derives it; the standing
-   clip's status as the only defence for `GM_NODES`, which this design nearly removed; and the
-   `agent_type` guard the approved design carried and the measurement removed (§0.2, §3.0) — a deviation
-   from an approved design is numbered so nobody re-derives the guard.
+   clip's status as the only defence for `GM_NODES`, which this design nearly removed; the
+   `agent_type` guard the approved design carried and the measurement removed (§0.2, §3.0); and the
+   newest-file rule the first amendment carried and the review refuted (§0.2) — a deviation from an
+   approved design is numbered so nobody re-derives either.
 
 ## 8. Rejected, with the measurement that rejected each
 
@@ -632,9 +763,13 @@ This spec yields **three plans at two explicit seams**, each independently usefu
 
 - Extension-less files are invisible to shell-text mining (11 of 820 here).
 - The failed-compaction window in §4.
-- The background-subagent misattribution of §3.0: bounded, visible in the journal, measured on the first
-  live corpus; the fix, if the number asks for one, is a card file per transcript and a second suffix
-  shape in `_reg_purge`.
+- The `ambiguous` rate and the false-exactness rate of §3.0, both counted on the first live corpus. A
+  Workflow fan-out is `ambiguous` by construction; the only discriminator that would card those is an
+  agent id on the three payloads, which only Claude Code can add — the journal says whether asking is
+  worth it.
+- The pair race of §3.0: the helper's own write landing milliseconds after an overlapping PreCompact
+  marked the slot ambiguous; the nonce makes it unservable, the journal line for that compaction still
+  reads `ambiguous`.
 - 2 of 24 live processes already run 2.1.267, which no binary fact here was read from; the first live run
   of Plan A on such a session is the check, and the payload measurement of §0.2 (the three key sets, one
   subagent compaction, and the subagent transcript's location) is repeated on it.
