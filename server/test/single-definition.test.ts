@@ -2750,7 +2750,13 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
     // every project fixture it owns there, and skipping it would hide a real
     // fork from the operator.
     for (const f of BASH) {
-      const swept = codeLines(f).filter((l) => /-var-tmp\*/.test(l));
+      // The needle is `-var-tmp` BARE, not `-var-tmp*`. Measured 2026-09-10:
+      // an over-widening mutation that added `-var-tmp-*` — a dash before the
+      // star, which is the spelling a careless hand actually writes — left the
+      // anchored form of this row GREEN while both behaviour controls went
+      // red. No bash file in the corpus mentions the path at all, so the bare
+      // needle has no false positive to trade against.
+      const swept = codeLines(f).filter((l) => /-var-tmp/.test(l));
       expect(swept, rel(f)).toEqual([]);
     }
   });
