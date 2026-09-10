@@ -2354,3 +2354,67 @@ measurement quoted from a review is a claim*, and the pair belongs together.
 Tasks 11 and 12 of the wave-3 server plan, and D-2000 which may be why they stalled — the worker's call
 whether they finish them or hand them on with a written reason. The ccd queue plan's Part D
 (D-2347 + D-2376–D-2381) is written and waiting on the workspace spawn.
+
+---
+
+## 2026-09-10 14:3x — #81's gate: 13 raised / 11 survived / 2 refuted. **The worst finding is my own ruling.**
+
+Four lenses on `opus`, one `sonnet` refuter per finding, 17 agents, in an isolated read-only worktree at
+`59b8e586`. Lenses chosen for the class this tree has no guard for: **absence claims falsified by the
+merge**, invariants minted by composing two sides, premises the merge invalidated, content lost.
+Artifact: `pr81-coordinator-gate.md` in this session's scratchpad.
+
+### IMPORTANT 1 — I ruled "`ccd/ccd` takes main's side WHOLESALE", and that ruling shipped a lie
+
+The worker executed it exactly, and the code half was right: main carries #73's work, the branch does
+not. **The prose half carried an absence claim this very merge falsifies.** `pr81:ccd/ccd:15669`:
+
+> WHEN account-pools wave 3 lands its reader … measured: `git grep -c stranded server/src/registry.ts`
+> **is 0 on `origin/main` and on this branch**; non-zero only on the wave-3 branch, where that reader lands
+
+Measured on the three trees: **`origin/main` 0, `7ca2b97a` 12, `pr81` 12.** *This PR is the wave-3 branch
+landing.* So the sentence is false on the merged tree, and "WHEN … lands" describes a future the commit
+makes present.
+
+**This is the identical class the worker caught in `ccd-crosspool.test.ts`, and my ruling re-introduced
+it one file over, hours later, after I had read and adopted their memory about it.** Their rule —
+*the side to distrust is whichever one claimed something about the other side's ABSENCE* — is the one I
+failed to apply to my own instruction. **"Take main's side wholesale" is a rule about AGE. The defect is
+not about age.** A side-choosing rule cannot see this class at all, because both sides' prose is
+internally consistent; only the merged tree falsifies one of them. Six sites.
+
+### The other three important findings
+
+- **The swap composition minted TWO invariants and the worker pinned ONE.** Both new cases observe the
+  ENQUEUE; neither drives a refusal, so **nothing reds if the refusals move back inside the queued
+  callback**. Their D-2425 is right about what it pins; the second half has no mechanism.
+- **`emitPools` is awaited I/O wearing `emitCoord`'s justification.** `watch.ts:780` is
+  `await this.emitPools(...)` and its comment cites "`emitCoord`'s reason one line up". Read both:
+  `private emitCoord(…): void` says *"touches no `node:sqlite` and no I/O"*; `private async emitPools(…)`
+  opens with `await readProjectPools(this.deps.io, …)`. **The borrowed reason is the exact property the
+  borrower lacks**, and it sits immediately before `detectDialogs`.
+- **`registry.ts:929`'s "22 field reads" is 23** on the merged tree, so "~529" is 553; four more copies.
+  **My reviewer over-claimed it as merge-created and the verifier corrected it** — the branch tip already
+  carried it. `registry.test.ts` already asserts 23; only prose drifted. The refuter earning its place.
+
+### #81 is CONFLICTING for the FOURTH time, and all four required checks are GREEN
+
+`origin/main` is `e4393adc` — #76, #82, #83 landed past the second merge. `test-macos` went green too,
+so **CI settled D-2409 with the arbiter**, exactly as the worker predicted. The third merge is the moment
+to land all eleven findings.
+
+### Two rulings the worker asked for
+
+**D-2428** (`ccd/ccd:1846`'s stale "one function away") — leave it, and do it in ONE `ccd/ccd` pass with
+IMPORTANT-1, agent-first. **The worker-skill sentence for D-2421** — its own PR: `worker-skill.test.ts`
+pins twelve clauses VERBATIM, and dragging a pinned-text change into a 57-file merge conflicting for the
+fourth time buys nothing. Two lines, faster alone.
+
+### And a memory near-miss worth more than most of the above
+
+This session resumed on a config root holding **zero** ccrc-pwa memory, and reconciling the six roots
+found `graphify-compaction-card-design.md` in two versions where **neither was a superset**: the newer
+rewrite had silently dropped six measured facts the older copy explicitly flagged as *"NOT derivable from
+the tree"* — the uncapped PreCompact stdout, the 10,000-char `additionalContext` spill, the hook ordering,
+`readFileState`. Merged them back rather than taking the newer copy. **"Newest wins" would have destroyed
+measured work — the same shape as IMPORTANT 1, in a different medium, on the same afternoon.**
