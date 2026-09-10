@@ -1,13 +1,15 @@
 # Subagent preview + ticket-named workspaces
 
 **Date:** 2026-08-31
-**Deviation series:** UNALLOCATED — every entry below carries `D-TBD-<slug>`, and none of them may be
-given a number by measurement. This plan first proposed "allocate from D-1123", read off a checkout whose
-`origin/main` high-water was D-1122; in the same breath it called that floor "a starting point, not an
-allocation", and it was right. D-1123..D-1128 were meanwhile ISSUED to program-leverage wave 5
+**Deviation series:** D-2458..D-2463, ISSUED by `POST /api/ledger/deviations` (floor moved 2458 -> 2464)
+and defined below in the same act. This plan first proposed "allocate from D-1123", read off a checkout
+whose `origin/main` high-water was D-1122; in the same breath it called that floor "a starting point, not
+an allocation", and it was right to. D-1123..D-1128 had meanwhile been ISSUED to program-leverage wave 5
 (`2026-08-31-program-leverage-wave5-f5.md`) and are load-bearing in shipped source —
 `server/src/coord/store.ts:623`, `server/src/coord/kickoff.ts:109`, `server/src/coord/reclaim.ts:212`,
-`server/src/server.ts:1581`, `pwa/src/fleet/nestFleet.ts:8` — so those six belong to that wave, not here.
+`server/src/server.ts:1581`, `pwa/src/fleet/nestFleet.ts:8` — so those six belong to that wave, and
+`deviation-refs.test.ts`'s cross-tree scan (F7) measured the collision the moment `origin/main` merged in.
+The numbers below are the allocator's answer, not this file's arithmetic.
 
 Two features, one plan, because they share nothing but a sheet and it is worth saying so:
 
@@ -264,30 +266,26 @@ portal at `open={false}`, so a close-then-query test stays GREEN with the reset 
 
 ## Deviations found
 
-*(The numbers below are OWED, not chosen. `deviation-refs.test.ts`'s cross-tree scan (F7) measured this
-collision as `origin/main` merged in, and the entries were RENAMED rather than renumbered because a number
-is ISSUED, never looked up: `POST /api/ledger/deviations` answers 400 from this box, so per CLAUDE.md the
-entries stay `D-TBD-<slug>` and the allocation is owed. Whoever can reach the allocator mints a block of
-six and substitutes them in document order — never derived from this file's history or any tree's
-high-water.)*
+*(Every number here was MINTED, never looked up — the floor a tree reports is what the next POST would
+mint, not a number anyone may take.)*
 
-- **D-TBD-pretooluse-outside-events-json** — `install-session-hooks.sh:37`'s `EVENTS_JSON` does not list `PreToolUse`, but `:91`
+- **D-2458** — `install-session-hooks.sh:37`'s `EVENTS_JSON` does not list `PreToolUse`, but `:91`
   installs it separately because it alone carries `matcher:"*"`. Two independent research passes read
   `:37` as the complete installed set and concluded the hook cannot see a Task launch. The list and the
   install are one fact in two places; only the derived-set test keeps them honest, and it does not cover
   the `PreToolUse` arm.
-- **D-TBD-subagent-name-is-the-type** — `FleetSession.subagents[].name` is documented as a subagent's name but is always its TYPE:
+- **D-2459** — `FleetSession.subagents[].name` is documented as a subagent's name but is always its TYPE:
   the ladder's first two keys (`agent_name`, `subagent_name`) are not in the shipped schema. Measured:
   five identical `workflow-subagent` rows in one live session.
-- **D-TBD-subagentstop-retires-oldest-row** — `SubagentStop` retires the oldest same-named row, not the one that stopped
+- **D-2460** — `SubagentStop` retires the oldest same-named row, not the one that stopped
   (`del(.[ (map(.name)|index($n)) // empty ])`), while `agent_id` — a required schema field that would
   make the pairing exact — is discarded at `session-hook.sh:138`.
-- **D-TBD-subagent-set-survives-restart** — the subagent set survives a process restart: `SessionStart` reads the prior set back and
+- **D-2461** — the subagent set survives a process restart: `SessionStart` reads the prior set back and
   writes it forward. Measured: rows aged 4037 and 3814 minutes on a `SessionStart` write.
-- **D-TBD-ws-slug-valid-quantifier-scope** — `_ws_slug_valid`'s `{1,30}` applies to the second character class, so a 1-character slug is
+- **D-2462** — `_ws_slug_valid`'s `{1,30}` applies to the second character class, so a 1-character slug is
   refused. Undocumented and untested (`ccd-workspaces.test.ts:76-80` stops at leading-dash, uppercase and
   length-32). The regex also PERMITS a trailing `-`.
-- **D-TBD-ws-slug-new-rc1-overloaded** — `_ws_slug_new` returns rc 1 for three distinct conditions (invalid `CCD_WS_SLUG`, taken
+- **D-2463** — `_ws_slug_new` returns rc 1 for three distinct conditions (invalid `CCD_WS_SLUG`, taken
   `CCD_WS_SLUG`, 60 exhausted draws) and `cmd_ws_add` reports all three as one string. An overloaded seam
   in ccd itself; out of scope here, recorded because this plan reads that path.
 
