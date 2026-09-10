@@ -417,10 +417,55 @@ describe("POST /api/mail — the 'worker' role", () => {
     expect(due[0]!.envelope).toContain('to: demo-worker');
   });
 
-  it("refuses 'worker' with no runId — a worker is per run and there is nothing to fall back to", async () => {
+  it("keeps the ROLE on the mail row and the SESSION on the delivery — the join key the worker re-bind selects on", async () => {
+    // WIRE-2 (PR #75 review round 1). `insertMail` stores the PRE-resolution
+    // literal and `queueDelivery` the resolved session, on purpose:
+    // `requeueAbandonedMail` selects `m.toId = 'worker'` (and the coordinator
+    // arm `'coordinator'`) to find what a replacement occupant inherits. A
+    // "tidy" `toId: resolvedToId` at the insert leaves every suite green while
+    // no re-bind and no reclaim ever finds a row again.
     const home = mkTmp('ccrc-mail-');
-    seed(home, 'demo-quiet-mesa');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
     const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const mailId = (res.json() as { id: number }).id;
+    const row = w.coord.db.prepare('SELECT toId FROM mail WHERE id = ?').get(mailId) as { toId: string };
+    expect(row.toId).toBe('worker');
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-worker']);
+  });
+
+  it("a worker-addressed mail sent through the route reaches the heir when the run is re-bound — the route's write and the store's read, pinned by one case", async () => {
+    // The two halves together: every store-side test seeds `insertMail`
+    // directly, every route-side test reads only the delivery. This one POSTs
+    // through the door and then re-binds, so the literal the route writes is
+    // the literal the re-bind selects on.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker'); seed(home, 'demo-heir');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId, subject: 'the wave brief' });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-heir']);
+    expect(due[0]!.envelope).toContain('to: demo-heir');
+    expect(w.coord.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it("refuses 'worker' with no runId — a worker is per run and there is nothing to fall back to, EVEN WHEN the coordinator fallback would resolve", async () => {
+    // THE GUARD, pinned against the mutant that matters (PR #75 review round
+    // 1, WIRE-1/MUT-1): give 'worker' the coordinator role's single-active-
+    // programme fallback and this send is ACCEPTED and delivered to the
+    // COORDINATOR — the wrong session, which the route's own comment calls
+    // worse than a refusal. The fixture therefore seeds exactly the world in
+    // which that fallback resolves (one active claimed programme, a bound
+    // worker), so a 404 here is the guard and not an accident of emptiness.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
     const res = await send(app, { ...GOOD, toId: 'worker', runId: null });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
