@@ -248,7 +248,7 @@ const setFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.
 const cardFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactcard');
 const journalFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions');
 const readSet = (): any => JSON.parse(fs.readFileSync(setFile(), 'utf8'));
-/** The card file: line 1 is the set's `at` (the nonce, spec §3.2), the rest the text. */
+/** The card file: line 1 is the set's collision-resistant nonce, then the text. */
 const readCard = (): { nonce: string; text: string } => {
   const raw = fs.readFileSync(cardFile(), 'utf8');
   const nl = raw.indexOf('\n');
@@ -2446,7 +2446,9 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
         { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
       stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
     const compactCard = readCard();
-    expect(compactCard.nonce).toBe(String(set.at));
+    expect(compactCard.nonce).toBe(set.nonce);
+    expect(typeof set.at).toBe('number');
+    expect(set.nonce).toMatch(/^compact-/);
     expect(compactCard.text).toContain('graphify card — this context\'s working set at compaction, from graphify-out/ (built at');
     expect(compactCard.text).toContain('- server/src/pane/statusline.ts [touched]');
     expect(readState().state).toBe('working');
@@ -2507,9 +2509,44 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(argv).toContain(' card --transcript ');
     expect(argv).toContain(` --transcript ${transcript} `);
     expect(argv).toContain(' --max-chars 4000 --max-files 12 ');
-    expect(argv).toContain(` --scope main --at ${readSet().at}`);
+    expect(argv).toContain(` --scope main --at ${readSet().at} --nonce ${readSet().nonce}`);
     expect(argv).not.toContain('--steer');                   // stage 1: never
     expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('records working hookstate before the bounded helper starts and rolls back its exact hook-owned document after a nonzero helper', () => {
+    const tree = cardTree(); plantHelper();
+    const original = path.join(home, 'hook-before-helper.compactset');
+    stub('timeout', [
+      'state="$HOME/.cc-sessions/demo-quiet-basin.hookstate.json"',
+      'test "$(jq -r .state "$state")" = working || exit 91',
+      `cp "$HOME/.cc-sessions/demo-quiet-basin.compactset" "${original}"`,
+      'shift; "$@"',
+      'exit 71',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(fs.readFileSync(original, 'utf8'));
+    expect(readSet().files).toBeNull();
+    expect(fs.existsSync(cardFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('timeout rollback never restores or removes a later nonce owner', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":1,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    stub('timeout', [
+      'shift; "$@"',
+      'rc=$?',
+      `printf '%s' '${laterSet.replace(/'/g, "'\"'\"'")}' > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `printf '%s' '${laterCard.replace(/'/g, "'\"'\"'")}' > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
+      'exit 71',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
   });
 
   it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {

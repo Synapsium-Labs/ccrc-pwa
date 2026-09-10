@@ -4,7 +4,7 @@
 
 **Goal:** After every compaction — the main thread's or a subagent's — the session is re-injected with a computed card of the files it was working in (symbols, community, dependents, from graphify's graph), and the summary is measured for whether it changed; the measurements start filling a per-session journal on the fleet box with no console change.
 
-**Architecture:** `ccd/session-hook.sh` gains behaviour in its three existing compaction arms: PreCompact decides WHICH context is compacting — `main`, `subagent` or `ambiguous`, by the liveness rule of spec §3.0, ONCE — writes the set file, and for an unambiguous scope runs the new helper `ccd/compact-card.mjs card` to mine that transcript's window, resolve the files against `graphify-out/graph.json` and write the card with the set's `at` as its first line; SessionStart(compact) serves that card once, as the fourth subject of the one envelope, iff the card's first line is the set's `at` (it never resolves); PostCompact runs `compact-card.mjs measure` over `compact_summary` against the set (iff inside the in-flight window), merges the result into hookstate as `compaction` and appends the journal. The helper is plain node (`node:*` only, the `shared/mark.mjs` class) installed beside the hook by `deploy.sh`'s agent lane and `ccrc install`. No new hook events; nothing printed on PreCompact in this plan (that is Plan C).
+**Architecture:** `ccd/session-hook.sh` gains behaviour in its three existing compaction arms: PreCompact decides WHICH context is compacting — `main`, `subagent` or `ambiguous`, by the liveness rule of spec §3.0, ONCE — writes the set file, and for an unambiguous scope runs the new helper `ccd/compact-card.mjs card` to mine that transcript's window, resolve the files against `graphify-out/graph.json` and write the card with the set's collision-resistant `nonce` as its first line. `at` remains an epoch-millisecond measurement. SessionStart(compact) serves that card once, as the fourth subject of the one envelope, iff the card's first line is the set's `nonce` (it never resolves); PostCompact retains numeric `at` only as measurement and runs `compact-card.mjs measure` over `compact_summary` against the set (iff inside the in-flight window), merges the result into hookstate as `compaction` and appends the journal. The helper is plain node (`node:*` only, the `shared/mark.mjs` class) installed beside the hook by `deploy.sh`'s agent lane and `ccrc install`. No new hook events; nothing printed on PreCompact in this plan (that is Plan C).
 
 **Tech Stack:** bash 4.4+ (the hook), node 22+ ESM (`.mjs`, no npm deps), jq, vitest 4 (`server/test`), TypeScript declaration sibling (`.d.mts`).
 
@@ -296,7 +296,7 @@ const setFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.
 const cardFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactcard');
 const journalFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions');
 const readSet = (): any => JSON.parse(fs.readFileSync(setFile(), 'utf8'));
-/** The card file: line 1 is the set's `at` (the nonce, spec §3.2), the rest the text. */
+/** The card file: line 1 is the set's collision-resistant `nonce`; `at` remains numeric measurement. */
 const readCard = (): { nonce: string; text: string } => {
   const raw = fs.readFileSync(cardFile(), 'utf8');
   const nl = raw.indexOf('\n');
@@ -331,7 +331,7 @@ git commit -m "test(compaction-card): the shared fixtures — measured transcrip
 - Test: `server/test/session-hook.test.ts` — new `describe('the compaction card — which context is compacting (spec §3.0)')`
 
 **Interfaces:**
-- Produces: `_hook_compact_scope <transcript_path> <trigger>` → sets `CS_SCOPE` (`main` | `subagent` | `ambiguous`), `CS_TRANSCRIPT` (empty for ambiguous), `CS_AGENT` (empty unless subagent), `CS_LIVE_N` (the live-agent count; empty on a manual trigger), `CS_PARENT_LIVE` (`true`/`false` when it decided, else empty); rc 1 = nothing may be said. `_hook_write_atomic <path> <text>` → rc 0 written whole, 1 nothing left behind; temp `$REG/.<id>.<pid>.<suffix>.tmp`. `_hook_compact_pre` → the overlap check, the stale-temp sweep, then writes `$REG/<id>.compactset` (`at` the nonce; `files:null` — NOT MINED; `served:false`) and stops for `ambiguous`; Task 6 extends it with the helper call. Constants `COMPACT_CARD_OFF`, `COMPACT_HELPER`, `COMPACT_CARD_MAX_CHARS`, `CARD_TOTAL_MAX_CHARS`, `COMPACT_CARD_MAX_AGE`, `COMPACT_LIVE_S`, `COMPACT_HELPER_TIMEOUT`, `COMPACT_WORKSET_MAX`, `COMPACT_SHAPE_PRED`.
+- Produces: `_hook_compact_scope <transcript_path> <trigger>` → sets `CS_SCOPE` (`main` | `subagent` | `ambiguous`), `CS_TRANSCRIPT` (empty for ambiguous), `CS_AGENT` (empty unless subagent), `CS_LIVE_N` (the live-agent count; empty on a manual trigger), `CS_PARENT_LIVE` (`true`/`false` when it decided, else empty); rc 1 = nothing may be said. `_hook_write_atomic <path> <text>` → rc 0 written whole, 1 nothing left behind; temp `$REG/.<id>.<pid>.<suffix>.tmp`. `_hook_compact_pre` → the overlap check, the stale-temp sweep, then writes `$REG/<id>.compactset` with numeric `at`, one collision-resistant `nonce`, `files:null` — NOT MINED — and `served:false`; it stops for `ambiguous`. Task 6 extends it with the helper call and nonce-gated rollback. Constants `COMPACT_CARD_OFF`, `COMPACT_HELPER`, `COMPACT_CARD_MAX_CHARS`, `CARD_TOTAL_MAX_CHARS`, `COMPACT_CARD_MAX_AGE`, `COMPACT_LIVE_S`, `COMPACT_HELPER_TIMEOUT`, `COMPACT_WORKSET_MAX`, `COMPACT_SHAPE_PRED`.
 - Consumes: `_hook_graph_measure` (sets `GM_CWD GM_BUILT GM_FRESH`, rc 0/1/2), `_hook_epoch_ms`, `CCRC_ID_MAX`, `$payload`, `$id`, `$REG`; the fixtures of Task 1 (`plantSession`, `LIVE`, `DEAD`, `minimalPath`, the payload builders).
 
 - [ ] **Step 1: Write the failing tests**
@@ -425,7 +425,7 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript, 'auto'));
     expect(readSet().scope).toBe('main');
-    fs.writeFileSync(cardFile(), `${readSet().at}\ngraphify card — planted\n`);
+    fs.writeFileSync(cardFile(), `${readSet().nonce}\ngraphify card — planted\n`);
     run(preCompact(tree, transcript, 'auto'));            // a second compaction, the first unfinished
     expect(readSet()).toMatchObject({ scope: 'ambiguous', transcript: null });
     expect(fs.existsSync(cardFile()), 'the card of the overlapped compaction is gone').toBe(false);
@@ -698,8 +698,10 @@ _hook_compact_pre() {
   find "$REG" -maxdepth 1 -name ".$id.*compact*.tmp" -mmin "+$mins" -delete 2>/dev/null || true
   rc=0; _hook_graph_measure || rc=$?
   at=$(_hook_epoch_ms)
-  # THE HOOK'S OWN SET. `at` is the nonce the card will be paired on (§3.3).
-  # `files:null` is NOT MINED, which the helper's `files:[]` (mined, empty)
+  nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
+  # THE HOOK'S OWN SET. `at` is numeric measurement; this one generated nonce
+  # owns the card pair and every rollback seam (§3.3). `files:null` is NOT
+  # MINED, which the helper's `files:[]` (mined, empty)
   # must never be read as — two conditions, two values. Written BEFORE the
   # graph gates, so PostCompact has the scope on a tree with no graph at all;
   # `built`/`fresh` are measured first so the journal carries them either way;
@@ -707,8 +709,8 @@ _hook_compact_pre() {
   # `served` is stamped by SessionStart(compact) after a successful emit.
   doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
       --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" \
-      --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
-      '{v:1, at:$at, scope:$scope, agent:(if $agent=="" then null else $agent end),
+      --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --arg nonce "$nonce" --argjson at "$at" \
+      '{v:1, at:$at, nonce:$nonce, scope:$scope, agent:(if $agent=="" then null else $agent end),
         transcript:(if $t=="" then null else $t end),
         parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
         liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
@@ -782,7 +784,7 @@ git commit -m "feat(hook): PreCompact decides which context is compacting by liv
 - Test: `server/test/compact-card.test.ts` (new file)
 
 **Interfaces:**
-- Produces: `EXIT = {OK:0, FAILURE:1, USAGE:2, EMPTY:3}`, `WINDOW_CAP` (16 MiB), `CHUNK` (1 MiB), `isBoundaryLine(line)`, `readWindow(path, cap?, chunk?)` → `{text, boundary}` (the chunk size is a parameter so a test can build a deterministic chunk-edge straddle), `parseArgs(argv)` → `{cmd, opts}` | `{error}`; the CLI `node compact-card.mjs <card|measure> --flag value …` with exit 2 on usage (`card` requires `--transcript --cwd --graph --labels --out --set --max-chars --max-files --built --fresh --scope --at`). `main` dispatches `card` to `cardCommand` (Task 5) and `measure` to `measureCommand` (Task 8); until those land, both subcommands exit 1 through the catch — no test asks for them before their task.
+- Produces: `EXIT = {OK:0, FAILURE:1, USAGE:2, EMPTY:3}`, `WINDOW_CAP` (16 MiB), `CHUNK` (1 MiB), `isBoundaryLine(line)`, `readWindow(path, cap?, chunk?)` → `{text, boundary}` (the chunk size is a parameter so a test can build a deterministic chunk-edge straddle), `parseArgs(argv)` → `{cmd, opts}` | `{error}`; the CLI `node compact-card.mjs <card|measure> --flag value …` with exit 2 on usage (`card` requires `--transcript --cwd --graph --labels --out --set --max-chars --max-files --built --fresh --scope --at --nonce`). `at` must be a positive epoch-millisecond measurement and `nonce` a nonempty ownership string. `main` dispatches `card` to `cardCommand` (Task 5) and `measure` to `measureCommand` (Task 8); until those land, both subcommands exit 1 through the catch — no test asks for them before their task.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1050,7 +1052,7 @@ export function parseArgs(argv) {
   return { cmd, opts };
 }
 
-const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'out', 'set', 'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at'];
+const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'out', 'set', 'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at', 'nonce'];
 
 function usage(msg) {
   process.stderr.write(`compact-card: ${msg}\n`);
@@ -1069,10 +1071,11 @@ export function main(argv) {
       const maxChars = Number(o.maxChars), maxFiles = Number(o.maxFiles), at = Number(o.at);
       if (!Number.isInteger(maxChars) || maxChars <= 0) return usage('--max-chars must be a positive integer');
       if (!Number.isInteger(maxFiles) || maxFiles <= 0) return usage('--max-files must be a positive integer');
-      if (!Number.isInteger(at) || at <= 0) return usage('--at must be the set\'s epoch-ms nonce');
+      if (!Number.isInteger(at) || at <= 0) return usage('--at must be epoch milliseconds');
+      if (typeof o.nonce !== 'string' || o.nonce === '') return usage('--nonce must be a nonempty string');
       return cardCommand({ transcript: o.transcript, cwd: o.cwd, graph: o.graph, labels: o.labels,
         out: o.out, set: o.set, maxChars, maxFiles, built: o.built, fresh: o.fresh,
-        scope: o.scope, agent: o.agent ?? null, at });
+        scope: o.scope, agent: o.agent ?? null, at, nonce: o.nonce });
     }
     if (p.cmd === 'measure') {
       if (o.trigger !== 'auto' && o.trigger !== 'manual') return usage('--trigger must be auto or manual');
@@ -1417,7 +1420,7 @@ git commit -m "feat(compact-card): mine the window for edited/touched/carried fi
 - Test: `server/test/compact-card.test.ts`
 
 **Interfaces:**
-- Produces: `GRAPH_MAX_BYTES` (96 MiB), `loadGraph(path, maxBytes?)` → `{nodes: Map, byFile: Map, files: Set, index: FileIndex, links, degree: Map}` (throws `too large` above the cap, before parsing), `loadLabels(path)` → object (empty on absence), `fileFacts(file, graph, labels, workset: Set)` → `{community, symbols, usedBy}`, `renderCard(set, graph, labels, {maxChars, maxFiles, built, fresh, scope, agent})` → string, `slotIsMine(setPath, at)` → the set on disk when its `at` is ours, else null, `cardCommand(o)` → exit code; the set file shape `{v, at, scope, agent, transcript, parentLive, liveAgents, cwd, built, fresh, steered, served, files, stats}` with `at` and `transcript` BEFORE `files` (the hook reads the head of the file, Task 7), `parentLive`/`liveAgents`/`served` CARRIED from the hook's set, and `steered` always `false` here (the hook stamps it, Plan C).
+- Produces: `GRAPH_MAX_BYTES` (96 MiB), `loadGraph(path, maxBytes?)` → `{nodes: Map, byFile: Map, files: Set, index: FileIndex, links, degree: Map}` (throws `too large` above the cap, before parsing), `loadLabels(path)` → object (empty on absence), `fileFacts(file, graph, labels, workset: Set)` → `{community, symbols, usedBy}`, `renderCard(set, graph, labels, {maxChars, maxFiles, built, fresh, scope, agent})` → string, `slotIsMine(setPath, nonce)` → the set on disk only when its collision-resistant `nonce` is ours, else null, `cardCommand(o)` → exit code; the set shape `{v, at, nonce, scope, agent, transcript, parentLive, liveAgents, cwd, built, fresh, steered, served, files, stats}` keeps numeric `at`, then `nonce`, then `transcript` before `files` (the hook reads the head of the file, Task 7). It stages the rendered card before its first target write, rechecks nonce ownership immediately before each target write, and rolls back an after-set failure only while its nonce still owns the slot. `parentLive`/`liveAgents`/`served` are carried from the hook's set, and `steered` is always `false` here (the hook stamps it, Plan C).
 
 - [ ] **Step 1: Write the failing tests** (append; extend the import with `GRAPH_MAX_BYTES, loadGraph, loadLabels, fileFacts, renderCard, slotIsMine, cardCommand`)
 
@@ -1465,7 +1468,7 @@ describe('the card from the graph (spec §3.2)', () => {
 
   it('renders the card: header with the graph commit and freshness, one line per file, blast radius, the footer', () => {
     const { graph, labels } = plant();
-    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'deadbeefcafe',
+    const set = { v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'deadbeefcafe',
       fresh: 'fresh', steered: false, stats: null,
       files: [{ path: 'server/src/pane/statusline.ts', tag: 'edited', count: 3 }, { path: 'server/src/watch.ts', tag: 'touched', count: 1 }] };
     const text = renderCard(set as any, loadGraph(graph), loadLabels(labels), { maxChars: 4000, maxFiles: 12, built: 'deadbeefcafe', fresh: 'fresh', scope: 'main', agent: null });
@@ -1484,7 +1487,7 @@ describe('the card from the graph (spec §3.2)', () => {
     const { graph, labels } = plant();
     const g = loadGraph(graph), l = loadLabels(labels);
     const files = [...g.files].sort().map((p) => ({ path: p, tag: 'touched' as const, count: 1 }));
-    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null, files };
+    const set = { v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null, files };
     const o = { built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null };
     const full = renderCard(set as any, g, l, { maxChars: 4000, maxFiles: 12, ...o });
     expect(full).not.toContain('files not shown');
@@ -1501,7 +1504,7 @@ describe('the card from the graph (spec §3.2)', () => {
   it('when one file still overflows, its `used by` list collapses to its count — never mid-line', () => {
     const { graph, labels } = plant();
     const g = loadGraph(graph), l = loadLabels(labels);
-    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null,
+    const set = { v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null,
       files: [{ path: 'server/src/big.ts', tag: 'edited' as const, count: 1 }] };
     const o = { built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null, maxFiles: 12 };
     const full = renderCard(set as any, g, l, { maxChars: 4000, ...o });
@@ -1513,12 +1516,12 @@ describe('the card from the graph (spec §3.2)', () => {
   });
 
   /** The set the HOOK writes before the helper runs (Task 2's shape): the
-   *  slot the helper must find its own `at` in, and the fields it carries. */
-  const hookSet = (set: string, at: number, extra: object = {}): void =>
-    fs.writeFileSync(set, JSON.stringify({ v: 1, at, scope: 'main', agent: null, transcript: '/t', parentLive: null, liveAgents: 0,
+   *  slot the helper must find its own `nonce` in, and the fields it carries. */
+  const hookSet = (set: string, at: number, nonce = `nonce-${at}`, extra: object = {}): void =>
+    fs.writeFileSync(set, JSON.stringify({ v: 1, at, nonce, scope: 'main', agent: null, transcript: '/t', parentLive: null, liveAgents: 0,
       cwd: dir, built: null, fresh: null, steered: false, served: false, files: null, stats: null, ...extra }) + '\n');
 
-  it('cardCommand rewrites the hook\'s set and writes the card, `at` and `transcript` before `files`, the hook\'s fields carried, the nonce as the card\'s first line, and exits 0', () => {
+  it('cardCommand rewrites the hook\'s set and writes the card, `at`, `nonce`, and `transcript` before `files`, the hook\'s fields carried, and exits 0', () => {
     const { graph, labels } = plant();
     const transcript = write('t.jsonl', [
       tl.toolUse('Read', { file_path: path.join(dir, 'server/src/pane/statusline.ts') }),
@@ -1529,39 +1532,40 @@ describe('the card from the graph (spec §3.2)', () => {
     ].join('\n') + '\n');
     const out = path.join(dir, 'reg', 'x.compactcard'), set = path.join(dir, 'reg', 'x.compactset');
     fs.mkdirSync(path.join(dir, 'reg'));
-    hookSet(set, 1789330000000, { scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1 });
+    hookSet(set, 1789330000000, 'nonce-a1', { scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1 });
     const rc = cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
-      built: 'deadbeefcafe', fresh: 'fresh', scope: 'subagent', agent: 'a1', at: 1789330000000 });
+      built: 'deadbeefcafe', fresh: 'fresh', scope: 'subagent', agent: 'a1', at: 1789330000000, nonce: 'nonce-a1' });
     expect(rc).toBe(EXIT.OK);
     const s = JSON.parse(fs.readFileSync(set, 'utf8'));
-    expect(Object.keys(s)).toEqual(['v', 'at', 'scope', 'agent', 'transcript', 'parentLive', 'liveAgents', 'cwd', 'built', 'fresh', 'steered', 'served', 'files', 'stats']);
-    expect(s).toMatchObject({ v: 1, at: 1789330000000, scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1,
+    expect(Object.keys(s)).toEqual(['v', 'at', 'nonce', 'scope', 'agent', 'transcript', 'parentLive', 'liveAgents', 'cwd', 'built', 'fresh', 'steered', 'served', 'files', 'stats']);
+    expect(s).toMatchObject({ v: 1, at: 1789330000000, nonce: 'nonce-a1', scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1,
       cwd: dir, built: 'deadbeefcafe', fresh: 'fresh', steered: false, served: false,
       files: [{ path: 'server/src/pane/statusline.ts', tag: 'edited', count: 1 },
               { path: 'server/src/watch.ts', tag: 'touched', count: 1 },
               { path: 'pwa/src/lib/models.ts', tag: 'carried', count: 1 }],
       stats: { tokens: 4, resolved: 3, ambiguous: 0, outside: 1, nomatch: 0 } });
     const card = fs.readFileSync(out, 'utf8').split('\n');
-    expect(card[0]).toBe('1789330000000');                                            // the nonce
+    expect(card[0]).toBe('nonce-a1');
     expect(card[1]).toContain('(subagent a1)');
     expect(card[2]).toBe('- server/src/pane/statusline.ts [edited] · community "watch.ts" · symbols parseCtxPct:L105 parseStatusline:L132 · used by server/src/fleet.ts');
     expect(fs.readdirSync(path.join(dir, 'reg')).sort()).toEqual(['x.compactcard', 'x.compactset']);   // no temp left
   });
 
-  it('THE SLOT CHECK: a set whose `at` is not the helper\'s, or no set at all, is refused — exit 1, nothing written', () => {
+  it('THE SLOT CHECK: a newer owner with the same `at` but another nonce, or no set at all, is refused — exit 1, nothing written', () => {
     const { graph, labels } = plant();
     const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
     const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
-    const args = { transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12, built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null, at: 7 };
+    const args = { transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null, at: 7, nonce: 'older-nonce' };
     expect(() => cardCommand(args)).toThrow(/slot/);                 // no set: the hook always writes one first
-    hookSet(set, 8, { scope: 'ambiguous', transcript: null });          // an overlapping PreCompact took the slot
+    hookSet(set, 7, 'newer-nonce', { scope: 'ambiguous', transcript: null }); // same ms, later owner
     const before = fs.readFileSync(set, 'utf8');
     expect(() => cardCommand(args)).toThrow(/slot/);
     expect(fs.readFileSync(set, 'utf8')).toBe(before);
     expect(fs.existsSync(out)).toBe(false);
-    expect(slotIsMine(set, 8)).not.toBeNull();
-    expect(slotIsMine(set, 7)).toBeNull();
-    expect(slotIsMine(path.join(dir, 'absent'), 7)).toBeNull();
+    expect(slotIsMine(set, 'newer-nonce')).not.toBeNull();
+    expect(slotIsMine(set, 'older-nonce')).toBeNull();
+    expect(slotIsMine(path.join(dir, 'absent'), 'older-nonce')).toBeNull();
   });
 
   it('an empty working set writes the set with files [] and NO card, exit 3', () => {
@@ -1570,7 +1574,7 @@ describe('the card from the graph (spec §3.2)', () => {
     const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
     hookSet(set, 1);
     expect(cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
-      built: '', fresh: '', scope: 'main', agent: null, at: 1 })).toBe(EXIT.EMPTY);
+      built: '', fresh: '', scope: 'main', agent: null, at: 1, nonce: 'nonce-1' })).toBe(EXIT.EMPTY);
     expect(JSON.parse(fs.readFileSync(set, 'utf8'))).toMatchObject({ files: [], built: null, fresh: null, stats: { tokens: 0 }, steered: false, served: false });
     expect(fs.existsSync(out)).toBe(false);
   });
@@ -1584,7 +1588,7 @@ describe('the card from the graph (spec §3.2)', () => {
     fs.mkdirSync(out);                                                  // a DIRECTORY at the card's name: the rename fails
     hookSet(set, 1);
     expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
-      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1 })).toThrow();
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'nonce-1' })).toThrow();
     expect(fs.readdirSync(path.join(dir, 'reg')).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 
@@ -1594,7 +1598,7 @@ describe('the card from the graph (spec §3.2)', () => {
     const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
     hookSet(set, 1);
     const args = ['card', '--transcript', transcript, '--cwd', dir, '--graph', graph, '--labels', labels,
-      '--out', out, '--set', set, '--max-chars', '4000', '--max-files', '12', '--built', 'b', '--fresh', 'fresh', '--scope', 'main', '--at', '1'];
+      '--out', out, '--set', set, '--max-chars', '4000', '--max-files', '12', '--built', 'b', '--fresh', 'fresh', '--scope', 'main', '--at', '1', '--nonce', 'nonce-1'];
     const ok = helper(args);
     expect(ok).toEqual({ status: EXIT.OK, stdout: '', stderr: '' });
     fs.rmSync(out); hookSet(set, 1);
@@ -1760,31 +1764,37 @@ function writeAtomic(target, text) {
   }
 }
 
-/** THE SLOT CHECK (spec §3.0, overlap). The hook wrote the set before
- *  running this helper; if the set on disk no longer carries this helper's
- *  `at`, an overlapping PreCompact has taken the slot and marked it
- *  ambiguous — this helper must not overwrite that verdict. Re-read
- *  immediately before EACH write; what remains is the interval between the
- *  read and the rename. Returns the set when it is ours (its fields are
- *  carried into the rewrite), else null. */
-export function slotIsMine(setPath, at) {
+/** THE SLOT CHECK (spec §3.0, overlap). `at` measures epoch milliseconds;
+ *  `nonce` owns the slot and card line 1. Retain the exact hook-written bytes
+ *  so post-set failure can restore them only while this nonce still owns it. */
+function ownedSlot(setPath, nonce) {
   try {
-    const cur = JSON.parse(readFileSync(setPath, 'utf8'));
-    return cur && typeof cur === 'object' && cur.at === at ? cur : null;
+    const text = readFileSync(setPath, 'utf8');
+    const set = JSON.parse(text);
+    return set && typeof set === 'object' && typeof nonce === 'string' && nonce !== '' && set.nonce === nonce
+      ? { set, text } : null;
   } catch {
     return null;
   }
 }
 
-/** `card`: window → tokens → working set → set file (always) → card (when
- *  the set is non-empty). Key ORDER in the set is part of the contract: `at`
- *  and `transcript` sit in the first 4 KiB, where the hook reads them with a
- *  bounded, fork-free `read -N` (spec §3.3 step 2). `at` is the hook's nonce
- *  — never Date.now() here — and it is ALSO the card's first line, which is
- *  what pairs a card to its set. `parentLive`, `liveAgents` and `served` are
- *  the hook's and are CARRIED; `steered` is always false here — the hook
- *  stamps it after the print (Plan C), never the helper. A refused slot
- *  throws, which `main` reports as exit 1 with nothing written. */
+export function slotIsMine(setPath, nonce) {
+  return ownedSlot(setPath, nonce)?.set ?? null;
+}
+
+function rollbackCard(setPath, outPath, nonce, original, write) {
+  if (slotIsMine(setPath, nonce)) {
+    try { write(setPath, original); } catch { /* preserve the primary failure */ }
+  }
+  try {
+    const card = readFileSync(outPath, 'utf8');
+    if (card.slice(0, card.indexOf('\n')) === nonce) unlinkSync(outPath);
+  } catch { /* no partial card, or another writer removed it */ }
+}
+
+/** `card`: window → tokens → staged card → set → card. It stages rendering
+ *  before the first target write, rechecks nonce ownership immediately before
+ *  each target write, and restores only safe owned output after card failure. */
 export function cardCommand(o) {
   const graph = loadGraph(o.graph);
   const labels = loadLabels(o.labels);
@@ -1792,18 +1802,26 @@ export function cardCommand(o) {
   const re = tokenRegex(extensionsOf(graph.files));
   const tokens = mineTokens(win.text, re);
   const { files, stats } = workingSet(tokens, graph.index, o.cwd);
-  const mine = slotIsMine(o.set, o.at);
-  if (!mine) throw new Error(`set at ${o.set} is no longer this helper's slot`);
-  const set = { v: 1, at: o.at, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
-    parentLive: typeof mine.parentLive === 'boolean' ? mine.parentLive : null,
-    liveAgents: Number.isInteger(mine.liveAgents) ? mine.liveAgents : null,
-    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.served === true, files, stats };
-  writeAtomic(o.set, JSON.stringify(set) + '\n');
-  if (files.length === 0) return EXIT.EMPTY;
-  const text = renderCard(set, graph, labels, { maxChars: o.maxChars, maxFiles: o.maxFiles,
-    built: o.built, fresh: o.fresh, scope: o.scope, agent: o.agent ?? null });
-  if (!slotIsMine(o.set, o.at)) throw new Error(`set at ${o.set} changed hands before the card was written — slot taken`);
-  writeAtomic(o.out, `${o.at}\n${text}\n`);
+  const mine = ownedSlot(o.set, o.nonce);
+  if (!mine) throw new Error(`set ${o.set} is no longer this helper's slot`);
+  const set = { v: 1, at: o.at, nonce: o.nonce, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
+    parentLive: typeof mine.set.parentLive === 'boolean' ? mine.set.parentLive : null,
+    liveAgents: Number.isInteger(mine.set.liveAgents) ? mine.set.liveAgents : null,
+    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.set.served === true, files, stats };
+  const card = files.length === 0 ? null : `${o.nonce}\n${renderCard(set, graph, labels, {
+    maxChars: o.maxChars, maxFiles: o.maxFiles, built: o.built, fresh: o.fresh,
+    scope: o.scope, agent: o.agent ?? null })}\n`;
+  const write = o.writeAtomic ?? writeAtomic;
+  if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the set was written — slot taken`);
+  write(o.set, JSON.stringify(set) + '\n');
+  if (card === null) return EXIT.EMPTY;
+  try {
+    if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the card was written — slot taken`);
+    write(o.out, card);
+  } catch (error) {
+    rollbackCard(o.set, o.out, o.nonce, mine.text, write);
+    throw error;
+  }
   return EXIT.OK;
 }
 ```
@@ -1820,18 +1838,19 @@ export function loadLabels(labelsPath: string): Record<string, string>;
 export interface FileFacts { community: string | null; symbols: string[]; usedBy: string[] }
 export function fileFacts(file: string, graph: Graph, labels: Record<string, string>, workset: Set<string>): FileFacts;
 export interface CompactSet {
-  v: 1; at: number; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
+  v: 1; at: number; nonce: string; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
   parentLive: boolean | null; liveAgents: number | null;
   cwd: string | null; built: string | null; fresh: string | null; steered: boolean; served: boolean;
   files: SetFile[] | null; stats: SetStats | null;
 }
-export function slotIsMine(setPath: string, at: number): CompactSet | null;
+export function slotIsMine(setPath: string, nonce: string): CompactSet | null;
 export function renderCard(set: CompactSet & { files: SetFile[] }, graph: Graph, labels: Record<string, string>,
   opts: { maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent'; agent: string | null }): string;
 export function cardCommand(o: {
   transcript: string; cwd: string; graph: string; labels: string; out: string; set: string;
   maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent';
-  agent: string | null; at: number;
+  agent: string | null; at: number; nonce: string;
+  writeAtomic?: (target: string, text: string) => void;
 }): number;
 ```
 
@@ -1846,8 +1865,8 @@ Expected: PASS — every test in the file.
 2. In `renderCard`, delete `if (hidden > 0) lines.push(…)` → both `files not shown` expectations go red.
 3. In `loadGraph`, read `g.edges` instead of `g.links` → the `degree` expectations and the whole render go red (no links).
 4. In `cardCommand`, move `writeAtomic(o.set, …)` below `if (files.length === 0) return EXIT.EMPTY;` → `an empty working set writes the set with files []` goes red.
-5. In `cardCommand`, write `text + '\n'` instead of `` `${o.at}\n${text}\n` `` → the `card[0]` nonce assertion goes red; replace `at: o.at` with `at: Date.now()` → the set's `at` assertion goes red.
-6. Delete the first `slotIsMine` check (write regardless) → `THE SLOT CHECK` goes red (the ambiguous set is overwritten); delete the second → the same test stays green (the first check already refused) — record that the second check's window is the render's duration, pinned by reading, and the first is the mechanism.
+5. In `cardCommand`, write `text + '\n'` instead of `` `${o.nonce}\n${text}\n` `` → the `card[0]` nonce assertion goes red; replace `at: o.at` with `at: Date.now()` → the set's numeric-`at` assertion goes red.
+6. Delete the initial `ownedSlot` guard → `THE SLOT CHECK` goes red (the later nonce owner's set is overwritten). Delete the pre-set-write `slotIsMine` guard → the render-staging takeover test goes red (a write occurs). Delete the pre-card-write guard → the later-owner rollback test goes red when its artificial takeover reaches the card seam. Each recheck is behavior-pinned at its own seam.
 7. In `writeAtomic`'s `catch`, delete the `unlinkSync(tmp)` → `a write that cannot complete leaves no temp behind` goes red.
 8. In `loadGraph`, delete the `size > maxBytes` throw → the `too large` assertion goes red.
 9. In `cardCommand`, write `steered: true` again → the `--steer is accepted and changes nothing` assertion goes red.
@@ -1868,7 +1887,7 @@ git commit -m "feat(compact-card): the card from the graph — symbols, communit
 
 **Interfaces:**
 - Consumes: the helper CLI of Tasks 3–5 (`card` with `--at`), `_hook_gate_tree`, `GM_*`, `COMPACT_HELPER`, `COMPACT_HELPER_TIMEOUT`.
-- Produces: after a PreCompact on a gated tree with an unambiguous scope, `$REG/<id>.compactcard` (line 1 = the set's `at`) and the helper-rewritten set; every failure leaves the hook's own set.
+- Produces: after a PreCompact on a gated tree with an unambiguous scope, `$REG/<id>.compactcard` (line 1 = the set's `nonce`) and the helper-rewritten set. The hook records `at` only as numeric measurement, generates one nonce from it/PID/two random values, passes it as `--nonce`, and on every helper result other than 0 or 3 restores the exact hook document and removes only same-nonce output; later owners survive.
 
 - [ ] **Step 1: Write the failing tests** (`minimalPath` and `stub` are Task 1's fixtures)
 
@@ -1886,7 +1905,8 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
               { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
       stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
     const card = readCard();
-    expect(card.nonce).toBe(String(set.at));
+    expect(card.nonce).toBe(set.nonce);
+    expect(typeof set.at).toBe('number');
     expect(card.text).toContain('graphify card — this context\'s working set at compaction, from graphify-out/ (built at');
     expect(card.text).toContain('- server/src/pane/statusline.ts [touched]');
     expect(readState().state).toBe('working');
@@ -1947,7 +1967,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(argv).toContain(' card --transcript ');
     expect(argv).toContain(` --transcript ${transcript} `);
     expect(argv).toContain(' --max-chars 4000 --max-files 12 ');
-    expect(argv).toContain(` --scope main --at ${readSet().at}`);
+    expect(argv).toContain(` --scope main --at ${readSet().at} --nonce ${readSet().nonce}`);
     expect(argv).not.toContain('--steer');                   // stage 1: never
     expect(fs.existsSync(cardFile())).toBe(true);
   });
@@ -2052,8 +2072,10 @@ with
     --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
     --out "$cardf" --set "$set" \
     --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
-    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" \
-    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1 || true
+    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
+    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
+  helper_rc=$?
+  [[ "$helper_rc" == 0 || "$helper_rc" == 3 ]] || _hook_compact_rollback "$set" "$cardf" "$nonce" "$doc"
   return 0
 }
 ```
@@ -2095,13 +2117,13 @@ The spec pins `COMPACT_HELPER_TIMEOUT` = 8 from measured inputs and requires the
 ```bash
 S=<scratchpad>/helper-measure; mkdir -p "$S"
 T=<this session's own transcript path>
-printf '{"v":1,"at":1,"scope":"main","agent":null,"transcript":"%s","parentLive":null,"liveAgents":0,"cwd":"%s","built":null,"fresh":null,"steered":false,"served":false,"files":null,"stats":null}\n' "$T" "$PWD" > "$S/x.compactset"
+printf '{"v":1,"at":1,"nonce":"scratch-1","scope":"main","agent":null,"transcript":"%s","parentLive":null,"liveAgents":0,"cwd":"%s","built":null,"fresh":null,"steered":false,"served":false,"files":null,"stats":null}\n' "$T" "$PWD" > "$S/x.compactset"
 /usr/bin/time -v node ccd/compact-card.mjs card --transcript "$T" --cwd "$PWD" \
   --graph <graph.json> --labels <its .graphify_labels.json> --out "$S/x.compactcard" --set "$S/x.compactset" \
-  --max-chars 4000 --max-files 12 --built x --fresh fresh --scope main --at 1 2>&1 | grep -E 'Elapsed|Maximum resident'
+  --max-chars 4000 --max-files 12 --built x --fresh fresh --scope main --at 1 --nonce "scratch-1" 2>&1 | grep -E 'Elapsed|Maximum resident'
 ```
 
-Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TIMEOUT` comment (replace `<p95> s / <RSS> MB`). **Acceptance: p95 ≤ 4 s on the largest graph.** If it is not, STOP and report — do not raise the constant; the spec's cost argument is what is wrong.
+Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TIMEOUT` comment (replace `<p95> s / <RSS> MB`). **Acceptance: p95 ≤ 4 s on the largest graph.** If it is not, STOP and report — do not raise the constant; the spec's cost argument is what is wrong. Task 6 measurement (2026-09-10, five fresh-nonce runs each): ccrc's 9,543,597-byte graph p95 0.36 s / peak 104,384 KiB RSS; largest admissible MekWarLive graph (70,434,955 bytes) p95 1.05 s / peak 332,184 KiB RSS. The 111,097,911-byte MegaMek graph exceeded the 96 MiB cap and exited 1 before parse in 0.25 s / 44,928 KiB RSS; its scratch set was byte-identical and no card existed.
 
 - [ ] **Step 7: Mutation checks**
 
@@ -2110,7 +2132,11 @@ Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TI
 3. Delete `[ "$rc" -eq 0 ] && _hook_gate_tree || return 0` → `a graph further behind HEAD` goes red (a card appears).
 4. Replace `for bin in timeout gtimeout` with `for bin in timeout` → `resolves gtimeout` goes red.
 5. Replace `_hook_timeout`'s final `return 127` with `shift; "$@"` → `with no timeout or gtimeout on PATH` goes red because node runs bare and rewrites the set.
-6. Delete `[ -f "$COMPACT_HELPER" ] || return 0` → no test reds (node fails on the missing file with the same outcome); the line is a short-circuit that saves a fork on an undeployed box, recorded here as unpinned by design.
+6. Remove the nonce condition in `_hook_compact_rollback` → `timeout rollback never restores or removes a later nonce owner` goes red because the exact hook document overwrites the later set. Measured red on 2026-09-10.
+7. Move the final PreCompact call before the hookstate rename → `records working hookstate before the bounded helper starts` goes red because the deadline stub refuses to capture its initial document. Measured red on 2026-09-10.
+8. Treat same numeric `at` as ownership in `ownedSlot` → `THE SLOT CHECK` goes red because the older helper overwrites the later nonce owner. Measured red on 2026-09-10.
+9. Delete the helper's pre-set-write `slotIsMine` guard → `rechecks the nonce after render staging and before the first target write` goes red (`writes` becomes 1). Delete the helper rollback ownership condition → its later-owner test goes red. Both measured red on 2026-09-10.
+10. Delete `[ -f "$COMPACT_HELPER" ] || return 0` → no test reds (node fails on the missing file with the same outcome); the line is a short-circuit that saves a fork on an undeployed box, recorded here as unpinned by design.
 
 - [ ] **Step 8: Run the whole file, then commit**
 
@@ -2141,12 +2167,13 @@ Append at the end of `server/test/session-hook.test.ts`:
 ```ts
 describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   /** A card+set pair on disk exactly as Task 6 leaves them, without running
-   *  the helper: `at` is the nonce, the card's first line. */
-  const plantPair = (at: number, text: string, opts: { nonce?: string; setAt?: number } = {}): void => {
-    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: opts.setAt ?? at, scope: 'main', agent: null,
+   *  the helper: numeric `at` is measurement; `nonce` owns the first line. */
+  const plantPair = (at: number, text: string, opts: { nonce?: string; setNonce?: string } = {}): void => {
+    const nonce = opts.setNonce ?? `nonce-${at}`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: 'main', agent: null,
       transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
       steered: false, served: false, files: null, stats: null }) + '\n');
-    fs.writeFileSync(cardFile(), `${opts.nonce ?? String(at)}\n${text}\n`);
+    fs.writeFileSync(cardFile(), `${opts.nonce ?? nonce}\n${text}\n`);
   };
   const CARD_TEXT = 'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):\n- a.ts [edited]\nBlast radius: 0 files import or call something in these 1 files.\nRe-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
 
@@ -2164,7 +2191,8 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(fs.existsSync(cardFile()), 'consume-once').toBe(false);
     expect(fs.existsSync(setFile()), 'the set is PostCompact\'s to consume').toBe(true);
     expect(readSet().served, 'the fact of serving is stamped into the set').toBe(true);
-    expect(readSet().at, 'the stamp rewrites nothing else').toBe(Number(nonce));
+    expect(readSet().nonce, 'the stamp preserves pair ownership').toBe(nonce);
+    expect(typeof readSet().at, 'the stamp preserves numeric measurement').toBe('number');
     expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
     // consume-once: a second compact SessionStart has no fourth subject
     const again = card(run(compactStart(tree, transcript)));
@@ -2318,7 +2346,7 @@ _hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or
 # ── SessionStart(compact) (spec §3.3): SERVE THE CARD ONCE, TO ITS SET ────
 # This arm cannot tell which context it serves (§3.0: the compactor has been
 # silent for ≥79 s by now) and NEVER resolves. It serves the card iff the card
-# is the set's own — line 1 of the card is the set's `at` — and consumes it.
+# is the set's own — line 1 of the card is the set's `nonce` — and consumes it.
 # An aged card belongs to no compaction that can still arrive and is REMOVED
 # (a dot-free registry file that outlives its use would hold the slug); a
 # crossed pair — another nonce, or no set — serves nothing and leaves the card
@@ -2333,7 +2361,7 @@ _hook_compact_card() {   # sets CARD_COMPACT; silent on every path
   [ -n "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || { rm -f "$f"; return 0; }
   [[ -f "$set" && -r "$set" ]] || return 0
   IFS= read -r -N 4096 head 2>/dev/null < "$set"
-  [[ "$head" =~ \"at\":([0-9]+) ]] || return 0
+  [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
   nonce="${BASH_REMATCH[1]}"
   IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$f"
   line1="${raw%%$'\n'*}"
@@ -2470,7 +2498,7 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
   it('measureCommand: the fields, and null — never 0 or main — without a set or without files', () => {
     const F = '\x60\x60\x60';                                       // a fence, never literal in a test file
     const text = `3. Files and Code Sections:\n- server/src/watch.ts\n${F}ts\nx\n${F}\n4. Next:\n${F}\ny\n${F}\n${F}`;
-    const set = { v: 1, at: 1, scope: 'subagent', agent: 'a1', transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: true,
+    const set = { v: 1, at: 1, nonce: 'nonce-1', scope: 'subagent', agent: 'a1', transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: true,
       files: [{ path: 'server/src/watch.ts', tag: 'edited', count: 1 }, { path: 'pwa/src/lib/models.ts', tag: 'touched', count: 1 }], stats: null };
     const m = measureCommand(text, set as any, 'auto');
     expect(m).toMatchObject({ trigger: 'auto', scope: 'subagent', chars: text.length, fences: 2, cited: 1, setSize: 2, steered: true, served: false });
@@ -2483,7 +2511,7 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
   });
 
   it('as the hook runs it: stdin in, one JSON line out, the trailing newline jq -r adds is not counted; exit 2 on a bad trigger; a bad set is NO set', () => {
-    const set = write('s.compactset', JSON.stringify({ v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: null, built: null, fresh: null, steered: false, served: false, files: [], stats: null }) + '\n');
+    const set = write('s.compactset', JSON.stringify({ v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: null, built: null, fresh: null, steered: false, served: false, files: [], stats: null }) + '\n');
     const r = helper(['measure', '--set', set, '--trigger', 'manual'], 'hello world\n');
     expect(r.status).toBe(EXIT.OK);
     expect(r.stdout.split('\n').filter(Boolean)).toHaveLength(1);
@@ -3216,7 +3244,7 @@ would trust runs `~/.cc-sessions/compact-card.mjs card` under a 5 s `timeout`: t
 was working in, mined from its transcript since the last compaction, resolved against
 `graphify-out/graph.json`, rendered as one line per file (community, symbols as `label:L<n>`,
 dependents outside the set) into `<id>.compactcard`. On SessionStart(compact) that card is served once,
-as the fourth subject of the one envelope, iff its first line is the set's `at`. On PostCompact
+as the fourth subject of the one envelope, iff its first line is the set's collision-resistant `nonce`; its numeric `at` remains measurement only. On PostCompact
 `compact-card.mjs measure` scores the summary the session will see — `chars`, `filesChars`, `fences`,
 `cited` against the set — into hookstate as `compaction` (with `n`, the journal's own count) and appends
 one line to `<id>.compactions`, the per-session study corpus. `~/.ccrc/compact-card-off` turns all three
@@ -3248,11 +3276,11 @@ git commit -m "docs: the compaction card in the README's hook section and in ccd
 
 ## Deviations found
 
-Numbers D-2384–D-2394 (the first review, eleven), D-2411–D-2420 (the second review, ten), and D-2446–D-2455 (the execution corrections, ten) were minted 2026-09-10 through `~/.local/bin/ccrc-api ledger allocate` (project `ccrc-pwa`; allocator floor now 2456), each defined here in the same act.
+Numbers D-2384–D-2394 (the first review, eleven), D-2411–D-2420 (the second review, ten), D-2446–D-2455 (the first execution corrections, ten), and D-2460–D-2463 (the Task 6 fix-round corrections, four) were minted 2026-09-10 through `~/.local/bin/ccrc-api ledger allocate` (project `ccrc-pwa`; allocator floor now 2464), each defined here in the same act.
 
 - **D-2384 — the approved design's `agent_type` guard does not exist on the payloads.** Spec §3.1 guard 2, §3.3 step 0 and §3.4's guard were written as "`.agent_type` in the payload empty". Measured 2026-09-09 on 2.1.266 (five headless runs): the three compaction payloads for a subagent's compaction are byte-identical in key set to the main thread's — the parent's `session_id` and `transcript_path`, no agent field. Operator direction 2026-09-10: compaction works for a subagent exactly as for the main thread. Fix: the guard is gone; §3.0's scope rule replaces it, and the scope is a tag the console renders.
 - **D-2385 — the first scope rule ("newest agent transcript wins") was a race, refuted before any code.** Three opus refuters (2026-09-10) measured on this box's corpus: a compacting context writes nothing for ≥79 s, siblings write every 4–6 s, Workflow fan-outs run seven and eight agents at once, and 5 of 197 main-thread boundaries had a newer subagent file. `prompt_id` is the parent's on a subagent's rows; no `CLAUDE_*` variable names an agent. Fix: liveness (§3.0) — manual → main; no live agent → main; one live agent beside a quiet parent → that subagent; anything else → `ambiguous`, which withholds the card and is measured. Recorded so nobody re-derives "newest wins".
-- **D-2386 — one card and one set per session id, written by every context.** Two compactions of one session inside the in-flight window cross the pair and mislabel both journal lines, and no later arm can tell which context it serves. Fix: an unconsumed set younger than `COMPACT_CARD_MAX_AGE` at PreCompact is overlap — that compaction is `ambiguous` and the card is removed; the set's `at` is the card's first line and SessionStart(compact) serves only a matching pair; SessionStart and PostCompact never resolve.
+- **D-2386 — one card and one set per session id, written by every context.** Two compactions of one session inside the in-flight window cross the pair and mislabel both journal lines, and no later arm can tell which context it serves. Original fix: an unconsumed set younger than `COMPACT_CARD_MAX_AGE` at PreCompact is overlap — that compaction is `ambiguous` and the card is removed; SessionStart(compact) serves only a matching pair; SessionStart and PostCompact never resolve. Superseded identity detail (D-2461): the set's collision-resistant `nonce`, not numeric `at`, is card line 1 and the matching key; `at` is retained only for measurement.
 - **D-2387 — the set has two writers and two shapes.** The approved text had the helper as the set's only writer and exit 3 writing nothing; then PostCompact had no scope on a graphless tree. Fix: PreCompact writes the set always (`files: null` — not mined; `built`/`fresh` measured first so the journal carries them either way); the helper rewrites it on exit 0 and on exit 3 (`files: []` — mined, empty). Two conditions, two values.
 - **D-2388 — `COMPACT_CARD_MAX_AGE` is 1200 s, the in-flight window, not a 3600 s serve bound.** The approved value bounded only the card's serving; the set had no age at all and a card that failed the bound was left standing. Argued from the longest measured compaction (826 s, gpt lane) ×1.45; applied to the card (removed when older), the set (removed unread when older) and the overlap check.
 - **D-2389 — the helper timeout is 8 s, declared as amendment R2 of the hook header's "no waiting".** The approved 20 s was a round number, 120× the hook's whole-arm p95; the wait was undeclared. Argued from node startup (~0.05 s), a 70 MB graph parsed in 1.15 s and a 64 MiB window scan (~1 s) at roughly twice their sum. The header sentence is corrected (Task 6); `find` is guarded inside the scope resolver, `node` remains unguarded, and D-2446 gives the deadline executable its portable local resolver. On a userland with neither deadline command, the feature is inert and says so.
@@ -3264,7 +3292,7 @@ Numbers D-2384–D-2394 (the first review, eleven), D-2411–D-2420 (the second 
 
 The second review (2026-09-10, three opus refuters and a scout over the amended spec and this plan) found the following; each changed the spec and the plan before any code:
 
-- **D-2411 — the overlap verdict was advisory: the earlier compaction's helper could overwrite it.** The hook marks the slot `ambiguous`, but the first draft's helper rewrote the set unconditionally, so a helper landing late restored a self-consistent pair the other context could consume. Fix: the helper re-reads the set immediately before each of its two writes and refuses unless its `at` is its own (`slotIsMine`); what remains is the read-to-rename interval, stated in spec §10.
+- **D-2411 — the overlap verdict was advisory: the earlier compaction's helper could overwrite it.** The hook marks the slot `ambiguous`, but the first draft's helper rewrote the set unconditionally, so a helper landing late restored a self-consistent pair the other context could consume. Original fix: the helper re-reads the set immediately before each of its two writes and refuses unless the slot is still its own (`slotIsMine`); what remains is the read-to-rename interval, stated in spec §10. Superseded identity detail (D-2461): `slotIsMine` compares the collision-resistant nonce, never numeric `at`.
 - **D-2412 — `steered` was written before the fact.** The helper recorded `--steer` in the set before knowing whether it would exit 0, so an exit 3 under `--steer` would have read `steered: true` for a compaction that was never steered, corrupting Plan C's whole control variable. Fix: the helper always writes `steered: false`; the hook stamps `true` only after the print (Plan C); the flag is accepted and ignored here.
 - **D-2413 — nothing recorded whether the card reached the model.** A mined set with a card that was never served (crossed pair, aged card, failed emit, timed-out helper) read exactly like a served one, so `cited` was uninterpretable. Fix: `_hook_emit_context` returns non-zero when it prints nothing; the arm stamps `served: true` into the set only after a printed card; `measure` copies it; `COMPACT_SHAPE_PRED` and the wire type carry it.
 - **D-2414 — the 5 s timeout was argued from parse time alone.** The review measured the first draft's naive suffix resolution (a scan of every file per token) at 2–12 s on a 64 MiB window against a 5,000-file graph, and `loadGraph` at ~1.5 s and ~250 MB RSS on a 51 MB graph. Fix: a basename index makes resolution O(tokens); `WINDOW_CAP` is 16 MiB (a never-compacted transcript is far smaller); `GRAPH_MAX_BYTES` (96 MiB) refuses a graph before parsing it; the timeout is 8 s and Task 6 re-measures p95 and RSS on this box's real graphs before it ships, with an acceptance bound.
@@ -3287,10 +3315,14 @@ The execution pass found the following corrections; D-2446–D-2455 were allocat
 - **D-2453 — L1 plus basename was an invented file-node heuristic contrary to the approved `metadata.kind`-or-highest-degree semantics.** Fix: remove it and test conflicting candidates.
 - **D-2454 — the renderer stopped truncating at one file, allowing a long valid path to breach `maxChars` and clip mid-line without disclosure.** Fix: permit zero rows with `(+k files not shown)`.
 - **D-2455 — the graph cap used `stat(path)` then `read(path)`, permitting replacement or growth above cap.** Fix: open once, bounded-read `maxBytes + 1` from that descriptor, and close in `finally`.
+- **D-2460 — a helper error after the set rewrite falsely left `files` mined.** A card write can fail after the helper replaced the hook's `files:null` document, making PostCompact record a mining fact that never completed. Fix: render before the first target write; retain the exact initial bytes; after a post-set failure restore them only while the helper nonce still owns the set, and remove only a card whose first line matches that nonce. The hook applies the same ownership-safe rollback for every helper result other than 0 or 3.
+- **D-2461 — epoch-millisecond `at` collisions make it an unsafe owner.** Two PreCompact hooks can share a millisecond; treating `at` as identity lets an older helper or rollback overwrite a later owner. Fix: generate one `compact-<at>-<pid>-<random>-<random>` nonce in PreCompact, pass `--nonce`, store it immediately after numeric `at`, put it on card line 1, and use it at every ownership, pair, serve and rollback seam. Future Task 7 pairs by `.nonce`; Task 9 retains numeric `at` only as measurement.
+- **D-2462 — the declared hookstate-first ordering lacked behavior evidence.** A source comment cannot prove the helper did not start before the `working` stamp became durable. Fix: the deadline-stub test reads persisted hookstate before it starts the helper, requires `state:"working"`, then drives a failing helper path whose rollback proves the initial document remains safe.
+- **D-2463 — the graph cap had fixture-only refusal evidence.** The real megamek graph is 111,097,911 bytes, above the 96 MiB cap, so the production helper must refuse it before parse without changing a fresh set or producing a card. The Task 6 scratch measurement records that exit 1, unchanged bytes, absent card, duration and peak RSS.
 
-## Self-review (writing-plans checklist, run before the numbers were minted)
+## Self-review (writing-plans checklist, corrected after Task 6 execution and fix-round review)
 
 - **Spec coverage.** §3.0 → Task 2 (rule, overlap) and Task 6 (guards); §3.1 → Tasks 2 and 6; §3.2 → Tasks 3, 4, 5; §3.3 → Task 7; §3.4 → Tasks 8, 9; §5 Hook rows → Tasks 2, 6, 7, 9 (each row named in a test or a mutation step; the two cost rows as the stub-`timeout` pin and the compact arm's own ratio); §5 Helper → Tasks 3, 4, 5, 8; §5 Installer → Task 10; §6 R2 → Task 6; §6 dot-free coupling → Tasks 2 (comment), 7 and 9 (removal); §7 deploy → the Deploy section. Not in this plan, by the spec's own split: §3.5 (Plan C), §3.6 and the Wire rows (Plan B).
-- **Placeholders.** Every step carries its code. Two measurements are deliberately deferred to execution because they need the shipped code on this box, and each carries an owner and an acceptance criterion: the compact arm's ratio band (Task 7, R=4 provisional; the executor records the shipped and mutated bands in the test comment and reports if the shipped p95 sits above 3.5) and the helper's p95/RSS on the real graphs (Task 6; p95 ≤ 4 s on the largest graph, else stop and report). Two mutation rows are recorded as unpinned by design (`[ -f "$COMPACT_HELPER" ]`, the second `slotIsMine`) rather than claimed red.
-- **Type consistency.** `CS_SCOPE`/`CS_TRANSCRIPT`/`CS_AGENT`/`CS_LIVE_N`/`CS_PARENT_LIVE` (Task 2) are what Task 6's helper call reads; Task 7 reads only `readCard()`'s `{nonce, text}` and the set's `at`; `cardCommand`'s `at: number` (Task 5) is what Task 3's `main` passes and Task 6's `--at "$at"` supplies; `measureCommand`'s `scope` literals and `served` (Task 8) match `COMPACT_SHAPE_PRED` (Task 2) and the spec's `CompactionMeas`; Task 9 builds its sets by running PreCompact for real, and reads `cwd`, `built`, `agent`, `transcript` from the set the hook wrote (Task 2's shape, carried by Task 5's rewrite).
+- **Execution state.** Task 6 code and focused tests have run; the helper's real-graph and over-cap measurements, the Task 6 mutation proofs, full-suite validation, and later plan tasks remain pending. The compact arm's ratio band (Task 7, R=4 provisional) and helper p95/RSS (Task 6; p95 ≤ 4 s on the largest admissible parse graph, else stop and report) are execution measurements, not completed claims. The `[ -f "$COMPACT_HELPER" ]` shortcut is intentionally unpinned because deleting it leaves the same silent failure; nonce ownership, post-set rollback, later-owner protection and hookstate-first ordering require diagnostic red mutations.
+- **Type consistency.** `CS_SCOPE`/`CS_TRANSCRIPT`/`CS_AGENT`/`CS_LIVE_N`/`CS_PARENT_LIVE` (Task 2) are what Task 6's helper call reads; Task 7 pairs only `readCard()`'s `{nonce, text}` with the set's `.nonce`; `cardCommand` receives numeric `at` plus `nonce`, both supplied by Task 6; `measureCommand` and Task 9 retain `at` solely as numeric measurement. `measureCommand`'s `scope` literals and `served` (Task 8) match `COMPACT_SHAPE_PRED` (Task 2) and the spec's `CompactionMeas`; Task 9 builds its sets by running PreCompact for real, and reads `cwd`, `built`, `agent`, `transcript` from the set the hook wrote (Task 2's shape, carried by Task 5's rewrite).
 - **Counts.** Test counts are not quoted per step ("every test in the file"): they drift with every added case and a wrong count makes a correct run look wrong. The `case "$event"` block parses to TEN events (`install-session-hooks.test.ts` floors at 10).

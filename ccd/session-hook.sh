@@ -68,7 +68,8 @@ _hook_timeout() {
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
 # file's standing contract (exit 0 on every path, no network, no locks, no
-# waiting) is unchanged. Every read below is a local file or a git ref.
+# waiting) is unchanged except the declared, hookstate-first bounded compaction
+# helper wait. Every read below is a local file or a git ref.
 _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
   local j=""
   # THE TOTAL CLIP LIVES HERE, at the ONE site every subject passes through.
@@ -770,6 +771,19 @@ _hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behi
   return 0
 }
 
+# Ownership is the hook's nonce, never its epoch-ms measurement: simultaneous
+# hooks can share `at`. Restore only our exact initial document and remove a
+# card only when card line 1 still bears that nonce.
+_hook_compact_rollback() {   # <set> <card> <nonce> <original document>
+  local set="$1" cardf="$2" nonce="$3" original="$4" cur="" first=""
+  cur=$(jq -r '.nonce // empty' "$set" 2>/dev/null) || cur=""
+  [[ "$cur" == "$nonce" ]] && _hook_write_atomic "$set" "$original" || true
+  if [ -f "$cardf" ]; then
+    IFS= read -r first < "$cardf" 2>/dev/null || first=""
+    [[ "$first" == "$nonce" ]] && rm -f "$cardf"
+  fi
+}
+
 # ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
 # Called from the very end of this file, AFTER the hookstate rename: the
 # `working` stamp lands first and never waits on the helper (Task 6's sole
@@ -777,7 +791,7 @@ _hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behi
 # stage 1. Every failure is silent and total for what comes after it.
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
-  local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" rc=0
+  local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
@@ -792,25 +806,19 @@ _hook_compact_pre() {
     CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""
   fi
   [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
-  # THE SWEEP. A helper killed by `timeout` between its temp write and its
-  # rename leaves `.<id>.<name>.<pid>.tmp`, which leads with a dot and is
-  # therefore invisible to `_reg_purge`; nothing else would ever remove it.
-  # Only THIS id's compaction temps, only older than the window — a young one
-  # may belong to a helper in flight.
+  # THE SWEEP. A helper killed by its deadline between temp write and rename
+  # leaves a dot-leading temp invisible to `_reg_purge`; only this id's old
+  # compaction temps are safe to reap.
   find "$REG" -maxdepth 1 -name ".$id.*compact*.tmp" -mmin "+$mins" -delete 2>/dev/null || true
   rc=0; _hook_graph_measure || rc=$?
   at=$(_hook_epoch_ms)
-  # THE HOOK'S OWN SET. `at` is the nonce the card will be paired on (§3.3).
-  # `files:null` is NOT MINED, which the helper's `files:[]` (mined, empty)
-  # must never be read as — two conditions, two values. Written BEFORE the
-  # graph gates, so PostCompact has the scope on a tree with no graph at all;
-  # `built`/`fresh` are measured first so the journal carries them either way;
-  # `parentLive`/`liveAgents` are what the rule saw, null where it did not look;
-  # `served` is stamped by SessionStart(compact) after a successful emit.
+  nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
+  # `at` is the epoch-ms measurement. The nonce is the collision-resistant slot
+  # identity, preserved in the set head and passed to the helper/card line 1.
   doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
-      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" \
+      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" --arg nonce "$nonce" \
       --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
-      '{v:1, at:$at, scope:$scope, agent:(if $agent=="" then null else $agent end),
+      '{v:1, at:$at, nonce:$nonce, scope:$scope, agent:(if $agent=="" then null else $agent end),
         transcript:(if $t=="" then null else $t end),
         parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
         liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
@@ -828,8 +836,10 @@ _hook_compact_pre() {
     --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
     --out "$cardf" --set "$set" \
     --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
-    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" \
-    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1 || true
+    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
+    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
+  helper_rc=$?
+  [[ "$helper_rc" == 0 || "$helper_rc" == 3 ]] || _hook_compact_rollback "$set" "$cardf" "$nonce" "$doc"
   return 0
 }
 
@@ -976,9 +986,10 @@ COMPACT_LIVE_S=120
 # ~1.5 s, a 16 MiB window mined in well under a second through a basename
 # index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
 # before it shipped — the p95 and peak RSS are recorded here by Task 6 of
-# plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc p95 0.23 s /
-# 103.7 MiB RSS; largest compatible graph (MekWarLive, 70.6 MB) p95 1.22 s /
-# 321.3 MiB RSS (five fresh-nonce runs each, 2026-09-10).
+# plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (MekWarLive,
+# 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
+# 2026-09-10).
 COMPACT_HELPER_TIMEOUT=8
 COMPACT_WORKSET_MAX=12
 # ONE SPELLING of the shape a `compaction` object must have to reach

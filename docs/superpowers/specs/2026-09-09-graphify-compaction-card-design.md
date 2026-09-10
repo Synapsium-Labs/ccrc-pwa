@@ -157,12 +157,12 @@ events; `install-session-hooks.sh`'s event list is unchanged.
 (every arm below is inert while ~/.ccrc/compact-card-off exists. ONLY PreCompact decides WHICH
  context is compacting — main, subagent or ambiguous — by the liveness rule of §3.0; the two later
  arms read that decision from the set and never resolve)
-PreCompact ──► scope + overlap check ──► $REG/<id>.compactset   (JSON: at, scope, agent, transcript; files null)
-   │          └► helper `card` (never for ambiguous) ──► $REG/<id>.compactcard  (line 1: the set's `at`; then the text)
+PreCompact ──► scope + overlap check ──► $REG/<id>.compactset   (JSON: at, nonce, scope, agent, transcript; files null)
+   │          └► helper `card` (never for ambiguous) ──► $REG/<id>.compactcard  (line 1: the set's `nonce`; then the text)
    │                                                   └─► $REG/<id>.compactset  (rewritten: files, tags, counts, steered)
    └─ stage 2: prints STEER_TEXT iff the helper exited 0 and the steer switch is absent
 summariser  (Claude Code; reads Additional Instructions)
-SessionStart(compact) ──► iff the card's line 1 is the set's `at`: appends the card as the 4th subject
+SessionStart(compact) ──► iff the card's line 1 is the set's `nonce`: appends the card as the 4th subject
                           of the ONE envelope and deletes it; an aged card is removed instead
 PostCompact ──► helper `measure` (compact_summary on stdin; the set iff inside the window) ──► hookstate.compaction
                                                                                             └─► $REG/<id>.compactions (journal)
@@ -276,12 +276,12 @@ and no later arm can tell which context it serves. So BOTH degrade: this PreComp
 PostCompact reads an `ambiguous` set. A failed compaction followed within the window by another costs
 that one its card (consecutive boundaries under an hour are 1% of intervals on this box; failures are
 rarer). **The verdict is durable, not advisory**: the helper re-reads the set on disk immediately before
-each of its two writes and refuses (exit 1, nothing written) unless the set still carries its own `--at`
+each target write and refuses (exit 1, nothing written) unless the set still carries its own `--nonce`
 — so an overlapping PreCompact that has already taken the slot cannot be overwritten by the earlier
-compaction's helper landing late. The card and the set are additionally **paired by a nonce** — the set's
-`at`, written as the card's first line — so the crossed-pair half of the race is unservable. What
-remains is the interval between the helper's re-read and its rename, milliseconds against a 79 s
-window, stated in §10.
+compaction's helper landing late. `at` is only the epoch-millisecond measurement. The generated
+collision-resistant `nonce` owns the set/card pair and is card line 1, so the crossed-pair half of the
+race is unservable. What remains is the interval between the helper's re-read and its rename,
+milliseconds against a 79 s window, stated in §10.
 
 ### 3.1 PreCompact arm (hook)
 
@@ -301,15 +301,17 @@ never waits on any of this. Guard chain, in order, every failure silent and tota
    temp-then-rename, the temp `$REG/.<id>.$$.compactset.tmp`):
 
    ```json
-   {"v":1,"at":1789330000000,"scope":"main","agent":null,
+   {"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<random>-<random>","scope":"main","agent":null,
     "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
     "parentLive":true,"liveAgents":0,
     "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh","steered":false,"served":false,
     "files":null,"stats":null}
    ```
 
-   `at` is the nonce every later step pairs on. `files: null` means **not mined**; the helper's
-   `files: []` means **mined, empty** — two conditions, two values. `cwd`, `built` and `fresh` are
+   `at` is an epoch-millisecond measurement only. PreCompact generates `nonce` once from that
+   measurement, its PID and two Bash random values; it owns every set/card pairing and rollback.
+   `files: null` means **not mined**; the helper's `files: []` means **mined, empty** — two
+   conditions, two values. `cwd`, `built` and `fresh` are
    `null` when the measurement had nothing to say; `parentLive`/`liveAgents` are null on a manual
    trigger. An `ambiguous` scope has `transcript: null`, `agent: null`, and the arm **stops here**.
 5. The graph gate: `_hook_graph_measure` returned 0 **and** `_hook_gate_tree` holds — a graph no more
@@ -320,15 +322,16 @@ never waits on any of this. Guard chain, in order, every failure silent and tota
    guard whose removal changes nothing observable is not a guard — on a userland with no `timeout` the
    helper never runs, the set is consumed by PostCompact, and the journal stays empty (§4).
 
-Then, with `--transcript` the resolved file of step 3 — never the payload's — and `--at` the nonce:
+Then, with `--transcript` the resolved file of step 3 — never the payload's — and numeric
+`--at` plus the separately generated ownership `--nonce`:
 
 ```
-timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
+_hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
   --transcript "$transcript" --cwd "$GM_CWD" --graph "$GM_CWD/graphify-out/graph.json" \
   --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
   --out "$REG/$id.compactcard" --set "$REG/$id.compactset" \
   --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
-  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" --at "$at" [--agent "$agent"] [--steer]
+  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" --at "$at" --nonce "$nonce" [--agent "$agent"] [--steer]
 ```
 
 `--steer` is passed when stage 2 is built and `~/.ccrc/compact-steer-off` is absent, and it changes
@@ -339,30 +342,35 @@ the print. Exit 0: the card was written and the set rewritten with the working s
 then prints `STEER_TEXT` (§3.5) — one line, plain text, the second and last deliberate stdout site in the
 file — and stamps. Exit 3: the working set was empty — the set is rewritten with `files: []`, no card.
 Any other exit (a slot no longer the helper's, a graph over `GRAPH_MAX_BYTES`, a failure), or the
-timeout: nothing more; the hook's own set stands. The existing `state="working"` write is unchanged.
+timeout: the hook nonce-gated restores its exact initial set document and removes only a card whose
+first line is that nonce. A later owner is never overwritten or unlinked. The existing
+`state="working"` write is unchanged.
 
 **Cost, and the contract it amends (§6, R2).** The helper is bounded by `COMPACT_HELPER_TIMEOUT` = 8 s.
-The inputs: node startup ~0.05 s; `graph.json` parsed once and indexed — 0.13–0.18 s at 9 MB, 1.15 s at
-70 MB (MekWarLive), with peak RSS about five times the file, which is why `GRAPH_MAX_BYTES` refuses
-larger ones; a window of at most `WINDOW_CAP` = 16 MiB, every line parsed (a 64 MiB window measured
-0.3 s to read and 0.4 s to mine, before the cap); resolution through a **basename index**, O(tokens),
+The inputs: node startup ~0.05 s; `graph.json` parsed once and indexed; a window of at most
+`WINDOW_CAP` = 16 MiB, every line parsed; and resolution through a **basename index**, O(tokens),
 never a scan of the file set per token (the review measured the naive scan at 2–12 s on a 64 MiB window
-against a 5,000-file graph). 8 s is roughly twice the sum on the worst tree on this fleet, on an idle box;
-**Plan A's Task 6 re-measures p95 and RSS on the fleet box's real graphs before the constant ships, and
-stops to report if p95 exceeds half the bound.** The scope `find`s, the overlap `find`, the temp sweep,
-the two payload `jq`s and the set write sit outside the timeout and are bounded by construction. None of
-it is on the hot path: PreCompact brackets a compaction of at least 79 s. It is still a wait the hook's
-header forbids, and §6 declares it.
+against a 5,000-file graph). Task 6's five fresh-nonce, production-helper runs on this fleet box
+(2026-09-10) measured ccrc's 9,543,597-byte graph at p95 0.36 s / peak 104,384 KiB RSS and the largest
+admissible graph, MekWarLive's 70,434,955-byte graph, at p95 1.05 s / peak 332,184 KiB RSS. Both are
+below the 4 s acceptance bound. The 111,097,911-byte MegaMek graph exceeds the 96 MiB cap and was
+refused before parse (exit 1, 0.25 s, 44,928 KiB RSS), leaving the scratch set byte-identical and no card.
+The scope `find`s, the overlap `find`, the temp sweep, the two payload `jq`s and the set write sit outside
+the timeout and are bounded by construction. None of it is on the hot path: PreCompact brackets a
+compaction of at least 79 s. It is still a wait the hook's header forbids, and §6 declares it.
 
 ### 3.2 Helper subcommand `card`
 
 **Input.** `--transcript` is whichever file §3.0 resolved — the parent's or a subagent's. The helper
-neither knows nor cares which, beyond copying `--scope`, `--agent`, `--transcript` and `--at` into the
-set and writing `--at` as the **first line of the card file** (the nonce §3.3 pairs on; the hook strips
-it before injecting). **The slot check.** Immediately before each of its two writes the helper re-reads
-the set on disk and refuses — exit 1, nothing written — unless its `at` is the helper's own `--at`: the
-hook's overlap verdict (§3.0) is then durable against a helper that lands late. `graph.json` larger than
-`GRAPH_MAX_BYTES` is refused the same way, before it is parsed. A subagent transcript has the same line shapes as the parent's, measured: an
+copies `--scope`, `--agent`, `--transcript`, numeric `--at`, and ownership `--nonce` into the set, and
+writes `--nonce` as the **first line of the card file** (the hook strips it before injecting).
+**The slot check.** It stages the render before naming either target, then immediately before each target
+write re-reads the set and refuses — exit 1, nothing written — unless its nonce is the helper's own
+`--nonce`: the hook's overlap verdict (§3.0) is then durable against a helper that lands late. If the
+set rewrite succeeded but the subsequent card write fails, the helper restores the exact initial set
+bytes only while its nonce still owns the set, removes only a same-nonce card, then rethrows. A later
+owner is never overwritten or unlinked. `graph.json` larger than `GRAPH_MAX_BYTES` is refused the same
+way, before it is parsed. A subagent transcript has the same line shapes as the parent's, measured: an
 `assistant` row is `{type:"assistant", message:{content:[{type:"tool_use", name, input}]}}`; the boundary
 row is `{type:"system", subtype:"compact_boundary", compactMetadata:{trigger,…}}`; the previous summary
 is `{type:"user", isCompactSummary:true, message:{content:"<string>"}}` — a string in 1,307 of 1,307
@@ -450,11 +458,11 @@ into place; a temp orphaned by `timeout`'s SIGTERM is swept by the next PreCompa
 `_reg_purge` never sees a dot-leading name. Names carry **no second dot** on purpose: `_reg_purge` unlinks `$REG/<id>.<suffix>` for every
 dot-free suffix except `archived` and `reaping` (which it removes last, in that order) plus the one
 explicitly named `<id>.hookstate.json`; these three are purged with the row by the loop, no explicit
-line needed. The set the helper writes — key order is part of the contract: `at` and `transcript`
-sit in the first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`:
+line needed. The set the helper writes — key order is part of the contract: `at`, `nonce`, and
+`transcript` sit in the first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`:
 
 ```json
-{"v":1,"at":1789330000000,"scope":"main","agent":null,
+{"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<random>-<random>","scope":"main","agent":null,
  "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
  "parentLive":true,"liveAgents":0,
  "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh",
@@ -477,9 +485,10 @@ which context it serves (§3.0), so it serves the card iff the card is the set's
 0. `~/.ccrc/compact-card-off` absent — **before the file is touched**.
 1. `f="$REG/$id.compactcard"` exists; younger than `COMPACT_CARD_MAX_AGE` (`find -mmin`, one fork) —
    an older card belongs to no compaction that can still arrive and is **removed**, never served.
-2. **The pair.** The set exists, and its `at` (a bounded `read -N 4096` of the set's head, fork-free)
-   equals the card's first line. A set naming another nonce, or no set, is a crossed pair — a card that
-   is not this compaction's — and nothing is served; the card stays for §3.0's overlap check or step 1
+2. **The pair.** The set exists, and its `nonce` (a bounded `read -N 4096` of the set's head,
+   fork-free) equals the card's first line. `at` remains available only as numeric measurement for
+   PostCompact. A set naming another nonce, or no set, is a crossed pair — a card that is not this
+   compaction's — and nothing is served; the card stays for §3.0's overlap check or step 1
    to retire.
 3. Read the rest of the card (bounded `read -N`, clipped at `COMPACT_CARD_MAX_CHARS` — defence in depth
    behind the helper's bound), `rm -f` it. Consume-once: a card is never served to two contexts.
@@ -632,7 +641,7 @@ export interface CompactionMeas {
 | no graph, or > `GRAPH_GATE_MAX_BEHIND` behind | no card, no steering; the set stands with `files: null`; the standing graph card still says why |
 | graph built at another commit but same content as HEAD, or ≤ `GRAPH_GATE_MAX_BEHIND` behind | the card header carries the same freshness word the graph card uses |
 | `find` missing | nothing written by PreCompact — the scope cannot be measured and a silent `main` would be a wrong answer; PostCompact writes nothing either |
-| `node` or `timeout` missing (a BSD userland); helper missing, refusing, or timing out | silent; the hook's own set stands (`files: null`) and PostCompact consumes it; nothing partial at a target name, and a temp orphaned by `timeout` is swept by the next PreCompact. With no `timeout` the helper never runs: no card, no measurement, no journal line — §6's R2 states it |
+| `node` or both deadline names missing (a BSD userland); helper missing, refusing, or timing out | silent; `_hook_timeout` resolves `timeout` then `gtimeout` and returns 127 if neither exists. Any non-0/non-3 helper result nonce-gated restores the hook's exact initial set and removes only a same-nonce card; a later owner survives. PostCompact consumes the set, and a temp orphaned by a deadline is swept by the next PreCompact. |
 | `graph.json` over `GRAPH_MAX_BYTES` | no card; the set stands with `files: null` and `built` set — the journal shows a graphed tree that was never carded |
 | PostCompact's helper fails, or the set will not parse | `compaction` carried, no journal line; the set is consumed all the same, so the next compaction is not `ambiguous` for it |
 | compaction blocked or failed after PreCompact | card and set remain. Inside `COMPACT_CARD_MAX_AGE` the next PreCompact reads them as overlap (§3.0): that compaction is `ambiguous`, no card. After the window the card is removed at the next SessionStart(compact) and the set at the next PostCompact, both unread |
@@ -641,7 +650,7 @@ export interface CompactionMeas {
 | subagent compaction, the one live agent beside a quiet parent | §3.0 resolves the subagent's own transcript; card, steering and measurement proceed exactly as for the main thread, tagged `scope:"subagent"` with the `agent` id. The payload still carries the parent's transcript and id — which is why the rule exists |
 | two contexts live at PreCompact — a Workflow fan-out, or a background subagent beside its parent | scope `ambiguous`: a set with `transcript: null`, no card, a measurement with `cited`/`setSize` null; counted on the corpus (§3.0) |
 | a live sibling paused longer than `COMPACT_LIVE_S` while another context compacted | one mislabelled compaction (false exactness, §3.0); checkable offline — the journal names a subagent transcript that carries no `compact_boundary` near the line's `at` |
-| the card's first line is not the set's `at`, or there is no set | a crossed pair: not served (§3.3 step 2); the overlap check or the age bound retires it; the measurement reads `served: false` |
+| the card's first line is not the set's `nonce`, or there is no set | a crossed pair: not served (§3.3 step 2); the overlap check or the age bound retires it; the measurement reads `served: false` |
 | the card was mined but never reached the model (crossed pair, aged card, failed emit) | `served: false` on the journal line; `cited` is not read against it |
 | `agent_type` / `agent_id` on the payloads | **measured absent** (2026-09-09, §0.2); the approved design gated on the field and no longer does — the measurement it named as Plan A's first task was taken before any plan was written (§7 item 1) |
 | `~/.ccrc/compact-card-off` present | all three arms inert: no card, no steering, no measurement, no journal line; a card already on disk is never served; a `compaction` already in hookstate is carried, not cleared — the chip persists until the next non-resume SessionStart |
@@ -668,11 +677,14 @@ export interface CompactionMeas {
 | two live contexts not ambiguous | a live parent beside a live agent → `scope:"ambiguous"`, `transcript: null`, no card; two live agents → the same |
 | manual trigger not `main` | `trigger:"manual"` with a live agent → `scope:"main"` |
 | overlap check dropped | a second PreCompact inside `COMPACT_CARD_MAX_AGE` → the set reads `ambiguous` and the card is gone |
-| the nonce not written, or not compared | a card whose first line is not the set's `at` → not served, still on disk; a served card never contains the nonce line |
+| the nonce not written, or not compared | a card whose first line is not the set's `nonce` → not served, still on disk; a served card never contains the nonce line |
 | aged card not removed | a card older than `COMPACT_CARD_MAX_AGE` → removed at SessionStart(compact), not served |
 | PostCompact reads an aged set | a set older than the window → removed; measurement with `scope`/`cited`/`setSize` null |
 | the `find` guard in the resolver dropped | a fixture PATH with no `find` → a set is written with a silent `main`; with the guard, nothing is written and stderr is empty |
-| the slot check dropped | a set whose `at` is not the helper's `--at` → the helper exits 1 and writes nothing; with the check dropped it overwrites |
+| nonce slot check dropped | a set with the same numeric `at` but a different nonce → the helper exits 1 and writes nothing; with the check dropped it overwrites |
+| post-set rollback dropped | a card-write failure after the set rewrite leaves mined fields instead of the exact hook-owned bytes |
+| rollback ownership check dropped | a later nonce owner installed during card write is restored or its card is removed; with the check it survives byte-for-byte |
+| hookstate-first order dropped | the deadline stub starts the helper while persisted hookstate is not `working` |
 | the temp sweep dropped | a stale `.<id>.compactcard.999.tmp` older than the window survives PreCompact; a young one always survives |
 | `served` not stamped | after a served card the set (and the journal line) read `served: true`; after a crossed pair `false` |
 | the set not consumed on a failing PostCompact | a failing helper leaves the set; the next PreCompact inside the window reads `ambiguous` |
@@ -711,8 +723,9 @@ export interface CompactionMeas {
 literal-in-a-body false positive, the 16 MiB cap realigned to a line, tag and token mining, exact and
 unique-suffix resolution with `ambiguous`/`outside`/`nomatch` counts, ranking, the graph's node-link
 shape (edges under `links`), card format with the scope in the header, `(+k files not shown)` on any
-drop, the ceiling, the copy of `--scope`/`--agent`/`--transcript`/`--at` into the set and the nonce as
-the card's first line, pid-suffixed temps, `measure` normalisation, every exit code.
+drop, the ceiling, the copy of `--scope`/`--agent`/`--transcript`/numeric `--at`/ownership `--nonce`
+into the set and nonce as the card's first line, pid-suffixed temps, `measure` normalisation, every exit
+code.
 
 **Installer/deploy**: `deploy.sh` ships the helper by `install_atomic` beside the hook (pinned like the
 hook's own line); `install-session-hooks.sh` unchanged — the derived wiring test stays untouched.

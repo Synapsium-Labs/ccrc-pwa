@@ -6,7 +6,8 @@
 //
 // Spec: docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md
 // (§3.2 `card`, §3.4 `measure`). Invoked ONLY by ccd/session-hook.sh, under
-// `timeout`, on PreCompact and PostCompact; installed beside the hook as
+// the hook's locally resolved `timeout`/`gtimeout` deadline, on PreCompact and
+// PostCompact; installed beside the hook as
 // ~/.cc-sessions/compact-card.mjs by deploy.sh's agent lane and `ccrc install`.
 //
 // Plain node, `node:*` imports only — the `shared/mark.mjs` class: a
@@ -424,31 +425,47 @@ function writeAtomic(target, text) {
   }
 }
 
-/** THE SLOT CHECK (spec §3.0, overlap). The hook wrote the set before
- *  running this helper; if the set on disk no longer carries this helper's
- *  `at`, an overlapping PreCompact has taken the slot and marked it
- *  ambiguous — this helper must not overwrite that verdict. Re-read
- *  immediately before EACH write; what remains is the interval between the
- *  read and the rename. Returns the set when it is ours (its fields are
- *  carried into the rewrite), else null. */
-export function slotIsMine(setPath, at) {
+/** THE SLOT CHECK (spec §3.0, overlap). `at` is a measurement, not an
+ *  identity: two hooks can share one millisecond. The hook generates one
+ *  collision-resistant `nonce`; it is carried by the set and on card line 1.
+ *  Read the slot's exact bytes with its parsed value so rollback can restore
+ *  the hook document byte-for-byte, but only while this nonce still owns it. */
+function ownedSlot(setPath, nonce) {
   try {
-    const cur = JSON.parse(readFileSync(setPath, 'utf8'));
-    return cur && typeof cur === 'object' && cur.at === at ? cur : null;
+    const text = readFileSync(setPath, 'utf8');
+    const set = JSON.parse(text);
+    return set && typeof set === 'object' && typeof nonce === 'string' && nonce !== '' && set.nonce === nonce
+      ? { set, text } : null;
   } catch {
     return null;
   }
 }
 
-/** `card`: window → tokens → working set → set file (always) → card (when
- *  the set is non-empty). Key ORDER in the set is part of the contract: `at`
- *  and `transcript` sit in the first 4 KiB, where the hook reads them with a
- *  bounded, fork-free `read -N` (spec §3.3 step 2). `at` is the hook's nonce
- *  — never Date.now() here — and it is ALSO the card's first line, which is
- *  what pairs a card to its set. `parentLive`, `liveAgents` and `served` are
- *  the hook's and are CARRIED; `steered` is always false here — the hook
- *  stamps it after the print (Plan C), never the helper. A refused slot
- *  throws, which `main` reports as exit 1 with nothing written. */
+export function slotIsMine(setPath, nonce) {
+  return ownedSlot(setPath, nonce)?.set ?? null;
+}
+
+/** A failed card write must not turn `files:null` into a false mining result.
+ *  Restore the exact hook document only while it remains ours; separately
+ *  remove a partial card only when its first line bears our nonce. */
+function rollbackCard(setPath, outPath, nonce, original, write) {
+  if (slotIsMine(setPath, nonce)) {
+    try { write(setPath, original); } catch { /* preserve the primary failure */ }
+  }
+  try {
+    const card = readFileSync(outPath, 'utf8');
+    if (card.slice(0, card.indexOf('\n')) === nonce) unlinkSync(outPath);
+  } catch { /* no partial card, or another writer removed it */ }
+}
+
+/** `card`: window → tokens → staged card → set file → card. Key ORDER in the
+ *  set is part of the contract: `at`, `nonce`, and `transcript` sit in the
+ *  first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`
+ *  (spec §3.3 step 2). `at` stays the hook's epoch-ms measurement; `nonce`
+ *  pairs a card to its set and owns every rollback seam. `parentLive`,
+ *  `liveAgents` and `served` are the hook's and are CARRIED; `steered` is
+ *  always false here — the hook stamps it after the print (Plan C), never the
+ *  helper. A refused slot throws, which `main` reports as exit 1. */
 export function cardCommand(o) {
   const graph = loadGraph(o.graph);
   const labels = loadLabels(o.labels);
@@ -456,18 +473,27 @@ export function cardCommand(o) {
   const re = tokenRegex(extensionsOf(graph.files));
   const tokens = mineTokens(win.text, re);
   const { files, stats } = workingSet(tokens, graph.index, o.cwd);
-  const mine = slotIsMine(o.set, o.at);
-  if (!mine) throw new Error(`set at ${o.set} is no longer this helper's slot`);
-  const set = { v: 1, at: o.at, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
-    parentLive: typeof mine.parentLive === 'boolean' ? mine.parentLive : null,
-    liveAgents: Number.isInteger(mine.liveAgents) ? mine.liveAgents : null,
-    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.served === true, files, stats };
-  writeAtomic(o.set, JSON.stringify(set) + '\n');
-  if (files.length === 0) return EXIT.EMPTY;
-  const text = renderCard(set, graph, labels, { maxChars: o.maxChars, maxFiles: o.maxFiles,
-    built: o.built, fresh: o.fresh, scope: o.scope, agent: o.agent ?? null });
-  if (!slotIsMine(o.set, o.at)) throw new Error(`set at ${o.set} changed hands before the card was written — slot taken`);
-  writeAtomic(o.out, `${o.at}\n${text}\n`);
+  const mine = ownedSlot(o.set, o.nonce);
+  if (!mine) throw new Error(`set ${o.set} is no longer this helper's slot`);
+  const set = { v: 1, at: o.at, nonce: o.nonce, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
+    parentLive: typeof mine.set.parentLive === 'boolean' ? mine.set.parentLive : null,
+    liveAgents: Number.isInteger(mine.set.liveAgents) ? mine.set.liveAgents : null,
+    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.set.served === true, files, stats };
+  // Rendering is intentionally complete before the helper first names a target.
+  const card = files.length === 0 ? null : `${o.nonce}\n${renderCard(set, graph, labels, {
+    maxChars: o.maxChars, maxFiles: o.maxFiles, built: o.built, fresh: o.fresh,
+    scope: o.scope, agent: o.agent ?? null })}\n`;
+  const write = o.writeAtomic ?? writeAtomic;
+  if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the set was written — slot taken`);
+  write(o.set, JSON.stringify(set) + '\n');
+  if (card === null) return EXIT.EMPTY;
+  try {
+    if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the card was written — slot taken`);
+    write(o.out, card);
+  } catch (error) {
+    rollbackCard(o.set, o.out, o.nonce, mine.text, write);
+    throw error;
+  }
   return EXIT.OK;
 }
 
@@ -489,7 +515,7 @@ export function parseArgs(argv) {
   return { cmd, opts };
 }
 
-const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'out', 'set', 'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at'];
+const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'out', 'set', 'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at', 'nonce'];
 
 function usage(msg) {
   process.stderr.write(`compact-card: ${msg}\n`);
@@ -508,10 +534,11 @@ export function main(argv) {
       const maxChars = Number(o.maxChars), maxFiles = Number(o.maxFiles), at = Number(o.at);
       if (!Number.isInteger(maxChars) || maxChars <= 0) return usage('--max-chars must be a positive integer');
       if (!Number.isInteger(maxFiles) || maxFiles <= 0) return usage('--max-files must be a positive integer');
-      if (!Number.isInteger(at) || at <= 0) return usage('--at must be the set\'s epoch-ms nonce');
+      if (!Number.isInteger(at) || at <= 0) return usage('--at must be epoch milliseconds');
+      if (typeof o.nonce !== 'string' || o.nonce === '') return usage('--nonce must be a nonempty string');
       return cardCommand({ transcript: o.transcript, cwd: o.cwd, graph: o.graph, labels: o.labels,
         out: o.out, set: o.set, maxChars, maxFiles, built: o.built, fresh: o.fresh,
-        scope: o.scope, agent: o.agent ?? null, at });
+        scope: o.scope, agent: o.agent ?? null, at, nonce: o.nonce });
     }
     if (p.cmd === 'measure') {
       if (o.trigger !== 'auto' && o.trigger !== 'manual') return usage('--trigger must be auto or manual');

@@ -34,16 +34,17 @@ export function loadLabels(labelsPath: string): Record<string, string>;
 export interface FileFacts { community: string | null; symbols: string[]; usedBy: string[] }
 export function fileFacts(file: string, graph: Graph, labels: Record<string, string>, workset: Set<string>): FileFacts;
 export interface CompactSet {
-  v: 1; at: number; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
+  v: 1; at: number; nonce: string; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
   parentLive: boolean | null; liveAgents: number | null;
   cwd: string | null; built: string | null; fresh: string | null; steered: boolean; served: boolean;
   files: SetFile[] | null; stats: SetStats | null;
 }
-export function slotIsMine(setPath: string, at: number): CompactSet | null;
+export function slotIsMine(setPath: string, nonce: string): CompactSet | null;
 export function renderCard(set: CompactSet & { files: SetFile[] }, graph: Graph, labels: Record<string, string>,
   opts: { maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent'; agent: string | null }): string;
 export function cardCommand(o: {
   transcript: string; cwd: string; graph: string; labels: string; out: string; set: string;
   maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent';
-  agent: string | null; at: number;
+  agent: string | null; at: number; nonce: string;
+  writeAtomic?: (target: string, text: string) => void;
 }): number;
