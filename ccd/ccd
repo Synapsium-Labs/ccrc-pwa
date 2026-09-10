@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=daba7da7b143bbf1f0f012230ea22ddbc6730855cfc85c39d6000e3b4fe93691
+# ccrc:generated 1 sha256=df65f8595bb7f52c6fb1b44908b030361fab2bf63da27b0b0bda931b0ba85895
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -949,13 +949,81 @@ SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
+# D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
+# On `--resume`, Claude Code classifies a tail whose last turn died in an API
+# error (a limit banner) as an interrupted turn, writes a META user prompt
+# ("Continue from where you left off.") and a synthetic "No response requested."
+# — and submits that prompt ONLY when CLAUDE_CODE_RESUME_INTERRUPTED_TURN is set.
+# Measured 2026-09-09: four rescued sessions, four idle landings, four manual
+# "resume" messages (spec §2). The value is the string "1", which is what Claude
+# Code's own runner sets for a respawned worker. It is a third-party flag, so it
+# ships with a measurement and a fallback: `_redrive_after_spawn` (D-2231).
+RESUME_INTERRUPTED_TURN=1
+# The prompt Claude Code submits. It starts with the sentence Claude Code's own
+# default uses (the PWA parser matches that prefix, shared/api.ts
+# RESUME_PROMPT_PREFIX) and then says what only ccd knows: the previous process
+# is gone, and with it every background task it owned. NO SINGLE QUOTE: the
+# string is single-quoted into the tmux command line (ccd-resume-flag.test.ts).
+RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this session (an account swap or a supervisor revival) after its previous process was stopped mid-turn, and the operator has not sent a new message since. Any background task, Workflow or subagent of the previous process is gone: re-check their journals and outputs, and re-verify anything time-sensitive (branch state, running processes, prior partial work) before continuing."
+# D-2230 — empty = no age cap on the re-drive (ruling R5). Set to a number of
+# milliseconds to make Claude Code suppress the re-drive of a turn older than that.
+RESUME_REDRIVE_MAX_AGE_MS=""
+REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
+REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts
-COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also skipped right after a swap)
+COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
+COMPACT_LANDING_WALL=80         # D-2014 — the ctx % at/above which the post-swap suppression stops
+                                # earning its veto.
+                                #
+                                # WHAT 80%+ IS NOT: proof that no landing compaction happened. An
+                                # earlier draft of this comment said exactly that, and the plan that
+                                # issued D-2014 falsifies it — its own incident table measures a
+                                # session climbing 45% -> 91.5% in NINE minutes, far inside this
+                                # gate's COMPACT_COOLDOWN window, so a session compacted on landing
+                                # to ~12% (measured 2026-09-08: 200,130 -> 25,164 tokens) can be
+                                # sitting at 80%+ here with the landing compaction having happened
+                                # exactly as the old premise assumed. Both worlds reach this line.
+                                #
+                                # WHAT IT IS: the reading that makes the veto not worth taking in
+                                # EITHER world. At 80%+ this session is near its wall NOW, and a
+                                # redundant compaction costs ~500s on the gpt lane against a wedge
+                                # measured at 80.7 minutes. On 2026-09-08 nine sessions landed on the
+                                # gpt lane at 12:12:59 and `calm-river` sat at 98% for thirty minutes
+                                # with no landing compaction in its transcript at all — that is the
+                                # case this exists for, and the gate does not need to know which case
+                                # it is in to decide correctly.
+                                #
+                                # BELOW this the conservative half survives untouched: a
+                                # freshly-landed session at a modest context is still left alone,
+                                # because the double-compaction the gate exists to prevent is the
+                                # likelier reading there and nothing is at risk while it is wrong.
+                                # NOT a second threshold on the compact decision — every gate below
+                                # COMPACT_THRESHOLD is unchanged; this only decides whether the
+                                # post-swap SUPPRESSION still applies.
+COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines about ONE session's
+                                # compact REFUSALS. THE NUMBER IS A JUDGEMENT; THE LOAD IT BOUNDS IS
+                                # THE MEASUREMENT. Measured: the supervisor ticks every 5s across ~20
+                                # sessions, so an unfloored note is 12 lines a minute per session and
+                                # ~240 across the fleet, into `$REG/swap.log` — a ~4,700-line file
+                                # humans read. 1800 is then chosen to match COMPACT_COOLDOWN, so a
+                                # refusal is said about as often as a compaction could be; no
+                                # experiment ranked it against 300 or 3600, and none is claimed.
+                                # See `_compact_note`, which separates the marker from this floor's
+                                # anchor the way `_strand_mark`/`_strand_clear` already do — without
+                                # that split a reason that FLAPS defeats the floor entirely (measured:
+                                # 10 alternating ticks wrote 10 lines, not 1).
+                                #
+                                # WHO READS `$REG/<id>.compactskip`: a human, off the registry, after
+                                # the fact. NOTHING in this tree reads it — not `server/src`,
+                                # `agent/src`, `shared` or `pwa/src` (measured 2026-09-08) — and it is
+                                # on no wire. It is a post-mortem breadcrumb standing beside
+                                # swap.log's floored line, nothing more. If it is ever promoted to a
+                                # wire field it needs a reader and the additive-only contract first.
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -1712,7 +1780,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   #
   # The dot-free claim, measured against every registry file a session has
   # today: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `swapblocked`, `uuid`,
@@ -12498,6 +12566,15 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   [[ -n "$obest" ]] && echo "$obest"
 }
 
+_pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
+  # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
+  # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
+  # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
+  # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
+  # injection, and the fallback re-drive — must not.
+  grep -qiE "continuing automatically|continuing shortly" <<<"$1"
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
@@ -12738,39 +12815,166 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
   printf '%s\n' "$1" | grep -aoiE 'ctx[^0-9]*[0-9]+%' | grep -oE '[0-9]+' | head -1
 }
 
+# D-2013 — WHY THE COMPACTOR DECLINED, said once rather than never or 240 times a minute.
+#
+# TWO REGISTRY FIELDS, and they are `_strand_mark`/`_strand_clear`'s shape for `_strand_mark`'s
+# reason — there the MARKER is `$REG/<id>.stranded` and the floor's anchor is
+# `$REG/<id>.strandnotify`, and `_strand_clear` removes the first while leaving the second:
+#
+#   • THE MARKER FOLLOWS THE TRUTH. `$REG/<id>.compactskip` is `<epoch> <reason>`, rewritten the
+#     moment the reason CHANGES so the registry always names the CURRENT refusal, and REMOVED by
+#     `_compact_note_clear` the moment the compactor stops declining. It is a fixed-size file
+#     that is overwritten, never appended, so following the truth costs nothing that grows.
+#     Its `<epoch>` is WHEN THIS REASON BECAME CURRENT (`stranded`'s own meaning) — not when it
+#     was last logged, which is what swap.log's line carries its own timestamp for.
+#   • THE ANCHOR OUTLIVES THE MARKER. `$REG/<id>.compactnote` is a bare epoch: WHEN WE LAST SAID
+#     IT OUT LOUD in `$REG/swap.log`, and nothing else. `_compact_note_clear` must not touch it.
+#
+# THE SPLIT IS THE MECHANISM, NOT THE TIDINESS, and it was measured. While the epoch lived in
+# `compactskip`'s first token, `_compact_note_clear` erased the floor's only anchor along with
+# the marker — so a reason that FLAPS defeated the floor completely: 10 alternating ticks of
+# `▓ ctx █░░░░░░░░░ 12%` (below threshold -> clear) and `? for shortcuts` (no ctx segment ->
+# note) wrote 10 swap.log lines, not 1, i.e. 6 a minute per session at the 5s tick. That flap is
+# the LIKELY shape, not a contrived one: it is D-2012's overlay hiding the statusline for a tick,
+# and 3 of 19 live panes render no `ctx` segment at all (measured 2026-09-08).
+#
+# ONLY THE LOG WAITS. `$REG/swap.log` is an append-only ~4,700-line file a human reads, and the
+# supervisor ticks every 5s across ~20 sessions. One line per session per COMPACT_NOTE_FLOOR is
+# the whole budget, and it now holds whether the reason is steady or flapping.
+#
+# REASONS ARE STABLE SLUGS, and the measured numbers ride in `$3` instead, so that comparing
+# "same reason?" is a string compare that does not flip every time a context percentage moves by
+# one point. The slug is what a future reader greps for; the detail is what tells them how bad it
+# was. Where two conditions need different remedies they get different SLUGS, not one slug with
+# two details — the field is what a reader has once the log line is floored away.
+_compact_note() {   # id reason [detail] — record why the compactor declined this tick.
+  local id="$1" reason="$2" detail="${3:-}" rec prev nts now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" compactskip)
+  prev="${rec#* }"; [[ "$rec" == "$prev" ]] && prev=""   # one-token (or empty): no reason half
+  # The marker, unfloored: a CHANGED reason is written this tick even when the log stays quiet.
+  [[ "$prev" == "$reason" ]] || _reg_set "$id" compactskip "$now $reason"
+  # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]` so `&&` short-circuits before the
+  # arithmetic ever sees a torn or hand-edited field — D-299's class, the same shape as the
+  # `strandnotify` floor in `_strand_mark` and the two cooldowns in `_auto_compact_check`.
+  nts=$(_reg_get "$id" compactnote)
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" compactnote "$now"
+  echo "$(date '+%F %T') compact-skip $id: $reason${detail:+ ($detail)}" >> "$REG/swap.log"
+  return 0
+}
+
+_compact_note_clear() {   # id — the compactor is no longer declining, so the MARKER must not
+  # outlive the condition it describes. A stale `mid-turn` read as current is the same class of
+  # lie D-2012 names on the server side.
+  #
+  # `$REG/<id>.compactnote` — the log floor's anchor — IS DELIBERATELY LEFT STANDING, and that
+  # is the whole of the fix measured in the header above: clearing it here is what let an
+  # alternating reason write a line every tick. It costs one stale epoch per session, which the
+  # floor reads as "we spoke recently" and nothing else reads at all.
+  #
+  # Silent by construction (the `-e` test, `_strand_clear`'s own reason): ~20 sessions x 12
+  # ticks a minute is the real load, and a clear that logged would be the spam the floor exists
+  # to prevent.
+  [[ -e "$REG/$1.compactskip" ]] && rm -f -- "$REG/$1.compactskip"
+  return 0
+}
+
 _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
   # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
   # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  #
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
+  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
+  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
+  # this session at all" or "this session is over its threshold and we are declining anyway" —
+  # the two shapes that were silent, and the second is the one that matters.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap pane pct wrapper spid sf st sua t cur
+  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t cur
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  lastswap=$(_reg_get "$id" lastswap)   # a swap landing already compacted from summary — don't double up
-  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
-  [[ -n "$pane" ]] || return 0
-  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || return 0
-  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || return 0
+  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
+  # outright on the premise that "a swap landing already compacted from summary". It records a
+  # FLAG instead, and the premise is tested against the pane's own context reading below, once
+  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
+  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
+  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
+  lastswap=$(_reg_get "$id" lastswap)
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
+  # D-2013/D-2014 — THREE CONDITIONS, THREE REASONS, AND THE FIRST TWO ARE MEASURED RATHER THAN
+  # NAMED. "tmux could not be asked" (dead pane, wedged server — the context is UNMEASURED and the
+  # remedy is to go look at the substrate) is a different fact from "tmux answered and the pane is
+  # blank" (it is there and empty — wait, or look at the session). `_auto_compact_check` runs ONLY
+  # under `PROBE_VERDICT == live` (see `_supervise_loop`), so the blank answer is the LIKELIER of
+  # the two, and one slug naming a wedged tmux server would send the operator after a fault that is
+  # not there. The old code recorded neither: it tested `-n "$pane"` alone and returned silently.
+  #
+  # THE PIPELINE ALREADY CARRIES TMUX'S STATUS — line 9 sets `pipefail`, so `$?` after
+  # `tmux … | tail -8` is tmux's rc, not tail's. MEASURED: `set -uo pipefail; f(){ return 3; };
+  # x=$(f | tail -8); echo $?` prints 3. An earlier cut of this fix split the capture across two
+  # statements to "recover" a status the pipeline had never lost — and that reshaping silently
+  # WIDENED the window every gate below reads. `$( )` strips trailing newlines, so capturing first
+  # and piping second makes `tail -8` take 8 lines of CONTENT where it used to take the last 8 pane
+  # ROWS: with 12 content rows and 4 trailing blank rows, 4 lines before, 8 after. That is not
+  # cosmetic. `grep -q "esc to interrupt"` then matches a stale banner further up (a false mid-turn
+  # refusal — the session never compacts), and `grep -q "❯"` matches an older prompt line while a
+  # dialog is up, which is how `/compact` gets typed into a menu. KEEP THE PIPELINE ON ONE LINE;
+  # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
+  #
+  # The third is `no-ctx-segment`: the pane was read fine and its statusline does not publish the
+  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
+  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
+  [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
+  [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
+  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
+  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
+  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
+  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
+  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
+  # constant, which says exactly what 80%+ does and does not establish about the landing.
+  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
+    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
-  echo "$pane" | grep -q "esc to interrupt" && return 0     # mid-turn
-  echo "$pane" | grep -q "❯" || return 0                     # not at a prompt yet
+  echo "$pane" | grep -q "esc to interrupt" && { _compact_note "$id" mid-turn "ctx ${pct}%"; return 0; }
+  echo "$pane" | grep -q "❯" || { _compact_note "$id" no-prompt "ctx ${pct}%"; return 0; }
   wrapper=$(_reg_get "$id" wrapper)
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
+  # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
+  # which is the same collapse one seam over — the detail is floored out of swap.log after the
+  # first line, and the FIELD is then all a reader has. An empty `$st` is not a status: tmux may
+  # have answered no pane pid, `$spid` may name another process, `_cfg_dir "$wrapper"` may be the
+  # wrong config directory, and the file may be absent or carry no `status` token. Every one of
+  # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
+  # detail carries the path/status that says which flavour it is.
+  [[ -n "$spid" ]] || { _compact_note "$id" no-pane-pid "tmux list-panes named no pane pid, ctx ${pct}%"; return 0; }
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ "$st" == "idle" ]] || return 0
+  [[ -n "$st" ]] || { _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0; }
+  [[ "$st" == "idle" ]] || { _compact_note "$id" not-idle "status=$st ctx ${pct}%"; return 0; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
-  # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition).
+  # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
+  # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
+  # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] || return 0
+  [[ "$sua" =~ ^[0-9]+$ ]] || { _compact_note "$id" quiet-unmeasured "no statusUpdatedAt in $sf, ctx ${pct}%"; return 0; }
+  [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
+    || { _compact_note "$id" not-quiet "ctx ${pct}%"; return 0; }
   # Don't clobber a half-typed message in the input box. `-e`: the reader needs
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
   cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && return 0
+  [[ -n "$cur" ]] && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+  # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
+  # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
+  # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
+  # the registry says must not depend on whether tmux answered.
+  _compact_note_clear "$id"
   _reg_set "$id" lastcompact "$now"
   echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
@@ -13162,6 +13366,12 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 # safe value — full fidelity, per the failure direction below.
 SPAWN_FROMSWAP=0
 
+_resume_env() {   # -> one line of KEY=value assignments for `env`, switching on Claude Code's interrupted-turn resume (D-2227)
+  local out="CLAUDE_CODE_RESUME_INTERRUPTED_TURN=$RESUME_INTERRUPTED_TURN CLAUDE_CODE_RESUME_PROMPT='$RESUME_PROMPT'"
+  [[ -n "$RESUME_REDRIVE_MAX_AGE_MS" ]] && out="$out CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=$RESUME_REDRIVE_MAX_AGE_MS"
+  printf '%s' "$out"
+}
+
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -13178,7 +13388,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -13220,6 +13430,13 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
   _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
+  # non-home-able lane the vars `_resume_env` composes are simply inert (the
+  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
+  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
+  # which only ever names a Claude Code JSONL) fails closed there regardless —
+  # so gating this line would buy nothing and cost a second home-ability check.
+  resenv=$(_resume_env)
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -13227,7 +13444,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -13268,7 +13485,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -13359,6 +13576,16 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
   _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  # D-2231 — after the effort injection, so its local-command chatter is already
+  # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
+  # (a keystroke there is the swap's job), rc 2 is a login screen.
+  #
+  # UNGATED on home-ability, unlike `_inject_spawn_effort` above — deliberately:
+  # a non-home-able lane never has `_resume_env`'s flag set, so its transcript
+  # never carries the resume pair `_transcript_stalled_pair` looks for, and the
+  # measurement fails closed (rc 1, not-stalled) rather than needing a second
+  # home-ability check here to reach the same silence.
+  [[ "$prompt_rc" == 0 ]] && _redrive_after_spawn "$id" "$tname" "$fromswap"
   return "$prompt_rc"
 }
 
@@ -13384,6 +13611,9 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
   local t="$1" cur
+  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
+    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+  fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
@@ -13397,6 +13627,87 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
     tmux send-keys -t "$t" Enter
   fi
+  return 0
+}
+
+_transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is the unsubmitted resume pair | 1 not | 2 unreadable (D-2231)
+  # THE MEASUREMENT BEHIND THE FLAG. Claude Code's `--resume` writes a META user
+  # "Continue from where you left off." and a synthetic "No response requested."
+  # and, without CLAUDE_CODE_RESUME_INTERRUPTED_TURN, stops there. A tail whose
+  # newest user/assistant rows are exactly that pair — local-command chatter,
+  # system rows and attachments after it do not count — is a stall. Anything
+  # else after the pair (a real reply, a human prompt) means someone drove it.
+  # Only `"type":"user"`/`"type":"assistant"` rows are read; a false hit on that
+  # substring inside quoted content can only break the pair, i.e. read "not
+  # stalled" — the status quo, never a spurious keystroke.
+  local f="$1" line state=0
+  [[ -r "$f" ]] || return 2
+  while IFS= read -r line; do
+    [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
+    if [[ "$line" == *'"isMeta":true'* && "$line" == *'Continue from where you left off.'* ]]; then state=1; continue; fi
+    if [[ "$state" -eq 1 && "$line" == *'"model":"<synthetic>"'* && "$line" == *'No response requested.'* ]]; then state=2; continue; fi
+    if [[ "$state" -eq 2 ]]; then
+      case "$line" in *'<local-command-caveat>'*|*'<command-name>'*|*'<local-command-stdout>'*) continue ;; esac
+    fi
+    state=0
+  done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
+  [[ "$state" -eq 2 ]]
+}
+
+_redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
+  # catch the redrive flag itself failing (rc 1 the pair is not on disk, rc 2 the transcript is
+  # unreadable) used to stand `_redrive_after_spawn` down with zero swap.log evidence. Logged ONLY
+  # on a swap landing (`fromswap`, threaded from `_spawn_settle`'s own positional) — an ordinary
+  # new spawn also carries CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 but writes no pair, so rc 1 there
+  # is the routine case, not news.
+  local id="$1" fromswap="$2" rc="$3" f="$4"
+  [[ "$fromswap" == 1 ]] || return 0
+  case "$rc" in
+    1) echo "$(date '+%F %T') redrive-skip $id: not-stalled" >> "$REG/swap.log" ;;
+    2) echo "$(date '+%F %T') redrive-skip $id: no transcript at $f" >> "$REG/swap.log" ;;
+  esac
+}
+
+_redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume prompt when the flag wrote the pair and drove nothing.
+  # Measured on the TRANSCRIPT, not on hookstate (D-2237): `working` proves tool
+  # calls, not that the re-drive took. Gives Claude Code REDRIVE_WAIT_S seconds
+  # first — a running turn ("esc to interrupt") or a real row after the pair ends
+  # the wait — then stands down on an armed auto-continue, a hard-blocked pane
+  # or a draft in the box, each with its own swap.log line.
+  #
+  # PANE WINDOW IS `tail -8`, EVERYWHERE BELOW BUT `_pane_box_draft` (D-2264).
+  # Every other established consumer of `esc to interrupt`/`_pane_auto_continue_armed`/
+  # `_pane_hard_blocked` narrows first — `_auto_swap_check` (ccd:12715) and `_auto_compact_check`
+  # (ccd:12929) both `| tail -8` — and ccd:12915-12924 already documents why: a full ~50-row
+  # capture lets `grep -q "esc to interrupt"` match a STALE banner further up the scrollback, and
+  # `_pane_hard_blocked`'s `limit reached|API Error: 429|rate limit` alternation is exactly what a
+  # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
+  # outside the last 8 lines while still being well inside a full capture, so widening this
+  # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_draft` alone keeps the
+  # full `-e` capture: it already reads only the LAST `❯` line, so a wider window costs it nothing.
+  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane cur
+  f=$(_transcript_path "$id") || return 0
+  for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
+    _transcript_stalled_pair "$f"; rc=$?
+    [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+    echo "$pane" | grep -q "esc to interrupt" && return 0
+    sleep 1
+  done
+  # Re-measure both loop conditions once more: the loop's own last check was one
+  # second ago, and Claude Code's own re-drive (or the operator) can start a turn
+  # in that gap. Typing into a turn that started here would be exactly the
+  # spurious keystroke the header comment promises never happens (D-2263).
+  _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
+  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  echo "$pane" | grep -q "esc to interrupt" && return 0
+  _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
+  _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  [[ -n "$cur" ]] && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  tmux send-keys -t "$t" -l "$RESUME_PROMPT"; sleep 1; tmux send-keys -t "$t" Enter
   return 0
 }
 

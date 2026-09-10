@@ -537,12 +537,12 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the nineteen machine lanes the
-fleet host reaches (eighteen box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-two machine lanes the
+fleet host reaches (twenty-one box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+`/api/lifecycle`, `/api/peers`, `/api/claims`, `/api/asks`) take a live session cookie **or**
 the token, which is how a coordinator reads its own wave ledger from the fleet
 host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
@@ -928,6 +928,35 @@ session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
 
+### A restart re-drives the turn it interrupted (D-2226)
+
+A usage-limit rescue is a `ccd swap`: the unit stops, the transcript is carried, the destination
+runs `<wrapper> --resume '<uuid>'`. Claude Code's own recovery for a limit — "Usage limit reached ·
+continuing automatically at HH:MM" — is an in-memory timer and dies with the old process. On the
+resume, Claude Code writes a META "Continue from where you left off." and a synthetic "No response
+requested." and submits the prompt **only** when `CLAUDE_CODE_RESUME_INTERRUPTED_TURN` is set.
+Before 2026-09-09 ccd never set it, so every rescue landed idle until a human typed (spec
+`docs/superpowers/specs/2026-09-09-post-swap-redrive-design.md`, four of four sessions measured).
+
+Now, on every spawn, `_spawn_start` exports that flag plus a ccd-authored `CLAUDE_CODE_RESUME_PROMPT`
+(`RESUME_PROMPT`, telling the model its previous process and every background task it owned are
+gone). Because the flag is a third-party default, `_spawn_settle` **measures** the landing:
+`_transcript_stalled_pair` reads the transcript tail, and if the newest real turn is still that
+unsubmitted pair after `REDRIVE_WAIT_S`, `_redrive_after_spawn` types the prompt itself and writes
+`redrive <id>: …` to `swap.log` (`redrive-skip` when the box holds a draft, the pane is
+hard-blocked, or an auto-continue is armed). Hookstate is not the measurement: `working` proves tool
+calls, not that the re-drive took.
+
+The one thing ccd must never do is cancel Claude Code's armed auto-continue with a keystroke.
+`_pane_auto_continue_armed` ("continuing automatically" / "continuing shortly") gates the compactor
+(`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
+arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
+pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
+message to resume"; the server parser keys on the structural markers — `isMeta` for the prompt
+line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
+(`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
+starting with that prefix, and nothing scans for it.
+
 ### One memory store per project: `ccrc memory`
 
 **A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
@@ -1239,7 +1268,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twelve clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
 `server/test/worker-skill.test.ts`), which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
@@ -1420,10 +1449,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its ten
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eleven
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twelve clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1664,7 +1693,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never

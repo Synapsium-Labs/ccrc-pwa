@@ -9,11 +9,12 @@
 // `=~ ^[0-9]+$` placed FIRST inside the same `[[ ]]` guards, because that is
 // what makes `&&` short-circuit before the arithmetic operand is evaluated.
 //
-// THREAT MODEL — say it plainly, as the commit does. None of the six swept
+// THREAT MODEL — say it plainly, as the commit does. None of the seven swept
 // sites is wire-reachable: the fields they read (`lastswap`, `lastcompact`,
-// `strandnotify`) are written only by ccd's own `_reg_set` from `$(date +%s)`
-// — `strandnotify` has exactly one writer, `_strand_mark` (wave 2b), and no
-// wire route reaches it either, so it is the same defence-in-depth class as
+// `strandnotify`, `compactnote`) are written only by ccd's own `_reg_set` from
+// `$(date +%s)` — `strandnotify` has exactly one writer, `_strand_mark` (wave
+// 2b), and `compactnote` exactly one, `_compact_note` (D-2013), and no wire
+// route reaches either, so they are the same defence-in-depth class as
 // the other five, not a new exposure — and `SWAP_JITTER` is agent-set env,
 // not wire-set. Exploiting one already needs write access to
 // `~/.cc-sessions` as the fleet UNIX user. This is defence in depth against a
@@ -104,6 +105,23 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.cleanup();
   });
 
+  it('_compact_note does not evaluate a payload planted in compactnote', () => {
+    const h = makeCcdHarness('arith-compactnote');
+    // D-2013's FLOOR ANCHOR, and the payload is planted where the arithmetic
+    // actually reads. Until fix round B the epoch was the first token of
+    // `compactskip` and this test planted it there; the flap fix separated the
+    // marker from the anchor (`_strand_mark`/`_strand_clear`'s shape), so
+    // `compactskip` is now compared as a STRING and never as a number, and
+    // `compactnote` is the bare epoch `$((now - nts))` evaluates. A payload
+    // left in `compactskip` would prove nothing — the same trap this file's
+    // SWAP_JITTER note describes.
+    h.sh(
+      " _reg_set myid compactnote 'REG[$(touch \"$HOME/PWNED-note\")]';"
+      + ' _compact_note myid mid-turn');
+    expect(existsSync(path.join(h.home, 'PWNED-note'))).toBe(false);
+    h.cleanup();
+  });
+
   it('_strand_mark does not evaluate a payload planted in strandnotify', () => {
     const h = makeCcdHarness('arith-strand');
     // The banner floor reads `strandnotify` as an arithmetic operand. A torn or
@@ -147,10 +165,11 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_spawn_start (fromswap)',                anchors: ['- lastswap ))', '-lt 300'],            arith: '$((' },
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
+    { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
   ];
   const codeLines = readFileSync(CCD, 'utf8').split('\n')
     .map((line) => line.trim())
-    .filter((line) => line.startsWith('[['));   // the six sites are all `[[ … ]]` guards, never comments
+    .filter((line) => line.startsWith('[['));   // the seven sites are all `[[ … ]]` guards, never comments
 
   for (const site of SITES) {
     it(`${site.fn} carries =~ ^[0-9] before its arithmetic`, () => {
