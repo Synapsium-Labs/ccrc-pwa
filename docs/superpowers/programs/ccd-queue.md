@@ -71,3 +71,27 @@ sentence now points at D-2475 rather than being rewritten — the per-group find
 **What this changes for dispatch.** The brief is unchanged and still measures inside both ceilings.
 Run 42 remains `planned` and now waits on ONE thing, capacity, not two. The worker will be told to
 derive the census itself and navigate by symbol; it must not carry a total out of the plan.
+
+## 23:3x UTC — a slot freed and I am STILL not dispatching, for a reason the cap was hiding
+
+Capacity dropped to 6 of 7, so the blocker I recorded two entries ago is gone. Run 42 stays `planned`
+anyway, on two grounds, and the second one only became visible once the first stopped masking it.
+
+**1. The corrected plan is on a branch the worker would never read.** D-2475 corrected Part D's
+headline and its mutation table on `ws/amber-summit`. A dispatched worker cuts its workspace from
+`origin/main`, where the plan still says **twelve guard sites** and still carries the drifted line
+anchors. Dispatching now would hand a worker the exact document I just ruled wrong, and the brief
+saying otherwise does not help: the plan is what a worker executes task-by-task, and a brief that
+contradicts its own plan is the coordinator asking someone to hold two stories at once. The
+correction has to reach `main` first — which puts it behind the same review-approval gate #81 is
+stuck on, so it is one blocker, not two.
+
+**2. The last slot belongs to the primary program.** account-pools wave 5/6 is the next dispatch on
+this fleet's critical path. Opening it costs nothing (`planned` rows are not counted), but
+dispatching it needs a slot, and the handoff is tight: open wave 5, close run 35 to free
+`clear-meadow`, dispatch wave 5. Spending the one free slot on the secondary program before that
+sequence runs would be me creating the cap refusal I complained about two entries ago.
+
+**Standing position, so the next reader does not have to re-derive it:** run 42 dispatches when the
+Part D correction is on `main` AND the account-pools wave-5 handoff has taken its slot — in that
+order. The brief and its 25 items are unchanged and still measure inside both ceilings.
