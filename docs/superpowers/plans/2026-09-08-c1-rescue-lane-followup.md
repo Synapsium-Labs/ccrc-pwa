@@ -1,6 +1,6 @@
 # C1 follow-up — the guards straddled the rescue lane (#67 review)
 
-**Base:** `origin/main` `db580771` (#67, C1). Branch `ws/clear-meadow`.
+**Base:** `origin/main` `db580771` (#67, C1). Branch `fix/c1-rescue-lane`.
 **Why this exists:** the coordinator's review of #67 finished AFTER the merge and found six survivors,
 one of which is a REGRESSION now on `main`.
 
@@ -21,7 +21,7 @@ sweep ran**: every supervisor start time is AFTER the install, so the running pr
 inode and C1 is EXECUTING on the box, not merely installed. That distinction is the one the embargo
 paragraph was rewritten to make (D-2034) — `grep -n 'EMBARGO IT CARRIED' ccd/ccd`, by anchor rather than
 by number, because this sentence said `:14876` while D-2034's own entry said `:14766` and the paragraph
-has since moved twice more. Two line numbers sixty lines apart for one rewrite, in one document, is not
+has since moved twice more. Two line numbers for one rewrite, in one document, is not
 a citation. It is the criterion D-1999 states — so the embargo is genuinely lifted, by the refined
 criterion rather than the loose one.
 
@@ -40,8 +40,10 @@ band, one tick of permission trouble. A five-second tick lives in the transient.
 2), D-2194–D-2207 (round 3), D-2212–D-2219 (round 3's #70 merge pass) and
 D-2254–D-2261 (round 4), D-2283–D-2309 (round 5, the coordinator's round-4 gate) and
 D-2312–D-2326 (round 5's own refute pass), D-2339–D-2341 (round 5's merge gate) and D-2343–D-2347
-(the #73 merge's refute pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
-sentence claimed only the first band for two rounds while the file went on defining two more below it —
+(the #73 merge's refute pass) and D-2348 (the hunk-header rule, booked by the coordinator and
+rewritten here after its own refute pass). Every number is defined here and nowhere else.
+**CORRECTED twice:** this sentence claimed only the first band for two rounds while the file went
+on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
 
@@ -182,9 +184,11 @@ the check that caught mutation 4 of Task 3 landing on the wrong function earlier
   carry) are NOT chased, per its instruction, and its reasoning was read at the cited lines.
 - The `.project` fold (D-2000, defined in the C1 plan) was widened as **D-2009**, and **D-2017** is
   cited above in D-2035's own prose. Neither number is DEFINED on any ref this PR merges into:
-  `git grep -n 'D-2009\|D-2017' origin/main` returns nothing, and both entries live only on the
-  unmerged `ws/clear-meadow` wave-3 plan. **CORRECTED TWICE (round 3, D-2206).** Round 1 filed the
-  dangling reference; round 2 "fixed" it by naming
+  `git grep -n 'D-2009\|D-2017' origin/main --
+  ':!docs/superpowers/plans/2026-09-08-c1-rescue-lane-followup.md'` returns nothing (the citing file
+  now matches itself on `main`, so it has to be excluded), and both entries live only on the unmerged
+  `ws/clear-meadow` wave-3 plan. **CORRECTED TWICE (round 3, D-2206).** Round 1 filed the dangling
+  reference; round 2 "fixed" it by naming
   `docs/superpowers/plans/2026-09-05-account-pools-wave3-server.md` as the home — a file that exists on
   `origin/main` and contains neither number — which turned a repo-wide dead end into a directed one,
   and left D-2017 untouched. `deviation-refs.test.ts` is green throughout: it scans for COLLISIONS and
@@ -356,8 +360,9 @@ had their remedies corrected.** Deviations D-2155–D-2162.
   cases stay green on it**, so it is a defect the mutation table cannot see.
 
   NO FIX — **and now DISCLOSED at the site**, which the first ruling omitted. This file's convention is
-  that an accepted cost is written where it is paid (`grep -ci disclosed ccd/ccd` = 49); a NO FIX whose
-  disclosure lives only in a plan is a decision the next reader of the code cannot see.
+  that an accepted cost is written where it is paid (`grep -ci disclosed ccd/ccd` is the census, and
+  it moves every round); a NO FIX whose disclosure lives only in a plan is a decision the next
+  reader of the code cannot see.
 
 ### Corrections carried in the same round, without their own numbers
 
@@ -513,7 +518,8 @@ one of the survivors was itself caught by an existing test while being written (
   it: "a count is a measurement or it is decoration."** Re-measured in full above, in that entry. The
   refutation stands on a better ground the entry never stated — the ceiling, not the doubling — and the
   first re-measurement's replacement mechanism ("the CORRELATED case") was itself false and is gone.
-  The NO FIX is now disclosed at the site in `ccd/ccd`, in the idiom this file already uses 49 times.
+  The NO FIX is now disclosed at the site in `ccd/ccd`, in the idiom this file already uses throughout
+  (`grep -ci disclosed ccd/ccd`).
 - **D-2205 (2026-09-09)** — **the sentence licensing a change to every `_reg_get` call site was false,
   and the case written to pin it certified a history that did not happen.** The comment said every
   enumerated input answers "rc 1 either way" and named `/dev/null` among the five; `cat /dev/null`
@@ -529,8 +535,9 @@ one of the survivors was itself caught by an existing test while being written (
 - **D-2206 (2026-09-09)** — **the misattribution sweep, and it is the third round running that one of
   these was a failed CORRECTION rather than fresh drift.** (a) The `-eq 2` navigation note: round 2
   deleted its closing sentence and left its premise, so the paragraph asserted P three lines above ¬P —
-  `_auto_swap_check` tests `-eq 2` twice, and the `prc` it tests is the one assigned by the very
-  `_pool_ok` call the sentence named as testing only `-eq 1`. Rewritten, not appended to. (b) The
+  `_auto_swap_check` tests `-eq 2` on `prc`, and the `prc` it tests is the one assigned by the
+  `aff_verb` `_pool_ok` call the sentence named as testing only `-eq 1`. Rewritten, not appended
+  to. (b) The
   D-2009 "correction" named a file containing no D-2009 on any ref this PR merges into, and D-2017 was
   never touched — both retracted above. (c) The `_pool_ok` census attributed its new prose mention to
   `_swap_target`'s candidate loop; the line is in `_auto_swap_check`, and the candidate-loop paragraph
@@ -827,11 +834,14 @@ guard, unreachable line, or a mutation that never applied — and the control is
   `cmd_start`/`cmd_enable` still read `.project` through `_reg_get`; an unreadable field folds to `""`,
   `_project_pool_state ""` answers `untagged` at its first line, and `untagged` permits everything — so
   the pool block decided "in pool" and said nothing. The gate says "both the die and the warn go
-  silent". **The die is unreachable from that read:** it is creation-only (`-z "$regw"`), and this read
-  runs only on the id form, where an empty `regw` has already died at `no wrapper recorded for '$id'
-  and none given`. What the fold silenced is the WARNING. The remedy is therefore a warning, for the
-  same reason ruling 5 gives the mismatch one — a revival must not be refused for a placement the
-  auto-swapper moves at the next idle boundary — and it carries `! _pool_untaggable` like the two dies.
+  silent".
+  **The die is unreachable from that read:** it sits on the `-z "$regw"` arm, which is non-empty on
+  every path that reaches this read (D-2317 retracts "creation-only" as the name for that test), and
+  this read runs only on the id form, where an empty `regw` has already died at `no wrapper recorded
+  for '$id' and none given`. What the fold silenced is the WARNING. The remedy is therefore a
+  warning, for the same reason ruling 5 gives the mismatch one — a revival must not be refused for a
+  placement the auto-swapper moves at the next idle boundary — and it carries `! _pool_untaggable`
+  like the two dies.
 - **D-2286 (2026-09-09)** — **"ONE MAPPING … cannot drift apart" was a claim written above the drift.**
   `_tick_strand_undecidable` built its own sentence, `"<word> could not be measured…"`, while the late
   path rendered the same condition through `_undecidable_cause`. Its two call sites are the tick's
@@ -886,17 +896,19 @@ guard, unreachable line, or a mutation that never applied — and the control is
   lines quoting the format. `~/.ccrc/accounts.sh` and the wrappers are generated at deploy time from
   bodies that never contain the prefix and are never merged.
 - **D-2296 (2026-09-09)** — **the `_reg_get` census: five statements of one number, four of them
-  stale, and the stale ones first.** It has moved four times in five rounds — 133 at C1, 135 once this
-  branch and the #70 merge had added sites, 133 when round 3 converted the two tick `.project` reads,
-  **132** when rounds 4 and 5 converted the three verb readers. Round 4's own delta falsified it in
+  stale, and the stale ones first.** Delete the enumeration and point at the one place that owns it:
+  the dated list in `ccd/ccd`'s `_reg_get` census block records each move with the ref it was measured
+  at — no chain restated here. Round 4's own delta falsified it in
   four places while the block was byte-unchanged, which is how a number goes stale without anyone
   editing it. "Re-measure it" was a REQUEST; `ccd-reg-get-census.test.ts` is the MECHANISM, reading the
   sentence's own two numbers out of the file and comparing each to what the sentence says it counted —
   the shape `ccd-pool-ok.test.ts` has carried for the `_pool_ok` header through the same five rounds
   without going stale once. The four arguments above it now say "every call site"; a second case
-  refuses any new three-digit cardinal in that block. One number, one place, one test.
+  refuses a restated figure near the census (the band and the reason are in
+  `ccd-reg-get-census.test.ts`'s own comment). One number, one place, one test.
 - **D-2297 (2026-09-09)** — **the "corrected" `mkdir` anchor was still wrong, in both directions.**
-  Round 4 replaced `grep -n 'mkdir -p "$POOLS_DIR"'` (zero hits) with `grep -n 'mkdir -p --'`, which
+  Round 4 replaced `grep -n 'mkdir -p "$POOLS_DIR"'` (one hit, its own citation — measured at
+  `391b3e1f`) with `grep -n 'mkdir -p --'`, which
   returns FOUR: the `$POOLS_DIR` call, its own citation, and two `_LC_DIR` mkdirs that are not pools
   paths at all — a four-hit command offered as proof of a one-site claim. The anchor now names
   `$POOLS_DIR` and carries the `grep -vE '^[0-9]+:[[:space:]]*#'` filter this file already uses twice
@@ -904,9 +916,11 @@ guard, unreachable line, or a mutation that never applied — and the control is
 - **D-2298 (2026-09-09)** — **the third present-tense claim about wave 3's reader, inside the round
   that removes them.** `_undecidable_cause`'s new header said `SessionRecord.stranded.reason` reaches
   "every ccrc surface" today; `git grep -c stranded server/src/registry.ts` is **0** on `origin/main`
-  and on the PR branch (17 on `ws/clear-meadow`, which is a different tree). D-2201 removed this exact
-  claim twice. Three more instances went with it: `_strand_mark`'s `STRANDED_UNREADABLE` — a constant
-  `grep -rn` finds nowhere in the tree — its `fleet.ts` ships that number clause, and the compact
+  and on the PR branch (non-zero only on `ws/clear-meadow`, which is a different tree — `git grep -c
+  stranded ws/clear-meadow -- server/src/registry.ts`). D-2201 removed this exact claim twice.
+  Three more instances went with it: `_strand_mark`'s `STRANDED_UNREADABLE` — a constant
+  `grep -rn 'STRANDED_UNREADABLE' --include='*.ts' .` finds nowhere in the tree — its `fleet.ts` ships
+  that number clause, and the compact
   lane's `stranded.at` is shipped. All four are future tense now, and the fail-shut is stated as a
   REQUIREMENT this branch places on that reader rather than a measurement of one that exists.
 - **D-2299 (2026-09-09)** — **an enumeration falsified by the entry added directly below it.**
@@ -991,9 +1005,11 @@ guard, unreachable line, or a mutation that never applied — and the control is
 ### Mutation table — round 5
 
 Every guard this round shipped, mutated one at a time against the ccd+pools set — 11 files / 362 at
-the head for M1–M11, and `ccd-crosspool.test.ts` + `ccd-reg-get-census.test.ts` (120 at the head) for
-M13–M17, which are about files that set does not contain. Stated because the first cut of this table
-quoted one set for rows measured on two (#69 review round 5, its own refute pass). The two GREEN rows are the findings; the RED control on the byte-identical sibling is what makes
+the head for M1–M11, `ownership.test.ts` (14 cases at the head) for M12, and `ccd-crosspool.test.ts` +
+`ccd-reg-get-census.test.ts` (120 at the head) for M13–M17, which are about files that set does not
+contain. Stated because the first cut of this table
+quoted one set for rows measured on two (#69 review round 5, its own refute pass). The rows whose
+pre-state is GREEN are the findings; the RED control on the byte-identical sibling is what makes
 the first one a finding rather than "nothing covers this area".
 
 | # | mutation | measured |
@@ -1002,15 +1018,15 @@ the first one a finding rather than "nothing covers this area".
 | M2 | `cmd_prefer`'s `! _pool_untaggable` dropped | GREEN 354 before → **RED** `and an UNTAGGABLE box still PREFERS` |
 | M2c | the byte-identical text dropped at `cmd_swap` — the CONTROL | **RED** `but an UNTAGGABLE box still swaps` (already) |
 | M3 | `cmd_start`'s read reverted to `_reg_get` | **RED** `cmd_start on the id form SAYS the project field could not be read` |
-| M4 | `_tick_strand_undecidable` builds its own sentence again | **RED ×5**, incl. three pre-existing cases |
-| M5 | the `wrapper` arm deleted from `_undecidable_cause` | **RED ×3** — the fold lands in `*` |
+| M4 | `_tick_strand_undecidable` builds its own sentence again | **RED** at every case asserting a `.stranded` sentence — crosspool + auto-swap-pool, control green |
+| M5 | the `wrapper` arm deleted from `_undecidable_cause` | **RED** at every case naming the account field — the fold lands in `*` — control green |
 | M6 | `$2`/`$3` swapped at the call site | GREEN 213 before → **RED ×2** |
 | M7 | the `home` arm deleted | **RED** `the home arm is reachable` |
 | M8 | `-x "$REG"` dropped from `_pool_untaggable` | **RED** `it never licenses a guess` |
 | M9 | `-d "$REG"` dropped | GREEN with the 0644 fixture → **RED** with 0755 |
 | M11 | the compact lane's status guard deleted | 600 s no output + SIGKILL before → **RED in 5.3 s** |
 | M12 | a second `# ccrc:generated` line replanted and re-stamped | `markers=2 verdict=ccrc-unmodified`, 13/13 green before → **RED**, 1 of 14 |
-| M13 | the census sentence's stated number changed | **RED** — both census cases |
+| M13 | the census sentence's stated number changed | **RED** — the first census case only; the second derives from that same sentence (D-2319) and tracks the change |
 | M14 | a cardinal restated in the census block | **RED** `one number, one place` |
 | M15 | the `wrapper` arm's verb reverted to "could not be read" | **RED ×4** — incl. the three-condition case |
 | M16 | `_strand_mark`'s torn-epoch fallback deleted | GREEN before → **RED** `a TORN epoch … degrades to now` |
@@ -1032,7 +1048,7 @@ Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six 
 `_tick_decided` call sites to prove which clear the new case actually rides.
 
 - **D-2312 (2026-09-09)** — **a self-counting anchor, in the paragraph that exists to stop one, 118
-  lines from the entry correcting one.** The fold's new header offered
+  lines from the entry correcting one at `47824849`.** The fold's new header offered
   `grep -n 'could not be computed' ccd/ccd` as "the census" proving every sentence producer routes
   through `_undecidable_cause`. It returns exactly ONE line — its own citation — because every arm ends
   "so no destination could **be** computed", never "could **not** be". Zero real hits for a claim about
@@ -1144,18 +1160,22 @@ Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six 
   this plan applies to every other number, applied to the numbers that arrive in findings.
 - **D-2341 (2026-09-09)** — **the citation sweep is its own PR, against a frozen tree, with nothing else
   in the commit.** The gate's ruling and its measurement: round 4 found 6 defects, round 5 closed them
-  and its own refute pass found 7 inside the commit that closed them, and the merge gate found ~12
-  inside the commit that closed those 7 — zero behavioural, zero touching a guard, eleven of them
+  and its own refute pass found, inside the commit that closed them, the entries booked as
+  D-2312–D-2326 (`## Deviations found — round 5's own refute pass`), and the merge gate found ~12
+  inside the commit that closed those — zero behavioural, zero touching a guard, eleven of them
   citations, most introduced or left standing by the commit whose purpose was sweeping that class.
   **Each round fixes citations at about the rate it creates them.** The delta's own proportions say why:
   272 lines of `ccd/ccd` against 340 of plan, so the prose is now larger and more fragile than the code,
   and every count in it is a claim about a tree the next commit moves. **A citation swept in the same
   commit as other work is stale before the commit lands.** Known open and deliberately NOT fixed here:
   "four sites carry the gate" where the same commit made it five; "133 at C1" left in the new suite's
-  header after the delta corrected it to 134 in `ccd/ccd`; "17 on `ws/clear-meadow`" corrected at one of
-  two sites; the M13/M4/M5 rows falsified by this commit's own changes; `cmd_start`'s "the paragraph
+  header after the delta corrected it to 134 in `ccd/ccd`; "17 on `ws/clear-meadow`" corrected at one
+  site of three, the two survivors being `ccd/ccd`'s wave-3 sentence and D-2298's parenthetical
+  (`grep -n '17 on' ccd/ccd docs/superpowers/plans/2026-09-08-c1-rescue-lane-followup.md`); the
+  M13/M4/M5 rows falsified by this commit's own changes; `cmd_start`'s "the paragraph
   below calls it" where that paragraph was corrected in the SAME commit to say the opposite; "ONE of its
-  five sentences" now six; and "creation-only" left standing at one site after D-2317 retracts it.
+  five sentences" now six; and "creation-only" left standing at both remaining sites —
+  `server/test/ccd-crosspool.test.ts` and D-2285's own entry above — after D-2317 retracts it.
 
 ---
 
@@ -1163,12 +1183,13 @@ Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six 
 
 `main` moved under the PR: `e227329e` (#73) landed and touched `ccd/ccd`, so #69 went CONFLICTING. The
 conflict was **exactly one line** — the provenance marker — which is the recurrence D-2294 was written
-for, arriving one commit after the pin that catches it. Resolved by dropping BOTH markers with the
+for, arriving in the first merge after the pin that catches it. Resolved by dropping BOTH markers
+with the
 conflict block and re-running `markGenerated`; D-2216 is what the other resolution looks like.
 
 **The `_reg_get` census pin fired on the raw merge, by itself, on a change from outside this PR.** #73
-adds one `_reg_get "` call, and the suite failed with "ccd/ccd now makes 133 calls, but the census still
-claims 132. Re-measure the sentence, do not re-measure this test." A citation on this branch went false
+adds one `_reg_get "` call, and the suite failed with "ccd/ccd now makes 133 … calls, but the census
+still claims 132. Re-measure the sentence, do not re-measure this test." A citation on this branch went false
 in the seconds it took an unrelated PR to land, and the only reason anyone knows is that one number had
 a mechanism. That is the case for a pin over a sweep, and it is now written into the block itself.
 
@@ -1182,7 +1203,8 @@ and 237 distinct, zero lines lost from either parent, no conflict residue. The o
   enumeration was mis-ORDERED: round 3 (`391b3e1f`) is an ancestor of the #70 merge (`1714038a`), so the
   drop to 133 came FIRST and the merge pushed it back to 135, not the reverse. And "#73 … THE FIRST MOVE
   NOBODY HERE MADE" is false — the #70 merge already moved it 133 → 135 from `main`'s compactor sites,
-  which this same block names twenty lines up. The half the commit actually earned is narrower and is
+  which this same block already names as having landed `_reg_get` sites from `main`. The half the
+  commit actually earned is narrower and is
   what it says now: **#73 is the first move the PIN CAUGHT**, because it is the first that happened
   after the pin existed. Two of six moves came from outside, which makes the argument stronger, not
   weaker.
@@ -1192,15 +1214,17 @@ and 237 distinct, zero lines lost from either parent, no conflict residue. The o
   **134**, and 134 is the true count at that ref. C1 measured correctly; what inherited a wrong 133 was
   this branch's own prose. A parenthetical written to close a misattribution, misattributing.
 - **D-2345 (2026-09-10)** — **the excluded span is the one unread place in the block, and every false
-  claim landed there.** The pin's cardinal scan reads up to the dated list and stops; the merge commit
-  moved the end anchor forward by 128 characters and those characters are exactly the new false
-  sentence. Structural fix rather than another correction: the causal sentences now live ABOVE the
-  anchor, where the scan reaches them, and what is allowed inside the list is a bare measured figure
-  with the ref it was measured at — one command per entry, and nothing that argues.
+  claim landed there.** The pin's cardinal scan reads everything up to the dated list and nothing
+  inside it; the merge commit moved the end anchor forward by 128 characters and those characters are
+  exactly the new false sentence. Structural fix rather than another correction: the pin's ARGUMENT
+  moved ABOVE the anchor, where the scan reaches it; the rule for the list itself — a bare measured
+  figure with the ref it was measured at, nothing that argues — is stated there and is not yet met by
+  the `db580771` and `1714038a` entries.
 - **D-2346 (2026-09-10)** — **an ordinal is a restated census wearing a suffix.** The scan matched
   `\d{2,4}\b` and so could not see `the 132nd call site`; the refute pass planted one and it passed.
   Widened to `\d{2,4}(?:st|nd|rd|th)?` — and it immediately found a live one this branch had carried
-  since round 3, `"the 135th is the one C1's own _tick_strand_undecidable added"`, now gone by the
+  since round 2 (`74a50164`, the round that booked D-2155–D-2162),
+  `"the 135th is the one C1's own _tick_strand_undecidable added"`, now gone by the
   block's own delete-or-point rule. Word-spelled figures remain a hole and are DISCLOSED rather than
   papered over: the other census in this file spells its numbers as words, which is exactly why nothing
   ever caught THAT one going stale, and a word-matcher here would be a second vocabulary to keep in
@@ -1221,3 +1245,61 @@ and 237 distinct, zero lines lost from either parent, no conflict residue. The o
   comment "claims that rung as shared". It does not — it names one specific sibling lane,
   "`_auto_compact_check` carries the same rung over the same path and a DIFFERENT arm", and that
   sentence is still true. No edit there.
+- **D-2348 (2026-09-10)** — **a diff hunk header is a guess the TOOL generates; the funcname driver that
+  looks like the fix makes it worse; and what does fix it has no reach. Booked by the coordinator,
+  measured here, REWRITTEN after three lenses refuted the first draft, and not taken.**
+  **The mechanism.** `git`'s `@@ … <text>` is the nearest line matching the funcname pattern **strictly
+  ABOVE the hunk's first line** — context included, so a match sitting AT the hunk start is never
+  eligible — and the search runs **in the PREIMAGE**, not in the new file. *The preimage half is the
+  structural fact and earns its own sentence: a function the commit ADDS is not in the search space at
+  all, so no `xfuncname` can ever name it.* Measured at git 2.43.0 — rename `_oldname` to `_newname` and
+  edit inside it in one commit, and the header still reads `@@ -5,2 +5,3 @@ _oldname() {`, naming a
+  function absent from the new file.
+  **The first draft of this entry stated that rule as "at or above the hunk start", and its own headline
+  example refutes it:** old `ccd/ccd:13557` IS `_inject_spawn_effort() {` AND IS the hunk start of
+  `@@ -13557,6 +13611,9 @@ _spawn()`. Under the rule as first written, git would have labelled that
+  hunk `_inject_spawn_effort` and the case could not exist. A doctrine entry whose mechanism sentence is
+  falsified by the evidence it cites — found by refuting the entry, never by writing it.
+  **The census** (`git diff e227329e^1 e227329e -- ccd/ccd`, 12 hunks at the default `-U3`): **four
+  headers name a function that does not contain the change** — `_swap_target` for the new
+  `_pane_auto_continue_armed`, `_tmux_new_session` for the new `_resume_env`, `_inject_spawn_effort` for
+  the three new `_transcript_stalled_pair` / `_redrive_standdown_log` / `_redrive_after_spawn`, and
+  `_spawn` for a change inside `_inject_spawn_effort`. A fifth header is EMPTY — the `ccrc:generated`
+  marker is line 2 and that hunk starts at line 1, outside every function — and a sixth names a variable
+  assignment four lines above its own change, `SUBSTRATE_BACKOFF_AFTER=3`, which is the plainest evidence
+  that the default heuristic is not a function parser at all. **The first draft said "6 of 12 do not name
+  where the change is": arithmetic standing in for a claim, since an empty header misleads nobody and a
+  coarse anchor is not a misattribution.**
+  **Two mechanisms, not one, and only one of them is beyond a flag.** Three of the four are
+  append-after-close — a new function inserted after its neighbour's closing brace, wrong at every
+  context width. The fourth is not: that change sits three lines below `_inject_spawn_effort`'s own
+  definition line, so the default three lines of LEADING CONTEXT put the hunk start at that definition
+  and push the search above it. Measured at every width — `-U0`, `-U1` and `-U2` all label it
+  `_inject_spawn_effort()`, CORRECTLY, and only `-U3` makes it `_spawn()`. The first draft called this
+  the sharpest case and folded it into the unreachable class; it is the one instance a flag does reach.
+  **The obvious remedy makes it worse, and this was measured on the corpus rather than on a fixture.**
+  This repo has no `.gitattributes` and no `diff.*` driver — `git check-attr diff -- ccd/ccd` answers
+  `unspecified` — so every file here uses the built-in heuristic. Reconstructing #73's diff in a scratch
+  repo (headers byte-identical to the live diff) and planting `* diff=bash` does NOT reproduce the same
+  labels: hunk 2's truthful-but-uninformative `SUBSTRATE_BACKOFF_AFTER=3` becomes `_svc_run_detached()`,
+  a function that opens at 742 and closes at 756 — some 193 lines above the change at 949.
+  **Misattributions 4 -> 5 of 12.** A custom `xfuncname` cannot help either: the search SPACE is what is
+  wrong, not the pattern.
+  **What DOES work has no reach, and that is the real reason this is doctrine rather than a config
+  change.** An external differ wired as `diff.<name>.command` — configured exactly like a funcname
+  driver, `.gitattributes` plus `git config` and nothing else — relabels both failing shapes correctly.
+  The first draft claimed "no configuration reaches this class"; that is false. The reason to go on
+  reading hunk bodies is REACH: an external differ is a program every reader must have installed, and
+  GitHub's PR view, the PWA's diff surface and any plain `git show` on another box honour none of it.
+  **A hunk header is never evidence about what changed** — read the hunk body, or ask the file
+  (`git log -L :<fn>:<file>`).
+  **Why it sits beside D-2340's ugrep zero.** Both are false anchors generated by the TOOL, so **no care
+  by the AUTHOR OF THE CHANGE prevents it — only care by the READER does.** (The first draft wrote "no
+  amount of author care", which collides with D-2340, whose whole lesson is that re-measuring IS the
+  remedy.) The shape that makes it fire here is not exotic: at `e227329e`, `ccd/ccd` carried 234 function
+  definitions and EVERY ONE was at column zero, 204 of them closed by a column-zero `}` and the rest
+  one-line forms — so "add a helper beside its peers" is the dominant change shape, and append-after-close
+  is the common case rather than the corner one. **The exposure is already present in this program:**
+  D-2347's unguarded read-by-name sits under the `_inject_spawn_effort` header, one of the four — and
+  D-2347 named the right function only because the finding read the hunk body. Nothing was mis-read, so
+  this is exposure, not a cost already paid; the first draft claimed the latter.
