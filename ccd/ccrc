@@ -440,6 +440,20 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # ms before this redirection, 9 ms after. Neither stream carries anything a
   # caller wants - the watcher exists for its stamp file and its signal - so
   # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  #
+  # THE ACCOUNT PROBE IS WHERE THIS WAS NOTICED, NOT WHERE IT BECAME REACHABLE
+  # (D-2332, correcting D-2272). The finding was filed saying that probe is the
+  # tree's FIRST caller inside a command substitution. It is the eleventh of
+  # eleven, measured 2026-09-09: five in ccd, three in ccrc-doctor-checks and
+  # three in ccrc - and eight of the other ten predate the account-connections
+  # branch entirely, so on a box with no coreutils this floor has been under ccd's
+  # tmux liveness probe, its two gh pr queries and the doctor's gh auth status
+  # check for as long as the shim has existed: each of them paid its whole
+  # deadline on every run instead of answering when its command did. The fix
+  # below is unchanged and was always right; what was understated is that it is
+  # a fix for the WHOLE call-site population, not for one new call site. The
+  # population is measured in ccrc-account.test.ts rather than counted here, so
+  # the claim cannot rot back into a claim about one caller.
   ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
@@ -5934,14 +5948,35 @@ _acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
 #   be a promise of an answer that is never coming. The two sentences are not
 #   the same sentence with a word changed, which is why this is a parameter and
 #   not a substitution.
+#
+# THE REMEDY COMES BEFORE $4, IN EVERY BRANCH THAT HAS ONE (D-2330), and the
+# order is a MECHANISM rather than a preference: `_acct_note_cap` truncates from
+# the RIGHT, so whatever this function puts last is the first thing an operator
+# loses. $4 is the editorial half - it says what the row beside the note is -
+# and at the probe it is 221 characters, so writing it BETWEEN the diagnosis and
+# the next step made the next step the first casualty. MEASURED before the
+# reorder, on a fixture HOME 772 characters deep: a 1078-character note, the
+# truncation marker present, and "Run 'ccrc wrappers' to write the missing
+# launcher." gone - and a note here is HOME plus about 306 characters, so the
+# loss begins around a 718-character HOME, which is well inside a real fleet
+# path. Diagnosis, then the ACTION, then the editorial clause: if anything is
+# dropped it is the half an operator cannot act on.
 _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> one note
   local rc="$1" id="$2" asked="$3" verdict="$4"
   if [ "$rc" -eq 127 ]; then
-    printf '%s' "$asked was never asked: there is no launcher at $WRAPPER_BIN_DIR/$id to run, so nothing about account $id was measured. $verdict Run 'ccrc wrappers' to write the missing launcher."
+    printf '%s' "$asked was never asked: there is no launcher at $WRAPPER_BIN_DIR/$id to run, so nothing about account $id was measured. Run 'ccrc wrappers' to write the missing launcher. $verdict"
   elif [ "$rc" -eq 126 ]; then
-    printf '%s' "$asked was never asked: $WRAPPER_BIN_DIR/$id exists but could not be executed, so nothing about account $id was measured. $verdict Check its mode bits and that its interpreter line names a shell this box has."
+    printf '%s' "$asked was never asked: $WRAPPER_BIN_DIR/$id exists but could not be executed, so nothing about account $id was measured. Check its mode bits and that its interpreter line names a shell this box has. $verdict"
   elif [ "$rc" -eq 125 ]; then
-    printf '%s' "$asked was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. $verdict"
+    # AND THIS BRANCH HAS AN ACTION AT LAST (D-2331). It used to end at the
+    # cause - what the deadline shim's own argument error IS - which is the one
+    # thing an operator can do nothing with, while its three siblings all named
+    # a next step. The step is a MEASUREMENT of the box rather than a guess,
+    # because D-2221's validator already refuses every duration this verb could
+    # pass that would earn a 125: the value is a whole number of seconds inside
+    # a stated range before the call is built, so a refusal of it is evidence
+    # about what answers to that name here, not about what was typed.
+    printf '%s' "$asked was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. This verb only ever hands it a whole number of seconds between 1 and 3600, so the argument it refused is not one you typed: find out what the deadline name resolves to on this box - run: command -v timeout gtimeout - and whether that is coreutils' own program rather than something else of the same name earlier on PATH. $verdict"
   elif [ "$rc" -gt 128 ]; then
     printf '%s' "$asked did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. $verdict"
   else
@@ -5999,8 +6034,13 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
     return 0
   fi
   if [ "$crc" -ne 0 ]; then
+    # `_acct_quick_stands`, NOT A HARD-CODED CLAUSE (D-2333). This refusal is
+    # composed AFTER the bracket above has run, so by this line the run may
+    # already have measured `$CCRC_LIMITS_DIR` moving under the lane's own
+    # launcher - the exact condition its probe twin was given a helper for in
+    # the same commit that opened it here.
     [ -n "$row" ] \
-      || _acct_refuse 1 classify-failed "the health classifier exited $crc without printing anything, so this box measured nothing about account $id - read the account-op: line above. Nothing was written."
+      || _acct_refuse 1 classify-failed "the health classifier exited $crc without printing anything, so this box measured nothing about account $id - read the account-op: line above. $(_acct_quick_stands)"
     printf '%s\n' "$row"
     exit "$crc"
   fi
@@ -6087,18 +6127,52 @@ _acct_limits_stamp() {   # <id> -> "<mtime>:<size>", or "absent"
 # `_acct_run_op`'s header names, two true statements flattened into one false
 # one — except in the direction nobody guards, one sentence going stale in two
 # places out of three.
+# THE TELEMETRY QUALIFIER, SPELLED ONCE FOR BOTH PATHS (D-2333). Both helpers
+# below need it and neither owns it: `~/.cc-limits` is moved by whichever
+# launcher ran, and since D-2273 the CHEAP question runs one too. It says
+# CHANGED and never WROTE, because co-occurrence is the whole of what a stamp
+# either side of a call can support (D-2274). Empty when nothing was measured,
+# so a caller concatenates it unconditionally.
+_acct_limits_moved() {   # -> "" or the sentence naming what moved
+  [ "$ACCT_LIMITS_TOUCHED" = true ] || return 0
+  printf '%s' " One thing did change while the question was being asked: $CCRC_LIMITS_DIR moved. That directory is shared account-scoped telemetry any session on this account can rewrite, so this run reports the change without claiming to be what caused it."
+}
+
+# THE CLAUSE FOR A RUN THAT NEVER REACHED THE PROBE (D-2333). "Nothing was
+# written." was hard-coded at two sites - `_acct_auth_status`'s classify-failed
+# refusal and `_acct_check`'s short-circuit clause - and D-2273 falsified both
+# in the same commit that wrote the bracket: the cheap question runs the LANE'S
+# OWN launcher with the lane's own config dir, so a run whose probe never ran
+# can still have moved the shared telemetry directory. The wire said
+# `limitsTouched: true` while the prose beside it said nothing was written, with
+# the file on disk. Same treatment as the probe's clause, and the SAME
+# qualifier, so the two paths cannot drift apart in what they claim about
+# `~/.cc-limits`. The leading sentence stays exact for what this path really
+# does: it reads a credential store and a roster and creates nothing.
+_acct_quick_stands() {   # -> what still stands after a run that did NOT reach the probe
+  printf '%s' "Nothing was written.$(_acct_limits_moved)"
+}
+
 _acct_probe_stands() {   # -> what still stands after a run that reached the probe
   # THE SITUATIONAL HALF, TRUE AT THE LINE THAT SAYS IT (D-2275, D-2135's
   # class). The sentence below tells an operator the launcher's writes are
   # confined to the lane's config dir - and `ACCT_LIMITS_TOUCHED`, which is set
   # before any refusal is composed and is readable from right here, may already
   # have measured otherwise. One conditional, and all three refusal sites
-  # inherit it with no caller change. It says CHANGED and never WROTE, because
-  # that is the whole of what the bracket can support (D-2274).
-  local telemetry=""
+  # inherit it with no caller change.
+  #
+  # AND THE LEADING HALF IS CONDITIONED, NOT MERELY FOLLOWED BY A RETRACTION
+  # (D-2335). The first landing appended the qualifier to a confinement claim
+  # that stayed ABSOLUTE, so in the `true` case the sentence asserted that
+  # everything the launcher wrote is still under the lane's config dir and then
+  # named something outside it that moved - assert and retract in one breath.
+  # Both halves move together now: when the stamp saw nothing, the claim is
+  # flat; when it saw something, the claim is narrowed to what this run can
+  # actually support before the exception is named.
+  local confined=" and anything the lane's own launcher wrote while answering is still under that lane's config dir."
   [ "$ACCT_LIMITS_TOUCHED" = true ] \
-    && telemetry=" One thing outside it did change while the question was being asked: $CCRC_LIMITS_DIR moved. That directory is shared account-scoped telemetry any session on this account can rewrite, so this run reports the change without claiming to be what caused it."
-  printf '%s' "No account state was written: no roster entry, no credential file and no kill-switch marker was touched. The probe HAD already run, so $CCRC_PROBE_DIR exists - this verb creates it to run in - and anything the lane's own launcher wrote while answering is still under that lane's config dir.$telemetry"
+    && confined=" and what the lane's own launcher wrote while answering is under that lane's config dir as far as this run could see, with one measured exception."
+  printf '%s' "No account state was written: no roster entry, no credential file and no kill-switch marker was touched. The probe HAD already run, so $CCRC_PROBE_DIR exists - this verb creates it to run in -$confined$(_acct_limits_moved)"
 }
 
 ACCT_LIMITS_TOUCHED=false
@@ -6275,12 +6349,23 @@ _acct_check() {
   fi
   # WHICH PATH RAN IS WHAT THE FINAL CLAUSE TURNS ON, so it is decided here and
   # not inferred later. A verdict from the cheap question means this run read a
-  # credential store and a roster and wrote nothing at all; a run that reached
-  # the probe created a directory and ran a launcher inside it.
-  local stands="Nothing was written."
+  # credential store and a roster and CREATED nothing; a run that reached the
+  # probe created a directory and ran a launcher inside it.
+  #
+  # "WROTE NOTHING AT ALL" IS WHAT THIS COMMENT USED TO SAY, AND D-2273
+  # FALSIFIED IT (D-2334). The cheap question runs the lane's own launcher with
+  # the lane's own config dir - that is the whole argument for bracketing it -
+  # so a short-circuited run can have moved `$CCRC_LIMITS_DIR` without ever
+  # reaching the probe. The sentence was load-bearing rather than decorative:
+  # it is the justification a reader would find for the hard-coded clause below
+  # it, and it told them not to make the repair. Both paths now end in a helper
+  # that asks the flag, and neither asserts what the other measured.
+  local stands=""
   if [ -z "$ACCT_HEALTH" ]; then
     _acct_probe "$id"
     stands="$(_acct_probe_stands)"
+  else
+    stands="$(_acct_quick_stands)"
   fi
 
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")

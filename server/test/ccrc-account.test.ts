@@ -61,7 +61,28 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
  *  idempotent — it rewrites the same four files with the same bytes — so the
  *  `run()` calls that follow change nothing about the listing. */
 function box(prefix: string): string {
-  const home = mkTmp(prefix);
+  return boxAt(mkTmp(prefix));
+}
+
+/** A fixture HOME `chars` characters long or a little more, carrying the same
+ *  tree `box` builds. It exists for ONE claim (D-2330): `_acct_note_cap`
+ *  truncates from the RIGHT at 1024 characters and every note this verb writes
+ *  interpolates `$HOME` twice, so which HALF of a note an operator keeps is a
+ *  function of how deep their home is. A tmpdir-shallow fixture can never see
+ *  that — it is the input on which every ordering of the sentence looks alike.
+ *  Real fleet paths reach here: this box's own worktree homes run past 60
+ *  characters before a project name, and a `~/.ccrc/probe` under a nested
+ *  workspace tree is what the deep case stands in for. */
+function deepBox(prefix: string, chars: number): string {
+  let home = mkTmp(prefix);
+  while (home.length < chars) {
+    home = join(home, 'd'.repeat(Math.min(100, Math.max(1, chars - home.length - 1))));
+  }
+  mkdirSync(home, { recursive: true });
+  return boxAt(home);
+}
+
+function boxAt(home: string): string {
   const ccd = join(home, 'ccrc', 'ccd');
   mkdirSync(ccd, { recursive: true });
   for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks']) {
@@ -5941,7 +5962,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
         // unmeasured, which is the thing this wave is counting.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),
           '#!/bin/sh\nexit 125\n', { mode: 0o755 });
-      }, 'timeout(1) refused to run', 'its own arguments are wrong'],
+      }, 'timeout(1) refused to run', 'command -v timeout gtimeout'],
     ];
     for (const [name, plant, says, alsoSays] of cases) {
       const home = box(`ccrc-account-check-why-${name}-`);
@@ -6257,6 +6278,21 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       .toContain('without claiming to be what caused it');
     expect(said).not.toMatch(/the probe wrote|this verb wrote|the launcher wrote to/);
 
+    // D-2335: AND THE LEADING HALF IS CONDITIONED, NOT MERELY FOLLOWED BY A
+    // RETRACTION. The first landing appended the qualifier to a confinement
+    // claim that stayed ABSOLUTE, so the `true` case asserted that everything
+    // the launcher wrote is still under the lane's config dir and then named
+    // something outside it that moved — a sentence that asserts and retracts in
+    // one breath. The `false` case keeps the flat claim, which is what makes
+    // this a condition rather than a rename.
+    const CONFINED = 'is still under that lane\'s config dir';
+    expect(stands('false'), 'the flat claim is gone from the case that supports it')
+      .toContain(CONFINED);
+    expect(said, 'the true case still asserts confinement and then retracts it')
+      .not.toContain(CONFINED);
+    expect(said, 'the true case narrows nothing before naming the exception')
+      .toContain('as far as this run could see');
+
     // D-2276, the banner that explains the stamp's own blind spot. It used to
     // argue the spot away with a field the stamp does not read: `ts` carries
     // the same whole-second resolution as the mtime and never enters the stamp
@@ -6266,6 +6302,123 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       .not.toContain('the statusline writes a fresh `ts`');
     expect(src, 'the stamp banner no longer states the bound it actually has')
       .toContain('SAME WHOLE SECOND');
+  });
+
+  it('says what a run that never reached the probe left behind, on BOTH its refusal paths (D-2333, D-2334)', () => {
+    // D-2273 BRACKETED THE CHEAP QUESTION AND OPENED D-2275's OWN CLASS AT THE
+    // TWIN ADDRESS. `auth status` runs the LANE'S OWN launcher with the lane's
+    // own config dir — that is the whole argument for stamping around it — so a
+    // run whose probe NEVER RAN can have moved the shared telemetry directory.
+    // Both refusal paths on that arm still hard-coded "Nothing was written.":
+    // `_acct_auth_status`'s classify-failed refusal, ~28 lines below the new
+    // bracket, and `_acct_check`'s short-circuit clause. Their probe twin had
+    // been given the situational helper in the same commit — two identical
+    // sentences, one fixed.
+    //
+    // THE CONTRADICTION IS CONSTRUCTED, not argued: the same fixture answers
+    // `limitsTouched: true` on the wire while the prose beside it says nothing
+    // was written, with the file on disk. It takes two boxes because the clause
+    // only ever reaches an operator through a REFUSAL, and the refusal is what
+    // a stale `health` op stands in for — same roster, same launcher, one op
+    // removed.
+    const movingClaude = (home: string): void => {
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(home, '.local', 'bin', 'claude'), [
+        '#!/bin/sh',
+        'if [ "$1" = auth ] && [ "$2" = status ]; then',
+        '  mkdir -p "$HOME/.cc-limits"',
+        '  printf \'{"five":7,"seven":0,"ts":1}\' > "$HOME/.cc-limits/claude.json"',
+        '  cat "$HOME/fixture-auth-out"',
+        '  IFS= read -r rc < "$HOME/fixture-auth-rc"; exit "$rc"',
+        'fi',
+        'echo "fixture claude: unexpected argv: $*" >&2; exit 90',
+      ].join('\n') + '\n', { mode: 0o755 });
+    };
+    const MOVED = 'One thing did change while the question was being asked';
+
+    // THE HELPER ITSELF, BOTH DIRECTIONS — a clause that always says it is not
+    // a clause. The `false` case is also what pins the sentence the rest of the
+    // suite still expects verbatim on this path.
+    const quiet = box('ccrc-account-quick-stands-');
+    for (const [flag, want] of [['false', false], ['true', true]] as const) {
+      const r = sourceRun(quiet, `ACCT_LIMITS_TOUCHED=${flag}\n_acct_quick_stands`);
+      expect(r.code, `${flag}: ${r.stderr}`).toBe(0);
+      expect(r.stdout.startsWith('Nothing was written.'), flag).toBe(true);
+      expect(r.stdout.includes(MOVED), flag).toBe(want);
+      expect(r.stdout.includes('.cc-limits'), flag).toBe(want);
+    }
+
+    // ── THE SHORT-CIRCUIT PATH ────────────────────────────────────────────
+    // An anthropic lane whose `auth status` answers a VERDICT never reaches the
+    // probe at all, and the launcher that answered it moved the stamp.
+    const wire = box('ccrc-account-quick-wire-');
+    seedRosterJson(wire, [UPSTREAM]);
+    movingClaude(wire);
+    authFixture(wire, SIGNED_OUT, 1);
+    const w = oneObject(run(wire, ['account', 'check', '--id', 'claude']));
+    expect((w['health'] as Record<string, unknown>)['verdict'],
+      'the fixture did not take the short-circuit path').toBe('auth-dead');
+    expect(w['limitsTouched'], 'the cheap question measured nothing').toBe(true);
+    expect(existsSync(join(wire, '.cc-limits', 'claude.json')),
+      'the fixture launcher wrote no telemetry').toBe(true);
+
+    const prose = staleAtBox('ccrc-account-quick-prose-', 'health');
+    seedRosterJson(prose, [UPSTREAM]);
+    movingClaude(prose);
+    authFixture(prose, SIGNED_OUT, 1);
+    const said = String(oneObject(run(prose, ['account', 'check', '--id', 'claude']))['detail']);
+    expect(said, 'the short-circuit prose still says nothing was written').toContain(MOVED);
+    expect(said).toContain('.cc-limits');
+    expect(said, 'the clause attributes a shared file\'s change to this run')
+      .toContain('without claiming to be what caused it');
+
+    // THE CONTROL, on the identical box with a launcher that moves nothing: the
+    // simple true sentence, and nothing appended. Without this the case would
+    // be green about a clause that says the same thing always.
+    const still = staleAtBox('ccrc-account-quick-still-', 'health');
+    seedRosterJson(still, [UPSTREAM]);
+    plantClaude(still, 'claude');
+    authFixture(still, SIGNED_OUT, 1);
+    expect(String(oneObject(run(still, ['account', 'check', '--id', 'claude']))['detail']))
+      .toMatch(/Nothing was written\.$/);
+
+    // ── THE CLASSIFY-FAILED PATH, the twin ~28 lines below the bracket ─────
+    // Driven through a planted `account-op.mjs` whose auth-status arm exits
+    // without writing, because bash builds that argv itself and cannot spell it
+    // wrong — the build skew this file stands in for everywhere else.
+    const wedged = classifierBox('ccrc-account-quick-classify-',
+      '  process.exitCode = 7;', 'auth-status');
+    seedRosterJson(wedged, [UPSTREAM]);
+    movingClaude(wedged);
+    authFixture(wedged, SIGNED_OUT, 1);
+    const c = run(wedged, ['account', 'check', '--id', 'claude']);
+    expect(c.code, c.stderr).toBe(1);
+    const cj = oneObject(c);
+    expect(cj['error']).toBe('classify-failed');
+    expect(String(cj['detail']), 'the classify-failed twin still hard-codes its clause')
+      .toContain(MOVED);
+
+    // …and the same arm with a launcher that moved nothing says the flat thing.
+    const wedgedQuiet = classifierBox('ccrc-account-quick-classify-quiet-',
+      '  process.exitCode = 7;', 'auth-status');
+    seedRosterJson(wedgedQuiet, [UPSTREAM]);
+    plantClaude(wedgedQuiet, 'claude');
+    authFixture(wedgedQuiet, SIGNED_OUT, 1);
+    expect(String(oneObject(run(wedgedQuiet, ['account', 'check', '--id', 'claude']))['detail']))
+      .toMatch(/Nothing was written\.$/);
+
+    // ── D-2334, THE COMMENT THAT TOLD A READER NOT TO MAKE THIS REPAIR ─────
+    // `_acct_check`'s own banner said a verdict from the cheap question means
+    // the run "wrote nothing at all", which D-2273 falsified in the commit that
+    // wrote the bracket. It is the justification a reader of the hard-coded
+    // clause would find, so it is load-bearing rather than decorative. Same
+    // shape as this file's D-2276 banner check: the false sentence gone, and
+    // the correction recorded where that reader is standing.
+    const src = readFileSync(CCRC_SRC, 'utf8');
+    expect(src, 'the short-circuit banner still claims the run wrote nothing at all')
+      .not.toContain('wrote nothing at all');
+    expect(src, 'the correction is not recorded beside the sentence it corrects')
+      .toContain('D-2334');
   });
 
   it('resets ACCT_LIMITS_TOUCHED before every check, not only inside the probe (D-2223 F8)', () => {
@@ -6392,7 +6545,7 @@ const PROBE_WEIRD = { type: 'result', subtype: 'success', is_error: true,
  *  never defers on `--source probe` (pinned below). The condition these stand
  *  for is the one this file guards everywhere else — an `account-op.mjs` that is
  *  not the same build as the `ccrc` calling it. */
-function classifierBox(prefix: string, probeArm: string): string {
+function classifierBox(prefix: string, arm: string, source = 'probe'): string {
   const home = box(prefix);
   rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
   mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
@@ -6403,8 +6556,8 @@ function classifierBox(prefix: string, probeArm: string): string {
   const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
   writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
     'const a = process.argv;',
-    'if (a[2] === "classify" && a.includes("probe")) {',
-    probeArm,
+    `if (a[2] === "classify" && a.includes(${JSON.stringify(source)})) {`,
+    arm,
     '} else {',
     `  await import(${real});`,
     '}',
@@ -6463,7 +6616,7 @@ describe('ccrc account check: the probe', () => {
         // for by a stub on the fixture PATH, which `ghContainedEnv` PREPENDS.
         writeFileSync(join(home, '.local', 'bin', 'timeout'),
           '#!/bin/sh\nexit 125\n', { mode: 0o755 });
-      }, 'refused to run', 'its own arguments are wrong'],
+      }, 'refused to run', 'command -v timeout gtimeout'],
     ];
     for (const [name, plant, says, alsoSays] of cases) {
       const home = box(`ccrc-account-probe-why-${name}-`);
@@ -6478,6 +6631,16 @@ describe('ccrc account check: the probe', () => {
       expect(notes, name).toContain(says);
       // THE REMEDY, which is the half an operator acts on: a verdict with no
       // next step is the shrug this deviation is about.
+      //
+      // AND `alsoSays` NAMES AN ACTION IN EVERY ROW NOW (D-2331). The 125 row
+      // used to expect a slice of its own CAUSE sentence — "its own arguments
+      // are wrong" — under a message reading *names no remedy*, which is an
+      // expectation that cannot fail on the condition it is named for
+      // (D-2209's family). It could not fail because there WAS no remedy in
+      // that branch: exit 125 said what the deadline shim's argument error is
+      // and stopped, while its three siblings each ended in something to do.
+      // The branch now ends in a measurement of the box, and this row expects
+      // that instead.
       expect(notes, `${name} names no remedy`).toContain(alsoSays);
       expect(notes, name).toContain('the probe');
       // AND THE CLOSING CLAUSE IS THE PROBE'S, NOT THE CHEAP QUESTION'S. The
@@ -6488,6 +6651,16 @@ describe('ccrc account check: the probe', () => {
         .toContain('the LAST question about this account');
       expect(notes, `${name} carried the auth-status caller's clause`)
         .not.toContain('The verdict below is the probe\'s.');
+      // THE ORDER, WHICH IS WHAT SURVIVES THE CAP (D-2330). `_acct_note_cap`
+      // truncates from the RIGHT, so whatever a branch writes last is the first
+      // thing a deep-HOME operator loses. The editorial clause — 221 characters
+      // of "what the verdict beside this note is" — must therefore come AFTER
+      // the action, in every branch that has one. Asserted on a shallow box,
+      // where the whole note survives and the two can be compared; the deep
+      // case below asserts the consequence.
+      expect(notes.indexOf(alsoSays),
+        `${name}: the editorial clause was written before the next step`)
+        .toBeLessThan(notes.indexOf('the LAST question about this account'));
     }
 
     // THE CONTRAST, AND IT HOLDS BOTH CALL SITES IN ONE RUN. An ANTHROPIC lane
@@ -6507,38 +6680,130 @@ describe('ccrc account check: the probe', () => {
     expect(notes[1]!).toContain('the LAST question about this account');
   });
 
-  it('bounds a launcher-controlled row detail AT THE SOURCE, not at the argv it crosses (D-2266, D-2267)', () => {
+  it('keeps the REMEDY when the note cap bites, and loses the editorial clause instead (D-2330)', () => {
+    // THE FIX FOR D-2268 CUT THE HEADROOM ON THE PATH THAT HAD NONE. Giving the
+    // probe its own closing clause put 221 characters between the diagnosis and
+    // the next step, and `_acct_note_cap` truncates from the RIGHT at 1024 — so
+    // on a deep HOME the sentence an operator can ACT on was the first thing
+    // dropped, and what survived was the half explaining what the verdict
+    // beside it is. Before the reorder, MEASURED on a fixture HOME 772
+    // characters deep: a 1078-character note, the marker present, and
+    // "Run 'ccrc wrappers' to write the missing launcher." gone.
+    //
+    // A NOTE HERE IS HOME PLUS A CONSTANT, which is why the fixture has to be
+    // deep and why the shallow control below is not enough on its own: at
+    // tmpdir depth every ordering of this sentence looks identical, and that is
+    // the input the first landing was written against. Real fleet paths are in
+    // this range — the account id, the launcher directory and the home all ride
+    // in the same sentence.
+    const REMEDY = 'Run \'ccrc wrappers\' to write the missing launcher.';
+    const CLAUSE = 'the LAST question about this account';
+    const MARKER = '… (this note was truncated by ccrc at 1024 characters)';
+
+    const deep = deepBox('ccrc-account-note-cap-deep-', 700);
+    seedRosterJson(deep, [UPSTREAM, OPENROUTER_LANE]);   // no launcher: the probe sees 127
+    const r = run(deep, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(0);
+    const note = ((oneObject(r)['notes'] as string[]) ?? [])[0] ?? '';
+    // THE CAP REALLY BIT, so what follows is a statement about truncation and
+    // not about a note that happened to fit. Without this the case would be
+    // green on any HOME at all.
+    expect(note, `the cap never fired: ${note.length} characters`).toContain(MARKER);
+    expect(note.length).toBe(1024 + MARKER.length);
+    // …AND THE OPERATOR KEPT THE HALF THEY CAN ACT ON. This is the assertion
+    // that reds if anyone puts the editorial clause back in front of the
+    // remedy: at this depth the old order loses the whole 50-character remedy
+    // and 31 characters of the clause besides.
+    expect(note, 'the truncation ate the next step').toContain(REMEDY);
+    // AND WHAT WAS DROPPED IS THE EDITORIAL TAIL, which is the other half of
+    // the same claim — there is no depth at which the clause vanishes and the
+    // remedy survives WHOLE, because the two are adjacent: the honest form is
+    // that the cut lands inside the clause rather than inside the next step.
+    expect(note, 'nothing was actually cut from the editorial clause')
+      .not.toContain('rather than anything measured about the lane');
+
+    // THE SHALLOW CONTROL, which is what makes the pair a discrimination rather
+    // than a claim about one depth: the same lane on an ordinary HOME loses
+    // nothing at all, so the deep case above is measuring the CAP and not a
+    // sentence this branch simply never writes.
+    const shallow = box('ccrc-account-note-cap-shallow-');
+    seedRosterJson(shallow, [UPSTREAM, OPENROUTER_LANE]);
+    const whole = ((oneObject(run(shallow, ['account', 'check', '--id', 'orchard-api']))[
+      'notes'] as string[]) ?? [])[0] ?? '';
+    expect(whole).not.toContain(MARKER);
+    expect(whole).toContain(REMEDY);
+    expect(whole).toContain(CLAUSE);
+    expect(whole.indexOf(REMEDY), 'the remedy is written after the editorial clause')
+      .toBeLessThan(whole.indexOf(CLAUSE));
+  });
+
+  it('bounds a launcher-controlled row detail AT THE SOURCE, in EVERY slot the factory covers (D-2266, D-2267, D-2328)', () => {
     // D-2222's class at a second address, and five slots wide: the 401 arm, the
-    // `unreachable` arm, the `api_error` arm's interpolated status, and the
-    // residual — which needs no `api_error` block at all, so any non-zero exit
-    // carrying any JSON object reaches it. MEASURED before the fix: a 200 000-
-    // character `result` produced a 200 089-byte row, `--row` hit
+    // `unreachable` arm, the `api_error` arm's interpolated status, the same
+    // arm's text on a status that is neither 401 nor null, and the residual —
+    // which needs no `api_error` block at all, so any non-zero exit carrying any
+    // JSON object reaches it. MEASURED before the fix: a 200 000-character
+    // `result` produced a 200 089-byte row, `--row` hit
     // `Argument list too long`, node exited 126, and the verb answered
     // `no-answer` about a lane whose billed request had already been spent and
     // ANSWERED. The whole point of the cap living in the row factory rather than
     // beside the note cap in bash is D-2267: a row is JSON the `health` op
     // parses, so a row clipped on its way to argv would fall to that parse's
     // catch and hand the op a NULL row — a silent wrong answer replacing a loud
-    // E2BIG. This case therefore asserts the VERDICT survived, not merely that
+    // E2BIG. Every case therefore asserts the VERDICT survived, not merely that
     // something short arrived.
-    const home = box('ccrc-account-probe-rowcap-');
-    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
-    plantProbe(home, 'orchard-api');
-    probeFixture(home, { ...PROBE_401, result: 'x'.repeat(200000) }, 1);
-    const r = run(home, ['account', 'check', '--id', 'orchard-api']);
-    expect(r.code, r.stderr).toBe(0);
-    const j = oneObject(r);
-    expect(j['error'], 'the verb shrugged instead of carrying the measurement it had')
-      .toBeUndefined();
-    const h = j['health'] as Record<string, unknown>;
-    expect(h['verdict'], 'a clean auth-dead row was thrown away').toBe('auth-dead');
-    expect(h['source']).toBe('probe');
+    //
+    // FIVE BODIES, BECAUSE ONE BODY MEASURED THE INSTANCE AND NOT THE RULE
+    // (D-2328). The first landing pinned the 401 slot alone under a header
+    // claiming one edit closes all five — and MEASURED, moving `capDetail` out
+    // of the `row` factory into the 401 arm left the file at 248/248 green while
+    // three of the other slots went straight back to `exit 1`, `no-answer` and
+    // node refusing the argument list. That green mutation is disambiguated
+    // rather than shrugged at: the same mutant reproduces the defect end to end
+    // on the uncovered slots, so the guard was UNPINNED — not unreachable, and
+    // not a mutation that failed to apply. A factory chosen for its generality
+    // has to have its generality measured, which is one row per slot.
+    const HUGE = 'x'.repeat(200000);
     const marker = '… (this detail was truncated by account-op at 1024 characters)';
-    const d = String(h['detail']);
-    expect(d, 'the detail was not truncated at all').toContain(marker);
-    // The EXACT length, because "shorter than 200000" would pass for any cap.
-    expect(d.length).toBe(1024 + marker.length);
-    expect(d.startsWith('x'.repeat(1024))).toBe(true);
+    const SLOTS: Array<[string, unknown, string]> = [
+      ['401', { ...PROBE_401, result: HUGE }, 'auth-dead'],
+      ['unreachable', { ...PROBE_REFUSED, result: `API Error: Connection refused ${HUGE}` },
+        'unreachable'],
+      // The status itself, which is ANY JSON value: `=== 401` and `=== null`
+      // both fall through, so a launcher can put a 200 000-character string
+      // where a number belongs and it lands in the sentence.
+      ['api_error_status', {
+        type: 'result', subtype: 'success', is_error: true,
+        terminal_reason: 'api_error', api_error_status: HUGE, result: 'nope',
+        total_cost_usd: 0,
+      }, 'unknown'],
+      ['api_error text', { ...PROBE_401, api_error_status: 503, result: HUGE }, 'unknown'],
+      // The widest slot of the five, and the one with no `api_error` block at
+      // all: `is_error` need not even be true — any non-zero exit carrying any
+      // JSON object arrives at the residual.
+      ['residual', {
+        type: 'result', subtype: 'success', is_error: true, terminal_reason: HUGE,
+        total_cost_usd: 0,
+      }, 'unknown'],
+    ];
+    for (const [name, body, verdict] of SLOTS) {
+      const home = box(`ccrc-account-probe-rowcap-${name.replace(/[^a-z]+/g, '-')}-`);
+      seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+      plantProbe(home, 'orchard-api');
+      probeFixture(home, body, 1);
+      const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(0);
+      const j = oneObject(r);
+      expect(j['error'], `${name}: the verb shrugged instead of carrying the measurement it had`)
+        .toBeUndefined();
+      const h = j['health'] as Record<string, unknown>;
+      expect(h['verdict'], `${name}: a real verdict was thrown away`).toBe(verdict);
+      expect(h['source'], name).toBe('probe');
+      const d = String(h['detail']);
+      expect(d, `${name}: the detail was not truncated at all`).toContain(marker);
+      // The EXACT length, because "shorter than 200000" would pass for any cap.
+      expect(d.length, name).toBe(1024 + marker.length);
+    }
 
     // THE OTHER SIDE OF THE BOUNDARY: a detail that fits is carried byte for
     // byte and carries no marker — a cap asserted only on the huge input is a
@@ -6849,16 +7114,56 @@ describe('ccrc account check: the probe', () => {
     // …and the two OTHER conditions `!== true` folded into `ok`, which is
     // D-2270: a body that says NOTHING about is_error, and a body that names it
     // in a shape this build cannot read. Neither is evidence of health.
-    for (const body of [{ type: 'result', subtype: 'success', result: 'ok' },
-      { type: 'result', is_error: 'false', result: 'ok' },
-      { type: 'result', is_error: null, result: 'ok' },
-      { type: 'result', is_error: 0, result: 'ok' }]) {
-      expect(at0(body)['verdict'], `${JSON.stringify(body)} read as healthy`)
-        .not.toBe('ok');
-      // AND THE RESIDUAL NAMES THE SHAPE IT SAW rather than shrugging — the
-      // reason nothing is lost by tightening the arm.
-      expect(String(at0(body)['detail']), JSON.stringify(body)).toContain('exit 0');
+    //
+    // AND THE ARM THEY LAND IN NAMES THEM APART (D-2329). The tightening was
+    // argued from this repo's overloaded-null rule, and its justification was
+    // that the residual "already names the shape it saw" — which was FALSE at
+    // the line below it: the residual named `terminal_reason`, the one field
+    // that is not the reason, so all four bodies here answered the identical
+    // `exit 0, terminal_reason absent`. The assertion this replaces could not
+    // see that: `toContain('exit 0')` is satisfied by that constant string for
+    // every body, which is a match and not a discrimination. So the claim is
+    // now DISTINGUISHABILITY, measured over the whole set — four bodies, four
+    // details — and each token is checked besides, so a build that made them
+    // differ by accident (a timestamp, a serial) could not pass either.
+    const RESIDUAL: Array<[unknown, string]> = [
+      [{ type: 'result', subtype: 'success', result: 'ok' }, 'is_error absent'],
+      [{ type: 'result', is_error: 'false', result: 'ok' }, 'is_error a string'],
+      [{ type: 'result', is_error: null, result: 'ok' }, 'is_error null'],
+      [{ type: 'result', is_error: 0, result: 'ok' }, 'is_error a number'],
+    ];
+    const said: string[] = [];
+    for (const [body, names] of RESIDUAL) {
+      const row = at0(body);
+      expect(row['verdict'], `${JSON.stringify(body)} read as healthy`).not.toBe('ok');
+      const detail = String(row['detail']);
+      expect(detail, JSON.stringify(body)).toContain('exit 0');
+      expect(detail, `${JSON.stringify(body)}: the residual does not name what it saw`)
+        .toContain(names);
+      said.push(detail);
     }
+    expect(new Set(said).size, `four conditions, one sentence: ${said.join(' | ')}`)
+      .toBe(RESIDUAL.length);
+
+    // THE SHAPE AND NEVER THE VALUE, which is why `shapeOf` is what the arm
+    // reaches for rather than the field itself: a launcher can put 300
+    // characters where a boolean belongs, and this note goes out on argv.
+    // D-2222's class, closed at the source the way it was closed for
+    // `loggedIn` (D-2223 F5) rather than only at the cap downstream.
+    const shouty = String(at0({ type: 'result', is_error: 'y'.repeat(300), result: 'ok' })['detail']);
+    expect(shouty, 'launcher text reached the sentence').not.toContain('yyy');
+    expect(shouty).toContain('is_error a string');
+
+    // …AND A BOOLEAN IS NAMED BY VALUE, because both booleans reach the
+    // residual — `true` beside a `terminal_reason` with no arm, `false` at a
+    // non-zero exit — and one shared word for the two would put the pair this
+    // whole case is about back into one sentence.
+    const t = opRun(['classify', '--source', 'probe', '--exit', '1'],
+      `${JSON.stringify(PROBE_WEIRD)}\n`);
+    expect(String(JSON.parse(t.stdout)['detail'])).toContain('is_error true');
+    const f = opRun(['classify', '--source', 'probe', '--exit', '1'],
+      `${JSON.stringify(PROBE_OK)}\n`);
+    expect(String(JSON.parse(f.stdout)['detail'])).toContain('is_error false');
 
     // THE POSITIVE HALF, so the assertion above is a discrimination and not a
     // constant: `is_error: false` at exit 0 is still the one `ok` §8 guards.
@@ -6938,15 +7243,23 @@ describe('ccrc account check: the probe', () => {
   });
 
   it('the deadline shim\'s bash fallback does not hold its caller\'s pipe for the whole deadline (D-2272)', () => {
-    // THE PROBE IS THIS TREE'S FIRST CALLER OF `_plat_timeout` INSIDE `$( )`,
-    // and that is what makes the fallback's orphan reachable. The watcher is a
-    // backgrounded subshell, so it inherits the command substitution's write
-    // end; the shim then signals the SUBSHELL, which dies and orphans the
-    // sleeper it was waiting on — and the orphan keeps that write end open, so
-    // the substitution cannot see EOF until the whole duration has run out,
-    // long after the command answered. MEASURED with a 10-second bound and a
-    // command that answers instantly: 10 006 ms before the redirection, 9 ms
-    // after.
+    // CALLED INSIDE A COMMAND SUBSTITUTION, the watcher is a backgrounded
+    // subshell that inherits the substitution's write end; the shim then
+    // signals the SUBSHELL, which dies and orphans the sleeper it was waiting
+    // on — and the orphan keeps that write end open, so the substitution cannot
+    // see EOF until the whole duration has run out, long after the command
+    // answered. MEASURED with a 10-second bound and a command that answers
+    // instantly: 10 006 ms before the redirection, 9 ms after.
+    //
+    // THIS CASE USED TO OPEN BY CALLING THE ACCOUNT PROBE THE TREE'S FIRST SUCH
+    // CALLER, AND THAT WAS FALSE (D-2332, correcting D-2272). It is the
+    // eleventh of eleven, and eight of the other ten predate this branch
+    // entirely — so the floor has been under `ccd`'s tmux liveness probe, its
+    // two `gh pr` queries and the doctor's own `gh auth status` check for as
+    // long as the shim has existed, on every box without coreutils. The
+    // correction makes the defect BIGGER, not smaller, which is why the
+    // population is measured below rather than described: a sentence about one
+    // call site is exactly what rotted, and a count cannot.
     //
     // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
     // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
@@ -6996,6 +7309,43 @@ describe('ccrc account check: the probe', () => {
       'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
     expect(slow.code, slow.stderr).toBe(0);
     expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
+
+    // ── THE POPULATION, MEASURED (D-2332) ──────────────────────────────────
+    // A FLOOR AND NOT AN EXACT COUNT, deliberately: a new bounded call inside
+    // `$( )` is an ordinary thing to add and must not red this case, while the
+    // claim that needs holding is the one that was got WRONG — that this shape
+    // has one caller, or that the account probe introduced it. The scan reads
+    // the shebang'd files of `ccd/` the way `macos-platform.test.ts` derives its
+    // corpus, so a new shell file added there is counted rather than missed.
+    const ccdDir = join(REPO, 'ccd');
+    const CALLS = /\$\([^()]{0,400}?_plat_timeout\b/gs;
+    const sites = new Map<string, number>();
+    for (const f of readdirSync(ccdDir, { withFileTypes: true })) {
+      if (!f.isFile()) continue;
+      const src = readFileSync(join(ccdDir, f.name), 'utf8');
+      if (!src.startsWith('#!')) continue;
+      const n = [...src.matchAll(CALLS)].length;
+      if (n > 0) sites.set(f.name, n);
+    }
+    const census = [...sites].map(([f, n]) => `${f}=${n}`).join(' ');
+    const total = [...sites.values()].reduce((a, b) => a + b, 0);
+    expect(total, `command-substitution callers of the shim: ${census}`)
+      .toBeGreaterThanOrEqual(10);
+    // …AND THEY ARE NOT ALL THE ACCOUNT VERB'S. Three files at least, and the
+    // majority outside the file this wave edited — which is the half of the
+    // corrected sentence that a bare count could not carry.
+    expect(sites.size, census).toBeGreaterThanOrEqual(3);
+    expect(total - (sites.get('ccrc') ?? 0), census).toBeGreaterThanOrEqual(8);
+
+    // AND BOTH SHIPPED COPIES CARRY THE CORRECTION, in the one place a reader
+    // of the shim will look. The platform block is pinned byte-identical across
+    // the two files by `macos-platform.test.ts`, so naming the ledger entry in
+    // it is what stops the primacy claim being written back into either copy
+    // without a second look. Same shape as this file's D-2276 banner check.
+    for (const f of ['ccd', 'ccrc']) {
+      expect(readFileSync(join(ccdDir, f), 'utf8'),
+        `${f}'s deadline shim does not carry D-2272's correction`).toContain('D-2332');
+    }
   });
 
   it('creates the scratch cwd and nothing else on the box (D-2223 F6, at the probe)', () => {

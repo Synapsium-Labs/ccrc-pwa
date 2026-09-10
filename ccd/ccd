@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d43e8882d53e8a0cce3b755bb3908f765275c7c1e074a890416847dc85fb8c32
+# ccrc:generated 1 sha256=287afd7f24b92eb60b94d2756425d65d6733b806c490e95bc76055a012f6729c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -381,6 +381,20 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # ms before this redirection, 9 ms after. Neither stream carries anything a
   # caller wants - the watcher exists for its stamp file and its signal - so
   # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  #
+  # THE ACCOUNT PROBE IS WHERE THIS WAS NOTICED, NOT WHERE IT BECAME REACHABLE
+  # (D-2332, correcting D-2272). The finding was filed saying that probe is the
+  # tree's FIRST caller inside a command substitution. It is the eleventh of
+  # eleven, measured 2026-09-09: five in ccd, three in ccrc-doctor-checks and
+  # three in ccrc - and eight of the other ten predate the account-connections
+  # branch entirely, so on a box with no coreutils this floor has been under ccd's
+  # tmux liveness probe, its two gh pr queries and the doctor's gh auth status
+  # check for as long as the shim has existed: each of them paid its whole
+  # deadline on every run instead of answering when its command did. The fix
+  # below is unchanged and was always right; what was understated is that it is
+  # a fix for the WHOLE call-site population, not for one new call site. The
+  # population is measured in ccrc-account.test.ts rather than counted here, so
+  # the claim cannot rot back into a claim about one caller.
   ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?

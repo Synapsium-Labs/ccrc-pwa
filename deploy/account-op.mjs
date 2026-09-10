@@ -768,10 +768,18 @@ function classifyProbe(row, j, exit) {
   // shape this build cannot read. A health verb must not read SILENCE AS
   // HEALTH — this repo's overloaded-null rule, at a seam whose two sides act on
   // the answers differently: `ok` ends the question, and everything else sends
-  // an operator to look. Nothing is lost by tightening it, because the residual
-  // at the bottom of this function already answers every other shape and
-  // already names the shape it saw. The same treatment D-2223 F5 gave
-  // `loggedIn` one task ago, for the same reason and in the same wave.
+  // an operator to look. The same treatment D-2223 F5 gave `loggedIn` one task
+  // ago, for the same reason and in the same wave.
+  //
+  // AND THE ARM IT HANDS THEM TO NOW NAMES THEM APART (D-2329). This paragraph
+  // used to close by saying nothing was lost because the residual "already
+  // names the shape it saw", and that was FALSE at the moment it was written:
+  // the residual named `terminal_reason` — the one field that is not the
+  // reason — so `is_error` absent, `"false"`, `null` and `0` all left through
+  // one identical sentence. A tightening argued from the overloaded-null rule
+  // cannot itself collapse four conditions at the seam below it, so the
+  // residual was given `is_error` in the D-2223 F5 spelling. It is TRUE now
+  // because that line says it, not because this comment does.
   if (exit === 0 && j.is_error === false) return row('ok', 'the lane answered one turn');
   if (j.is_error === true && j.terminal_reason === 'api_error') {
     const status = j.api_error_status ?? null;
@@ -782,7 +790,28 @@ function classifyProbe(row, j, exit) {
     }
     return row('unknown', `api_error with status ${status === null ? 'null' : status}: ${text}`);
   }
-  return row('unknown', `exit ${exit}, terminal_reason ${j.terminal_reason ?? 'absent'}`);
+  return row('unknown', `exit ${exit}, is_error ${isErrorAs(j)}, `
+    + `terminal_reason ${j.terminal_reason ?? 'absent'}`);
+}
+
+/** What the residual saw in `is_error`, as a token that is never launcher text
+ *  (D-2329). Four conditions reach the residual at exit 0 and used to be
+ *  indistinguishable in its sentence — the field ABSENT, and the field named as
+ *  a string, a null or a number — which is the overloaded seam the `=== false`
+ *  arm above was tightened to avoid, reopened one line below it.
+ *
+ *  ABSENT IS ITS OWN WORD, and it has to be: `shapeOf(undefined)` would answer
+ *  "a undefined", which reads as a value the body carried rather than as a
+ *  field it never named. A BOOLEAN IS NAMED BY VALUE rather than by shape,
+ *  because `true` and `false` both reach here — `true` beside a
+ *  `terminal_reason` this classifier has no arm for, `false` at a non-zero exit
+ *  — and "a boolean" would put those two back in one sentence. Both spellings
+ *  are this file's own fixed tokens, so nothing a launcher wrote enters the
+ *  note's LENGTH either (D-2222's class, closed at the source the way `shapeOf`
+ *  closed it for `loggedIn`). */
+function isErrorAs(j) {
+  if (!Object.prototype.hasOwnProperty.call(j, 'is_error')) return 'absent';
+  return typeof j.is_error === 'boolean' ? String(j.is_error) : shapeOf(j.is_error);
 }
 
 function out(o) {
