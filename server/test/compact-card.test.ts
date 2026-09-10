@@ -11,6 +11,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { tl, GRAPH, graphJson } from './compactCardFixtures.js';
 import {
   EXIT, WINDOW_CAP, CHUNK, isBoundaryLine, readWindow, parseArgs,
+  extensionsOf, tokenRegex, mineTokens, fileIndex, resolveToken, workingSet, WORKSET_CAP,
 } from '../../ccd/compact-card.mjs';
 
 const HELPER = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -145,5 +146,97 @@ describe('the CLI contract', () => {
     expect(r.status).toBe(EXIT.USAGE);
     expect(r.stdout).toBe('');
     expect(r.stderr).toMatch(/^compact-card: /);
+  });
+});
+
+describe('mining — the working set out of the window (spec §3.2)', () => {
+  const re = tokenRegex(['ts', 'sh', 'md']);
+
+  it('tags Edit/Write/MultiEdit/NotebookEdit edited, Read touched, Bash tokens touched, the previous summary carried; skips lines that do not parse', () => {
+    const win = [
+      tl.toolUse('Edit', { file_path: '/w/server/src/a.ts', old_string: 'x', new_string: 'y' }),
+      tl.toolUse('Write', { file_path: '/w/b.ts', content: '' }),
+      tl.toolUse('MultiEdit', { file_path: '/w/m.ts', edits: [] }),
+      tl.toolUse('NotebookEdit', { notebook_path: '/w/n.ipynb' }),
+      tl.toolUse('Read', { file_path: '/w/c.ts' }),
+      tl.toolUse('Bash', { command: 'sed -n 1,5p server/src/d.ts && cat -n ccd/e.sh | head' }),
+      tl.summary('touched docs/f.md and server/src/a.ts; not g.tsz'),
+      tl.toolUse('Grep', { pattern: 'x', path: 'server/src/z.ts' }),   // not a mined tool
+      'not json at all',
+    ].join('\n');
+    expect(mineTokens(win, re)).toEqual([
+      { token: '/w/server/src/a.ts', tag: 'edited' }, { token: '/w/b.ts', tag: 'edited' },
+      { token: '/w/m.ts', tag: 'edited' }, { token: '/w/n.ipynb', tag: 'edited' },
+      { token: '/w/c.ts', tag: 'touched' },
+      { token: 'server/src/d.ts', tag: 'touched' }, { token: 'ccd/e.sh', tag: 'touched' },
+      { token: 'docs/f.md', tag: 'carried' }, { token: 'server/src/a.ts', tag: 'carried' },
+    ]);
+  });
+
+  it('a summary whose content is an array of text blocks is mined too, and a null regex mines only Edit/Read', () => {
+    const arr = JSON.stringify({ type: 'user', isCompactSummary: true,
+      message: { role: 'user', content: [{ type: 'text', text: 'see docs/f.md' }] } });
+    expect(mineTokens(arr, re)).toEqual([{ token: 'docs/f.md', tag: 'carried' }]);
+    const win = [tl.toolUse('Read', { file_path: '/w/c' }), tl.toolUse('Bash', { command: 'cat a.ts' })].join('\n');
+    expect(mineTokens(win, null)).toEqual([{ token: '/w/c', tag: 'touched' }]);
+  });
+
+  it('the token regex is DERIVED from the graph\'s own extensions, longest first, anchored on both sides', () => {
+    expect(extensionsOf(['a/b.ts', 'c.tsx', 'ccd/ccd', 'x.d.mts', '.hidden', 'noext.'])).toEqual(['mts', 'tsx', 'ts']);
+    expect(tokenRegex([])).toBeNull();
+    expect('run foo.tsx and bar.ts, not baz.tsz nor _qux.ts_'.match(tokenRegex(['tsx', 'ts'])!)).toEqual(['foo.tsx', 'bar.ts']);
+    expect('a c++ file x.c+ and y.c'.match(tokenRegex(['c+', 'c'])!)).toEqual(['x.c+', 'y.c']);   // escaped
+  });
+});
+
+describe('resolution — against the graph\'s own files (spec §3.2)', () => {
+  const files = fileIndex(['server/src/pane/statusline.ts', 'server/src/watch.ts', 'pwa/src/watch.ts', 'ccd/ccd']);
+
+  it('the index groups files by basename — the shape that keeps resolution O(tokens)', () => {
+    expect(files.byBase.get('watch.ts')).toEqual(['server/src/watch.ts', 'pwa/src/watch.ts']);
+    expect(files.byBase.get('ccd')).toEqual(['ccd/ccd']);
+    expect(files.files.size).toBe(4);
+  });
+
+  it('strips the cwd and ./, matches exactly, then by a UNIQUE path-segment suffix', () => {
+    expect(resolveToken('/w/server/src/watch.ts', files, '/w')).toEqual({ path: 'server/src/watch.ts' });
+    expect(resolveToken('./server/src/watch.ts', files, '/w')).toEqual({ path: 'server/src/watch.ts' });
+    expect(resolveToken('pane/statusline.ts', files, '/w')).toEqual({ path: 'server/src/pane/statusline.ts' });
+    expect(resolveToken('ccd/ccd', files, '/w')).toEqual({ path: 'ccd/ccd' });
+  });
+  it('two suffix matches are AMBIGUOUS, never a guess', () => {
+    expect(resolveToken('watch.ts', files, '/w')).toEqual({ reason: 'ambiguous' });
+  });
+  it('an absolute path outside the tree is OUTSIDE; an unknown path is NOMATCH', () => {
+    expect(resolveToken('/etc/hosts.ts', files, '/w')).toEqual({ reason: 'outside' });
+    expect(resolveToken('server/src/nope.ts', files, '/w')).toEqual({ reason: 'nomatch' });
+    expect(resolveToken('/w', files, '/w')).toEqual({ reason: 'nomatch' });
+  });
+  it('a segment boundary is required — statusline.ts does not match xstatusline.ts', () => {
+    expect(resolveToken('statusline.ts', fileIndex(['a/xstatusline.ts']), '/w')).toEqual({ reason: 'nomatch' });
+  });
+});
+
+describe('the working set — ranked, counted, capped (spec §3.2)', () => {
+  const files = fileIndex(['a.ts', 'b.ts', 'c.ts', 'd.ts']);
+  it('ranks edited > touched > carried, then by count, then path; the strongest tag wins for a file', () => {
+    const tokens = [
+      { token: 'c.ts', tag: 'carried' as const }, { token: 'c.ts', tag: 'touched' as const },
+      { token: 'b.ts', tag: 'touched' as const }, { token: 'b.ts', tag: 'touched' as const },
+      { token: 'a.ts', tag: 'edited' as const }, { token: 'd.ts', tag: 'carried' as const },
+      { token: '/x/out.ts', tag: 'touched' as const }, { token: 'zz.ts', tag: 'touched' as const },
+    ];
+    const { files: ws, stats } = workingSet(tokens, files, '/w');
+    expect(ws).toEqual([
+      { path: 'a.ts', tag: 'edited', count: 1 }, { path: 'b.ts', tag: 'touched', count: 2 },
+      { path: 'c.ts', tag: 'touched', count: 2 }, { path: 'd.ts', tag: 'carried', count: 1 },
+    ]);
+    expect(stats).toEqual({ tokens: 8, resolved: 6, ambiguous: 0, outside: 1, nomatch: 1 });
+  });
+  it('the set keeps at most WORKSET_CAP files', () => {
+    const many = fileIndex(Array.from({ length: 150 }, (_, i) => `f${i}.ts`));
+    const tokens = [...many.files].map((t) => ({ token: t, tag: 'touched' as const }));
+    expect(workingSet(tokens, many, '/w').files).toHaveLength(WORKSET_CAP);
+    expect(WORKSET_CAP).toBe(100);
   });
 });

@@ -116,6 +116,128 @@ export function readWindow(path, cap = WINDOW_CAP, chunkSize = CHUNK) {
   }
 }
 
+// ── MINING (spec §3.2) ───────────────────────────────────────────────────
+/** Ranked tags, strongest first. */
+export const TAGS = Object.freeze(['edited', 'touched', 'carried']);
+const TAG_RANK = { edited: 0, touched: 1, carried: 2 };
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+/** The working set is capped here; the card prints the first `--max-files`
+ *  of it (two populations, spec §3.2). */
+export const WORKSET_CAP = 100;
+
+/** Every extension the graph's own files carry, longest first then
+ *  alphabetical — DERIVED, never typed. Files with no extension (`ccd/ccd`)
+ *  cannot be mined from shell text: a stated limitation, not a bug. */
+export function extensionsOf(files) {
+  const exts = new Set();
+  for (const f of files) {
+    const b = basename(f);
+    const i = b.lastIndexOf('.');
+    if (i > 0 && i < b.length - 1) exts.add(b.slice(i + 1));
+  }
+  return [...exts].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** `[A-Za-z0-9_./-]+\.(<ext>)`, anchored on both sides so `baz.tsz` and a
+ *  mid-word start never match; null when the graph names no extension. */
+export function tokenRegex(exts) {
+  if (exts.length === 0) return null;
+  const alt = exts.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return new RegExp(`(?<![A-Za-z0-9_./-])[A-Za-z0-9_./-]+\\.(?:${alt})(?![A-Za-z0-9_])`, 'g');
+}
+
+const textOf = (content) => {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((c) => (c && typeof c.text === 'string' ? c.text : '')).join('\n');
+  return '';
+};
+
+/** Raw path tokens out of a window, one row per occurrence (the mining table
+ *  of spec §3.2): Edit-shaped tools' `file_path`/`notebook_path` → edited;
+ *  `Read`'s `file_path` → touched; regex hits in a `Bash` command → touched;
+ *  regex hits in the previous compaction's summary → carried. A line that
+ *  does not parse is skipped, never fatal. */
+export function mineTokens(windowText, re) {
+  const out = [];
+  for (const line of windowText.split('\n')) {
+    if (line === '') continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o === null || typeof o !== 'object') continue;
+    const msg = o.message;
+    if (o.type === 'assistant' && msg && Array.isArray(msg.content)) {
+      for (const item of msg.content) {
+        if (!item || item.type !== 'tool_use' || !item.input || typeof item.input !== 'object') continue;
+        const inp = item.input;
+        if (EDIT_TOOLS.has(item.name)) {
+          const p = typeof inp.file_path === 'string' ? inp.file_path : inp.notebook_path;
+          if (typeof p === 'string' && p !== '') out.push({ token: p, tag: 'edited' });
+        } else if (item.name === 'Read') {
+          if (typeof inp.file_path === 'string' && inp.file_path !== '') out.push({ token: inp.file_path, tag: 'touched' });
+        } else if (item.name === 'Bash' && re && typeof inp.command === 'string') {
+          for (const m of inp.command.matchAll(re)) out.push({ token: m[0], tag: 'touched' });
+        }
+      }
+    } else if (o.isCompactSummary === true && msg && re) {
+      for (const m of textOf(msg.content).matchAll(re)) out.push({ token: m[0], tag: 'carried' });
+    }
+  }
+  return out;
+}
+
+// ── RESOLUTION (spec §3.2) ───────────────────────────────────────────────
+/** The graph's `source_file` set, indexed by basename. A suffix match can
+ *  only ever hit a file with the token's own basename, so the candidates for
+ *  a token are one Map lookup — O(tokens) for the whole window, never a scan
+ *  of every file per token (the review measured that scan at 2–12 s on a
+ *  64 MiB window against a 5,000-file graph). */
+export function fileIndex(files) {
+  const set = new Set(files);
+  const byBase = new Map();
+  for (const f of set) {
+    const b = basename(f);
+    const list = byBase.get(b);
+    if (list) list.push(f); else byBase.set(b, [f]);
+  }
+  return { files: set, byBase };
+}
+
+/** One token against the index: strip a leading `<cwd>/` or `./`; exact
+ *  match first; else a suffix match on a path-segment boundary that is UNIQUE
+ *  in the set. Two or more → `ambiguous`; an absolute path outside `<cwd>` →
+ *  `outside`; none → `nomatch`. */
+export function resolveToken(token, index, cwd) {
+  let t = token;
+  if (cwd && (t === cwd || t.startsWith(cwd + '/'))) t = t.slice(cwd.length + 1);
+  if (t.startsWith('/')) return { reason: 'outside' };
+  while (t.startsWith('./')) t = t.slice(2);
+  if (t === '') return { reason: 'nomatch' };
+  if (index.files.has(t)) return { path: t };
+  const suffix = '/' + t;
+  const hits = (index.byBase.get(basename(t)) ?? []).filter((f) => f.endsWith(suffix));
+  if (hits.length === 1) return { path: hits[0] };
+  return { reason: hits.length > 1 ? 'ambiguous' : 'nomatch' };
+}
+
+/** The working set: every resolved file, the strongest tag it earned, its
+ *  occurrence count; ranked edited > touched > carried, then count, then
+ *  path; capped. `stats` is what tells a thin card from a thin session. */
+export function workingSet(tokens, index, cwd, cap = WORKSET_CAP) {
+  const stats = { tokens: tokens.length, resolved: 0, ambiguous: 0, outside: 0, nomatch: 0 };
+  const acc = new Map();
+  for (const { token, tag } of tokens) {
+    const r = resolveToken(token, index, cwd);
+    if (!r.path) { stats[r.reason]++; continue; }
+    stats.resolved++;
+    const cur = acc.get(r.path);
+    if (!cur) acc.set(r.path, { path: r.path, tag, count: 1 });
+    else { cur.count++; if (TAG_RANK[tag] < TAG_RANK[cur.tag]) cur.tag = tag; }
+  }
+  const ranked = [...acc.values()].sort((a, b) =>
+    TAG_RANK[a.tag] - TAG_RANK[b.tag] || b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { files: ranked.slice(0, cap), stats };
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────
 /** `--kebab-flag value` pairs into camelCase keys; `--steer` alone is a
  *  boolean; anything else is a usage error the caller reports. */
