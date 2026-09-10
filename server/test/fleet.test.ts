@@ -450,11 +450,11 @@ describe('PR state on the wire', () => {
   });
 
   // Fix round, finding 2. `held: r.held` is this task's ONE server line and it
-  // had no test: `hold-gate.test.ts` exercises `archiveMerged` against
-  // `SessionRecord`, never `assembleFleet`, so `held: null` here would have
-  // stayed green everywhere while every held workspace reached the phone
-  // unheld — no chip, and the actions sheet offering Hold instead of Release,
-  // which is the ONLY PWA route to the release that `ws-reap`'s refusal
+  // had no test: `hold-gate.test.ts` exercises `sweepMerged` (`archiveMerged`'s
+  // successor) against `SessionRecord`, never `assembleFleet`, so `held: null`
+  // here would have stayed green everywhere while every held workspace reached
+  // the phone unheld — no chip, and the actions sheet offering Hold instead of
+  // Release, which is the ONLY PWA route to the release that `ws-reap`'s refusal
   // sentence tells the operator to take. Same shape as `archivedAt` above:
   // the registry field, verbatim, on the assembled session.
   it('carries held straight through, verbatim', async () => {

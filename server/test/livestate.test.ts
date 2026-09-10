@@ -32,13 +32,15 @@ describe('liveSessionStatus', () => {
 
   // FROZEN, and this test exists to keep it frozen. `waiting` gets its own
   // route to the attention bucket (D-76, below), but the collapse to `busy`
-  // here must NOT change: three consumers read `SessionStatus` for "may I act
-  // on this session right now" — the mail delivery gate (watch.ts), the
-  // archive-safety verdict (watch.ts's `archiveSafety`) and the per-session
-  // socket — and for every one of them a human-blocked session is a session
-  // they must keep their hands off. Turning `waiting` into `idle` here would
-  // let mail inject into an open dialog and let auto-archive kill a session
-  // sitting on a permission prompt.
+  // here must NOT change: `SessionStatus` still gates "may I act on this
+  // session right now" for the mail delivery gate (watch.ts) and the
+  // per-session socket, and for both a human-blocked session is a session
+  // they must keep their hands off. (A third consumer used to read it the
+  // same way — the busy/attached archive-safety verdict `watch.ts`'s
+  // `archiveSafety` computed before every auto-archive — but the operator
+  // ruled the auto-archive out on 2026-09-10 and `archiveSafety` went with
+  // it.) Turning `waiting` into `idle` here would let mail inject into an
+  // open dialog a human is standing at.
   it('collapses Claude Codes `waiting` to busy — never to idle', () => {
     expect(liveSessionStatus('waiting')).toBe('busy');
   });

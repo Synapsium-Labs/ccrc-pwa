@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -344,6 +344,13 @@ const ASKS_DISABLED_MARKER = 'asks-disabled';
  * disconnected so a stretch of empty/partial reads never clobbers the last
  * known good snapshot `/api/fleet` falls back to.
  */
+/** The identity of one merged announcement: the workspace AND the PR that
+ *  merged. Defined once because two things key on it and they must not drift —
+ *  `mergedNotified` (say it once) and the push's collapse tag (replace only
+ *  what is genuinely the same statement). A workspace outlives its own merge
+ *  now, so `id` alone is not an identity. */
+const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
+
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
@@ -396,18 +403,24 @@ export class FleetWatcher {
    *  ("can't tell") reads as disabled, never as license to keep holding. */
   private asksDisabled = false;
   /**
-   * `id#prNumber` keys already told "merged, held, nothing archived" — so
-   * `archiveMerged`'s held branch fires that push ONCE per (workspace, PR)
-   * rather than on every 2-minute sweep for as long as the hold stands.
+   * `id#prNumber` keys already told "merged … nothing archived" — so
+   * `sweepMerged` announces a merge ONCE per (workspace, PR) rather than on
+   * every 2-minute sweep for as long as that PR stays the bound one.
+   *
+   * THE NUMBER IN THE KEY IS LOAD-BEARING, and more so since the archive was
+   * removed: a workspace now survives its first merge, so it can land a
+   * SECOND PR, and `boundRow` binds the newest one. A key of `id` alone would
+   * announce the first merge and silently swallow every one after it.
    *
    * IN-MEMORY BY DESIGN, not a gap: a server restart forgets the latch and
-   * may repeat the push, but `pushOne`'s tag is `merged-<id>` — the SAME
-   * collapse key the real archive push uses — so the repeat REPLACES the
-   * prior notification on the phone rather than stacking a duplicate. The
-   * cost of losing this latch on restart is one redundant, silently-replaced
-   * notification; persisting it would buy nothing back for that price.
+   * may repeat the push, but `announceMerged` tags it `merged-<id>#<number>` —
+   * the same key — so the repeat REPLACES that PR's own prior notification
+   * rather than stacking a duplicate, while a DIFFERENT PR's announcement,
+   * which is a different statement, still stands beside it. The cost of losing
+   * this latch on restart is one redundant, silently-replaced notification;
+   * persisting it would buy nothing back for that price.
    */
-  private heldMergedNotified = new Set<string>();
+  private mergedNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** Prior status per session — drives the busy→idle push. */
@@ -552,7 +565,7 @@ export class FleetWatcher {
   private readonly transcripts: TranscriptResolver;
   /** The set of projects with at least one non-dead session, as of the last
    *  completed `tick()` — feeds `pushOne`'s "name the project only when more
-   *  than one is active" rule. `detectDialogs` and `sweepPr`/`archiveMerged`
+   *  than one is active" rule. `detectDialogs` and `sweepPr`/`sweepMerged`
    *  run on their own clocks (the pane sweep runs before this tick's own
    *  `assembleFleet`; the PR sweep is a `void`-dispatched lane that can still
    *  be in flight ticks later) and neither has the current tick's session list
@@ -1526,8 +1539,8 @@ export class FleetWatcher {
    *      ws-archive` "DESTROYS NOTHING" (`ccd:3833`), so an archived row keeps
    *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
    *      fully in scope for conditions 2-4 unless excluded here; same guard,
-   *      same shape, as the write right below this one in the file
-   *      (`archiveMerged`, `r.workspace === null || r.archivedAt !== null`) —
+   *      same shape, as the skip right below this one in the file
+   *      (`sweepMerged`, `r.workspace === null || r.archivedAt !== null`) —
    *      review finding 2;
    *   2. the REGISTRY says the branch is still exactly `ws/<workspace>` —
    *      condition 2 is also the idempotence marker, which is why there is no
@@ -1592,7 +1605,7 @@ export class FleetWatcher {
       if (identity === null) continue;
       // `ws-archive` destroys nothing — an archived row is still `workspace
       // !== null` with `branch` still at the born name — so it is excluded
-      // here explicitly, the same shape `archiveMerged` below already uses.
+      // here explicitly, the same shape `sweepMerged` below already uses.
       if (r.workspace === null || r.archivedAt !== null) continue;
       const born = `ws/${r.workspace}`;
       if (r.branch !== born) continue;
@@ -1639,7 +1652,7 @@ export class FleetWatcher {
       // asking here — before `claimTitleRead` writes anything — is what makes
       // "an unsupported verb records no attempt" true of the stat gate as well
       // as of the attempted set. Skips silently, same self-healing caveat as
-      // `archiveMerged`'s own `ws-archive` gate below (fix round 4, task 14,
+      // `sweepPr`'s own `pr-state` gate below (fix round 4, task 14,
       // Minor #5): automatic in remote mode, on THIS WATCHER's own 60s
       // timer (`CAPS_REFRESH_MS`) — not the agent's, which has none —
       // requires a server restart in local mode (`localcaps.ts`, one probe
@@ -2287,8 +2300,10 @@ export class FleetWatcher {
    *      at least `MAIL_QUIET_MS` old — the SOLE idle authority. Affirmatively,
    *      because `liveStatus` answers `'idle'` for a missing pid, a missing
    *      config dir and an unreadable file (`fleet.ts:118-131`) —
-   *      `archiveSafety`'s rule (`:731-736`, "MUST NOT collapse `unknown` to
+   *      the deleted `archiveSafety`'s rule ("MUST NOT collapse `unknown` to
    *      idle") applies here for the same reason: this ends in a keystroke.
+   *      That function is gone with the auto-archive it guarded (`sweepMerged`),
+   *      and this lane is now the only place the rule still has work to do.
    *
    * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
    * `draft-present` refused, `dialog-open` refused — inside the session's own
@@ -2967,13 +2982,24 @@ export class FleetWatcher {
 
   /**
    * One `ccd pr-state --project <p>` per project with at least one workspace,
-   * then a LEVEL evaluation of the archive condition. Level, not edge: there
-   * is no prevPhase file and no "did we see the transition" flag, because the
-   * producer and the consumer are different processes on different boxes with
-   * no acknowledgement — a partial sweep killed at the outer timeout, an agent
-   * disconnect or a busy-skip would destroy the edge permanently and strand
-   * the workspace in a state the UI claims was archived. `ws-archive` is
-   * idempotent, so retrying every 120 s is free and self-healing.
+   * then `sweepMerged` over the same snapshot.
+   *
+   * The PHASE is still evaluated as a LEVEL: there is no prevPhase file and no
+   * "did we see the transition" flag, because the producer and the consumer
+   * are different processes on different boxes with no acknowledgement, and a
+   * partial sweep killed at the outer timeout, an agent disconnect or a
+   * skipped row would destroy an edge permanently. Re-reading the level every
+   * 120 s is free.
+   *
+   * What CONSUMES that level is now edge-shaped on purpose, and the two do not
+   * contradict each other. `sweepMerged` announces a merge once per
+   * (workspace, PR) through the in-memory `mergedNotified` latch — an edge —
+   * because a sentence repeated every 120 s for the life of a workspace is
+   * noise, and losing that edge to a restart costs one silently-replaced
+   * notification (see the field's own docstring). The old consumer was
+   * `ws-archive`, which is idempotent and destructive, so it wanted the
+   * opposite: no latch at all, and a retry every sweep. It is gone (operator
+   * ruling, 2026-09-10 — see `sweepMerged`).
    */
   private async sweepPr(): Promise<void> {
     const now = Date.now();
@@ -3039,7 +3065,7 @@ export class FleetWatcher {
           this.prStates.set(line.id, phaseFor(line));
         }
       }
-      await this.archiveMerged(records);
+      this.sweepMerged(records);
     } finally {
       // Only the CURRENT sweep may clear the stamp. An abandoned sweep that
       // finally returns half an hour later must not unlatch the one that
@@ -3067,197 +3093,136 @@ export class FleetWatcher {
     }
   }
 
-  /**
-   * `'ok' | 'busy' | 'attached' | 'unknown'`, and it MUST NOT collapse
-   * `unknown` to idle. `liveStatus` answers `'idle'` when the pid or the
-   * config dir is missing or the status file is unreadable, and in remote mode
-   * both of those reads cross the agent WS — so a socket hiccup reads as "not
-   * working". Archive needs an AFFIRMATIVE idle.
-   *
-   * IT ALSO CARRIES `held`, read from the SAME fresh registry read — fix-wave
-   * findings 1/5. This is the only registry read that happens at the archive
-   * DECISION POINT; `archiveMerged`'s own `records` argument is the snapshot
-   * `sweepPr` took before it awaited one gh-bound `ccd pr-state` per project
-   * (20 s budget each, and a sweep is only abandoned after PR_SWEEP_STUCK_MS =
-   * 15 min), so a hold placed while the sweep is in flight is invisible there.
-   * The wave boundary IS the modal instant for placing one — the merge that
-   * ends wave N is what tells the orchestrator to hold for wave N+1 — so the
-   * stale window is exactly the window the feature exists for, and
-   * `ccd ws-archive` has no held rung of its own to catch what slips through
-   * (deliberately: a by-hand archive of a held workspace must still work, see
-   * README and PrSheet). This function already had the fresh record in hand
-   * and threw the field away; now it returns it.
-   *
-   * `held` is null for the `attached` answer, which returns BEFORE the read:
-   * that answer defers the archive anyway, so nothing can be destroyed by not
-   * knowing — the only thing lost is the held-merged push, which the caller's
-   * snapshot rung fires whenever the hold predates the sweep.
-   */
-  async archiveSafety(id: string): Promise<{ verdict: 'ok' | 'busy' | 'attached' | 'unknown'; held: string | null }> {
-    if (this.bus.listenerCount(`session:${id}`) > 0) return { verdict: 'attached', held: null };
-    // C0.3: one session's own row, not the whole registry.
-    const read = await readSessionRecord(this.deps.io, this.deps.cfg, id);
-    if (!read.found) return { verdict: 'unknown', held: null };
-    const rec = read.record;
-    // SKIP (defer): a row with an unmeasured identity field — `measuredIdentity`
-    // answers null — is treated EXACTLY like the previously-dropped row it
-    // used to be before the ladder existed — `readSessionRecord` would have
-    // answered `{found:false}` for this same fixture, and `!read.found` above
-    // already meant `{unknown, held: null}`. `held: null`, not `rec.held`,
-    // to preserve that pre-change shape
-    // exactly, even though `.held` itself is a separate field that COULD
-    // still be readable — the point of this branch is "answer nothing more
-    // than the dropped row used to", not "answer everything we happen to
-    // still have". Preserved explicitly rather than left to fall out of
-    // `cfgDir`'s own failure below (only wrapper degradation would trigger
-    // that) — `workdir`/`uuid` degradation must defer too, even though
-    // neither is read directly in this function.
-    const identity = measuredIdentity(rec);
-    if (identity === null) return { verdict: 'unknown', held: null };
-    const held = rec.held;
-    // D-309: three answers, not one boolean. `gone` — tmux itself said the
-    // session does not exist — is the only reading that may mean "no pane:
-    // nothing is running". `unknown` (unreachable server, cut-short client)
-    // REFUSES, like every other cannot-tell branch of this function already
-    // did; this arm was the one that answered 'ok' on a question it had not
-    // managed to ask, the same defect D-308 (was D-B8-12) fixed in ccd's `_ws_status`,
-    // on the same destructive caller class.
-    const sv = await this.deps.tmux.sessionVerdict(id);
-    if (sv.verdict === 'gone') return { verdict: 'ok', held };
-    if (sv.verdict === 'unknown') return { verdict: 'unknown', held };
-    const pid = await this.deps.tmux.panePid(id);
-    const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
-    if (!pid || !cfgDir) return { verdict: 'unknown', held };
-    const live = await readLiveState(this.deps.io, cfgDir, pid);
-    if (!live) return { verdict: 'unknown', held };
-    return { verdict: liveSessionStatus(live.status) === 'busy' ? 'busy' : 'ok', held };
-  }
-
-  /** The held-merged push: once per (workspace, PR), from whichever rung saw
-   *  the hold — the snapshot's or `archiveSafety`'s fresh read. One latch key,
-   *  so the two rungs can never both announce the same pair. */
-  private notifyHeldMerged(r: SessionRecord, number: number | null, reason: string): void {
-    const key = `${r.id}#${number ?? '?'}`;
-    if (this.heldMergedNotified.has(key)) return;
-    this.heldMergedNotified.add(key);
+  /** The merged push: once per (workspace, PR). `reason` names the thing a
+   *  human would have to release before they could archive this workspace by
+   *  hand — a hold, an open run — and is null in the ordinary case, where
+   *  nothing is in the way and the workspace is simply still here. The two
+   *  sentences differ by that clause alone, so the held wording is unchanged
+   *  from when it was the only one. */
+  private announceMerged(key: string, r: SessionRecord, number: number | null, reason: string | null): void {
+    if (this.mergedNotified.has(key)) return;
+    this.mergedNotified.add(key);
     this.pushOne({
       kind: 'merged', sessionId: r.id, project: r.project,
       title: `✓ merged › ${r.workspace}`,
-      body: `PR #${number ?? '?'} merged — ${reason}; nothing archived.`,
+      body: reason === null
+        ? `PR #${number ?? '?'} merged; nothing archived.`
+        : `PR #${number ?? '?'} merged — ${reason}; nothing archived.`,
+      // EXPLICIT, because `pushOne`'s default (`${kind}-${sessionId}`) is one
+      // key short of this lane's own. The latch is per (workspace, PR) so a
+      // second PR from the same workspace is announced — and an id-only
+      // collapse tag would then let that second announcement REPLACE the
+      // first in the tray, so an operator who looked once, late, would learn
+      // that #43 landed and never that #42 did. Same shape and the same
+      // reason as the mail lane's `mail-<toId>-<mailId>` just above.
+      //
+      // It still collapses where it should: a restart forgets the latch and
+      // may repeat ONE PR's push, and that repeat carries this same tag, so
+      // it replaces rather than stacks.
+      tag: `merged-${key}`,
     }, this.activeProjects);
   }
 
-  private async archiveMerged(records: SessionRecord[]): Promise<void> {
+  /**
+   * The merged lane: it ANNOUNCES, and it never acts.
+   *
+   * WHAT IT USED TO DO, and why that ended (operator ruling, 2026-09-10). This
+   * loop ran `ccd ws-archive` on a merged workspace the moment it measured
+   * idle and unwatched — the only destructive ccd call in this server that
+   * NOBODY ASKED FOR. The other two `wsArchive` call sites both answer a
+   * request: `server.ts`'s `/archive` route is the operator's own button, and
+   * `coord/close.ts`'s is a run close carrying `{state:'failed', archive:true}`.
+   * Both wear `sweepDec`'s unattended-server provenance, because that is who
+   * runs the verb; neither fires on a timer. `ws-archive` deletes nothing on
+   * disk, which is the sentence the original ruling rested on, but it
+   * unsupervises the unit and kills the tmux pane, so it ends the session, its
+   * scrollback and whatever turn was in flight.
+   *
+   * MEASURED on the live fleet the day this changed: 7 of the box's 13 archive
+   * markers read `merged:#N`, five of them from the preceding 48 hours — and
+   * every one of those five sat on a session that was ALIVE AGAIN, revived by
+   * hand after this sweep had killed it. That is not tidying finished work; it
+   * is interrupting work in progress, and then doing it again, because the
+   * trigger is a LEVEL and `ws-restore` clears the very marker that suppressed
+   * it. (The same population is what `divergence`'s archived-but-live census
+   * and `sessionBucket`'s D-74 conjunct were both built to survive.)
+   *
+   * The safety ladder could not see that harm and never could. `archiveSafety`
+   * measured an INSTANTANEOUS `idle` — and a session parked at the prompt
+   * while its operator reads the last answer measures exactly that. A `tmux
+   * attach` on the fleet box was invisible to it; only an open PWA websocket
+   * counted. Deferring on `busy`/`attached`/`unknown` narrowed the window; it
+   * could not close it, because the thing being measured is not the thing that
+   * matters (whether a human is coming back).
+   *
+   * A merged PR is also not the end of a workspace. It survives its own merge
+   * now, so it can land a second PR — `boundRow` binds the newest one — which
+   * is why the latch key carries the number.
+   *
+   * WHAT REMAINS. The rungs above the act stay, because they now choose the
+   * SENTENCE rather than gate a destruction: a hold and an open run each name
+   * why a human would have to release something first. What is gone with the
+   * act is every MEASUREMENT it needed — `archiveSafety`'s tmux verdict, pane
+   * pid and `<pid>.json` read, each an agent round trip per merged row per
+   * sweep in remote mode, on a population that now accumulates instead of
+   * retiring itself.
+   *
+   * ARCHIVING IS UNCHANGED AS A HUMAN ACT: `POST /api/sessions/:id/archive`
+   * from the PWA, `ccd ws-archive` at a terminal, and the coordinator's own
+   * lane (`coord/close.ts`'s `{state:'failed', archive:true}`) all still do
+   * exactly what they did. Nothing here removed a door; it removed the actor
+   * that walked through one unasked.
+   */
+  private sweepMerged(records: SessionRecord[]): void {
     for (const r of records) {
-      // SKIP, before ANYTHING else — including the workspace/archivedAt test
-      // right below, which itself becomes UNSAFE on a degraded row: both
-      // fields read null on an unreadable file, and `workspace === null`
-      // would make an actually-active merged workspace look like one with no
-      // workspace at all (harmless), while `archivedAt !== null` reading
-      // false-negative (null) on a row that WAS already archived would make
-      // an already-archived workspace look freshly archive-ELIGIBLE again.
+      // SKIP a degraded row before anything else. It no longer guards an act —
+      // there is none — but it still guards the SENTENCE. Not because `held`
+      // would read wrong: a listed-but-unreadable `.hold` answers
+      // `HOLD_UNREADABLE`, never null (`registry.ts` argues that polarity at
+      // length, and `hold-gate.test.ts` pins the resulting body verbatim).
+      // Because the row's own IDENTITY is what this box could not read — the
+      // uuid, workdir or wrapper naming which session this is — and a
+      // notification is a statement about a specific workspace, addressed to
+      // it (`sessionId` deep-links the phone to `/s/<id>`). Announcing off a
+      // row that could not be identified is a claim about something unproven,
+      // and the same silence the previously-dropped row used to get.
       if (measuredIdentity(r) === null) continue;
       const pr = this.prStates.get(r.id);
       if (r.workspace === null || r.archivedAt !== null) continue;
-      if (pr?.phase !== 'merged') continue;                 // unknown NEVER archives
-      if (r.held !== null) {
-        // A program claims this workspace: the merge is a WAVE boundary, not
-        // the end. Archive nothing; say so once per (workspace, PR) — the
-        // in-memory latch (see its own comment) means a server restart may
-        // repeat the push, which the shared `merged-<id>` collapse tag turns
-        // into a replace, not a stack. The bucket ladder is untouched: no
-        // `archivedAt` is written, so the workspace stays in the live
-        // buckets exactly as an ordinary session would.
-        //
-        // THE SNAPSHOT'S RUNG, and it is the fast one, not the authoritative
-        // one: `records` was read at the top of `sweepPr`, before every
-        // gh-bound round trip. It can only ever be a hold that ALREADY
-        // existed then, so it can never be wrong in the destructive direction
-        // — but it can be blind, and the `archiveSafety` rung below is the one
-        // that answers for holds placed while this sweep was in flight.
-        this.notifyHeldMerged(r, pr.number, r.held);
-        continue;
-      }
-      // The FRESH answer, at the decision point: verdict and hold from one
-      // registry read taken now, not from the snapshot above (findings 1/5).
-      // The hold is checked FIRST because it is not a deferral of the same
-      // kind — 'busy'/'attached' say "not yet", a hold says "not until a
-      // human releases it", and the operator gets told which.
-      const safety = await this.archiveSafety(r.id);
-      if (safety.held !== null) {
-        this.notifyHeldMerged(r, pr.number, safety.held);
-        continue;
-      }
-      // THE THIRD RUNG (Wave 2), and it is what makes this surface SAFE
-      // rather than merely safer: an ABSENT hold is no longer sufficient to
-      // archive. `coord.db` is the authority on "whose claim is this?" — the
-      // hold file is one path keyed on a session id whose reason string is
-      // display-only and parsed back nowhere. Release-then-crash (hold gone,
-      // run still open) and the archive-vs-hold race both stop mattering
-      // here, because the sweep now asks the authoritative question.
+      if (pr?.phase !== 'merged') continue;                 // unknown NEVER announces
+      // THE LATCH FIRST, and that ordering is the point of hoisting the key out
+      // of `announceMerged`. Everything below this line is work done only to
+      // WORD a sentence, and the deleted code paid for its own `coord.db` read
+      // exactly once per workspace because the rungs above it (a hold, then an
+      // affirmative-idle measurement) turned most rows away first — its
+      // comment recorded "Measured N reaching this query on the live fleet: 0
+      // rows per sweep". Those rungs are gone and merged rows now ACCUMULATE
+      // by design, so without this check every merged workspace would pay a
+      // query every 120 s, for the life of the server, to re-derive a sentence
+      // that was already said and will be thrown away.
+      const key = mergedKey(r.id, pr.number);
+      if (this.mergedNotified.has(key)) continue;
+      // The reason is DISPLAY ONLY now, so it is taken from what is already in
+      // hand: the snapshot's `held`, and one synchronous `coord.db` read. The
+      // fresh registry re-read this used to take at the decision point existed
+      // because the decision was destructive and the snapshot predates a
+      // gh-bound round trip per project; the cost of a stale read here is a
+      // notification that does not name the hold placed thirty seconds ago,
+      // and the next PR's announcement gets it right.
       //
-      // `?.` IS LOAD-BEARING: `test/helpers.ts`'s `testDeps` supplies no
-      // `coord`, and every archive test in `hold-gate.test.ts` and
-      // `pr-sweep.test.ts` builds its watcher from it. A non-optional call
-      // TypeErrors every test that reaches this archive path and has nothing
-      // to do with runs — MEASURED by deleting the `?.`: 7 red, 3 in
-      // `hold-gate.test.ts` and 4 in `pr-sweep.test.ts`. (The earlier
-      // "fourteen" was never measured; this branch's own doctrine is that a
-      // stated measurement holds.) The
-      // `?? []` is NOT an overloaded null: a server with coordination
-      // switched off has no runs to be claimed BY, so "no coord" and "no
-      // open run" are the same fact here, not two a caller would handle
-      // differently — the same stance every other coord-gated surface in
-      // this file takes ("absent means none of this exists").
-      //
-      // NO CACHE, for the reason the rung two above already states in its own
-      // words: a snapshot consulted at a destructive decision point is the
-      // shape this function had to fix once. Measured N reaching this query
-      // on the live fleet: 0 rows per sweep.
+      // `?.` on `coord` is load-bearing: `test/helpers.ts`'s `testDeps` supplies
+      // none, and every test that reaches this lane would TypeError without it.
+      // `?? []` is not an overloaded null — a server with coordination switched
+      // off has no runs to be claimed by, so "no coord" and "no open run" are
+      // the same fact here rather than two a caller would treat differently.
       const openRuns = this.deps.coord?.openRunsForSession(r.id) ?? [];
-      if (openRuns.length > 0) {
-        const s = openRuns[openRuns.length - 1]!;
-        this.notifyHeldMerged(r, pr.number,
-          `run ${s.id} is still open — ${s.program} wave ${s.wave}${s.waveOf === null ? '' : `/${s.waveOf}`}`);
-        continue;
-      }
-      if (safety.verdict !== 'ok') continue;   // defers; the next sweep retries
-      const argv = CCD_ARGV.wsArchive(r.id, sweepDec(this.deps.fleetState, 'sweep:archive-merged'));
-      // The same gate the `pr-state` sweep above and the `/archive` route
-      // apply. Third instance of NF10's class, found in round 3: on a host
-      // whose ccd predates `ws-archive` this call can only fail its usage
-      // check, and being level-triggered it would re-fire for every merged
-      // session on every sweep, forever. Skipping writes no state — the level
-      // stays `merged`, so the archive happens on the first sweep after the
-      // host is upgraded — IN REMOTE MODE, where THIS WATCHER's own 60s
-      // timer (`CAPS_REFRESH_MS`, just above) re-asks the agent regardless
-      // of any signal from ccd; the agent itself has no timer, it answers
-      // when asked and re-execs only when ccd's mtime/size has changed —
-      // so no restart is needed.
-      // In LOCAL MODE (fix round 4, task 14, Minor #5) `fleetState.ccdVerbs`
-      // is read once, at boot (`localcaps.ts`), so a `ccdVerbs` that is
-      // `null` (no evidence) or genuinely `[]` (measured, and this box's
-      // ccd advertises nothing) self-heals only on the NEXT SERVER RESTART
-      // — this sweep goes on skipping silently until then, not until the
-      // next upgrade.
-      if (!verbSupported(this.deps.fleetState, argv)) continue;
-      const res = await this.deps.runCcd(argv);
-      if (!res.ok) continue;
-      if (res.stdout.startsWith('already archived')) continue;   // idempotent re-fire: no second push
-      // AFTER the fact, and it promises only navigation: no `actions` here,
-      // so an older service worker renders it exactly like every other push.
-      // `this.activeProjects` — this sweep has no fleet list of its own in
-      // scope (see the field's own comment) and must not block on `gh` to get
-      // one.
-      // `›`, not `·`: `pushOne` appends the project with `·` when more than
-      // one is active, and reusing that separator here would render
-      // "✓ merged · wt-foo · ccrc-pwa" with no way to tell workspace from
-      // project. The old copy used `›` for exactly this reason.
-      this.pushOne({
-        kind: 'merged', sessionId: r.id, project: r.project,
-        title: `✓ merged › ${r.workspace}`,
-        body: `PR #${pr.number ?? '?'} merged; workspace archived, nothing deleted.`,
-      }, this.activeProjects);
+      const run = openRuns[openRuns.length - 1];
+      const reason = r.held !== null
+        ? r.held
+        : run !== undefined
+          ? `run ${run.id} is still open — ${run.program} wave ${run.wave}${run.waveOf === null ? '' : `/${run.waveOf}`}`
+          : null;
+      this.announceMerged(key, r, pr.number, reason);
     }
   }
 
@@ -3375,7 +3340,7 @@ export class FleetWatcher {
           // `this.activeProjects` — this sweep runs BEFORE this tick's own
           // `assembleFleet` (see `tick()`), so the current fleet's project
           // set isn't computed yet; it reads last tick's, same reasoning as
-          // `archiveMerged` above.
+          // `sweepMerged` above.
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
             title: '❓ Question', body: dialog.title || 'Claude has a question',
@@ -3818,7 +3783,7 @@ export class FleetWatcher {
     const now = Date.now();
     // Same run `parentOfSession` derived the parent from — `openRunsForSession`
     // mirrors its `ORDER BY id DESC LIMIT 1` pick via "last of the ASC list",
-    // the same idiom `archiveMerged` above already uses. Recorded on the ask
+    // the same idiom `sweepMerged` above already uses. Recorded on the ask
     // row for provenance; the OPERATOR MAIL below deliberately does NOT carry
     // it (see that call's own comment).
     const openRuns = this.deps.coord!.openRunsForSession(r.id);
