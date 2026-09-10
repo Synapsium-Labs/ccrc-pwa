@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0c70b4ddf1f202caf3bc2e5cfdeb5c49841e3a715e29dfcf1c718fcf8e9ea1b1
+# ccrc:generated 1 sha256=6b77b39f56b22c636458b048d282c04fbecfabf4e3d9529d5ad5d20ad3d9d435
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5795,9 +5795,10 @@ PY
 }
 
 cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
-  # workspace for an active program. The ONE input the merge-gated auto-archive
-  # was missing: an idle agent between waves is indistinguishable from a
-  # finished one, so the claim is DECLARED, never inferred. Non-destructive and
+  # workspace for an active program. The ONE input nothing on this box can
+  # measure: an idle agent between waves is indistinguishable from a finished
+  # one, so the claim is DECLARED, never inferred — and it is what `ws-rm`,
+  # `ws-rename`, `ws-reap` and `forget` each refuse on. Non-destructive and
   # idempotent: re-hold updates the reason. The reason string is the display
   # everywhere — write it verbatim, parse it nowhere.
   # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
@@ -5873,15 +5874,17 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # ordinary reason (`program:x wave:1/4`) still has plenty left after it.
   [[ -n "${reason//[[:space:]]/}" ]] || die "empty reason — say which program holds this"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
-    || die "$id is not a workspace — nothing ever auto-archives a main checkout, so a hold there is a lie waiting to confuse someone"
+    || die "$id is not a workspace — a hold gates workspace verbs, so a hold on a main checkout gates nothing and is a lie waiting to confuse someone"
   [[ -f "$REG/$id.archived" ]] \
     && die "$id is archived — restore first: a hold cannot protect a pane that is already gone"
   # CHECKED, unlike every other `_reg_set` in this file, because this is the one
   # field whose silent absence is destructive. ccd runs `set -uo pipefail` with
   # NO `-e`, so an unchecked failed write would fall straight through to the
   # echo below. Left unprotected, the orchestrator protocol reads exit code +
-  # stdout, records the workspace as claimed, and dispatches the next wave; the
-  # archiveMerged sweep sees no hold and archives the merged workspace mid-run.
+  # stdout, records the workspace as claimed, and dispatches the next wave;
+  # every rung that reads `.hold` straight off disk — `ws-rm`, `ws-rename`,
+  # `ws-reap`, `forget` — then sees none and treats a mid-wave workspace as
+  # free the moment anyone reaches for one of them.
   # So the ONE verb whose failure means UNPROTECTED refuses like every other
   # doubt path in this function rather than announcing a success it did not have.
   #
@@ -5917,10 +5920,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
 }
 
 cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim.
-  # A release ends THIS file's claim and nothing else. It does NOT necessarily
-  # re-arm the auto-archive sweep: since Build 8 Wave 2, `archiveMerged` also
-  # asks the server's coord.db whether an OPEN RUN still names this session,
-  # and skips if one does — an absent hold is no longer sufficient. Idempotent.
+  # A release ends THIS file's claim and nothing else. It does NOT mean nobody
+  # still considers this workspace claimed: since Build 8 Wave 2 the server's
+  # coord.db separately records whether an OPEN RUN still names this session,
+  # and `POST /api/sessions/:id/archive` refuses on that alone — an absent hold
+  # has never been sufficient there. Idempotent.
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
@@ -5994,9 +5998,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # `Is a directory`, same false success. Downstream, `runCcdOr502` keys on
     # the exit code, so `POST /release` answered 200 `{ok:true}` and the PWA's
     # fire-and-forget confirm closed with no toast: the operator is told the
-    # claim is gone while `archiveMerged` keeps deferring and `ws-rm`/`ws-reap`
-    # keep refusing. Fail-shut in the safe direction, but a lie either way, and
-    # the sibling verb's own guard is the standard this file set.
+    # claim is gone while `ws-rm`/`ws-rename`/`ws-reap`/`forget` keep refusing
+    # and the server's merged push keeps naming the hold. Fail-shut in the safe
+    # direction, but a lie either way, and the sibling verb's own guard is the
+    # standard this file set.
     # INSIDE the `-e` arm (ccd:3431), so a `not held` answer writes nothing: an
     # idempotent no-op is not an act, and recording one would make the record
     # disagree with what happened. Read BEFORE the unlink, which is the only
@@ -6584,8 +6589,9 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   #     described, and the DESTRUCTIVE verb refuses on them at the instant of
   #     deletion (Task 5/6: `registry-branch-drift`, `detached-head`,
   #     `branch-missing`) where a refusal costs nothing but a deferred cleanup.
-  # Archive is lossless and runs unattended — Task 14 fires it every 120 s and
-  # discards the exit code — so a refusal it cannot converge out of strands the
+  # Archive is lossless and is still fired with no human watching — the
+  # server's run-close lane does it (`coord/close.ts`, `{state:'failed',
+  # archive:true}`) — so a refusal it cannot converge out of strands the
   # workspace in the live fleet forever with nothing on screen to say why. Same
   # argument Task 2's Context already makes for a dirty tree ("refusing would
   # strand merged-but-dirty workspaces in the live fleet permanently"), and the

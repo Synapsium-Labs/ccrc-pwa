@@ -28,14 +28,14 @@ function seed(ids: string[]): string {
   return home;
 }
 
-const mergedLine = (id: string): string => JSON.stringify({
+const mergedLine = (id: string, number = 42): string => JSON.stringify({
   id, project: 'demo', repo: 'o/r', branch: 'ws/' + id, base: 'origin/main', baseShort: 'main',
   tip: 'f'.repeat(40), ahead: 3, dirty: 0, commits: [], template: null,
-  rows: [{ number: 42, state: 'MERGED', headRefName: 'ws/' + id, headRefOid: 'deadbee',
+  rows: [{ number, state: 'MERGED', headRefName: 'ws/' + id, headRefOid: 'deadbee',
     baseRefName: 'main', isCrossRepository: false, mergedAt: '2026-07-20T10:00:00Z',
     mergeCommit: { oid: '7a68ca0' }, url: 'u', title: 't', isDraft: false,
     statusCheckRollup: null, ours: true }],
-  phase: 'merged', number: 42, checkedAt: 1785300000000, reason: null,
+  phase: 'merged', number, checkedAt: 1785300000000, reason: null,
 });
 
 /** A runner that answers tmux (idle, alive) and records ccd argv. */
@@ -174,135 +174,6 @@ describe('the third lane', () => {
     await w.tick();
     await new Promise((r) => setTimeout(r, 50));
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
-    w.stop();
-  });
-});
-
-describe('level-triggered archiving', () => {
-  it('archives a merged, idle, unattached workspace', async () => {
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
-    await w.tick();
-    await vi.waitFor(() => expect(calls).toContainEqual(['ws-archive', '--session', 'demo-quiet-basin']));
-    w.stop();
-  });
-
-  it('does not archive a merged workspace an OPEN RUN names, even with no hold at all', async () => {
-    // THE WHOLE POINT OF THE RUNG, and the reason an absent hold stopped being
-    // sufficient: release-then-crash and the archive-vs-hold race both leave a
-    // live wave's workspace unheld for a window, and this sweep is destructive.
-    // Asserted from THIS harness as well as `hold-gate.test.ts`'s because this
-    // is the file whose archive path the rung actually changes in production.
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    // NO hold is planted, deliberately.
-    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const opened = coord.openRun({ program: 'build4', title: 't', project: 'demo',
-      wave: 2, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator' });
-    if (!('id' in opened)) throw new Error('fixture openRun refused');
-    coord.setSession(opened.id, 'demo-quiet-basin');
-
-    const calls: string[][] = [];
-    const w = new FleetWatcher(
-      { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), coord },
-      new Bus(), 10_000);
-    await w.tick();
-    // `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
-    // signal a whole sweep (archiveMerged included) has actually finished.
-    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    w.stop();
-  });
-
-  it('RETRIES on the next sweep rather than consuming an edge', async () => {
-    // ws-archive is idempotent, so a level is free to re-fire. An edge
-    // consumed on one box and never received on the other strands the
-    // workspace in a state the UI claims was archived.
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
-    await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
-    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
-    await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(2));
-    w.stop();
-  });
-
-  it('does NOT archive a busy session', async () => {
-    const home = seed(['demo-quiet-basin']);
-    const dir = path.join(home, '.claude', 'sessions');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, '4242.json'), JSON.stringify({ pid: 4242, sessionId: '1'.repeat(36), cwd: '/d', status: 'busy', statusUpdatedAt: 1 }));
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
-    await w.tick();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    w.stop();
-  });
-
-  it('does NOT archive when the status is UNKNOWN — never collapse unknown to idle', async () => {
-    // liveStatus returns 'idle' when the status file is unreadable, and in
-    // remote mode that read crosses the agent WS: a socket hiccup would
-    // otherwise kill a running turn.
-    const home = seed(['demo-quiet-basin']);   // no sessions/<pid>.json at all
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
-    await w.tick();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    w.stop();
-  });
-
-  it('does NOT archive a session someone is watching', async () => {
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    const bus = new Bus();
-    bus.on('session:demo-quiet-basin', () => {});
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), bus, 10_000);
-    await w.tick();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    w.stop();
-  });
-
-  it('does NOT archive an unknown phase, at any staleness', async () => {
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor('{"phase":"unknown","reason":"timeout"}', calls)), new Bus(), 10_000);
-    await w.tick();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    w.stop();
-  });
-
-  it('notifies AFTER the archive succeeded, promising only navigation', async () => {
-    // PushPayload is {title, body, sessionId?} and push-sw.js passes no
-    // actions[], so any "tap to keep / tap to cancel" copy would be a straight
-    // lie on the lock screen.
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    // Typed with `PushPayload`, not `async () => {}`: an untyped, zero-arg
-    // mock infers a zero-arg call-args TUPLE, so indexing `[0]` below does
-    // not typecheck under a test/-inclusive tsconfig — invisible here only
-    // because the real server tsconfig excludes test/ (pre-merge fix round,
-    // finding 14-M1; this was copied verbatim from the brief itself).
-    const notify = vi.fn(async (_payload: PushPayload) => {});
-    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
-    const w = new FleetWatcher(deps, new Bus(), 10_000);
-    await w.tick();
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    const payload = notify.mock.calls[0]![0];
-    expect(payload.title).toContain('merged');
-    expect(payload.body).toContain('nothing deleted');
-    expect(payload.sessionId).toBe('demo-quiet-basin');
     w.stop();
   });
 });
@@ -685,169 +556,285 @@ describe('the unsupported-verb branch — a fleet that never advertised pr-state
     expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);   // never called at all
     w.stop();
   });
+});
 
-  // ROUND 3 — the third instance of NF10's class, and the only one that is not
-  // a route. `archiveMerged` is LEVEL-triggered by design (see the retry test
-  // above), so on a host whose ccd predates `ws-archive` the ungated call did
-  // not fail once: it re-fired for every merged session on every sweep,
-  // forever. The gate has to sit here and not only on the two routes.
-  it('never fires the level-triggered ws-archive at a fleet that lacks the verb', async () => {
+// THE MERGED LANE ANNOUNCES AND NEVER ACTS (operator ruling, 2026-09-10).
+//
+// This lane used to run `ccd ws-archive` on a merged workspace the moment it
+// measured idle and unwatched — the only destructive ccd call in this server
+// that NOBODY ASKED FOR. (The two that remain both answer a request: the
+// operator's own `/archive` route, and a run close carrying
+// `{state:'failed', archive:true}`.) `ws-archive` deletes nothing on disk, but
+// it unsupervises the unit and kills the tmux pane, so it ends the session, its
+// scrollback and any turn in flight (`ccd/ccd`'s `_ws_archive`).
+//
+// MEASURED on the live fleet the day this changed: 7 of the box's 13 archive
+// markers read `merged:#N`, five of them from the preceding 48 hours — and ALL
+// FIVE sat on sessions that were alive again, revived by hand after the sweep
+// had killed them. The sweep was not tidying finished work; it was interrupting
+// work in progress, on a level trigger that re-fired every 120 s (`ws-restore`
+// clears the marker that suppresses it, so a restored workspace was re-killed).
+//
+// Its safety ladder could not see the harm and never could: `archiveSafety`
+// measured an INSTANTANEOUS `idle`, and a session parked at the prompt while
+// its operator reads the last answer measures exactly that. A `tmux attach` on
+// the fleet box was invisible to it; only an open PWA websocket counted.
+//
+// So the act is gone and the SENTENCE stays: one notification per (workspace,
+// PR), whatever is or is not in the way. Archiving remains a thing a human
+// does — `POST /api/sessions/:id/archive` from the PWA, `ccd ws-archive` at a
+// terminal — and the coordinator's own lane (`coord/close.ts`'s
+// `{state:'failed', archive:true}`) is untouched.
+describe('the merged lane announces and never acts', () => {
+  it('runs NO ws-archive for a merged, idle, unattached workspace, and says so instead', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    // `pr-state` IS advertised — otherwise the sweep short-circuits upstream at
-    // watch.ts's own gate and this would pass for the wrong reason, proving
-    // nothing about archiveMerged.
-    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      fleetState: { connected: true, downSince: null, ccdVerbs: ['pr-state'], rosterFp: null, build: null } };
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
-    // Waiting on the merged PHASE is not enough and would make this pass both
-    // ways: `tick()` fires `sweepPr()` with `void`, and archiveMerged runs
-    // AFTER the phase lands, so the assertion would race the very call it
-    // forbids. `prSweepStartedAt` returns to 0 in sweepPr's own `finally`, so
-    // it is the one signal that the whole sweep — archiveMerged included —
-    // has finished. (Measured: without this wait, deleting the gate under test
-    // leaves the test green.)
-    const started = (): number => (w as unknown as { prSweepStartedAt: number }).prSweepStartedAt;
-    await vi.waitFor(() => { expect(started()).not.toBe(0); });
-    await vi.waitFor(() => { expect(started()).toBe(0); });
-    expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged');
-    expect(calls).toContainEqual(['pr-state', '--project', 'demo']);
+    // `prSweepStartedAt` back to 0 is the one signal the whole sweep finished —
+    // waiting on the absence of a call otherwise proves only that it is slow.
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    // Level, not edge: the state is untouched, so the archive happens on the
-    // first sweep after the host is upgraded.
-    expect(w.currentPrStates().get('demo-quiet-basin')?.reason).toBeNull();
-    w.stop();
-  });
-});
-
-describe('archiveSafety — an unconfigured wrapper is UNKNOWN, never a silent ok', () => {
-  it('a valid pid with no cfgDir for its wrapper is unknown, not ok', async () => {
-    // Isolates `!pid || !cfgDir` from `||`-vs-`&&`: pid resolves fine, but
-    // the wrapper is not in this box's roster (`cfg.roster`), so
-    // `configDirFor` answers undefined. `||` must short the whole check to
-    // 'unknown' BEFORE ever handing `undefined` to readLiveState.
-    const home = seed(['demo-quiet-basin']);
-    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.wrapper'), 'ghost-wrapper');
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    const payload = notify.mock.calls[0]![0];
+    expect(payload.title).toContain('merged');
+    expect(payload.body).toContain('#42');
+    expect(payload.body).toContain('nothing archived');
     w.stop();
   });
 
-  it('an id with no registry record at all is unknown, not ok', async () => {
-    // Mutation-sweep finding: collapsing `if (!rec) return 'unknown';` to
-    // `return 'ok';` survived every other test — nothing calls archiveSafety
-    // for an id readRegistry() cannot find. Real gap, not equivalent:
-    // archiveMerged's OWN records come from an EARLIER readRegistry() call
-    // than archiveSafety's; if the entry vanishes between the two reads (the
-    // session was reaped, or its registry files were mid-write), an
-    // unidentifiable session must defer, never be treated as safe.
-    const home = seed(['demo-quiet-basin']);   // registry has demo-quiet-basin, NOT demo-ghost
-    const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor('', calls)), new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-ghost')).resolves.toEqual({ verdict: 'unknown', held: null });
-    w.stop();
-  });
-
-  // Registry ladder (architecture doc, increment 1's second half): a row
-  // that USED to be dropped entirely (readRegistry's old blanket rule) is
-  // now DEGRADED instead — `readSessionRecord` finds it — so `!rec` alone no
-  // longer catches this case. Written FIRST and confirmed red against the
-  // pre-gate code, which would fall through past the (now-added)
-  // `measuredIdentity` check straight to `configDirFor(cfg, rec.wrapper)`
-  // — `rec.wrapper` measured fine here, so it would have answered `'ok'`
-  // for a row whose OWN `.workdir`/`.uuid` this read could not confirm at
-  // all, preserving the pre-change behaviour for the previously-dropped row
-  // is exactly what this pins.
-  // Fix (blocking review finding 6): the fixture below is not enough on its
-  // own to kill the guard. `.workdir` is degraded, but this fixture used to
-  // stop at `!live` too (no `<pid>.json` on disk) — `readLiveState` finds
-  // nothing either way, so `{verdict:'unknown', held}` (with `held: null`
-  // anyway) arrives for an entirely unrelated reason, and the guard's own
-  // deletion is undetectable: reverted to a plain
-  // `{uuid: r.uuid, wrapper: r.wrapper, workdir: r.workdir}` read, `identity`
-  // still carries wrapper `'claude'` (untouched — this fixture never
-  // degrades it) and `pid`, and this same fixture reaches
-  // `configDirFor(...)` fine, `readLiveState` fine, and a concrete verdict —
-  // 'ok' or 'busy' — falls out the OTHER end, never 'unknown'. `liveIdle`
-  // below closes that gap: a busy/idle live-state file makes the
-  // guard-LESS path resolve to a real, concrete 'ok', so only the GUARD
-  // itself — not an unrelated `!live` stop — can be what still answers
-  // 'unknown' here.
-  it('a row LISTED but with an unmeasured identity field is unknown, not ok — SKIP, preserving the ' +
-     'previously-dropped row\'s own answer exactly', async () => {
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const unreadableWorkdir = unreadableField('demo-quiet-basin', 'workdir');
-    const calls: string[][] = [];
-    const w = new FleetWatcher({ ...testDeps(home, runnerFor('', calls)), io: unreadableWorkdir }, new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: null });
-    w.stop();
-  });
-});
-
-describe('archiveSafety — the tmux arm answers three ways, and silence REFUSES (D-309 (was D-B8-13))', () => {
-  it('a tmux that DID NOT ANSWER is unknown, never ok — silence is not proof there is nothing to destroy', async () => {
-    // D-308 (was D-B8-12)'s fail-shut polarity, carried to the server seam it was missing
-    // from. This function's four other cannot-tell branches all answer
-    // 'unknown'; the tmux branch was the one that answered 'ok' — on the one
-    // reading whose caller ARCHIVES on that answer, with the same comment and
-    // the same defect as ccd's `_ws_status` before D-308. The fixture plants
-    // an idle live-state so BOTH ways of losing the guard die here: reverting
-    // to the boolean (`!hasSession` -> 'ok') answers 'ok' directly, and letting
-    // `unknown` fall through to the pid/live reads resolves a concrete 'ok'
-    // off the live file. Only the guard itself can be what answers 'unknown'.
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
-    const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
-    };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
-    // `held` carried, not nulled: the unknown answer still feeds the caller's
-    // held-merged push, same as the pid/cfgDir unknown arm below it.
-    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'unknown', held: 'program:orca wave:2/3' });
-    w.stop();
-  });
-
-  it('a session tmux PROVED gone is ok — the genuine no-pane answer keeps its meaning', async () => {
-    const home = seed(['demo-quiet-basin']);
-    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
-    const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: "can't find session: cc-demo-quiet-basin\n" };
-      return { code: 0, stdout: '', stderr: '' };
-    };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
-    await expect(w.archiveSafety('demo-quiet-basin')).resolves.toEqual({ verdict: 'ok', held: 'program:orca wave:2/3' });
-    w.stop();
-  });
-});
-
-describe('the idempotent re-fire — "already archived" must not push a second notification', () => {
-  it('does not notify when ws-archive reports it was already archived', async () => {
+  it('announces a SECOND merged PR from the same workspace — the latch is per (workspace, PR), not per workspace', async () => {
+    // The reason the act had to go, stated as a test: a workspace that merges
+    // one PR is usually not finished. Now that it survives its first merge it
+    // can land another, and the operator has to hear about that one too.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const notify = vi.fn(async () => {});
-    const run: Runner = async (_cmd, args) => {
-      calls.push(args);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'pr-state') return { code: 0, stdout: mergedLine('demo-quiet-basin'), stderr: '' };
-      if (args[0] === 'ws-archive') return { code: 0, stdout: 'already archived demo-quiet-basin', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
-    };
-    const deps = { ...testDeps(home, run), push: { notify } as never };
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
-    await vi.waitFor(() => expect(calls).toContainEqual(['ws-archive', '--session', 'demo-quiet-basin']));
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+
+    // The same sweep again with the SAME PR: the latch holds, no second push.
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    // A NEW pr-state reading, a higher PR number: `boundRow` binds the newest
+    // PR on the branch, so this is what a second merge from one workspace
+    // actually looks like on the wire.
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(mergedLine('demo-quiet-basin', 43), calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    expect(notify.mock.calls[1]![0].body).toContain('#43');
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+  });
+
+  it('announces a BUSY session\'s merge too — liveness gated a destructive act, and there is no longer one to gate', async () => {
+    const home = seed(['demo-quiet-basin']);
+    const dir = path.join(home, '.claude', 'sessions');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, '4242.json'), JSON.stringify({ pid: 4242, sessionId: '1'.repeat(36), cwd: '/d', status: 'busy', statusUpdatedAt: 1 }));
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+  });
+
+  it('announces a WATCHED session\'s merge too — an open chat screen is not a reason to stay silent', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const bus = new Bus();
+    bus.on('session:demo-quiet-basin', () => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
+    const w = new FleetWatcher(deps, bus, 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+  });
+
+  it('takes NO tmux or live-state reading for a merged row — the lane measures nothing because it acts on nothing', async () => {
+    // `archiveSafety`'s pane pid + `<pid>.json` reads existed to prove an
+    // affirmative idle before destroying something. In remote mode each one is
+    // an agent round trip, per merged row, per sweep — and merged rows now
+    // ACCUMULATE, because nothing retires them on a timer any more. The lane
+    // must not pay that price for a sentence it can write from the snapshot.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    // `detectDialogs` takes its own capture-pane/list-panes for every row, so
+    // the assertion is about the SWEEP's own extra reads: with the lane's
+    // measurement gone there is exactly one `has-session` per tick (the dialog
+    // detector's), never a second one taken at an archive decision point.
+    expect(calls.filter((c) => c[0] === 'has-session').length).toBeLessThanOrEqual(1);
+    w.stop();
+  });
+});
+
+// THE RUNGS ABOVE THE ACT, which outlived it. Every one of them used to decide
+// whether to DESTROY a workspace; each now decides whether there is a sentence
+// at all (the phase, the degraded row) and what clause it carries (the hold,
+// the open run). They are pinned apart from the describe above because of what
+// makes them non-vacuous: an assertion that no `ws-archive` ran would now pass
+// with the whole lane deleted, so each of these turns on the ANNOUNCEMENT the
+// rung changes — its presence, its absence, or its exact words.
+describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
+  it('stays silent on an UNKNOWN phase, and speaks the moment the sweep reads merged', async () => {
+    // `pr?.phase !== 'merged'` is the same rung that used to mean "unknown
+    // never archives", and it is still why a `gh` timeout does not tell the
+    // operator their PR landed. The second sweep is what keeps this from being
+    // a tautology: exactly ONE thing changes between them, the phase.
+    //
+    // A per-session grey (the line carries an `id`), NOT the id-less shape the
+    // deleted test used: that one is a whole-repo failure, so it would back the
+    // project off and the second sweep would never reach `pr-state` at all.
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const grey = JSON.stringify({ id: 'demo-quiet-basin', phase: 'unknown', reason: 'timeout' });
+    const w = new FleetWatcher(
+      { ...testDeps(home, runnerFor(grey, calls)), push: { notify } as never }, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
     expect(notify).not.toHaveBeenCalled();
+
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body).toContain('nothing archived');
+    w.stop();
+  });
+
+  it('says nothing at all for a DEGRADED row, and everything for the same row measured', async () => {
+    // `measuredIdentity(r) === null` no longer guards an act — there is none —
+    // but it still guards the CLAIM. `held` reads null on a row whose files
+    // this box could not read exactly as it does on a workspace nobody holds,
+    // so announcing the unqualified "nothing is in the way" off a degraded row
+    // states something never measured. Silence is the honest answer.
+    //
+    // The second watcher is the whole point: one fixture, one field, and the
+    // announcement appears. Without it this would pass with the lane deleted.
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      io: unreadableField('demo-quiet-basin', 'workdir'), push: { notify } as never }, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
+    expect(notify).not.toHaveBeenCalled();
+    w.stop();
+
+    const measured = vi.fn(async (_payload: PushPayload) => {});
+    const w2 = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify: measured } as never }, new Bus(), 10_000);
+    await w2.tick();
+    await vi.waitFor(() => expect(measured).toHaveBeenCalledTimes(1));
+    w2.stop();
+  });
+
+  it('names the HOLD in the sentence, verbatim', async () => {
+    // The hold used to be the rung that REFUSED the archive; it is now the
+    // clause that explains why the workspace is still here. Asserted whole,
+    // not `toContain`: the reason string IS the display (`registry.ts`'s
+    // HOLD_UNREADABLE docstring), so a hold reworded, truncated or prefixed on
+    // its way to the tray is the defect this pins.
+    const home = seed(['demo-quiet-basin']);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'), 'program:orca wave:2/3');
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never }, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged — program:orca wave:2/3; nothing archived.');
+    w.stop();
+  });
+
+  it('names the OPEN RUN when nothing is held — and still announces with no coord store to ask', async () => {
+    // THE RUNG THAT AN ABSENT HOLD IS NOT ENOUGH ON ITS OWN. Release-then-crash
+    // and the archive-vs-hold race both leave a live wave's workspace unheld
+    // for a window; the run row outlives both, so it is what names the wave
+    // still working in a workspace whose PR just landed. It reaches the tray
+    // verbatim, same as the hold above.
+    //
+    // The second watcher pins the `?.`/`?? []` on `coord`: `testDeps` supplies
+    // no store, and a server with coordination switched off has no runs to be
+    // claimed by — so it announces the PLAIN sentence rather than throwing
+    // inside a void-dispatched sweep, where the TypeError would surface only
+    // as a notification that never came.
+    const home = seed(['demo-quiet-basin']);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({ program: 'build4', title: 't', project: 'demo',
+      wave: 2, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    coord.setSession(opened.id, 'demo-quiet-basin');
+
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      coord, push: { notify } as never }, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body)
+      .toBe(`PR #42 merged — run ${opened.id} is still open — build4 wave 2/3; nothing archived.`);
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    w.stop();
+
+    const coordless = vi.fn(async (_payload: PushPayload) => {});
+    const w2 = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify: coordless } as never }, new Bus(), 10_000);
+    await w2.tick();
+    await vi.waitFor(() => expect(coordless).toHaveBeenCalledTimes(1));
+    expect(coordless.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');
+    w2.stop();
+  });
+
+  it('addresses the push at the merged session and collapses on `merged-<id>#<pr>`', async () => {
+    // What the tray can actually do with this, and nothing more. `push-sw.js`
+    // passes no `actions[]`, so copy offering a choice would be a lie on the
+    // lock screen — the body is a statement of fact and `sessionId` is the
+    // only affordance, deep-linking to /s/<id>. The tag is the other half:
+    // `mergedNotified` is in-memory, so a restart may repeat this push, and
+    // the tag is what makes that repeat REPLACE the first rather than stack a
+    // second identical notification — and why the tag carries the PR NUMBER
+    // as well as the id: a workspace can land a second PR now, and an id-only
+    // key would let #43's announcement quietly overwrite #42's in the tray.
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_payload: PushPayload) => {});
+    const w = new FleetWatcher({ ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never }, new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    const payload = notify.mock.calls[0]![0];
+    expect(payload.sessionId).toBe('demo-quiet-basin');
+    expect(payload.tag).toBe('merged-demo-quiet-basin#42');
+    expect(payload.title).toBe('✓ merged › quiet-basin');
+    expect(payload.actions).toBeUndefined();
     w.stop();
   });
 });

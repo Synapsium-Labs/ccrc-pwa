@@ -225,8 +225,9 @@ export const MIGRATIONS: readonly string[] = [
 
   // ── 2: user_version 1 -> 2 ────────────────────────────────────────────────
   // `CoordStore.openRunsForSession` — "which OPEN runs name this session?" —
-  // is asked at three destructive decision points (close's fleet act,
-  // `archiveMerged`, the by-hand archive route). `runs` had no index on
+  // is asked at three decision points (close's fleet act, the by-hand archive
+  // route — both of which destroy — and `sweepMerged`, which only picks which
+  // sentence its merged push carries). `runs` had no index on
   // `sessionId`, and `state NOT IN (…)` is negated set membership, not
   // seekable, so the query planned as `SCAN runs`. Measured against the v1
   // DDL in an in-memory `node:sqlite`: `SCAN runs` before,

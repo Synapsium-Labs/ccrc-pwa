@@ -102,9 +102,11 @@ describe('README: workspace holds', () => {
 
   it('states the archive gate as it now is: an absent hold is NOT sufficient', () => {
     const section = holdsSection();
-    // Wave 2 — `archiveMerged` also asks coord.db, and the by-hand route
-    // refuses `run-open`. A section that still says a release re-arms the
-    // sweep is describing a build that no longer exists.
+    // Wave 2 — `archiveMerged` used to ask coord.db too; its announce-only
+    // successor `sweepMerged` still does (to pick the reason, not to gate an
+    // act), and the by-hand route refuses `run-open`. A section that still
+    // says a release re-arms the sweep is describing a build that no longer
+    // exists.
     expect(section).toMatch(/open run/i);
     expect(section).toMatch(/run-open/);
     expect(section).toMatch(/force/i);
@@ -178,7 +180,16 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/ws-rm/);
     expect(bullet.toLowerCase()).toMatch(/reap/);
     expect(bullet).toMatch(/forget/);
-    expect(bullet).toMatch(/archiveMerged/);
+    // NOT `/archiveMerged/` any more. That assertion bound this bullet's
+    // honesty to a FUNCTION NAME, and the function is gone (operator ruling,
+    // 2026-09-10 — the merged lane announces and unsupervises nothing). It
+    // stayed green only because the corrected README kept the word as history,
+    // so the next person to tidy a dead symbol out of the prose would have red
+    // this suite for a reason that has nothing to do with what it guards.
+    // What must not go silent is the CLAIM: this bullet is about which callers
+    // record `_ws_unsupervise`'s own `ccd` default, and the fact worth stating
+    // is that none of them now runs unasked.
+    expect(bullet.toLowerCase()).toMatch(/unattended/);
     // Grounded in the real default `_ws_unsupervise` falls back to.
     expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
   });

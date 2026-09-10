@@ -1130,11 +1130,14 @@ general remote-shell:
   from its own Bash tool gets, among other callers. And `pwa` is not what
   EVERY API-reachable path to a stopped session records — the several OTHER
   routes and lanes that reach `_ws_unsupervise` directly (`ws-rm`, the
-  archive/reap verbs, `forget`, `FleetWatcher.archiveMerged`) pass no
-  surface at all and record `_ws_unsupervise`'s own default, `ccd` — an
-  operator archiving a workspace from the PWA sees "stopped by ccd" on that
-  row, correctly, because ccd itself did the unsupervising there, not the
-  stop route.
+  archive/reap verbs, `forget`) pass no surface at all and record
+  `_ws_unsupervise`'s own default, `ccd` — an operator archiving a
+  workspace from the PWA sees "stopped by ccd" on that row, correctly,
+  because ccd itself did the unsupervising there, not the stop route. No
+  UNATTENDED lane is on that list any more: `FleetWatcher.archiveMerged`
+  was one, and `sweepMerged`, the lane that replaced it, pushes a
+  notification and unsupervises nothing — every path left to this seam is
+  one a human asked for.
   The capability is also conditional, not assumed — and its no-evidence
   default is the OPPOSITE of every other gated verb's. `stopSurfaceSupported`
   reads the same `ccdVerbs` channel `verbSupported`
@@ -1412,21 +1415,30 @@ answers a bare 400 `bad-request`, which is what a non-PWA client sees.
 
 A hold has more consumers than any one paragraph used to admit: **four rungs in
 ccd** — `ws-rm` and `ws-reap` refuse, `ws-release` removes, and `forget` refuses
-— plus the archive sweep, plus every place the PWA renders the reason. All four
-ccd rungs test `-e`, so an *unreadable* hold refuses too.
+— plus the merged sweep, which reads the hold to pick which notice it pushes,
+plus every place the PWA renders the reason. All four ccd rungs test `-e`, so an
+*unreadable* hold refuses too.
 
-`archiveMerged`'s auto-archive gate is *merged **and unheld*** — `held === null`
-is the conjunct — so a workspace idle between two waves of the same program
-reads as claimed, not finished, and survives a sweep even after its PR merges.
-The hold is re-read from the registry at the archive decision point, not taken
-from the snapshot the sweep opened with, so a hold placed *during* a sweep still
-lands. **Since Build 8, an absent hold is no longer sufficient**: the sweep also
-asks the server's `coord.db` whether an OPEN RUN still names the session, and
-skips if one does. That is what makes release-then-crash and the
-archive-vs-hold race stop mattering — the sweep asks the authoritative
-question, not a file that cannot answer it. The reason string is still
-display-only and parsed back nowhere; it merely gained a `run:<id>` so a human
-reading `~/.cc-sessions` can tell whose claim it is.
+`sweepMerged`, the lane that watches for a merged PR, ANNOUNCES and never acts:
+nothing in this server archives a workspace unasked. The hold therefore no
+longer gates a destruction — it picks the SENTENCE. A workspace that is
+*merged **and unheld*** — `held === null` is the conjunct — gets the plain
+`PR #N merged; nothing archived.`, while one idle between two waves of the
+same program reads as claimed, not finished, and gets `PR #N merged —
+<reason>; nothing archived.` instead. One push per (workspace, PR) — the
+number is in the latch key, because a workspace survives its own merge now and
+can land a second PR. The hold is taken
+from the snapshot the sweep opened with, not re-read at the push: the fresh
+registry read this used to take was there because the decision was destructive,
+and the cost of a stale one is a notice that does not name a hold placed thirty
+seconds ago — which the next PR's notice gets right. **An absent hold is still
+not the whole question**: since Build 8 the sweep also asks the server's
+`coord.db` whether an OPEN RUN still names the session, and names that run as
+the reason when one does, so release-then-crash (hold gone, run still open) does
+not read as finished — the sweep asks the authoritative question, not a file
+that cannot answer it. The reason string is still display-only and parsed back
+nowhere; it merely gained a `run:<id>` so a human reading `~/.cc-sessions` can
+tell whose claim it is.
 
 Destroying a workspace a program declared mid-flight takes two deliberate acts,
 never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
@@ -1526,11 +1538,13 @@ buy.
    run: a second `POST /api/runs`, naming the same `sessionId`, back to
    step 1 — then step 2's dispatch again, on the new run's id.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
-   ws-release`); the ordinary merged-and-unheld sweep archives it on its own
-   clock. An explicit abandon (`state:'failed'`) alone still only
-   *releases*, exactly like a normal final close — archiving instead needs
-   `archive:true` passed explicitly (the one call in this whole lane to
-   `ccd ws-archive`, mirroring the manual archive route including its 501).
+   ws-release`); nothing archives the workspace on its own after that — the
+   merged sweep only pushes its notification, so the workspace stays live and
+   supervised until a human archives it. An explicit abandon
+   (`state:'failed'`) alone still only *releases*, exactly like a normal final
+   close — archiving instead needs `archive:true` passed explicitly (the one
+   call in this whole lane to `ccd ws-archive`, mirroring the manual archive
+   route including its 501).
    **Caution:** `state:'failed'` with `final:false` and no `archive`
    re-holds the workspace under the *next* wave's reason even though this
    run just went terminal — abandoning mid-program needs `final:true` or

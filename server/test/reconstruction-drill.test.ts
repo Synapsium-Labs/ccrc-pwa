@@ -210,8 +210,9 @@ describe('the reconstruction drill', () => {
   });
 
   it('still recovers the program with the hold released, and SAYS the confidence dropped', () => {
-    // The final-merge state: the coordinator released, the sweep archived, the
-    // DB is gone. The ledger alone still answers, and the drill must not
+    // The final-merge state: the coordinator released, the workspace was
+    // archived by hand (nothing does that unattended anymore), the DB is
+    // gone. The ledger alone still answers, and the drill must not
     // pretend the corroboration it lost was never there.
     const dir = copyFixtureWithout(fx, 'registry/ccrc-pwa-clear-cove.hold');
     const r = reconstruct(dir);
