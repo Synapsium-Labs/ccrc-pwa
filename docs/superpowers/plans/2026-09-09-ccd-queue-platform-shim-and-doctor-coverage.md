@@ -317,10 +317,16 @@ sweep rather than one row. The 20-line comment at 3888-3907 enumerates this open
 existing lock file, a first-ever lock file and an unwritable `$REG` — every branch where `open` RETURNS,
 and none where it does not.
 
-### D-2381 — two prose claims measured false while verifying D-2347, one of them the coordinator's own
-**(a) D-2347's remedy clause is false for one input shape.** It says the fix is *"behaviour-identical for
-every input that answers today, since absent already returns 2"*. Measured on a clean worktree cut from
-`origin/main` at `24f32a18`, with the call bounded:
+### D-2381 — the spec calls three consumers durable; one of them is not
+**WITHDRAWN, the half this entry opened with.** It booked D-2347's false *"behaviour-identical for every
+input that answers today"* clause as a finding of mine. **The worker found the identical row
+independently and corrected D-2347 in place, in PR #78** — by the same method, extracting the function
+and driving it under `timeout 5` — and D-2347 is their number to correct. Two independent measurements
+produced the same table, which is why it is recorded here as CORROBORATION and not as a second finding:
+this program's own precedent is D-1742, *a finding closed twice on measurements nobody took is still ONE
+finding*. Their entry also declines to cite this plan's number, correctly: a `D-` ref in tracked prose
+seeds this project's ledger floor whether or not the number was issued to that plan, and
+`deviation-refs.test.ts` refuses it. The measurement, kept because Part D's D5 is written against it:
 
 | input | before | after `[[ -f "$f" && -r "$f" ]]` |
 |---|---|---|
@@ -336,8 +342,8 @@ writes to stderr and emits nothing, so the loop reads zero lines and the functio
 never observed. The change is correcting, but it IS a change. `ccd-redrive.test.ts` 30/30 after the fix;
 `ccd-resume-flag` + `transcript-ladder` + `ccd-project-pool` 106/106.
 
-**(b) `2026-08-12-swap-transcript-defect-family-design.md` §2.5 calls three consumers durable; one is
-not.** It reads *"Its three consumers are `_ws_archive_manifest`, `cmd_ws_audit` and `_ws_tombstone`: the
+**THE FINDING THIS ENTRY NOW CARRIES: `2026-08-12-swap-transcript-defect-family-design.md` §2.5 calls
+three consumers durable; one is not.** It reads *"Its three consumers are `_ws_archive_manifest`, `cmd_ws_audit` and `_ws_tombstone`: the
 durable records written when a workspace is archived, audited and reaped."* `_ws_archive_manifest` is
 durable (persisted by `_reg_set "$id" archivemanifest`) and `_ws_tombstone` is durable
 (`$REG/.reaped/<id>.json`), but `cmd_ws_audit` emits to **stdout only** and its own header says it
