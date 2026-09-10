@@ -16,7 +16,7 @@ Every task's requirements implicitly include this section.
 
 - **Work in a git worktree of `ws/graphify-compaction-card`** (superpowers:using-git-worktrees). Every path below is relative to that worktree's repo root. Run every vitest command from inside `server/`: `cd server && ./node_modules/.bin/vitest run test/<file>` — **never bare `npx vitest`** (it resolves a global copy and reports "no tests"). Run suites in the FOREGROUND with a tool timeout ≥ 600000 ms. Known load flakes to re-run in isolation before calling a break: `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`.
 - **Fixture HOMEs only.** Never run the hook, `ccd`, `ccrc` or `deploy.sh` against the real `$HOME`. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits`, `~/.ccrc` or any `claude-session@*` unit. Never run `graphify update` or any graph build — the ccrc sweep owns the write side; the helper READS `graphify-out/` and nothing else.
-- **The hook's standing contract** (`ccd/session-hook.sh` header): exit 0 on every path, write atomically or not at all, no network, no locks — unchanged; **no waiting** is amended ONCE, as spec §6's R2: the two compaction arms wait on the helper under `timeout` for at most `COMPACT_HELPER_TIMEOUT` (8 s, re-measured on this box's real graphs in Task 6 before it ships), off the hot path, after the hookstate write has landed. Task 6 corrects the header sentence. Every new call site is `|| true`/`|| return 0`-shaped; `find` is guarded with `command -v` inside the resolver (the file's `jq` idiom); `node` and `timeout` are NOT — their absence is indistinguishable from a failing helper at the call site, and a guard nothing can redden is not a mechanism. **Plan A prints nothing new**: SessionStart is still the only event that prints context, PreToolUse the only one that prints a decision; the `prints NOTHING on every other event` test keeps PreCompact and PostCompact in its loop and must stay green. The R1 "one printf" rule and the hook header's two-event sentence are NOT amended here — that is Plan C's, with the print.
+- **The hook's standing contract** (`ccd/session-hook.sh` header): exit 0 on every path, write atomically or not at all, no network, no locks — unchanged; **no waiting** is amended ONCE, as spec §6's R2: the two compaction arms wait on the helper under `_hook_timeout`, which locally resolves `timeout` then `gtimeout`, for at most `COMPACT_HELPER_TIMEOUT` (8 s, re-measured on this box's real graphs in Task 6 before it ships), off the hot path, after the hookstate write has landed. Task 6 corrects the header sentence. Every new call site is `|| true`/`|| return 0`-shaped; `_hook_timeout` resolves the deadline executable and returns 127 when neither exists, preserving the silent inert outcome; `node` is NOT guarded — its absence is indistinguishable from a failing helper at the call site, and a guard nothing can redden is not a mechanism. **Plan A prints nothing new**: SessionStart is still the only event that prints context, PreToolUse the only one that prints a decision; the `prints NOTHING on every other event` test keeps PreCompact and PostCompact in its loop and must stay green. The R1 "one printf" rule and the hook header's two-event sentence are NOT amended here — that is Plan C's, with the print.
 - **Only ccrc-owned artifacts change**: the hook, the helper, `deploy/deploy.sh`, `ccd/ccrc`, tests, README, this plan and the spec's status line. No `CLAUDE.md` anywhere (operator ruling 2026-09-02).
 - **Constants are defined once, in the hook, with the spec §2 values**: `COMPACT_CARD_MAX_CHARS=4000`, `CARD_MAX_CHARS=2400` (exists — **never moved, never raised**: it is the only defence for the ungated `GM_NODES`, D-1899), `CARD_TOTAL_MAX_CHARS` DERIVED as `$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))`, `COMPACT_CARD_MAX_AGE=1200` (the in-flight window), `COMPACT_LIVE_S=120` (liveness), `COMPACT_HELPER_TIMEOUT=8`, `COMPACT_WORKSET_MAX=12`, `GRAPH_GATE_MAX_BEHIND=10` (exists). In the helper: `WINDOW_CAP` = 16 MiB, `WORKSET_CAP` = 100, `GRAPH_MAX_BYTES` = 96 MiB. The jq shape predicate `COMPACT_SHAPE_PRED` is spelled ONCE and concatenated into both jq programs that need it.
 - **Registry files carry dot-free suffixes** — `.compactcard`, `.compactset`, `.compactions` — so `ccd/ccd`'s `_reg_purge` (which removes every dot-free `$REG/<id>.<suffix>` except `archived` and `reaping`, plus the explicitly named `hookstate.json`) unlinks them with the row. The same dot-free shape is what `_ws_slug_free` scans, so nothing may outlive its use: aged cards and sets are removed, never left (spec §6). Temp names are dot-PREFIXED and carry the writer's pid — the hook's `$REG/.<id>.<pid>.<suffix>.tmp` (its hookstate idiom), the helper's `$REG/.<name>.<pid>.tmp` — invisible to every suffix-shaped registry glob AND to `_reg_purge`, which is why PreCompact sweeps this id's stale `.compact*.tmp` temps (a helper killed by `timeout` between write and rename leaves one).
@@ -571,8 +571,9 @@ COMPACT_CARD_MAX_AGE=1200
 # Used as `find -mmin` minutes.
 COMPACT_LIVE_S=120
 # THE ONE WAIT THIS FILE ALLOWS (spec §6, amendment R2 of the header's
-# contract): both helper calls run under `timeout` for at most this many
-# seconds, off the hot path — PreCompact and PostCompact bracket a compaction
+# contract): both helper calls use `_hook_timeout`, resolving `timeout` or
+# `gtimeout`, for at most this many seconds, off the hot path — PreCompact and
+# PostCompact bracket a compaction
 # of at least 79 s — and after the hookstate write has landed. Argued from
 # measured inputs (node startup ~0.05 s, a 70 MB graph parsed and indexed in
 # ~1.5 s, a 16 MiB window mined in well under a second through a basename
@@ -1849,7 +1850,7 @@ Expected: PASS — every test in the file.
 6. Delete the first `slotIsMine` check (write regardless) → `THE SLOT CHECK` goes red (the ambiguous set is overwritten); delete the second → the same test stays green (the first check already refused) — record that the second check's window is the render's duration, pinned by reading, and the first is the mechanism.
 7. In `writeAtomic`'s `catch`, delete the `unlinkSync(tmp)` → `a write that cannot complete leaves no temp behind` goes red.
 8. In `loadGraph`, delete the `size > maxBytes` throw → the `too large` assertion goes red.
-9. In `cardCommand`, write `steered: o.steer === true` again → the `--steer is accepted and changes nothing` assertion goes red.
+9. In `cardCommand`, write `steered: true` again → the `--steer is accepted and changes nothing` assertion goes red.
 
 - [ ] **Step 6: Commit**
 
@@ -1880,7 +1881,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     const { transcript } = plantSession({ lines: workLines(tree) });
     expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
     const set = readSet();
-    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, served: false, parentLive: null, liveAgents: 0,
+    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, served: false, parentLive: null, liveAgents: null,
       files: [{ path: 'server/src/pane/statusline.ts', tag: 'touched', count: 1 },
               { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
       stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
@@ -1936,7 +1937,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(false);
   });
 
-  it('the helper runs under `timeout` with the constant, and the argv is the spec\'s', () => {
+  it('the helper runs through `_hook_timeout` with the constant, and the argv is the spec\'s', () => {
     const tree = cardTree(); plantHelper();
     stub('timeout', 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"');
     const { transcript } = plantSession({ lines: workLines(tree) });
@@ -1951,11 +1952,10 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(true);
   });
 
-  it('with no `timeout` on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
-    // A BEHAVIOUR pin, not a guard pin: there is no `command -v timeout` guard,
-    // because a missing `timeout` fails the call site exactly as a failing
-    // helper does (exit 127, swallowed) and a guard nothing can redden is not a
-    // mechanism. What this row holds is the outcome the spec's §4 promises.
+  it('with no timeout or gtimeout on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
+    // `_hook_timeout` tries both supported deadline names. When neither exists,
+    // it returns 127 and the swallowed helper call preserves the hook-owned set;
+    // this row pins the inert outcome the spec's §4 promises.
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['timeout']) });
@@ -1974,8 +1974,10 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
   });
 
   it('the file header declares the one wait it allows — the R2 amendment', () => {
-    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 14).join('\n');
+    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 16).join('\n');
     expect(head).toContain('COMPACT_HELPER_TIMEOUT');
+    expect(head).toContain('locally resolved');
+    expect(head).toContain('`timeout`/`gtimeout` deadline');
   });
 });
 ```
@@ -2001,21 +2003,21 @@ with
   [[ "$CS_SCOPE" != ambiguous ]] || return 0
   # A card needs a graph the gate would trust (the SAME predicate as the
   # search gate, so card and gate agree about which trees count) and the
-  # helper beside this file. `node` and `timeout` are NOT guarded: a missing
-  # one fails the call below exactly as a failing helper does (exit 127,
-  # swallowed), and a guard whose removal changes nothing observable is not a
-  # guard. On a userland with no `timeout` (BSD) the helper never runs, the
-  # set is consumed by PostCompact, and the journal stays empty — spec §4.
+  # helper beside this file. `node` remains unguarded: a missing one fails the
+  # call below exactly as a failing helper does. `_hook_timeout` resolves the
+  # deadline executable locally as `timeout` then `gtimeout`, and returns 127
+  # when neither exists; that failure is swallowed, so the set remains for
+  # PostCompact and the journal stays empty — spec §4.
   [ "$rc" -eq 0 ] && _hook_gate_tree || return 0
   [ -f "$COMPACT_HELPER" ] || return 0
   # THE ONE WAIT (spec §6, R2): at most COMPACT_HELPER_TIMEOUT seconds, after
   # the hookstate rename, bracketing a compaction of at least 79 s. Exit 0
   # wrote the card and rewrote the set; exit 3 rewrote the set with files [];
   # anything else — 1 (a refused slot, an oversized graph, a failure), 2, 124
-  # from timeout, 127 — leaves the hook's own set standing. Nothing is printed
-  # on any path (stage 1). `--steer` is never passed here: the print and its
-  # `steered` stamp are Plan C's.
-  timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" card \
+  # from the resolved deadline, 127 — leaves the hook's own set standing.
+  # Nothing is printed on any path (stage 1). `--steer` is never passed here:
+  # the print and its `steered` stamp are Plan C's.
+  _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" card \
     --transcript "$CS_TRANSCRIPT" --cwd "$GM_CWD" \
     --graph "$GM_CWD/graphify-out/graph.json" \
     --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
@@ -2045,10 +2047,11 @@ with
 # contract is absolute: exit 0 on every path, write atomically or not at
 # all, no network, no locks, no waiting — with ONE declared exception (the
 # compaction-card spec, §6 amendment R2): the PreCompact and PostCompact arms
-# wait on `~/.cc-sessions/compact-card.mjs` under `timeout` for at most
-# COMPACT_HELPER_TIMEOUT seconds, off the hot path (each brackets a compaction
-# of at least 79 s) and only after the hookstate write has landed. A hook that
-# can slow or break a session is worse than no hook.
+# wait on `~/.cc-sessions/compact-card.mjs` through the locally resolved
+# `timeout`/`gtimeout` deadline for at most COMPACT_HELPER_TIMEOUT seconds, off
+# the hot path (each brackets a compaction of at least 79 s) and only after the
+# hookstate write has landed. A hook that can slow or break a session is worse
+# than no hook.
 ```
 
 - [ ] **Step 5: Run and watch it pass**
@@ -2073,7 +2076,7 @@ Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TI
 
 - [ ] **Step 7: Mutation checks**
 
-1. Delete the `timeout "$COMPACT_HELPER_TIMEOUT"` prefix (run `node` bare) → `the helper runs under timeout` goes red (no argv file).
+1. Delete the `_hook_timeout "$COMPACT_HELPER_TIMEOUT"` prefix (run `node` bare) → `the helper runs through _hook_timeout` goes red (no argv file).
 2. Replace `--transcript "$CS_TRANSCRIPT"` with `--transcript "$tp"` → `a subagent's card is mined from ITS transcript` goes red (fleet.ts on the card).
 3. Delete `[ "$rc" -eq 0 ] && _hook_gate_tree || return 0` → `a graph further behind HEAD` goes red (a card appears).
 4. Delete `[ -f "$COMPACT_HELPER" ] || return 0` → no test reds (node fails on the missing file with the same outcome); the line is a short-circuit that saves a fork on an undeployed box, recorded here as unpinned by design.
@@ -2825,16 +2828,17 @@ _hook_compact_post() {
     fi
   fi
   [ -n "$extra" ] || extra='{"cwd":null,"built":null,"agent":null,"transcript":null}'
-  # From here every exit consumes the set. `node` and `timeout` are not
-  # guarded (a missing one fails the pipeline like a failing helper, exit 127
-  # swallowed); the helper file is, to save a fork on an undeployed box.
+  # From here every exit consumes the set. `node` remains unguarded (a missing
+  # one fails the pipeline like a failing helper); `_hook_timeout` locally
+  # resolves `timeout` or `gtimeout`, and its 127 is swallowed by the pipeline.
+  # The helper file is guarded to save a fork on an undeployed box.
   if [ ! -f "$COMPACT_HELPER" ]; then rm -f "$set"; return 0; fi
   # `jq -r` appends one newline; the helper trims before it measures. A PIPE,
   # not a process substitution: under `pipefail` a failed jq fails the
   # pipeline and this arm stops — a zero is never recorded for a summary that
   # was never read.
   m=$(jq -r '.compact_summary' <<<"$payload" 2>/dev/null \
-      | timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure "${sa[@]}" --trigger "$trig" 2>/dev/null) \
+      | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure "${sa[@]}" --trigger "$trig" 2>/dev/null) \
       || { rm -f "$set"; return 0; }
   rm -f "$set"
   # SHAPE GATE, direction one (spec §3.4): exactly one object of the pinned
@@ -3068,7 +3072,7 @@ In the agent lane, directly after `install_atomic ccd/session-hook.sh .cc-sessio
 
 ```bash
   # The compaction card's helper (compaction-card spec §2): plain node, no
-  # npm, read by the hook's PreCompact and PostCompact arms under `timeout`.
+  # npm, read by the hook's PreCompact and PostCompact arms through `_hook_timeout`.
   # 644 — `node` runs it; nothing executes it directly. Same lane, same
   # atomic install as the hook: the hook's guard for it is SILENT, so a box
   # reached by the hook and not the helper would simply never write a card.
@@ -3213,14 +3217,14 @@ git commit -m "docs: the compaction card in the README's hook section and in ccd
 
 ## Deviations found
 
-Numbers D-2384–D-2394 (the first review, eleven) and D-2411–D-2420 (the second review, ten) minted 2026-09-10 through `~/.local/bin/ccrc-api ledger allocate` (project `ccrc-pwa`; floor now 2421), each defined here in the same act.
+Numbers D-2384–D-2394 (the first review, eleven), D-2411–D-2420 (the second review, ten), and D-2446–D-2455 (the execution corrections, ten) were minted 2026-09-10 through `~/.local/bin/ccrc-api ledger allocate` (project `ccrc-pwa`; allocator floor now 2456), each defined here in the same act.
 
 - **D-2384 — the approved design's `agent_type` guard does not exist on the payloads.** Spec §3.1 guard 2, §3.3 step 0 and §3.4's guard were written as "`.agent_type` in the payload empty". Measured 2026-09-09 on 2.1.266 (five headless runs): the three compaction payloads for a subagent's compaction are byte-identical in key set to the main thread's — the parent's `session_id` and `transcript_path`, no agent field. Operator direction 2026-09-10: compaction works for a subagent exactly as for the main thread. Fix: the guard is gone; §3.0's scope rule replaces it, and the scope is a tag the console renders.
 - **D-2385 — the first scope rule ("newest agent transcript wins") was a race, refuted before any code.** Three opus refuters (2026-09-10) measured on this box's corpus: a compacting context writes nothing for ≥79 s, siblings write every 4–6 s, Workflow fan-outs run seven and eight agents at once, and 5 of 197 main-thread boundaries had a newer subagent file. `prompt_id` is the parent's on a subagent's rows; no `CLAUDE_*` variable names an agent. Fix: liveness (§3.0) — manual → main; no live agent → main; one live agent beside a quiet parent → that subagent; anything else → `ambiguous`, which withholds the card and is measured. Recorded so nobody re-derives "newest wins".
 - **D-2386 — one card and one set per session id, written by every context.** Two compactions of one session inside the in-flight window cross the pair and mislabel both journal lines, and no later arm can tell which context it serves. Fix: an unconsumed set younger than `COMPACT_CARD_MAX_AGE` at PreCompact is overlap — that compaction is `ambiguous` and the card is removed; the set's `at` is the card's first line and SessionStart(compact) serves only a matching pair; SessionStart and PostCompact never resolve.
 - **D-2387 — the set has two writers and two shapes.** The approved text had the helper as the set's only writer and exit 3 writing nothing; then PostCompact had no scope on a graphless tree. Fix: PreCompact writes the set always (`files: null` — not mined; `built`/`fresh` measured first so the journal carries them either way); the helper rewrites it on exit 0 and on exit 3 (`files: []` — mined, empty). Two conditions, two values.
 - **D-2388 — `COMPACT_CARD_MAX_AGE` is 1200 s, the in-flight window, not a 3600 s serve bound.** The approved value bounded only the card's serving; the set had no age at all and a card that failed the bound was left standing. Argued from the longest measured compaction (826 s, gpt lane) ×1.45; applied to the card (removed when older), the set (removed unread when older) and the overlap check.
-- **D-2389 — the helper timeout is 5 s, declared as amendment R2 of the hook header's "no waiting".** The approved 20 s was a round number, 120× the hook's whole-arm p95; the wait was undeclared. Argued from node startup (~0.05 s), a 70 MB graph parsed in 1.15 s and a 64 MiB window scan (~1 s) at roughly twice their sum. The header sentence is corrected (Task 6); `find`, `timeout` and `node` are guarded like `jq`; on a userland with no `timeout` the feature is inert and says so.
+- **D-2389 — the helper timeout is 8 s, declared as amendment R2 of the hook header's "no waiting".** The approved 20 s was a round number, 120× the hook's whole-arm p95; the wait was undeclared. Argued from node startup (~0.05 s), a 70 MB graph parsed in 1.15 s and a 64 MiB window scan (~1 s) at roughly twice their sum. The header sentence is corrected (Task 6); `find` is guarded inside the scope resolver, `node` remains unguarded, and D-2446 gives the deadline executable its portable local resolver. On a userland with neither deadline command, the feature is inert and says so.
 - **D-2390 — `find -printf` is GNU-only; the hook declares two userlands.** The first amendment's one-liner (`-printf '%T@ %p' | sort -n | tail -1`) would print nothing on BSD and silently answer `main` for every subagent compaction, and `sort -n` is locale-sensitive. Fix: `find -mmin` (GNU and BSD) with a bash `read` loop and a `-d` guard; no sort.
 - **D-2391 — hookstate's positional read-back gains `compaction` as the SIXTH line, before `subagents`.** D-1249's rule (the one unbounded-text field goes last) holds because the line is `null` or the `tostring` of an object that passed `COMPACT_SHAPE_PRED`, which escapes any newline; the predicate is spelled once and concatenated into both jq programs that need it (the helper-stdout gate and the read-back).
 - **D-2392 — the session's subagent directory is `${tp%.jsonl}/subagents`, not `<dirname tp>/<session_id>/subagents`.** Equivalent (the transcript's basename IS the session id, measured across five lanes), and it removes a second `jq` read of the payload and the shape gate a `$sid` interpolation would have needed.
@@ -3239,6 +3243,19 @@ The second review (2026-09-10, three opus refuters and a scout over the amended 
 - **D-2418 — the approved spec block fed `measure` through a process substitution while claiming `pipefail` semantics.** A redirection is not a pipeline: a jq that died mid-write would have handed the helper a truncated summary and recorded a short `chars`. Fix: the plan's pipe form is now the spec's.
 - **D-2419 — the rule recorded only its verdict, so its misfire rate could not be measured.** Fix: `parentLive` and `liveAgents` ride the set and the journal; the corpus measurement that closed the review's question — at an auto-compaction the parent's last row is 0.8 s old at p50, 3.7 s at p95, never 120 s (n=216) — is in spec §0.2.
 - **D-2420 — three new dot-free registry suffixes would have silently staled `ccd/ccd`'s enumerated purge inventory, which the first draft forbade itself from touching.** Fix: Task 11 adds the three names to the comment, re-stamps `ccd/ccd`'s provenance marker with the command `ownership.test.ts` prescribes, and pins the names.
+
+The execution pass found the following corrections; D-2446–D-2455 were allocated together before these definitions were written:
+
+- **D-2446 — a bare `timeout` conflicts with the shebang portability scanner and independent hook install.** The hook cannot borrow ccd's platform block. Fix: `_hook_timeout` locally resolves `timeout` then `gtimeout`; neither tool returns 127, which the existing silent call site swallows so the feature remains inert after the hook-owned set writes.
+- **D-2447 — the helper CLI main guard failed under symlink invocation.** Fix: `realpathSync` establishes executable identity.
+- **D-2448 — `readWindow`'s boundary-first chunk ignored the caller cap.** Fix: bound that read by cap minus already-read bytes.
+- **D-2449 — `tokenRegex`'s leading lookbehind is output-neutral but a linear-time cost guard.** The output-only proof caused a reversal; a 64 KiB timing-effect test now pins it.
+- **D-2450 — `TAG_RANK` duplicated `TAGS`, and unknown tags corrupted ordering.** Fix: derive the rank from `TAGS` and discard out-of-vocabulary tags.
+- **D-2451 — two Task 4 mutation recipes were non-diagnostic on the original fixture data.** Fix: replace them with distinguishing count data and a timing effect.
+- **D-2452 — Task 5's `steered:o.steer===true` mutation was vacuous because Plan A never forwards `--steer`.** Fix: mutate to `steered:true`.
+- **D-2453 — L1 plus basename was an invented file-node heuristic contrary to the approved `metadata.kind`-or-highest-degree semantics.** Fix: remove it and test conflicting candidates.
+- **D-2454 — the renderer stopped truncating at one file, allowing a long valid path to breach `maxChars` and clip mid-line without disclosure.** Fix: permit zero rows with `(+k files not shown)`.
+- **D-2455 — the graph cap used `stat(path)` then `read(path)`, permitting replacement or growth above cap.** Fix: open once, bounded-read `maxBytes + 1` from that descriptor, and close in `finally`.
 
 ## Self-review (writing-plans checklist, run before the numbers were minted)
 

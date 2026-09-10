@@ -2433,3 +2433,133 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(src.match(/^COMPACT_SHAPE_PRED=/gm)).toHaveLength(1);
   });
 });
+
+
+describe('the compaction card — PreCompact and the helper (spec §3.1)', () => {
+  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    const set = readSet();
+    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, served: false, parentLive: null, liveAgents: null,
+      files: [{ path: 'server/src/pane/statusline.ts', tag: 'touched', count: 1 },
+        { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
+      stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
+    const compactCard = readCard();
+    expect(compactCard.nonce).toBe(String(set.at));
+    expect(compactCard.text).toContain('graphify card — this context\'s working set at compaction, from graphify-out/ (built at');
+    expect(compactCard.text).toContain('- server/src/pane/statusline.ts [touched]');
+    expect(readState().state).toBe('working');
+  });
+
+  it('a subagent\'s card is mined from ITS transcript, and says so in the header', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({
+      lines: [tl.toolUse('Read', { file_path: path.join(tree, 'server/src/fleet.ts') })], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.toolUse('Read', { file_path: path.join(tree, 'pwa/src/lib/models.ts') })], age: LIVE }],
+    });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'subagent', agent: 'a1', files: [{ path: 'pwa/src/lib/models.ts', tag: 'touched', count: 1 }] });
+    const { text } = readCard();
+    expect(text).toContain('(subagent a1)');
+    expect(text).toContain('pwa/src/lib/models.ts');
+    expect(text).not.toContain('server/src/fleet.ts');
+  });
+
+  it('an ambiguous scope writes no card even with a graph and the helper', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet()).toMatchObject({ scope: 'ambiguous', files: null });
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a graph further behind HEAD than the gate allows writes the set but no card', () => {
+    const tree = path.join(home, 'tree'); plantHelper();
+    const first = gitTree(tree, 12);                         // HEAD is 11 commits past the graph
+    plantGraph(tree, { built: first, nodes: NODES, content: GRAPH });
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(readSet()).toMatchObject({ files: null, fresh: '11 commits behind HEAD' });
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a failing helper, a missing helper, and a helper printing garbage each leave the hook\'s own set', () => {
+    const tree = cardTree();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));                        // no helper planted
+    expect(readSet().files).toBeNull();
+    fs.rmSync(setFile());
+    plantHelper(); stub('node', 'printf garbage; exit 1');
+    run(preCompact(tree, transcript));
+    expect(readSet().files).toBeNull();
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('the helper runs through `timeout` with the constant, and the argv is the spec\'s', () => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"');
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const argv = fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
+    expect(argv.startsWith('8 node ')).toBe(true);
+    expect(argv).toContain(' card --transcript ');
+    expect(argv).toContain(` --transcript ${transcript} `);
+    expect(argv).toContain(' --max-chars 4000 --max-files 12 ');
+    expect(argv).toContain(` --scope main --at ${readSet().at}`);
+    expect(argv).not.toContain('--steer');                   // stage 1: never
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain(`_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
+}`);
+    const tree = cardTree(); plantHelper();
+    stub('gtimeout', 'printf \'%s\\n\' "$*" > "$HOME/gtimeout-argv"; shift; exec "$@"');
+    const bin = minimalPath(['timeout']);
+    fs.copyFileSync(path.join(home, 'bin', 'gtimeout'), path.join(bin, 'gtimeout'));
+    fs.chmodSync(path.join(bin, 'gtimeout'), 0o755);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript), { PATH: bin });
+    expect(fs.readFileSync(path.join(home, 'gtimeout-argv'), 'utf8')).toMatch(/^8 node /);
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('with no timeout or gtimeout on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
+    // The resolver makes the deadline executable portable while preserving the
+    // failure contract: when neither spelling exists, it returns 127 and the
+    // swallowed helper call leaves the hook-written set in place.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['timeout']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(readSet().files).toBeNull();
+    expect(fs.existsSync(cardFile())).toBe(false);
+    expect(readState().state).toBe('working');
+  });
+
+  it('a transcript with no tool calls: the set says mined-empty (files []), no card', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: [tl.user('hello')] });
+    run(preCompact(tree, transcript));
+    expect(readSet().files).toEqual([]);
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('the file header declares the one wait it allows — the R2 amendment', () => {
+    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 16).join('\n');
+    expect(head).toContain('COMPACT_HELPER_TIMEOUT');
+    expect(head).toContain('locally resolved');
+    expect(head).toContain('`timeout`/`gtimeout` deadline');
+  });
+});

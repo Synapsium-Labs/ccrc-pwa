@@ -3,10 +3,12 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network, no locks, no waiting. A hook that can slow or break a
-# session is worse than no hook. Consumed read-only by the ccrc server via
-# the agent (whitelist: .cc-sessions is readable; nothing here needs a
-# grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
+# all, no network, no locks, no waiting — except the compaction helper's one
+# hookstate-first, COMPACT_HELPER_TIMEOUT-bounded, locally resolved
+# `timeout`/`gtimeout` deadline. A hook that can slow or break a session is
+# worse than no hook. Consumed read-only by the ccrc server via the agent
+# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
+# sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
@@ -37,6 +39,17 @@ _hook_epoch_ms() {
   fi
   local t; t=$(date +%s%3N 2>/dev/null)
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
+}
+
+_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
 }
 
 # ── THE THREE ENVELOPES: R1's card, R5's deny, R6's nudge ─────────────────
@@ -759,9 +772,9 @@ _hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behi
 
 # ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
 # Called from the very end of this file, AFTER the hookstate rename: the
-# `working` stamp lands first and never waits on the helper (Task 6 adds it,
-# bounded by `timeout`). Prints nothing — stage 1. Every failure is silent and
-# total for what comes after it.
+# `working` stamp lands first and never waits on the helper (Task 6's sole
+# deadline is locally resolved as `timeout` or `gtimeout`). Prints nothing —
+# stage 1. Every failure is silent and total for what comes after it.
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" rc=0
@@ -807,6 +820,16 @@ _hook_compact_pre() {
         steered:false, served:false, files:null, stats:null}' 2>/dev/null) || return 0
   _hook_write_atomic "$set" "$doc" || return 0
   [[ "$CS_SCOPE" != ambiguous ]] || return 0
+  [ "$rc" -eq 0 ] && _hook_gate_tree || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+  _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" card \
+    --transcript "$CS_TRANSCRIPT" --cwd "$GM_CWD" \
+    --graph "$GM_CWD/graphify-out/graph.json" \
+    --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
+    --out "$cardf" --set "$set" \
+    --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
+    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" \
+    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1 || true
   return 0
 }
 
@@ -945,14 +968,17 @@ COMPACT_CARD_MAX_AGE=1200
 # Used as `find -mmin` minutes.
 COMPACT_LIVE_S=120
 # THE ONE WAIT THIS FILE ALLOWS (spec §6, amendment R2 of the header's
-# contract): both helper calls run under `timeout` for at most this many
-# seconds, off the hot path — PreCompact and PostCompact bracket a compaction
+# contract): both helper calls use `_hook_timeout`, which resolves `timeout`
+# or `gtimeout`, for at most this many seconds, off the hot path — PreCompact
+# and PostCompact bracket a compaction
 # of at least 79 s — and after the hookstate write has landed. Argued from
 # measured inputs (node startup ~0.05 s, a 70 MB graph parsed and indexed in
 # ~1.5 s, a 16 MiB window mined in well under a second through a basename
 # index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
 # before it shipped — the p95 and peak RSS are recorded here by Task 6 of
-# plans/2026-09-10-graphify-compaction-card-plan-a.md: <p95> s / <RSS> MB.
+# plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc p95 0.23 s /
+# 103.7 MiB RSS; largest compatible graph (MekWarLive, 70.6 MB) p95 1.22 s /
+# 321.3 MiB RSS (five fresh-nonce runs each, 2026-09-10).
 COMPACT_HELPER_TIMEOUT=8
 COMPACT_WORKSET_MAX=12
 # ONE SPELLING of the shape a `compaction` object must have to reach
@@ -1444,7 +1470,7 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
 # PreCompact's card work runs LAST, after the `working` stamp is on disk: the
-# helper it will call (Task 6) is bounded by `timeout`, and the state write
-# must never wait on it. Nothing below prints.
+# helper it will call (Task 6) has one locally resolved deadline, and the
+# state write must never wait on it. Nothing below prints.
 if [[ "$event" == PreCompact ]]; then _hook_compact_pre || true; fi
 exit 0
