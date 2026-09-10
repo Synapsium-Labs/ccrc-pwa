@@ -1290,11 +1290,12 @@ export class FleetWatcher {
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
     /** WHICH RUN this push is about, when the lane raising it knows one
-     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: five of
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: four of
      *  this method's seven call sites are about a session and about no run at
      *  all, and an omitted field and an explicit `null` are the SAME fact for
      *  this one field — "about no run" — which is why folding them costs
-     *  nothing. The two lanes that know a run pass the one they already have. */
+     *  nothing. The three lanes that know a run pass the one they already
+     *  have: the mail lane, the run lane, and the blocked-sender lane. */
     runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
