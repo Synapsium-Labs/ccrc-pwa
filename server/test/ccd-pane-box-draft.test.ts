@@ -149,13 +149,14 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`
     // truncates there and silently drops the trailing ` -e` from the match.
     const calls = src.match(/_pane_box_draft "\$\(tmux capture-pane.*\)"/g) ?? [];
-    // Four sites: the two injectors (`_auto_compact_check`'s drafting guard,
+    // Five sites: the two injectors (`_auto_compact_check`'s drafting guard,
     // `_inject_spawn_effort`'s empty-box guard), `_redrive_after_spawn`'s
     // input-box-not-empty stand-down (D-2264) — the re-drive's own box-draft
     // check is the one place inside that function NOT narrowed to `tail -8`
-    // (see the comment above `_redrive_after_spawn` in ccd/ccd) — plus
-    // `_session_hard_blocked`'s own non-empty-box stand-down (D-2363).
-    expect(calls, 'the two injector call sites, the redrive stand-down and _session_hard_blocked').toHaveLength(4);
+    // (see the comment above `_redrive_after_spawn` in ccd/ccd) —
+    // `_session_hard_blocked`'s own non-empty-box stand-down (D-2363), and
+    // `_auto_stale_check`'s own non-empty-box stand-down (D-2360).
+    expect(calls, 'the two injector call sites, the redrive stand-down, _session_hard_blocked (D-2363) and _auto_stale_check (D-2360)').toHaveLength(5);
     for (const c of calls) expect(c, c).toContain(' -e');
   });
 });

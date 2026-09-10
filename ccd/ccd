@@ -970,6 +970,7 @@ RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this sessio
 RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
+STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -1806,8 +1807,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 133
-# invocations across 109 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 136
+# invocations across 112 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -12914,6 +12915,45 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   [[ -z "$cur" ]]
 }
 
+_pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
+  # THE BUNDLE'S OWN SENTENCE (2.1.267: `mu(l)` returns it for `phase:"stale"`,
+  # reached when the auto-resume tick finds a gap past the reset larger than its
+  # grace — a throttled or suspended process). Enter in that phase submits the
+  # continuation Claude Code already holds (`tengu_quota_auto_resume_stale_resumed`).
+  # Gated on the exact sentence so a changed one fails CLOSED — no keystroke —
+  # which is the lesson of 2026-09-08's trust dialog (a bare Enter exited five
+  # sessions). `ccd-limit-stale.test.ts` carries the sentence verbatim.
+  grep -qiE "usage limit has reset.*press enter to continue" <<<"$1"
+}
+
+_auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its own auto-continue went stale.
+  # Runs on the supervise tick BEFORE `_auto_swap_check`: the account has reset,
+  # the continuation is right there, and Enter is Claude Code's documented
+  # affordance for this phase — a swap would cost a restart and a transcript copy
+  # for nothing. Four stand-downs, each pinned: no prompt, a running turn, a
+  # non-empty box (a human is at the keyboard; Enter would submit THEIR text),
+  # and the cooldown, which also keeps the box-not-empty line from repeating
+  # every five seconds (D-2361).
+  local id="$1" t pane now last cur
+  t=$(_tmux "$id")
+  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  [[ -n "$pane" ]] || return 0
+  _pane_limit_stale "$pane" || return 0
+  echo "$pane" | grep -q "esc to interrupt" && return 0
+  echo "$pane" | grep -q "❯" || return 0
+  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
+  _reg_set "$id" stalepress "$now"
+  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  if [[ -n "$cur" ]]; then
+    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but the input box is not empty [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+    return 0
+  fi
+  echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  tmux send-keys -t "$t" Enter
+  return 0
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
@@ -15139,7 +15179,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
-        _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
         beat=$((beat + tick))
         (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
         ;;
