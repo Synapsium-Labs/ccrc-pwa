@@ -168,6 +168,50 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   });
 });
 
+describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () => {
+  type CountedIO = Parameters<typeof readProjectPools>[0];
+
+  const countingIO = (): { io: CountedIO; ops: string[] } => {
+    const ops: string[] = [];
+    const io: Record<string, unknown> = {};
+    for (const [member, impl] of Object.entries(localIO as unknown as Record<string, unknown>)) {
+      io[member] = typeof impl === 'function'
+        ? (...args: unknown[]): unknown => {
+            ops.push(member);
+            // Preserve methods such as readFile that derive through `this`.
+            return (impl as (...a: unknown[]) => unknown).apply(io, args);
+          }
+        : impl;
+    }
+    return { io: io as unknown as CountedIO, ops };
+  };
+
+  it('does no I/O when the root listing is unmeasurable', async () => {
+    tag('demo', 'pool-a');
+    const { io, ops } = countingIO();
+    expect(await readProjectPools(io, cfg(), null)).toEqual({ listed: false });
+    expect(ops).toEqual([]);
+  });
+
+  it('does no I/O when the measured root listing has no pools directory', async () => {
+    const names = await rootNames();
+    const { io, ops } = countingIO();
+    expect(await readProjectPools(io, cfg(), names)).toEqual({ listed: true, tags: new Map() });
+    expect(ops).toEqual([]);
+  });
+
+  it('does one readdir plus one measured read per non-dot entry', async () => {
+    tag('demo', 'pool-a');
+    tag('quiet-basin', 'pool-b');
+    tag('.demo.4242.tmp', 'pool-a');
+    const names = await rootNames();
+    const { io, ops } = countingIO();
+    const read = await readProjectPools(io, cfg(), names);
+    expect(read.listed).toBe(true);
+    expect(ops).toEqual(['readdir', 'readFileMeasured', 'readFileMeasured']);
+  });
+});
+
 describe('L3 may not narrow — four states in, four states out', () => {
   it('every state a marker can be in survives to the wire', async () => {
     tag('demo', 'pool-a');            // tagged

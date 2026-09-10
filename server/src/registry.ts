@@ -44,7 +44,8 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     ~22 a session's read fires — so it asks to be retried.
+   *                     23 [registry-read-census:fields] field reads a session's
+   *                     read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
    *                     null); the directory listing is the evidence, the same
@@ -288,8 +289,9 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires ~22 reads per session under one
- * request timeout). Held with an unreadable reason, never unheld: the consumer
+ * the agent WS is enough (`readRegistry` fires 23
+ * [registry-read-census:fields] field reads per session under one request
+ * timeout). Held with an unreadable reason, never unheld: the consumer
  * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
  * which binds a candidate workspace only on `cutShort(res) === true &&
  * winner.held === null` — on the stated ground that a workspace a cut-short
@@ -443,9 +445,11 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (registry.ts's own module docstring: "~22 reads per session" — a 24-session
-// fleet sees ~529 round trips PER `readRegistry` call) would otherwise log the
-// same stuck field dozens of times a minute. `warnOnce` is keyed `id#field`,
+// (23 [registry-read-census:fields] field reads per session — a 24-session
+// fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+// PER `readRegistry` call, before the conditional reconfirmation listing)
+// would otherwise log the same stuck field dozens of times a minute.
+// `warnOnce` is keyed `id#field`,
 // not just `field`, so one wrapper's degraded read never silences a
 // DIFFERENT session's — and it is pruned per id no longer listed, so a
 // reaped session's history does not live forever.
@@ -529,7 +533,8 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 22-field read plus the `SessionRecord` it builds — the ONE
+ * One session's 23-field read [registry-read-census:fields] plus the
+ * `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
  * copy of this shape to drift out of sync with the first. `names` is the
@@ -873,7 +878,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
-  // `ccd ws-release` landing anywhere inside the ~22-field-read window left
+  // `ccd ws-release` landing anywhere inside the 23-field-read window left
   // the name in the listing and no bytes behind it, indistinguishable at
   // `field()` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
@@ -930,10 +935,12 @@ export type SingleRead =
   | { found: false; reason: 'unlistable' };
 
 /**
- * `readRegistry`, narrowed to ONE session (C0.3). One `readdir` plus that
- * id's 22 field reads — ~23 agent-WS round trips in remote mode, instead of
- * `readRegistry`'s 24-generation sweep of the whole fleet (~529 round trips
- * on a 24-session fleet) — for every caller that only ever asked "what does
+ * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
+ * `readdir` plus that id's 23 [registry-read-census:fields] field reads — 24
+ * agent-WS operations [registry-read-census:single] in remote mode, instead of
+ * `readRegistry`'s 553-operation baseline [registry-read-census:fleet] on a
+ * 24-session fleet. The conditional reconfirmation listing described below is
+ * excluded from both baselines. This serves every caller that only asked "what does
  * the registry say about THIS session" and never needed uniqueness or a
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
  * loop body `readRegistry` uses, so there remains exactly one parser.

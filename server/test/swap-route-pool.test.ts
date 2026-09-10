@@ -313,3 +313,77 @@ describe('POST /api/sessions/:id/swap — both arms ride the per-session queue (
     expect(calls).toEqual([CCD_ARGV.swapCross(ID, 'claude-b') as unknown as string[]]);
   });
 });
+
+/**
+ * Run a refusal while another write holds the same session's queue slot.
+ * A pre-queue refusal answers immediately and never registers another key; a
+ * refusal moved inside `queue.run` cannot answer until the held write releases.
+ */
+const refusalAnswersWhileHeld = async (
+  a: FastifyInstance,
+  queue: RecordingQueue,
+  key: string,
+  payload: Record<string, unknown>,
+): Promise<Awaited<ReturnType<FastifyInstance['inject']>>> => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const order: string[] = [];
+  const heldRun = queue.run(key, async () => {
+    order.push('held-start');
+    await held;
+    order.push('held-end');
+  });
+
+  try {
+    await waitFor(() => order.length === 1, `the held slot on ${key} to start`);
+    const post = a.inject({ method: 'POST', url: `/api/sessions/${key}/swap`, payload });
+    let answer: Awaited<typeof post> | undefined;
+    void post.then((res) => { answer = res; });
+    await waitFor(() => answer !== undefined, `the refusal for ${key} to answer outside the held slot`);
+    expect(queue.keys, 'a refusal must not take a queue slot').toEqual([key]);
+    expect(calls, 'the server refuses without asking ccd').toEqual([]);
+    expect(order, 'the first write must still hold the slot').toEqual(['held-start']);
+    return answer!;
+  } finally {
+    release();
+    await heldRun;
+  }
+};
+
+describe('POST /api/sessions/:id/swap — every refusal is decided before the queued call', () => {
+  it('answers the crossPool 501 while the slot is held', async () => {
+    tag('demo', 'pool-a');
+    const queue = new RecordingQueue();
+    app = await open({ ccdVerbs: ['swap'], queue });
+    const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude-b', crossPool: true });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+  });
+
+  it('answers the ordinary 409 while the slot is held', async () => {
+    tag('demo', 'pool-a');
+    const queue = new RecordingQueue();
+    app = await open({ queue });
+    const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude-b' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a',
+    });
+  });
+
+  it('answers the ordinary 404 while the unlisted id\'s slot is held', async () => {
+    const queue = new RecordingQueue();
+    app = await open({ queue });
+    const res = await refusalAnswersWhileHeld(app, queue, 'claude-nothing', { wrapper: 'claude' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
+  });
+
+  it('answers the ordinary 503 while the slot is held', async () => {
+    const queue = new RecordingQueue();
+    app = await open({ io: { ...localIO, readdir: async () => null }, queue });
+    const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -16,6 +16,65 @@ import { unreadableField, absentField } from './ioDoubles.js';
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
 };
+
+const REGISTRY_CENSUS_TAG = 'registry-read-census';
+
+function buildRecordFieldReadCount(src: string): number {
+  const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
+  expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
+  return [...body![1]!.matchAll(/\bfield(?:Measured)?\(/g)].length;
+}
+
+function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
+  const claims = new Map<string, number[]>();
+  const commentText = src.split('\n').map((line) => {
+    const comment = line.match(/^\s*(?:\/\/|\*)\s?(.*)$/);
+    return comment?.[1] ?? '';
+  }).join(' ');
+  for (const match of commentText.matchAll(/(\d+)\s+[^\d\n]{0,40}?\[registry-read-census:(fields|single|fleet)\]/g)) {
+    const values = claims.get(match[2]!) ?? [];
+    values.push(Number(match[1]));
+    claims.set(match[2]!, values);
+  }
+  return claims;
+}
+
+describe('registry read census', () => {
+  it('derives the single-session and 24-session remote costs from buildRecord', () => {
+    const root = path.resolve(import.meta.dirname, '..', '..');
+    const registrySrc = readFileSync(path.join(root, 'server/src/registry.ts'), 'utf8');
+    const fieldReads = buildRecordFieldReadCount(registrySrc);
+    const expected = new Map<string, number>([
+      ['fields', fieldReads],
+      ['single', 1 + fieldReads],
+      ['fleet', 1 + 24 * fieldReads],
+    ]);
+    expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
+
+    const files = [
+      'server/src/registry.ts',
+      'server/src/fleet.ts',
+      'server/src/watch.ts',
+      'server/src/server.ts',
+      'server/test/registry.test.ts',
+      'server/test/routes.test.ts',
+    ];
+    const seen = new Map<string, number>();
+    for (const file of files) {
+      const src = file === 'server/src/registry.ts'
+        ? registrySrc
+        : readFileSync(path.join(root, file), 'utf8');
+      expect(src.includes(`[${REGISTRY_CENSUS_TAG}:`), `${file} has no tagged registry census claim`).toBe(true);
+      for (const [kind, values] of taggedRegistryCensusClaims(src)) {
+        const derived = expected.get(kind);
+        expect(derived, `${file} has an unknown ${REGISTRY_CENSUS_TAG} kind: ${kind}`).toBeDefined();
+        expect(values, `${file} has a stale ${kind} registry census claim`).toEqual(values.map(() => derived!));
+        seen.set(kind, (seen.get(kind) ?? 0) + values.length);
+      }
+    }
+    expect([...seen.keys()].sort()).toEqual([...expected.keys()].sort());
+  });
+});
 
 describe('readRegistry', () => {
   let home: string;
@@ -526,8 +585,9 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 22 field reads instead of
-// a whole-fleet sweep. These pin that it agrees with readRegistry's own
+// narrowed to one id — one readdir plus that id's 23
+// [registry-read-census:fields] field reads instead of a whole-fleet sweep.
+// These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
 describe('readSessionRecord', () => {
@@ -574,7 +634,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 22-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 23-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -594,7 +654,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-a-MekWarLive', {
       wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -615,10 +675,6 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
-    // substrate marker (D-310 (was D-B8-14)) + the strand marker (account
-    // pools, wave 3) — the number is pinned rather than derived because it IS
-    // the remote-mode cost: one round trip each, per session, per 2-second tick.
     expect(fieldReads).toHaveLength(23);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });

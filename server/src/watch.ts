@@ -786,10 +786,12 @@ export class FleetWatcher {
       // every dispatch, which is the precise lie spec §4.2 mints
       // `unmeasurable` to prevent.
       this.emitCoord(registryRead.listed ? registryRead.names : null);
-      // BEFORE the fail-shut return and on BOTH arms, `emitCoord`'s reason one
-      // line up: an unlistable registry is exactly the state in which nobody
-      // may decide a pool, so it must reach the wire on the tick it happens
-      // rather than leave the chips frozen on their last value.
+      // BEFORE the fail-shut return: an unlistable registry is exactly the
+      // state in which nobody may decide a pool, so `listed:false` must reach
+      // the wire now rather than leave the last pool snapshot frozen. That arm
+      // is free: `readProjectPools` returns before touching io when names is
+      // null. The listed arm's bounded cost and why it stays awaited are stated
+      // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
       await this.emitPools(registryRead.listed ? registryRead.names : null);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
@@ -885,8 +887,10 @@ export class FleetWatcher {
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
-      // in remote mode, ~21 field reads per session, ~505 round trips on a
-      // 24-session fleet, doubled for no reason. Sharing the read also keeps
+      // in remote mode, 23 [registry-read-census:fields] field reads per
+      // session, so a 24-session fleet's baseline is 553 agent-WS operations
+      // [registry-read-census:fleet] per sweep before conditional
+      // reconfirmation, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
       // above) and this assembly looking at the identical snapshot, which is
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
@@ -1176,9 +1180,19 @@ export class FleetWatcher {
    *  `null` names is an UNLISTABLE registry, and rides the wire as
    *  `listed: false` — every project `unreadable`, nobody decides.
    *
-   *  Byte-equality guarded like `emitCoord`. It DOES touch io (one `pools/`
-   *  readdir and one read per tagged project), so it is async and awaited by
-   *  the caller before the fail-shut return, for `emitCoord`'s own reason. */
+   *  Byte-equality guarded like `emitCoord`, but awaited for its own reason:
+   *  `lastPoolsJson` is written after the reads, so overlapping detached
+   *  sweeps could finish out of order and latch an older snapshot until the
+   *  tags changed again. `tick()`'s re-entrancy guard provides that ordering.
+   *
+   *  The cost in front of `detectDialogs` is explicit and bounded by project
+   *  tags, not fleet sessions: zero io when names is null or does not contain
+   *  `pools`, otherwise one `pools/` readdir plus one measured read per non-dot
+   *  entry. `project-pools-read.test.ts` pins that function. This is unlike the
+   *  untimed or queue-blocked lanes dispatched below the dialog sweep; it is
+   *  also smaller than the awaited whole-registry read already above it. Both
+   *  FleetIO implementations fold read failures into measured return values,
+   *  so no catch is needed around the reads. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
     const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
     const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
@@ -1872,8 +1886,9 @@ export class FleetWatcher {
     //
     // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
     // clock above has already returned on every other call by the time this
-    // line runs. D-283 was about the per-tick whole-fleet read, ~21 field
-    // reads per session in remote mode; this is one round trip a minute.
+    // line runs. D-283 was about the per-tick whole-fleet read, 23 field
+    // reads [registry-read-census:fields] per session in remote mode; this is
+    // one round trip a minute.
     const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (registryNames === null) {
       // FAIL SHUT, and this is the one read in this method where the direction

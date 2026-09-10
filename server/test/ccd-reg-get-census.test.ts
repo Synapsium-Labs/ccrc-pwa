@@ -128,11 +128,11 @@ describe('the `_reg_get` header states a census that stays honest', () => {
  * The SAME shape for the other census this branch keeps falsifying. `cmd_prefer`
  * carries a sentence counting the measured `.project` readers, and round 5
  * converted a third one at `cmd_start` in the very commit whose message books
- * "an enumeration falsified by the entry added directly below it" — leaving that
- * sentence one function away asserting two verbs where there are now three.
- * A comment saying "re-measure this" is how that happens; a case is how it stops.
+ * "an enumeration falsified by the entry added directly below it" — leaving the
+ * later sentence asserting two verbs where there are now three. A comment saying
+ * "re-measure this" is how that happens; a case is how it stops.
  */
-describe('the `_reg_read "$id" project` census one function over stays honest too', () => {
+describe('the `_reg_read "$id" project` census stays honest too', () => {
   it('both numbers `cmd_prefer` claims match its own cited command, filtered and bare', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const from = src.indexOf('THE CENSUS, SPELLED SO IT DOES NOT COUNT ITSELF');

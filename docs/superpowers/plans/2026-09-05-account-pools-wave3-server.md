@@ -3703,9 +3703,12 @@ block above.
   `_session_verdict`, `_alive`, `_reg_set`). The sweep corrected the copy in
   `server/test/ccd-reg-get-census.test.ts` to "in the same file" and did not correct this one — and
   `ccd-reg-get-census.test.ts`'s cardinal scan cannot catch it, because that scan only sees DIGITS, so
-  a false SPATIAL citation in the block it guards can never red. **NOT FIXED HERE:** `ccd/ccd` takes
-  `origin/main`'s side wholesale by ruling, and editing it would put this merge into a file whose
-  deploy is AGENT-FIRST for reasons unrelated to a comment. Reported for the C1 lane.
+  a false SPATIAL citation in the block it guards can never red. **FIXED IN THIS ROUND after the
+  coordinator reversed the initial C1 deferral:** `ccd/ccd` now says "earlier in this file", and the
+  two residual adjacency claims found in the same pass say "earlier"/"later" rather than invent a
+  distance. The generated marker was restamped and `ownership.test.ts` plus the ccd census/behaviour
+  suites passed. This is a source edit, not a deployment; D-2000 still blocks wave 3's deploy, whose
+  eventual lane remains agent-first.
 
 - **D-2429 (2026-09-10)** (the #81 merge) — **This branch's `ccd/ccd` was strictly OLDER than a fix that
   is merged AND deployed on the live fleet, so a per-file merge decision could have reverted production
@@ -3760,3 +3763,16 @@ block above.
   rather than restating a number). **A merge is where one branch's stale prose meets the other
   branch's corrected prose, and the conflict markers show you only the sentences that happen to
   collide.**
+
+- **D-2445 (2026-09-10)** (the #81 merge) — **When one parent deletes a use and the other parent adds
+  adjacent machinery, a union merge can keep an import whose last caller is gone.** Wave 3 imported
+  `readSessionRecord` into `watch.ts` for a second registry read in `emitPools`; main deleted that
+  second read while hardening the live-session path. The merge correctly kept main's deletion and
+  wave 3's pools imports, but a keep-both resolution could have retained `readSessionRecord` with no
+  call site: green under this tree's TypeScript settings, and one `noUnusedLocals` switch away from a
+  build failure. Measured on `d7c11dd7`: the token appears exactly once in `watch.ts`, inside the
+  historical comment that explains the deletion, while the import names only `measuredIdentity`,
+  `readRegistry` and `readRegistryMeasured`. **For a deletion/addition overlap, the merge question is
+  not "does each parent's text survive?"; it is "does every retained import still have a caller in the
+  composed tree?"** This is a review rule rather than new runtime machinery, so the measured caller
+  census is the mechanism and no ornamental source guard was added.

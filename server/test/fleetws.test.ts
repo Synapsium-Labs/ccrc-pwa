@@ -973,9 +973,10 @@ describe('fleet REST + WS', () => {
     });
 
     it('says listed:false when the registry root cannot be listed — the tick that fails shut still reports', async () => {
-      // The emitter sits BESIDE `emitCoord`, above the `!listed` early return,
-      // for `emitCoord`'s own reason: placed below it the chips would freeze on
-      // their last value while the box could not be read at all.
+      // The emitter sits beside `emitCoord`, above the `!listed` early return,
+      // because placed below it the chips would freeze on their last value
+      // while the box could not be read at all. Unlike synchronous `emitCoord`,
+      // its listed-arm I/O cost and ordering argument live on `emitPools`.
       let listable = true;
       const flaky: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
       const { ws, next, watcher } = await connect({ io: flaky });
@@ -1149,6 +1150,50 @@ describe('fleet REST + WS', () => {
       bus.emit('divergence', []);
       expect(await next()).toEqual({ type: 'divergence', divergences: [] });
 
+      ws.close();
+    });
+  });
+
+  describe('the ask chip on the two cold paths', () => {
+    const CHILD = 'claude-a-MekWarLive';
+    const CHIP = { state: 'held', parentId: 'coord-1', answeredBy: null };
+
+    const heldAsk = (): CoordStore => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.insertAsk({
+        childId: CHILD, parentId: CHIP.parentId, runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: Date.now(),
+      });
+      return coord;
+    };
+
+    it('GET /api/fleet carries the held ask on first paint', async () => {
+      app = await buildServer({ ...testDeps(home), coord: heldAsk() });
+      const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+      const body = res.json() as { sessions: Array<{ id: string; ask: unknown }> };
+      const row = body.sessions.find((session) => session.id === CHILD);
+      expect(row, 'the seeded session must reach the first paint').toBeDefined();
+      expect(row!.ask).toEqual(CHIP);
+    });
+
+    it('/ws/fleet carries the held ask on its cold-start snapshot', async () => {
+      app = await buildServer({ ...testDeps(home), coord: heldAsk() });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => {
+        ws.on('open', () => resolve());
+        ws.on('error', reject);
+      });
+
+      expect((await next()).type).toBe('hello');
+      const snapshot = await next();
+      expect(snapshot.type).toBe('fleet');
+      const row = snapshot.sessions.find((session: { id: string }) => session.id === CHILD);
+      expect(row, 'the seeded session must reach the cold-start snapshot').toBeDefined();
+      expect(row.ask).toEqual(CHIP);
       ws.close();
     });
   });

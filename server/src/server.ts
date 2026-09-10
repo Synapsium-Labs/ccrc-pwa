@@ -1467,10 +1467,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
-  // them a per-request check, not a periodic sweep) and previously called
-  // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
-  // remote mode, in front of every human keystroke — purely to answer "does
+  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // them a per-request check, not a periodic sweep) plus the constructed-id
+  // revival probe below, and previously called `readRegistry` — a 24-session
+  // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+  // per call in remote mode, before conditional reconfirmation, in front of
+  // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
   // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
   // the box regardless. One
@@ -1481,8 +1483,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (21 fields, each dropped whole on ANY single field read failing — see
-  // `registry.ts`'s "incomplete registry entry" comment), so a transient
+  // (23 [registry-read-census:fields] field reads; identity failures follow
+  // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
   const knownId = async (id: string, names?: readonly string[] | null): Promise<boolean> => {
@@ -2200,8 +2202,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // ONE queued invocation for both arms (D-2177, below). The two arms
     // differ only in WHICH argv they choose; every refusal — the 501, the
-    // 404/503 ladder, the pool verdict — is decided BEFORE the queued call,
-    // which is the hoist the PR-open route below carries the scar for.
+    // 404/503 ladder, the pool verdict — is decided BEFORE the queued call.
+    // `swap-route-pool.test.ts` pins both halves separately: one block proves
+    // both arms enqueue, and the "every refusal" block proves a refusal still
+    // answers while this session's queue slot is already held.
     let argv: CcdArgv;
     if (body.crossPool === true) {
       // The declared crossing skips the verdict entirely — that IS the
@@ -2215,10 +2219,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       }
       argv = CCD_ARGV.swapCross(id, body.wrapper);
     } else {
-      // The row, for its `project` — read at REQUEST TIME so the 409 decides on
-      // the same freshness `cmd_swap` will. `readSessionRecord` is one id's ~23
-      // field reads, not the fleet's; the ladder is `/stop`'s, because an
-      // unlistable registry proves nothing about THIS id and 404 would be a lie.
+      // The row, for its `project`, is a best-effort early refusal: it avoids
+      // queueing a swap that is already known to violate the pool rule. The
+      // queue wait can stale this snapshot, so `cmd_swap` re-measures and is the
+      // authoritative gate at execution time. `readSessionRecord` reads one id,
+      // not the fleet; the ladder is `/stop`'s because an unlistable registry
+      // proves nothing about THIS id and 404 would be a lie.
       const read = await readSessionRecord(deps.io, deps.cfg, id);
       if (!read.found) {
         return reply.code(read.reason === 'unlistable' ? 503 : 404)

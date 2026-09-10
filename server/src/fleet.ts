@@ -223,8 +223,9 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
   // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (readRegistry's 24-generation sweep, ~505 round trips
-  // on a 24-session fleet in remote mode, for a question about one session).
+  // the whole registry (a 24-session fleet's baseline is 553 agent-WS
+  // operations [registry-read-census:fleet] per `readRegistry` call, before
+  // conditional reconfirmation, for a question about one session).
   const read = await readSessionRecord(io, cfg, id);
   // A degraded row must never answer 'dead' — the interrupt route's own
   // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
@@ -360,8 +361,9 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, ~21 field reads per session, a few hundred ms
-   * after the one `tick()` used for `sweepHookStates`/`detectDialogs` — and a
+   * SEPARATE whole-fleet sweep, 23 [registry-read-census:fields] field reads
+   * per session, a few hundred ms after the one `tick()` used for
+   * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
    * still land in `sessions` with `unmeasured` empty (wrong), or vice versa.
    * Passing the rows in makes every lane inside one tick describe the

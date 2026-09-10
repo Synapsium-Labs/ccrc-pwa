@@ -349,9 +349,9 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 75 scanned + the static wildcard when the bundle is built. (59 stood
-    // here across several waves; the account-pools merge is where it was
-    // finally re-measured, not where it went stale.)
+    // 75 scanned + the static wildcard when the bundle is built.
+    // (59 stood here across several waves; the account-pools merge is where
+    // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
     // And the reconstruction really joins the tree back up, rather than reading
     // leaf segments: these two only exist if the depth walk works.
@@ -525,8 +525,9 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 75 scanned − 3 websockets − 27 exempt-and-scanned (28 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 45; the gated non-exempt
+    // The scanned, websocket and exempt counts are derived by the assertion
+    // below; the sole unscanned exemption is named and checked separately.
+    // The gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
     // do, — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`, and —
@@ -1462,5 +1463,11 @@ describe('the gate sweep states the route counts it derives', () => {
     expect(digitsIn(claim('websockets and ' + 'every HTTP route')),
       'the flag-off claim states a socket count this file does not derive')
       .toEqual([WS_ROUTES.length]);
+  });
+
+  it('the scanner-meta comment names the scanned route count', () => {
+    expect(digitsIn(claim('scanned + the ' + 'static wildcard')),
+      'the scanner-meta comment states a count this file does not derive')
+      .toEqual([ROUTES.length]);
   });
 });

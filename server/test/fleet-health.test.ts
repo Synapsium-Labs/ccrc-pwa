@@ -374,6 +374,8 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     } finally { await app.close(); }
   });
 
+  // The ask half of this composed first-paint handler, plus its websocket
+  // cold-start twin, is pinned by fleetws.test.ts's cold-path ask cases.
   it('a live assemble carries the measured pools for first paint', async () => {
     const home = mkTmp('ccrc-fleet-pools-');
     seedRoster(home);
