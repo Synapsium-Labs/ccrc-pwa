@@ -12,7 +12,7 @@ import { tl, GRAPH, graphJson, node } from './compactCardFixtures.js';
 import {
   EXIT, WINDOW_CAP, CHUNK, isBoundaryLine, readWindow, parseArgs,
   extensionsOf, tokenRegex, mineTokens, fileIndex, resolveToken, workingSet, WORKSET_CAP,
-  GRAPH_MAX_BYTES, loadGraph, loadLabels, fileFacts, renderCard, slotIsMine, cardCommand,
+  GRAPH_MAX_BYTES, readBoundedDescriptor, loadGraph, loadLabels, fileFacts, renderCard, slotIsMine, cardCommand,
 } from '../../ccd/compact-card.mjs';
 
 const HELPER = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -296,6 +296,26 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(loadLabels(path.join(dir, 'absent.json'))).toEqual({});
   });
 
+  it('keeps graph parsing bounded to one descriptor: exactly maxBytes is accepted, maxBytes + 1 is refused, including growth after fstat', () => {
+    const json = graphJson(GRAPH, 'deadbeefcafe');
+    const cap = Buffer.byteLength(json);
+    const graph = write('at-cap.json', json);
+    expect(loadGraph(graph, cap).files.size).toBe(12);
+    expect(() => loadGraph(write('over-cap.json', json + ' '), cap)).toThrow(/too large/);
+
+    const fd = fs.openSync(graph, 'r');
+    let grew = false;
+    try {
+      expect(() => readBoundedDescriptor(fd, cap, (readFd, buffer, offset, length, position) => {
+        if (!grew) { fs.appendFileSync(graph, ' '); grew = true; }
+        return fs.readSync(readFd, buffer, offset, length, position);
+      })).toThrow(/too large/);
+    } finally {
+      fs.closeSync(fd);
+    }
+    expect(grew).toBe(true);
+  });
+
   it('fileFacts: the community label, top FIVE symbols by degree, the top three dependents OUTSIDE the working set with the rest counted', () => {
     const { graph, labels } = plant();
     const g = loadGraph(graph), l = loadLabels(labels);
@@ -313,6 +333,22 @@ describe('the card from the graph (spec §3.2)', () => {
     // no `metadata.kind`, no L1 node named after the file: the top-degree node stands in
     expect(fileFacts('shared/api.ts', g, l, new Set(['shared/api.ts']))).toEqual({
       community: 'api.ts', symbols: ['FLEET_PROTO:L5'], usedBy: ['pwa/src/session/ModelSheet.tsx', 'server/src/fleet.ts'] });
+  });
+
+  it('fileFacts treats only metadata.kind=file as a file node; an L1 basename lookalike loses to the top-degree representative and that representative is not a symbol', () => {
+    const l1Basename = node('skew_l1', 'skew.ts', 'server/src/skew.ts', 1, 1);
+    const topDegree = node('skew_top', 'topDegree', 'server/src/skew.ts', 42, 3);
+    const other = node('skew_other', 'other', 'server/src/skew.ts', 77, 3);
+    const content = { ...GRAPH, nodes: [...GRAPH.nodes, l1Basename, topDegree, other], links: [
+      ...GRAPH.links,
+      { ...GRAPH.links[0], source: 'skew_top', target: 'f_statusline', relation: 'calls' },
+      { ...GRAPH.links[0], source: 'skew_top', target: 'f_watch', relation: 'calls' },
+    ] };
+    const graph = write('graphify-out/graph.json', graphJson(content, 'deadbeefcafe'));
+    const labels = write('graphify-out/.graphify_labels.json', JSON.stringify({ ...GRAPH.labels, '1': 'L1 basename', '3': 'top degree' }));
+    expect(fileFacts('server/src/skew.ts', loadGraph(graph), loadLabels(labels), new Set(['server/src/skew.ts']))).toEqual({
+      community: 'top degree', symbols: ['other:L77', 'skew.ts:L1'], usedBy: [],
+    });
   });
 
   it('renders the card: header with the graph commit and freshness, one line per file, blast radius, the footer', () => {
@@ -362,6 +398,21 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(collapsed).toMatch(/· used by \(\+4\)$/m);
     expect(collapsed).not.toContain('server/src/d1.ts');
     expect(collapsed.length).toBeLessThan(full.length);
+  });
+
+  it('drops a pathological final row whole when it alone exceeds the ceiling, while retaining the disclosure, blast radius, and footer', () => {
+    const { graph, labels } = plant();
+    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null,
+      files: [{ path: `server/src/${'x'.repeat(1000)}.ts`, tag: 'edited' as const, count: 1 }] };
+    const text = renderCard(set as any, loadGraph(graph), loadLabels(labels),
+      { maxChars: 400, maxFiles: 12, built: 'b', fresh: 'fresh', scope: 'main', agent: null });
+    expect(text.length).toBeLessThanOrEqual(400);
+    expect(text.split('\n')).toEqual([
+      'graphify card — this context\'s working set at compaction, from graphify-out/ (built at b, fresh):',
+      '(+1 files not shown)',
+      'Blast radius: 0 files import or call something in these 1 files.',
+      FOOTER,
+    ]);
   });
 
   /** The set the HOOK writes before the helper runs (Task 2's shape): the

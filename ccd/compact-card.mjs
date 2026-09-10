@@ -19,7 +19,7 @@
 // with `files: []`, no card); 2 usage; 1 any failure. `card` prints nothing on
 // stdout; `measure` prints exactly one JSON object. Every failure names itself
 // on stderr, which the hook discards — the hook's contract is silence.
-import { openSync, readSync, closeSync, fstatSync, statSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
+import { openSync, readSync, closeSync, fstatSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -270,10 +270,35 @@ export function workingSet(tokens, index, cwd, cap = WORKSET_CAP) {
  *  sessions under a memory.high cgroup. The 70 MB MekWarLive graph passes. */
 export const GRAPH_MAX_BYTES = 96 * 1024 * 1024;
 
-export function loadGraph(graphPath, maxBytes = GRAPH_MAX_BYTES) {
-  const size = statSync(graphPath).size;
+/** Reads no more than `maxBytes + 1` from an already-open graph descriptor.
+ * The extra byte turns descriptor-local growth into an overflow rather than an
+ * unbounded parse. `read` is injected only to make that invariant diagnosable. */
+export function readBoundedDescriptor(fd, maxBytes, read = readSync) {
+  const size = fstatSync(fd).size;
   if (size > maxBytes) throw new Error(`graph.json: too large (${size} bytes over ${maxBytes})`);
-  const g = JSON.parse(readFileSync(graphPath, 'utf8'));
+  const chunks = [];
+  let total = 0, position = 0;
+  while (total <= maxBytes) {
+    const buf = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+    const count = read(fd, buf, 0, buf.length, position);
+    if (count === 0) break;
+    chunks.push(buf.subarray(0, count));
+    total += count;
+    position += count;
+  }
+  if (total > maxBytes) throw new Error(`graph.json: too large (${total} bytes over ${maxBytes})`);
+  return Buffer.concat(chunks, total).toString('utf8');
+}
+
+export function loadGraph(graphPath, maxBytes = GRAPH_MAX_BYTES) {
+  const fd = openSync(graphPath, 'r');
+  let text;
+  try {
+    text = readBoundedDescriptor(fd, maxBytes);
+  } finally {
+    closeSync(fd);
+  }
+  const g = JSON.parse(text);
   if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.links)) throw new Error('graph.json: no nodes/links arrays');
   const nodes = new Map(), byFile = new Map(), files = new Set(), degree = new Map();
   for (const n of g.nodes) {
@@ -309,8 +334,7 @@ export function loadLabels(labelsPath) {
 /** The link relations that mean "depends on" (spec §3.2 `used by`). */
 const DEPENDS = new Set(['imports', 'imports_from', 'calls', 'references', 'indirect_call']);
 const lineOf = (n) => { const m = /^L(\d+)$/.exec(String(n.source_location ?? '')); return m ? m[1] : null; };
-const isFileNode = (n, file) =>
-  (n.metadata && n.metadata.kind === 'file') || (n.source_location === 'L1' && n.label === basename(file));
+const isFileNode = (n) => n.metadata && n.metadata.kind === 'file';
 
 /** One file's facts: the community label of its file node; its top five
  *  symbols by total degree, as `label:L<line>`; the files OUTSIDE the working
@@ -320,7 +344,7 @@ export function fileFacts(file, graph, labels, workset) {
   const nodes = graph.byFile.get(file) ?? [];
   const deg = (n) => graph.degree.get(n.id) ?? 0;
   const byDegree = (a, b) => deg(b) - deg(a) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
-  const fileNode = nodes.find((n) => isFileNode(n, file)) ?? [...nodes].sort(byDegree)[0] ?? null;
+  const fileNode = nodes.find(isFileNode) ?? [...nodes].sort(byDegree)[0] ?? null;
   const community = fileNode && fileNode.community !== undefined ? labels[String(fileNode.community)] : undefined;
   const symbols = nodes.filter((n) => n !== fileNode).sort(byDegree).slice(0, 5)
     .map((n) => { const l = lineOf(n); return l ? `${n.label}:L${l}` : String(n.label); });
@@ -379,7 +403,10 @@ export function renderCard(set, graph, labels, opts) {
   let n = Math.min(opts.maxFiles, set.files.length);
   let text = assemble(n, false);
   while (text.length > opts.maxChars && n > 1) { n--; text = assemble(n, false); }
-  if (text.length > opts.maxChars) text = assemble(n, true);
+  if (text.length > opts.maxChars) {
+    text = assemble(n, true);
+    while (text.length > opts.maxChars && n > 0) { text = assemble(--n, true); }
+  }
   return text;
 }
 

@@ -26,6 +26,8 @@ export function workingSet(tokens: Token[], index: FileIndex, cwd: string, cap?:
 export interface GraphNode { id: string; label: string; source_file: string; source_location?: string; community?: number; metadata?: { kind?: string } }
 export interface GraphLink { source: string; target: string; relation: string }
 export const GRAPH_MAX_BYTES: number;
+export function readBoundedDescriptor(fd: number, maxBytes: number,
+  read?: (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number): string;
 export interface Graph { nodes: Map<string, GraphNode>; byFile: Map<string, GraphNode[]>; files: Set<string>; index: FileIndex; links: GraphLink[]; degree: Map<string, number> }
 export function loadGraph(graphPath: string, maxBytes?: number): Graph;
 export function loadLabels(labelsPath: string): Record<string, string>;
