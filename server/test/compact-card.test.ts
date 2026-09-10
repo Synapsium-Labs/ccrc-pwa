@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { tl, GRAPH, graphJson } from './compactCardFixtures.js';
+import { tl, GRAPH, graphJson, node } from './compactCardFixtures.js';
 import {
   EXIT, WINDOW_CAP, CHUNK, isBoundaryLine, readWindow, parseArgs,
   extensionsOf, tokenRegex, mineTokens, fileIndex, resolveToken, workingSet, WORKSET_CAP,
@@ -460,5 +460,27 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(JSON.parse(fs.readFileSync(set, 'utf8')).files, 'a failure rewrites nothing').toBeNull();
     expect(helper([...args, '--scope', 'nope']).status).toBe(EXIT.USAGE);
     expect(helper([...args, '--at', 'soon']).status).toBe(EXIT.USAGE);
+  });
+
+  it('END TO END, an AMBIGUOUS basename: a graph with two files named `watch.ts` resolves neither — the bare basename is never a guess, exit 3, `stats.ambiguous` says why', () => {
+    // Built from GRAPH plus one extra node (the Task 4 review's suggestion) —
+    // the fixture module itself is untouched. `pwa/src/watch.ts` shares its
+    // basename with the fixture's own `server/src/watch.ts`, so the graph's
+    // own basename index carries two candidates for the bare token `watch.ts`.
+    const dup = node('f_watch2', 'watch.ts', 'pwa/src/watch.ts', 1, 1, 'file');
+    const content = { ...GRAPH, nodes: [...GRAPH.nodes, dup] };
+    const graph = write('graphify-out/graph.json', graphJson(content, 'deadbeefcafe'));
+    const labels = write('graphify-out/.graphify_labels.json', JSON.stringify(GRAPH.labels));
+    expect(loadGraph(graph).index.byBase.get('watch.ts')).toEqual(['server/src/watch.ts', 'pwa/src/watch.ts']);
+    const transcript = write('t.jsonl', tl.toolUse('Bash', { command: 'cat watch.ts' }) + '\n');
+    const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
+    hookSet(set, 1);
+    const rc = cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1 });
+    expect(rc).toBe(EXIT.EMPTY);
+    const s = JSON.parse(fs.readFileSync(set, 'utf8'));
+    expect(s.files).toEqual([]);
+    expect(s.stats).toMatchObject({ tokens: 1, resolved: 0, ambiguous: 1, outside: 0, nomatch: 0 });
+    expect(fs.existsSync(out)).toBe(false);
   });
 });
