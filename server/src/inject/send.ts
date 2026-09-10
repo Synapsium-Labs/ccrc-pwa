@@ -509,7 +509,7 @@ export function sendPrompt(
     // has scrolled into its 220x50 pane — swap.log, this file, an earlier limit episode —
     // and testing the WHOLE capture against them held mail on a false positive that could
     // never expire (the sweep's back-off counts no attempt for this error, by design).
-    const armWindow = plain.split('\n').slice(-8).join('\n');
+    const armWindow = plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');
     if (opts.holdIfAutoContinueArmed && autoContinueArmed(armWindow)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
     // A menu owns the keyboard and there is no input box to type into — the only
     // `❯` on screen is the cursor resting on the selected OPTION. draftOf would

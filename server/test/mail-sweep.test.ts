@@ -55,6 +55,7 @@ const MAIL_REPLAY_MS = 600_000;
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = 900_000; // watch.ts's own PR_BACKOFF_MAX_MS, mirrored — see its own comment
+const MAIL_ARMED_HOLD_MS = 300_000;
 const PAST_SWEEP_MS = MAIL_SWEEP_MS + 1_000; // clears the lane's own re-sweep gate
 
 // The STORED envelope's own bytes — `mail_deliveries.envelope`, what
@@ -2094,7 +2095,7 @@ describe('an armed auto-continue holds the nudge (D-2369)', () => {
     expect(row.state).toBe('queued');
     expect(row.lastError).toBe('auto-continue-armed');
     expect(row.attempts).toBe(0);
-    expect(row.nextAttemptAt).toBe(Date.now() + 300_000);
+    expect(row.nextAttemptAt).toBe(Date.now() + MAIL_ARMED_HOLD_MS);
     expect(sent.filter((p) => p.tag === `mail-blocked-${id}`)).toHaveLength(1);
     advance(PAST_SWEEP_MS); await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([]);
@@ -2105,7 +2106,7 @@ describe('an armed auto-continue holds the nudge (D-2369)', () => {
     // and the sweep above touches nothing). Still armed, `d.lastError` now
     // reads back as 'auto-continue-armed' from the row itself — the shape the
     // `d.lastError !==` guard exists to recognise as a REPEAT, not a new one.
-    advance(300_000); await w.sweepMail();
+    advance(MAIL_ARMED_HOLD_MS); await w.sweepMail();
     expect(sent.filter((p) => p.tag === `mail-blocked-${id}`)).toHaveLength(1);
   });
   it('a delivery one attempt short of the ceiling is NOT parked by a hold', async () => {

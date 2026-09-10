@@ -1,6 +1,6 @@
 # Limit recovery follow-ups — stale Enter, a structural limit detector, an armed-nudge hold — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Close the three follow-ups the post-swap re-drive left recorded — D-2233 (the stale
 `press enter to continue` phase), D-2234 (the limit banner's structured fields unread) and
@@ -64,7 +64,7 @@ foreground, timeout ≥ 600000 ms.
 **Files:** `ccd/ccd` (after `_transcript_stalled_pair`), `shared/api.ts`,
 `server/test/ccd-limit-banner.test.ts` (new).
 
-- [ ] **Step 1 — the shared literal.** In `shared/api.ts`, directly after `SYNTHETIC_MODEL`:
+- [x] **Step 1 — the shared literal.** In `shared/api.ts`, directly after `SYNTHETIC_MODEL`:
 
 ```ts
 /** The `error` Claude Code writes on the assistant row it appends for a 429
@@ -75,7 +75,7 @@ foreground, timeout ≥ 600000 ms.
 export const RATE_LIMIT_ERROR = 'rate_limit';
 ```
 
-- [ ] **Step 2 — the failing tests.** Create `server/test/ccd-limit-banner.test.ts`:
+- [x] **Step 2 — the failing tests.** Create `server/test/ccd-limit-banner.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -205,7 +205,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/ccd-limit-banner.test.ts`
 (`_transcript_limit_banner: command not found`; the `_transcript_stalled_pair` directory case
 answers rc 1 today, the FIFO case rc=124).
 
-- [ ] **Step 3 — the detector.** In `ccd/ccd`, directly after `_transcript_stalled_pair`'s
+- [x] **Step 3 — the detector.** In `ccd/ccd`, directly after `_transcript_stalled_pair`'s
   closing brace:
 
 ```bash
@@ -241,10 +241,10 @@ _transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a r
   Keep the `if … then found="$line"; continue; fi` ON ONE LINE: the coupling test finds the
   detector line by `*'"isApiErrorMessage":true'*` and `found="$line"` together.
 
-- [ ] **Step 4 — the paired guard in `_transcript_stalled_pair`.** Replace
+- [x] **Step 4 — the paired guard in `_transcript_stalled_pair`.** Replace
   `[[ -r "$f" ]] || return 2` with `[[ -f "$f" && -r "$f" ]] || return 2   # D-2370: -r alone admits a FIFO (D-2347)`.
 
-- [ ] **Step 5 — GREEN, then the mutation table.** Run the suite; all green. Then, one at a
+- [x] **Step 5 — GREEN, then the mutation table.** Run the suite; all green. Then, one at a
   time, restore between each:
 
 | mutation | red case |
@@ -257,7 +257,7 @@ _transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a r
 | `-f && -r` -> `-r` (stalled pair) | both D-2370 cases |
 | `RATE_LIMIT_ERROR = 'rate_limited'` | the coupling case |
 
-- [ ] **Step 6 — commit.** `git add ccd/ccd shared/api.ts server/test/ccd-limit-banner.test.ts`;
+- [x] **Step 6 — commit.** `git add ccd/ccd shared/api.ts server/test/ccd-limit-banner.test.ts`;
   `git commit -m "feat(ccd,shared): a rate-limit banner is measured on the transcript, structurally, and both readers pair -f with -r (D-2362, D-2370)"`.
 
 ---
@@ -267,7 +267,7 @@ _transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a r
 **Files:** `ccd/ccd` (`_pane_hard_blocked`'s neighbourhood; `_auto_swap_check`;
 `_tick_strand_undecidable`), `server/test/ccd-limit-banner.test.ts` (second describe).
 
-- [ ] **Step 1 — the failing tests.** Append to `server/test/ccd-limit-banner.test.ts`:
+- [x] **Step 1 — the failing tests.** Append to `server/test/ccd-limit-banner.test.ts`:
 
 ```ts
 describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363)', () => {
@@ -345,7 +345,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
 
 Run — RED (`_session_hard_blocked: command not found`; the blank-pane case dispatches nothing).
 
-- [ ] **Step 2 — the union.** In `ccd/ccd`, directly after `_pane_auto_continue_armed`:
+- [x] **Step 2 — the union.** In `ccd/ccd`, directly after `_pane_auto_continue_armed`:
 
 ```bash
 _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner and nobody is typing (D-2363)
@@ -374,7 +374,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
 }
 ```
 
-- [ ] **Step 3 — the rescue arm.** In `_auto_swap_check`, replace
+- [x] **Step 3 — the rescue arm.** In `_auto_swap_check`, replace
 
 ```bash
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
@@ -404,7 +404,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   Keep the comment block that precedes the old `_pane_hard_blocked` line (the "Classify BEFORE
   picking a target" paragraph); it still describes `force`.
 
-- [ ] **Step 4 — the strand half.** In `_tick_strand_undecidable`, replace
+- [x] **Step 4 — the strand half.** In `_tick_strand_undecidable`, replace
 
 ```bash
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
@@ -425,7 +425,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   (`local pane` is already declared at the top of that function; add `blocked` to it or keep
   the separate `local` — either, but declared.)
 
-- [ ] **Step 5 — GREEN, then mutations.** Run `ccd-limit-banner`, `ccd-auto-swap-hold`,
+- [x] **Step 5 — GREEN, then mutations.** Run `ccd-limit-banner`, `ccd-auto-swap-hold`,
   `ccd-auto-swap-pool`, `ccd-swap-refuse`, `ccd-crosspool`, `ccd-redrive` — all green (the
   pane arm's tests exercise `_session_hard_blocked` through its first line; a fixture that has
   no transcript makes the transcript arm answer rc 1 through `_transcript_path`'s fallback
@@ -440,7 +440,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
 | drop `$(… printf ' via=transcript')` | the first case's log assertion |
 | strand half left on `_pane_hard_blocked` | "the strand half …", the source pin |
 
-- [ ] **Step 6 — commit.** `git commit -am "feat(ccd): the rescue arm and the strand half read one verdict — pane first, then the transcript, never over a human's draft (D-2363, D-2364)"`.
+- [x] **Step 6 — commit.** `git commit -am "feat(ccd): the rescue arm and the strand half read one verdict — pane first, then the transcript, never over a human's draft (D-2363, D-2364)"`.
 
 ---
 
@@ -450,7 +450,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
 `_session_hard_blocked`; the supervise tick line), `server/test/ccd-limit-stale.test.ts` (new),
 `server/test/ccd-pane-box-draft.test.ts` (the pin).
 
-- [ ] **Step 1 — the failing tests.** Create `server/test/ccd-limit-stale.test.ts`:
+- [x] **Step 1 — the failing tests.** Create `server/test/ccd-limit-stale.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -531,13 +531,13 @@ describe('_auto_stale_check presses Enter for a stale auto-continue (D-2360)', (
 
 Run — RED.
 
-- [ ] **Step 2 — constant.** After `REDRIVE_TAIL_LINES=60 …` add:
+- [x] **Step 2 — constant.** After `REDRIVE_TAIL_LINES=60 …` add:
 
 ```bash
 STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
 ```
 
-- [ ] **Step 3 — the functions.** After `_session_hard_blocked`:
+- [x] **Step 3 — the functions.** After `_session_hard_blocked`:
 
 ```bash
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
@@ -580,16 +580,16 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
 }
 ```
 
-- [ ] **Step 4 — the tick.** Change the supervise tick line
+- [x] **Step 4 — the tick.** Change the supervise tick line
   `_sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"` to
   `_sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"`.
 
-- [ ] **Step 5 — the `_pane_box_draft` pin.** In `server/test/ccd-pane-box-draft.test.ts`,
+- [x] **Step 5 — the `_pane_box_draft` pin.** In `server/test/ccd-pane-box-draft.test.ts`,
   the site count becomes 5 and the message names the two new sites:
   `expect(calls, 'the two injector call sites, the redrive stand-down, _session_hard_blocked (D-2363) and _auto_stale_check (D-2360)').toHaveLength(5);`
   Update the comment above it the same way.
 
-- [ ] **Step 6 — GREEN, then mutations.** Run `ccd-limit-stale`, `ccd-pane-box-draft`,
+- [x] **Step 6 — GREEN, then mutations.** Run `ccd-limit-stale`, `ccd-pane-box-draft`,
   `ccd-redrive`, `ccd-auto-compact`.
 
 | mutation | red case |
@@ -602,7 +602,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
 | draft check removed | "a non-empty input box: no keystroke" |
 | tick line without `_auto_stale_check` | the source pin |
 
-- [ ] **Step 7 — commit.** `git commit -am "feat(ccd): press Enter for Claude Code when its own auto-continue went stale (D-2360, D-2361)"`.
+- [x] **Step 7 — commit.** `git commit -am "feat(ccd): press Enter for Claude Code when its own auto-continue went stale (D-2360, D-2361)"`.
 
 ---
 
@@ -610,7 +610,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
 
 **Files:** `shared/api.ts`, `server/src/transcript/parse.ts`, `server/test/transcript-parse.test.ts`.
 
-- [ ] **Step 1 — the failing tests.** Append to `server/test/transcript-parse.test.ts`:
+- [x] **Step 1 — the failing tests.** Append to `server/test/transcript-parse.test.ts`:
 
 ```ts
 describe('the limit banner is a system event, not the model speaking (D-2365)', () => {
@@ -644,7 +644,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
 });
 ```
 
-- [ ] **Step 2 — the wire.** In `shared/api.ts`: `export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';`
+- [x] **Step 2 — the wire.** In `shared/api.ts`: `export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';`
   and the system member becomes
 
 ```ts
@@ -658,7 +658,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
   Extend the `SystemOrigin` JSDoc with one line: `'limit'` — the assistant row Claude Code
   appends on a 429 (`isApiErrorMessage:true, error:"rate_limit"`).
 
-- [ ] **Step 3 — the parser.** In `server/src/transcript/parse.ts`: import `RATE_LIMIT_ERROR`;
+- [x] **Step 3 — the parser.** In `server/src/transcript/parse.ts`: import `RATE_LIMIT_ERROR`;
   widen the envelope type with `isApiErrorMessage?: unknown; error?: unknown; quotaLimits?: unknown;`;
   and directly BEFORE the `SYNTHETIC_MODEL` check insert:
 
@@ -676,7 +676,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
   }
 ```
 
-- [ ] **Step 4 — GREEN, then mutations.** `transcript-parse`, `single-definition`, `typecheck-tests`.
+- [x] **Step 4 — GREEN, then mutations.** `transcript-parse`, `single-definition`, `typecheck-tests`.
 
 | mutation | red case |
 |---|---|
@@ -684,7 +684,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
 | `typeof … === 'number'` -> truthiness | "not a number is dropped" |
 | the spread -> `resetsAt` unconditionally | "no quotaLimits … no resetsAt key" |
 
-- [ ] **Step 5 — commit.** `git commit -am "feat(server,shared): the limit banner is a system event carrying resetsAt (D-2365)"`.
+- [x] **Step 5 — commit.** `git commit -am "feat(server,shared): the limit banner is a system event carrying resetsAt (D-2365)"`.
 
 ---
 
@@ -693,7 +693,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
 **Files:** `pwa/src/lib/clock.ts` (new), `pwa/src/session/MessageBubble.tsx`,
 `pwa/src/session/chat.css`, `pwa/test/clock.test.ts` (new), `pwa/test/chat.test.tsx`.
 
-- [ ] **Step 1 — the failing tests.** `pwa/test/clock.test.ts`:
+- [x] **Step 1 — the failing tests.** `pwa/test/clock.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -737,7 +737,7 @@ describe('a usage limit reads as a harness line, not a reply (D-2366)', () => {
 });
 ```
 
-- [ ] **Step 2 — the clock.** `pwa/src/lib/clock.ts`:
+- [x] **Step 2 — the clock.** `pwa/src/lib/clock.ts`:
 
 ```ts
 /** Local HH:MM for an epoch-SECONDS instant (the unit Claude Code writes
@@ -752,7 +752,7 @@ export function resetClock(epochSeconds: number, now: Date = new Date()): string
 }
 ```
 
-- [ ] **Step 3 — the bubble.** In `MessageBubble.tsx`, import `resetClock` and, in the system
+- [x] **Step 3 — the bubble.** In `MessageBubble.tsx`, import `resetClock` and, in the system
   branch after the `no-response` case:
 
 ```tsx
@@ -774,11 +774,11 @@ export function resetClock(epochSeconds: number, now: Date = new Date()): string
   with a one-line comment (D-2366: a limit is "waiting on the world", the same attention ink as
   the stall — the tree defines no third tone for it).
 
-- [ ] **Step 4 — GREEN.** `cd pwa && ./node_modules/.bin/vitest run test/clock.test.ts test/chat.test.tsx`
+- [x] **Step 4 — GREEN.** `cd pwa && ./node_modules/.bin/vitest run test/clock.test.ts test/chat.test.tsx`
   and `npx tsc --noEmit` (from `pwa/`). Mutation: drop the `origin === 'limit'` branch — both
   chat cases red; `sameDay ? hm : …` -> always `hm` — "another day" red.
 
-- [ ] **Step 5 — commit.** `git commit -am "feat(pwa): a usage limit is a harness line with the reset in the viewer's clock (D-2366)"`.
+- [x] **Step 5 — commit.** `git commit -am "feat(pwa): a usage limit is a harness line with the reset in the viewer's clock (D-2366)"`.
 
 ---
 
@@ -788,7 +788,7 @@ export function resetClock(epochSeconds: number, now: Date = new Date()): string
 `pwa/src/lib/api.ts`, `server/test/auto-continue-armed.test.ts` (new), `server/test/send.test.ts`,
 `server/test/mail-sweep.test.ts`.
 
-- [ ] **Step 1 — the failing tests.** `server/test/auto-continue-armed.test.ts`:
+- [x] **Step 1 — the failing tests.** `server/test/auto-continue-armed.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -903,7 +903,7 @@ describe('an armed auto-continue holds the nudge (D-2369)', () => {
   file has no such case, seed the mail row with `fromId: FROM_ID` the way `queueTestDelivery`
   builds it. `NOW`/`Date.now()` — match the file's clock idiom (`vi.setSystemTime`).
 
-- [ ] **Step 2 — `dialog.ts`.** After `BUSY_RE`:
+- [x] **Step 2 — `dialog.ts`.** After `BUSY_RE`:
 
 ```ts
 /** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
@@ -917,7 +917,7 @@ export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
 export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
 ```
 
-- [ ] **Step 3 — `send.ts`.** Import `autoContinueArmed`; add `'auto-continue-armed'` to the
+- [x] **Step 3 — `send.ts`.** Import `autoContinueArmed`; add `'auto-continue-armed'` to the
   `SendResult` error union with a doc line (the pane's status line says Claude Code will
   continue on its own; nothing was pressed; the caller asked for this refusal); add
   `holdIfAutoContinueArmed?: boolean` to `opts` (doc: ONLY the mail lane sets it — a human's
@@ -938,7 +938,7 @@ export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_
     if (hasMenu(plain)) return { ok: false, error: 'dialog-open' };
 ```
 
-- [ ] **Step 4 — `watch.ts`.** Beside `MAIL_BACKOFF_MAX_MS`:
+- [x] **Step 4 — `watch.ts`.** Beside `MAIL_BACKOFF_MAX_MS`:
 
 ```ts
 /** D-2369: how long a nudge is held when the recipient's own auto-continue is
@@ -966,12 +966,12 @@ const MAIL_ARMED_HOLD_MS = 300_000;
         }
 ```
 
-- [ ] **Step 5 — the PWA's slug text.** In `pwa/src/lib/api.ts`'s `SEND_ERROR_TEXT` add
+- [x] **Step 5 — the PWA's slug text.** In `pwa/src/lib/api.ts`'s `SEND_ERROR_TEXT` add
   `'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.'`.
   (`pwa/test/api.test.ts` ~line 767 iterates known codes; if it pins the key set, add the
   code there.)
 
-- [ ] **Step 6 — GREEN, then mutations.** `auto-continue-armed`, `send`, `mail-sweep`,
+- [x] **Step 6 — GREEN, then mutations.** `auto-continue-armed`, `send`, `mail-sweep`,
   `dialog`, `typecheck-tests`; `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts`.
 
 | mutation | red case |
@@ -984,7 +984,7 @@ const MAIL_ARMED_HOLD_MS = 300_000;
 | the branch moved after the attempts ceiling | "one attempt short of the ceiling" |
 | `d.lastError !==` guard dropped | "the sender told once" (2 pushes) |
 
-- [ ] **Step 7 — commit.** `git commit -am "feat(server): the mail nudge holds while the recipient's own auto-continue is armed (D-2367, D-2368, D-2369)"`.
+- [x] **Step 7 — commit.** `git commit -am "feat(server): the mail nudge holds while the recipient's own auto-continue is armed (D-2367, D-2368, D-2369)"`.
 
 ---
 
@@ -992,7 +992,7 @@ const MAIL_ARMED_HOLD_MS = 300_000;
 
 **Files:** `README.md`, `ccd/ccd` (marker line only), this plan.
 
-- [ ] **Step 1 — README.** After the subsection `### A restart re-drives the turn it
+- [x] **Step 1 — README.** After the subsection `### A restart re-drives the turn it
   interrupted (D-2226)` add:
 
 ```markdown
@@ -1021,19 +1021,19 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
 - Both transcript readers pair `-f` with `-r` (D-2370, closing D-2347).
 ```
 
-- [ ] **Step 2 — re-stamp `ccd/ccd`** (once, after every ccd edit above is committed):
+- [x] **Step 2 — re-stamp `ccd/ccd`** (once, after every ccd edit above is committed):
 
 ```
 node --input-type=module -e "import fs from 'node:fs'; import { markGenerated } from './shared/mark.mjs'; fs.writeFileSync('ccd/ccd', markGenerated(fs.readFileSync('ccd/ccd', 'utf8')));"
 git diff --stat ccd/ccd   # exactly one line
 ```
 
-- [ ] **Step 3 — the whole-tree gates**, each one package at a time, in the foreground:
+- [x] **Step 3 — the whole-tree gates**, each one package at a time, in the foreground:
   `ownership`, `single-definition`, `dtbd`, `deviation-refs` (after `git fetch origin main`),
   `ccd-reg-get-census` (a prose census pinned to a count — if it moves, update the sentence it
   names, never the count), `typecheck-tests`; then the full `server`, `pwa`, `agent` suites.
 
-- [ ] **Step 4 — commit.** `git add README.md ccd/ccd && git commit -m "docs(ccd): the limit follow-ups, and ccd/ccd's provenance re-stamp (D-2360–D-2374)"`.
+- [x] **Step 4 — commit.** `git add README.md ccd/ccd && git commit -m "docs(ccd): the limit follow-ups, and ccd/ccd's provenance re-stamp (D-2360–D-2374)"`.
 
 ---
 
@@ -1133,3 +1133,13 @@ whole-branch review's findings — same allocator, same act-of-definition discip
   placeholder token" discipline forbids `D-TBD-<slug>` even provisionally; the whole-branch
   review that followed flagged the missing number and this entry, plus the ccd comments and test
   titles it names, is the correction.
+- **D-2444** — *Cache each session's transcript verdict for 30 seconds.* Final review measured
+  `_session_hard_blocked`'s transcript arm at roughly 36 ms per idle row on every five-second
+  supervise tick, about 14 times the pane classifier and mostly spent resolving the transcript
+  path. `$REG/<id>.tscan` stores `"<epoch> <0|1>"`; `TRANSCRIPT_ARM_INTERVAL=30` reuses both a
+  positive and a negative verdict, including the negative written for an absent or unreadable
+  transcript. The pane verdict, running-turn guard and D-2443 stale-press grace all remain ahead
+  of this cache. A cached positive keeps the strand verdict stable, but the input-box draft guard
+  remains outside the cache and is re-measured every time, so cached evidence can never carry a
+  human's new draft through a swap. The worst added detection delay is 30 seconds, within the
+  rescue arm's existing 120-second jitter.

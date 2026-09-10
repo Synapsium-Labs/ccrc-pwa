@@ -2691,14 +2691,12 @@ export class CoordStore {
    *  other writer of this column is: the row's recorded reason for its own
    *  terminal state should name the write that actually caused it.
    *
-   *  `countsAsAttempt` (registry ladder, default `true` — every EXISTING
-   *  caller is a genuine send failure and stays unchanged): `false` is
-   *  `sweepMail`'s own "recipient found but unmeasurable" branch, which never
-   *  even reached `sendPrompt` — `attempts` is SEND-FAILURE budget
-   *  (`MAIL_MAX_ATTEMPTS`'s own docstring), and ratcheting it on a row that
-   *  was never attempted would let that branch march toward the SAME park
-   *  ceiling a genuine failure does, for a recipient this sweep has not
-   *  actually proven gone. */
+   *  `countsAsAttempt` (default `true`): `false` belongs to three refusal paths
+   *  that are not send failures. The registry-unmeasurable and tmux-unknown
+   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold
+   *  reaches it but refuses before any keystroke. `attempts` is SEND-FAILURE
+   *  budget (`MAIL_MAX_ATTEMPTS`'s own docstring), so none may march toward the
+   *  same park ceiling as a prompt that was actually attempted and failed. */
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +

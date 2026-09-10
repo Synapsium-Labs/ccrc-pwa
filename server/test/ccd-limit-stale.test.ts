@@ -52,6 +52,14 @@ describe('_auto_stale_check presses Enter for a stale auto-continue (D-2360)', (
     seed(); check(); check();
     expect(enters()).toHaveLength(1);
   });
+  it('a 60-second-old stamp is still inside the 120-second cooldown', () => {
+    seed(); h.sh(`_reg_set ${ID} stalepress $(( $(date +%s) - 60 ))`); check();
+    expect(enters()).toEqual([]);
+  });
+  it('a 121-second-old stamp is outside the 120-second cooldown', () => {
+    seed(); h.sh(`_reg_set ${ID} stalepress $(( $(date +%s) - 121 ))`); check();
+    expect(enters()).toHaveLength(1);
+  });
   it('again once the cooldown has lapsed', () => {
     seed(); check(); h.sh(`_reg_set ${ID} stalepress 1`); check();
     expect(enters()).toHaveLength(2);

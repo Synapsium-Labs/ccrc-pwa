@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
-import { itLinux } from './platformFixtures.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -55,10 +54,11 @@ const detect = (p: string): { rc: string; out: string } => {
   const i = raw.indexOf('|');
   return { rc: raw.slice(0, i), out: raw.slice(i + 1, -1) };
 };
-/** The same function run under `timeout` in a child bash that inherits only
- *  the function's text — the only way to prove a read does NOT block. */
+/** The same function under a cross-platform five-second alarm in a child bash
+ *  that inherits only the function's text — the only way to prove a read does
+ *  NOT block. Perl is available on both supported userlands; SIGALRM exits 142. */
 const detectTimed = (fn: string, p: string): string =>
-  h.sh(`timeout 5 bash -c "$(declare -f ${fn}); REDRIVE_TAIL_LINES=$REDRIVE_TAIL_LINES; ${fn} \\"\\$1\\"" _ ${JSON.stringify(p)} >/dev/null 2>&1; echo "rc=$?"`);
+  h.sh(`perl -e 'alarm shift; exec @ARGV' 5 bash -c "$(declare -f ${fn}); REDRIVE_TAIL_LINES=$REDRIVE_TAIL_LINES; ${fn} \\"\\$1\\"" _ ${JSON.stringify(p)} >/dev/null 2>&1; echo "rc=$?"`);
 
 describe('_transcript_limit_banner (D-2362)', () => {
   it('the newest real row is the banner: rc 0, prints resetsAt and rateLimitType', () => {
@@ -104,7 +104,7 @@ describe('_transcript_limit_banner (D-2362)', () => {
     seed(); const d = path.join(h.home, 'dir.jsonl'); fs.mkdirSync(d);
     expect(detect(d).rc).toBe('2');
   });
-  itLinux('a FIFO at the path: rc 2 without blocking — `-r` alone would open it and wait for ever (D-2370)', () => {
+  it('a FIFO at the path: rc 2 without blocking — `-r` alone would open it and wait for ever (D-2370)', () => {
     seed(); const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
     expect(detectTimed('_transcript_limit_banner', f)).toBe('rc=2');
   });
@@ -123,7 +123,7 @@ describe('_transcript_stalled_pair pairs -f with -r (D-2370, closing D-2347)', (
     seed(); const d = path.join(h.home, 'dir.jsonl'); fs.mkdirSync(d);
     expect(h.sh(`_transcript_stalled_pair ${JSON.stringify(d)}; echo "rc=$?"`)).toBe('rc=2');
   });
-  itLinux('a FIFO at the path: rc 2 without blocking', () => {
+  it('a FIFO at the path: rc 2 without blocking', () => {
     seed(); const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
     expect(detectTimed('_transcript_stalled_pair', f)).toBe('rc=2');
   });
@@ -227,5 +227,65 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     const src = fs.readFileSync(CCD, 'utf8');
     expect(src).toContain('_session_hard_blocked "$id" "$pane" && hard_blocked=1');
     expect(src).toContain('_session_hard_blocked "$1" "$pane" && blocked=1');
+  });
+});
+
+describe('the transcript verdict is cached per session (D-2444)', () => {
+  const PROMPT = '? for shortcuts\n❯ ';
+  const stub = (verdict: 0 | 1 | 2, pathReadable = true): string => `
+    _transcript_path() { ${pathReadable ? 'echo "$HOME/transcript.jsonl"' : 'return 1'}; };
+    _transcript_limit_banner() { echo transcript-read >> "$HOME/ccd-calls"; return ${verdict}; };
+    tmux() { case "\${1:-}" in capture-pane) printf '%s\\n' ${JSON.stringify(PROMPT)} ;; esac; };
+    _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
+  const verdict = (extra = '', env: Record<string, string> = {}): string =>
+    h.sh(`${extra} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "rc=$?"`, env);
+  const reads = (): string[] => h.calls().filter((line) => line === 'transcript-read');
+
+  it('reuses a positive verdict and keeps answering blocked', () => {
+    seed();
+    expect(verdict(stub(0))).toBe('rc=0');
+    expect(verdict(stub(0))).toBe('rc=0');
+    expect(reads()).toHaveLength(1);
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 1$/);
+  });
+
+  it('reads again when the cached verdict is older than TRANSCRIPT_ARM_INTERVAL', () => {
+    seed(); h.sh(`_reg_set ${ID} tscan "1 1"`);
+    expect(verdict(stub(0))).toBe('rc=0');
+    expect(reads()).toHaveLength(1);
+  });
+
+  it('re-asks the draft guard for a cached positive without rereading the transcript', () => {
+    seed(); h.sh(`_reg_set ${ID} tscan "$(date +%s) 1"`);
+    expect(verdict(stub(0), { BOX_DRAFT: 'half a sentence' })).toBe('rc=1');
+    expect(reads()).toEqual([]);
+  });
+
+  it('writes and honors a negative verdict, then finds the banner after expiry', () => {
+    seed();
+    expect(verdict(stub(1))).toBe('rc=1');
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
+    expect(verdict(stub(0))).toBe('rc=1');
+    expect(reads()).toHaveLength(1);
+
+    h.sh(`_reg_set ${ID} tscan "1 0"`);
+    expect(verdict(stub(0))).toBe('rc=0');
+    expect(reads()).toHaveLength(2);
+  });
+
+  it('caches an absent transcript as a negative verdict', () => {
+    seed();
+    expect(verdict(stub(0, false))).toBe('rc=1');
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
+    expect(reads()).toEqual([]);
+  });
+
+  it('caches an unreadable transcript as a negative verdict', () => {
+    seed();
+    expect(verdict(stub(2))).toBe('rc=1');
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
+    expect(reads()).toHaveLength(1);
+    expect(verdict(stub(0))).toBe('rc=1');
+    expect(reads()).toHaveLength(1);
   });
 });

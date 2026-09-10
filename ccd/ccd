@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=70c2b0170f12af0c293aaf3e3c655ff263cf1581fa9f93da8c7cb1a3b94a7c69
+# ccrc:generated 1 sha256=3e8860d2bf2456284ddcdaf00c68e4f0d281740df0702dfc426f27b58660296c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -972,6 +972,7 @@ REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives 
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
+TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -1808,8 +1809,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 137
-# invocations across 113 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 138
+# invocations across 114 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -12598,8 +12599,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # do) — _avail on a hard-blocked wrapper reads exactly like a wrapper that
   # is fine, so the ordinary "home is fine: stay" / "cur still works: stay"
   # branches would never fire the rescue at all. The caller (_auto_swap_check)
-  # passes force iff _pane_hard_blocked already confirmed the session is
-  # stuck regardless of what telemetry says. The home-recovered MOVE below
+  # passes force iff `_session_hard_blocked` confirmed the session — pane-first,
+  # with D-2363's transcript fallback — is stuck regardless of telemetry. The home-recovered MOVE below
   # stays reachable under force when cur != home: in that branch cur is the
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
@@ -12918,13 +12919,34 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # STALE_RESUME_GRACE gives Claude Code a few ticks to redraw before the
   # transcript arm trusts what it reads; it does not touch the pane arm above,
   # which decides on what is on screen NOW regardless of any stale press.
-  local id="$1" pane="$2" f cur last
+  #
+  # THE TRANSCRIPT VERDICT IS CACHED FOR 30s (D-2444), after the pane, busy and
+  # stale-press gates above. The final review measured an idle negative at
+  # ~30-35 ms/call, ~11-13x the pane classifier, most of it in
+  # `_transcript_path`; paying that every five seconds across the fleet was a
+  # standing tax for a detector whose rescue already has up to 120s of jitter.
+  # `$REG/<id>.tscan` is "<epoch> <0|1>" and records BOTH answers — including a
+  # missing/unreadable transcript as 0 — so the common negative is cached too.
+  # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
+  # GUARD stays outside the cache and is re-asked on every positive: caching a
+  # transcript must never let a swap carry away what a human started typing.
+  local id="$1" pane="$2" f cur last now scan scan_ts scan_verdict verdict=0
   _pane_hard_blocked "$pane" && return 0
   grep -q "esc to interrupt" <<<"$pane" && return 1
-  last=$(_reg_get "$id" stalepress)
-  [[ "$last" =~ ^[0-9]+$ && $(( $(date +%s) - last )) -lt "$STALE_RESUME_GRACE" ]] && return 1
-  f=$(_transcript_path "$id") || return 1
-  _transcript_limit_banner "$f" >/dev/null || return 1
+  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
+  scan=$(_reg_get "$id" tscan)
+  scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
+  if [[ "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
+        && $((now - scan_ts)) -lt "$TRANSCRIPT_ARM_INTERVAL" ]]; then
+    verdict="$scan_verdict"
+  else
+    if f=$(_transcript_path "$id") && _transcript_limit_banner "$f" >/dev/null; then
+      verdict=1
+    fi
+    _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
+  fi
+  [[ "$verdict" -eq 1 ]] || return 1
   cur=$(_pane_box_draft "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)")
   [[ -z "$cur" ]]
 }
@@ -13332,27 +13354,18 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # return here, ahead of any classifier, and a limited session with a blank
   # pane was never rescued. `_session_hard_blocked` reads the transcript for
   # that case; a blank pane that is NOT blocked still stands still, as before.
-  # THE VERDICT'S OWN COST, DISCLOSED (final review finding 3, 2026-09-10).
-  # Replacing `_pane_hard_blocked` with `_session_hard_blocked` here did not
-  # only add a capability, it added a PRICE, and this row pays it on EVERY
-  # tick past the two cooldown gates above, whether limited or not. Measured
-  # in a FIXTURE HOME (roster via `shared/generate.mjs`, 200 iterations x 3
-  # runs, box load 9-32): `_pane_hard_blocked` alone ~2.6-2.9 ms/call;
-  # `_session_hard_blocked` ~30-35 ms/call — roughly +27-32 ms per row per
-  # tick, an order of magnitude (~11-13x). The cost lands on an IDLE, HEALTHY
-  # row: no "esc to interrupt", so no early return, so the full transcript
-  # arm runs — `_transcript_path` (registry reads, two `tr` pipelines,
-  # `_ws_realpath`) and `_transcript_limit_banner` (the file read) — only to
-  # answer "not blocked", which is the ordinary answer most rows give most
-  # ticks. At ~20 live sessions on a 5s tick that is a meaningful fraction of
-  # a core in steady state, up from what `_pane_hard_blocked` alone cost.
-  # Not fixed here: hoisting `_transcript_path` (its inputs are registry
-  # fields this same tick has just synced) or a short per-session cooldown on
-  # the transcript arm are both live options — a limit banner is not
-  # second-critical — but neither has an orchestrator ruling or a D-number
-  # yet, and this comment's job is disclosure, the same discipline the
-  # `_tick_strand_undecidable` block at its own call site (below, in this
-  # file) already keeps for its own capture-pane cost.
+  # THE VERDICT'S OWN COST, DISCLOSED (final review finding 3, 2026-09-10;
+  # mitigated by D-2444). Replacing `_pane_hard_blocked` with
+  # `_session_hard_blocked` here added a price. In a FIXTURE HOME (roster via
+  # `shared/generate.mjs`, 200 iterations x 3 runs, box load 9-32), the old
+  # uncached path measured `_pane_hard_blocked` alone at ~2.6-2.9 ms/call and
+  # `_session_hard_blocked` at ~30-35 ms/call — roughly +27-32 ms, an order of
+  # magnitude (~11-13x), mostly in `_transcript_path`. D-2444 now caches both
+  # verdicts for 30s, so an IDLE, HEALTHY row pays that full transcript scan at
+  # most once per interval rather than on every 5s tick. Intervening calls still
+  # pay the registry/cache read; a positive also re-measures the draft. The
+  # `_tick_strand_undecidable` block at its own call site below discloses that
+  # its same-cadence call shares this cache rather than adding another scan.
   _session_hard_blocked "$id" "$pane" && hard_blocked=1
   [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
@@ -16154,9 +16167,9 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # A session standing still on an unmeasurable field is not by itself
   # stranded — it may be idle, mid-turn, or perfectly happy — and marking it
   # would be the same fabricated positive claim this commit removes one seam
-  # up. `_pane_hard_blocked` is the same classifier the ordinary rescue path
-  # uses, asked the same way; it needs only `_tmux "$1"`, never the field that
-  # could not be read.
+  # up. `_session_hard_blocked` is the same classifier the ordinary rescue path
+  # uses, asked pane-first with D-2363's transcript fallback; it needs only
+  # `_tmux "$1"`, never the field that could not be read.
   # THE CAPTURE'S COST, DISCLOSED (#69 review round 1 S7, ruled NO FIX as
   # D-2162, re-measured in round 3, and re-measured AGAIN on the #70 merge —
   # which moved it). This `capture-pane` is unconditional and sits above
@@ -16212,18 +16225,20 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # one, with every case green.
   local pane blocked=""
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
-  # AN UNMEASURABLE PANE CLEARS NOTHING, and this line stays a BARE return
-  # (#69 review, S2). An empty capture is a pane nobody could read; clearing on
-  # it would be the fabricated clear C1 exists to prevent, and it is the one
-  # place the clear below must NOT move up to.
+  # AN UNMEASURABLE PANE WITH NO TRANSCRIPT VERDICT CLEARS NOTHING (#69 review,
+  # S2, amended by D-2363). An empty capture is normally a pane nobody could
+  # read; only `_session_hard_blocked`'s transcript fallback may make a positive
+  # claim from it. Without either measurement, the return below must stay ahead
+  # of the clear or it would fabricate recovery.
   # THIS CALL'S OWN COST, DISCLOSED SEPARATELY FROM THE CAPTURE ABOVE (final
-  # review finding 3, 2026-09-10) — the capture-pane essay above this function
-  # is about the `tmux capture-pane` fork alone; `_session_hard_blocked`
-  # (replacing `_pane_hard_blocked` here too) adds its own cost on top, same
-  # order of magnitude as `_auto_swap_check`'s call (~+27-32 ms/call, ~11-13x
-  # — full measurement and attribution at that call site's comment). This tick
-  # runs on the SAME 5s cadence and the same unconditional capture, so an idle
-  # row pays both.
+  # review finding 3, 2026-09-10; mitigated by D-2444) — the capture-pane essay
+  # above this function is about the `tmux capture-pane` fork alone. This
+  # `_session_hard_blocked` call runs on the same 5s cadence as
+  # `_auto_swap_check`, but both calls share `$REG/<id>.tscan`: whichever misses
+  # first may pay the ~+27-32 ms uncached transcript path measured at the other
+  # call site, while the later same-tick call normally pays only cache lookup.
+  # An idle negative gets at most one full scan per 30s interval; a positive
+  # additionally re-measures the draft on every call.
   _session_hard_blocked "$1" "$pane" && blocked=1
   [[ -n "$pane" || -n "$blocked" ]] || return 0
   # THE MARKER MUST FOLLOW THE TRUTH — `_strand_mark`'s own docstring says so,

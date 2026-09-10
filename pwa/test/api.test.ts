@@ -765,7 +765,7 @@ describe('apiErrorText and the code translators that compose with it', () => {
 
   it('does not shadow any code the SEND translator owns either', () => {
     for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
-      'draft-clear-failed', 'not-alive']) {
+      'draft-clear-failed', 'not-alive', 'auto-continue-armed']) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
         .not.toBe(code);

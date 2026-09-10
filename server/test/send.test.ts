@@ -742,11 +742,18 @@ describe('holdIfAutoContinueArmed (D-2368)', () => {
   // file, a prior limit episode on screen), which is not Claude Code's own armed
   // banner. Decided on the LAST 8 LINES, matching ccd's `_pane_auto_continue_armed`
   // window, so a stale phrase far above the input box must not hold mail.
-  it('a phrase above the fold does not hold — decided on the last 8 lines, matching ccd\'s tail -8 window', async () => {
+  it('the armed phrase exactly 8 real rows from the end still holds with a trailing newline', async () => {
     const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
-    const filler = Array.from({ length: 15 }, (_, i) => `pane row ${i}`);
-    const paneAboveFold = [stale, ...filler, '❯ '].join('\n') + '\n';
-    const { tmux, calls } = fakeTmux([paneAboveFold, '❯ hi\n', '❯ \n']);
+    const pane = [stale, ...Array.from({ length: 6 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('the same phrase 9 real rows from the end is above the fold and does not hold', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const pane = [stale, ...Array.from({ length: 7 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane, '❯ hi\n', '❯ \n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls).length).toBeGreaterThan(0);

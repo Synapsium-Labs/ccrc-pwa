@@ -14,4 +14,7 @@ describe('resetClock (D-2366)', () => {
     const now = new Date(at * 1000 - 3 * 86_400_000);
     expect(resetClock(at, now)).toMatch(/^\d\d:\d\d · \d{1,2} [A-Z][a-z]{2}$/);
   });
+  it.each([NaN, Infinity])('a non-finite epoch %s has no clock', (value) => {
+    expect(resetClock(value)).toBeNull();
+  });
 });

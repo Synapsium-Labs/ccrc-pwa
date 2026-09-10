@@ -3208,7 +3208,7 @@ export interface SlashCommand {
  *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
  *  ignores it, an older writer omits it.
  *  'limit' — the assistant row Claude Code appends on a 429
- *  (`isApiErrorMessage:true, error:"rate_limit"`). */
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
 export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
 /** The sentence Claude Code's default resume prompt is, and every variant —
  *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
