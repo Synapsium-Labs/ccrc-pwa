@@ -562,16 +562,94 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(gsaved), 'the graphify aside was consumed rather than named').toBe(true);
   });
 
-  it('--purge removes ~/.ccrc and ~/ccrc-backups — and NEVER worktrees', () => {
+  // R34 (final whole-branch review, Critical): since `ccrc memory --apply`,
+  // `~/.ccrc/memory/<slug>` is the SOLE live copy of a project's durable
+  // memory — every agent home's own copy is a symlink into it. A bare
+  // `--purge` must not destroy it: the documented-safe sequence `ccrc
+  // backup && ccrc uninstall --purge` would otherwise silently destroy a
+  // session's prose with no exception, no prompt and no mention. Bare
+  // `--purge` removes ~/.ccrc's CONFIG and ~/ccrc-backups but PRESERVES
+  // ~/.ccrc/memory (and so ~/.ccrc itself, now holding only `memory/`).
+  it('--purge removes ~/.ccrc\'s config and ~/ccrc-backups, PRESERVES ~/.ccrc/memory, and NEVER touches worktrees', () => {
     const home = mkTmp('ccrc-uninst-purge-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'),
+      '---\nname: A lesson\n---\nprose a session wrote once\n');
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    // config is gone
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    // the memory store survives, byte for byte
+    expect(readFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'utf8'))
+      .toContain('prose a session wrote once');
+    expect(r.stdout).toMatch(/PRESERVED/);
+    expect(r.stdout).toMatch(/--purge-memory/);
+    expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt')),
+      '--purge ate a worktree').toBe(true);
+    expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  // Bare `--purge` with NO memory ever migrated: nothing to preserve, and
+  // the whole of `~/.ccrc` (never just its config) should still go, exactly
+  // as `--purge` always did before this fix.
+  it('--purge with no memory store ever migrated removes ~/.ccrc whole, as before', () => {
+    const home = mkTmp('ccrc-uninst-purge-nomem-');
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall', ['--purge']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.ccrc'))).toBe(false);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
-    expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt')),
-      '--purge ate a worktree').toBe(true);
-    expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  // Re-review fix: `_uninst_purge`'s preserve-memory arm used to iterate
+  // `"$HOME/.ccrc"/*` under `nullglob` ALONE, so a DOTFILE directly under
+  // `~/.ccrc` (nothing in this tree writes one, but an operator or the OS
+  // can — a `.DS_Store`, an editor swap file, a `.bak`) survived the loop,
+  // the `rmdir` right after it then failed on ENOTEMPTY, and the close line
+  // still unconditionally claimed "~/.ccrc and ~/ccrc-backups removed" —
+  // measured, with the dotfile left behind beside that very message. Seed
+  // one and require BOTH that it is actually gone (the `dotglob` fix) and
+  // that the close line cannot lie about it either way.
+  it('a dotfile under ~/.ccrc does not survive bare --purge, and the close line never claims a removal that did not happen', () => {
+    const home = mkTmp('ccrc-uninst-purge-dotfile-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.ccrc', '.hidden-thing'), 'operator/OS residue, not written by ccrc');
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', '.hidden-thing'))).toBe(false);
+    expect(r.stdout).toMatch(/~\/\.ccrc and ~\/ccrc-backups removed/);
+  });
+
+  // The explicit second flag: an operator who really wants the memory gone
+  // too says so, and only then does it go.
+  it('--purge --purge-memory removes ~/.ccrc whole, memory store included', () => {
+    const home = mkTmp('ccrc-uninst-purge-mem-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'prose\n');
+    const r = runVerb(home, 'uninstall', ['--purge', '--purge-memory']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(r.stdout).toMatch(/config AND its memory store/);
+  });
+
+  // `--purge-memory` names something to extend; without `--purge` there is
+  // nothing to extend, and silently ignoring the flag would be the same
+  // "operator asked for X, the tool quietly did not-X" shape this branch's
+  // own conventions forbid elsewhere.
+  it('--purge-memory without --purge is a usage error, exit 2, nothing removed', () => {
+    const home = mkTmp('ccrc-uninst-purgemem-alone-');
+    plantInstalledBox(home);
+    const r = runVerb(home, 'uninstall', ['--purge-memory']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--purge-memory needs --purge/);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
+    expect(existsSync(join(home, 'ccrc'))).toBe(true);
   });
 });
 
@@ -598,6 +676,31 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
       ? 'app.ccrc.ccrc.plist' : 'ccrc.service'))).toBe(true);
     expect(existsSync(join(dir, 'server-dist', 'index.js'))).toBe(true);
     expect(existsSync(join(dir, 'agent-dist', 'index.js'))).toBe(true);
+  });
+
+  // R34 (final whole-branch review): `~/.ccrc/memory` used to be absent
+  // from this set entirely — the exact gap that let `ccrc backup && ccrc
+  // uninstall --purge` read as a documented-safe sequence while destroying
+  // a project's only copy of its own memory. `ccrc backup` must snapshot it
+  // like everything else here, byte for byte.
+  it('includes ~/.ccrc/memory — the one live copy of every project\'s durable memory', () => {
+    const home = mkTmp('ccrc-backup-memory-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'prose\n');
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = /^backup: (\S+)/m.exec(r.stdout)![1]!;
+    expect(readFileSync(join(dir, 'memory', '-p-demo', 'a-lesson.md'), 'utf8')).toBe('prose\n');
+  });
+
+  it('absence of ~/.ccrc/memory (nothing ever migrated) is ordinary, not a failure', () => {
+    const home = mkTmp('ccrc-backup-nomemory-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
   });
 
   it('prunes to the newest CCRC_BACKUP_KEEP timestamped dirs — hand-made siblings survive', () => {

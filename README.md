@@ -73,7 +73,7 @@ account home it finds. The server comes up on `127.0.0.1:7788`.
 Then:
 
 ```bash
-ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc doctor      # binaries, units, roster, hook registration, auth posture
 ccrc status      # what is running, where
 ```
 
@@ -448,7 +448,8 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
 host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
 fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, and `~/.ccrc/memory` — the
+sole live copy of every project's durable memory since `ccrc memory --apply` — complete before any
 install write); re-run the install spine from the verified staged tree (role-aware, atomic,
 seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
 the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
@@ -468,8 +469,11 @@ takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
 inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
 `~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
-backups — never worktrees, never tmux state.
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
+(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
+`~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
+a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
+to remove it too; never worktrees, never tmux state.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -952,6 +956,79 @@ message to resume"; the server parser keys on the structural markers — `isMeta
 line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
 (`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
 starting with that prefix, and nothing scans for it.
+
+### One memory store per project: `ccrc memory`
+
+**A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
+accounts.** Claude Code keeps it at `<config dir>/projects/<slug>/memory` — inside the
+*account's* home, not the project's — so the swap this whole design is bent around carries
+the conversation across and leaves the memory behind. Each home a box carries accumulates its
+own copy of what sessions learned about the same repo, and they drift apart.
+
+The answer is one store per **project**, shared by every home on the box:
+`~/.ccrc/memory/<slug>`, with each home's `projects/<slug>/memory` a symlink into it.
+Nothing has to move on a swap, because nothing was ever the account's to hold.
+
+```bash
+ccrc memory            # the census: one line per (home, project) pair, then a count
+ccrc memory --apply    # the union — the only step in any of this that moves a byte
+```
+
+**The census is read-only.** A pair is a home's `projects/<slug>/memory` that exists at all —
+a project a home has never held is not a pair and is not listed — and it reads either
+`converged` (the link *resolves* to the store and the store is a directory: resolution, never
+the link's spelling) or `forked` (a real directory, or any link that does not resolve to a
+store directory — pointing at another home, dangling, or landing on a plain file).
+**Homes are enumerated from the FILESYSTEM (`~/.claude*/`), never from the roster** — the
+roster describes the accounts ccrc places work on and was never a census of homes, and a box
+can carry config dirs no roster entry names. **Scratch slugs are skipped**, because the harness
+mints one for every throwaway directory a session was started in — four prefixes, because the OS
+scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
+`-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
+this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
+slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
+
+**`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
+home is copied across; a byte-identical collision stays one file; a same-named file whose
+content *differs* keeps **both** copies, the incoming one suffixed with the home it came
+from, for a human to reconcile. `MEMORY.md` is the exception — an index of one line per file,
+derived from each file's own `name`/`description` frontmatter where it has one. A file that
+does not (measured: a small minority fleet-wide) is dropped from the index — there is nothing
+to derive a line from — but never silently: the run counts what it dropped and names the
+count and the store in its own `NOTE:` line, the same discipline a suffixed conflict copy
+already gets. It is therefore rebuilt rather than merged. Sub-directories and non-`.md` files
+are not memory files: they are counted, not copied, and the run names how many stayed behind
+and where — a backup path on the plain-directory arm, the resolved source itself on the
+symlink arm, whichever ran. Only a **real directory** is backed up — beside itself as
+`memory.pre-ccrc-<UTC>`, with the path printed on that pair's line; the symlink arms take no
+backup, because a link holds no data. And it **refuses rather than reporting a success it did
+not achieve**: a union that cannot read a source or land a copy stops the *whole run* at that
+pair — the operator sees the failing pair's own diagnostic (or, on the symlink arm, the
+resolved target that could not be read, which names neither home nor project slug), but every
+home not yet processed is simply never reached and never mentioned, converged or not. Only the
+plain-directory arm's own source is guaranteed left exactly where it stood; nothing else is,
+once one pair fails. It also normalises a converged link whose own text is not the store — a
+relative spelling, or a *chain* through another home's link, which would quietly make one
+account's home load-bearing for every other, reintroducing one level up the very failure this
+replaces.
+
+`--apply` is a one-time operator act; two mechanisms keep it honest afterwards. The
+SessionStart hook converges one `(home, project)` pair per start and **never merges data** —
+it acts only where there is nothing to lose (an absent link, or a plain directory that is
+empty, tested by `rmdir`'s own failure so there is no check-then-act window across a live
+fleet), leaving a non-empty directory or a link pointing elsewhere exactly as found.
+`ccrc doctor`'s `memory` check then reports what the hook declined to touch, in three
+conditions it never collapses into one, each its own severity: **forked** pairs are a
+**WARN** (remedy: `ccrc memory --apply`) — a fork is the expected state of every multi-home
+box before its one-time migration, not a misconfiguration, and FAILing it would hard-die
+`ccrc update` before its supervisor sweep ever runs, coercing an unrelated verb into demanding
+that migration; homes the hook **cannot reach at all** are a **FAIL**, because
+`install-session-hooks.sh` builds its default list from the roster (remedy: add the account to
+the roster, or register `session-hook.sh` in that home's `settings.json` by hand) — nothing
+repairs that on its own; and a `settings.json` that exists but **cannot be read** earns its own
+**WARN** and remedy — "I could not measure it" is not "it is definitely not wired".
 
 ## Attention, notifications and answering
 
