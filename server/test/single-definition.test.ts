@@ -963,10 +963,11 @@ describe('the program ledger is parsed by nothing', () => {
   // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
   // actual mechanism is "no file under server/src mentions
   // docs/superpowers/programs" — narrowed only as far as the shipped tree
-  // forces: nine mentions exist today, and every one but three is a comment
+  // forces: ten mentions exist today, and every one but three is a comment
   // explaining the convention (coord/db.ts's own migration-rule docstring,
   // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
-  // shared/api.ts). The three non-comment mentions are STRING VALUES the
+  // shared/api.ts, watch.ts's own build4-dogfood citation). The three
+  // non-comment mentions are STRING VALUES the
   // running system emits or throws — never a value it reads back off disk —
   // and are named below, exactly, rather than pattern-matched: a
   // `readFile(Sync)?(` check on the same line catches only the single-line
