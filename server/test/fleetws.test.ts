@@ -907,10 +907,12 @@ describe('fleet REST + WS', () => {
   // riding it on `FleetSession` would make `reviveFleetSession` a second
   // producer of it (the `divergence` frame's own argument).
   describe('the `pools` frame', () => {
-    const connect = async (over: Partial<Deps> = {}, opts: { tick?: boolean } = {}) => {
+    const connect = async (
+      over: Partial<Deps> = {}, opts: { tick?: boolean; intervalMs?: number } = {},
+    ) => {
       const deps = { ...testDeps(home), ...over };
       const bus = new Bus();
-      const watcher = new FleetWatcher(deps, bus);
+      const watcher = new FleetWatcher(deps, bus, opts.intervalMs);
       app = await buildServer(deps, bus, watcher);
       if (opts.tick !== false) await watcher.tick();
       await app.listen({ host: '127.0.0.1', port: 0 });
@@ -926,6 +928,34 @@ describe('fleet REST + WS', () => {
       mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });
       writeFileSync(path.join(home, '.cc-sessions', 'pools', project), bytes);
     };
+
+    it('gives the pool leg half of this watcher instance\'s cadence', async () => {
+      tag('demo', 'pool-a');
+      const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
+      const io: FleetIO = {
+        ...localIO,
+        readdir: async (p, timeoutMs) => {
+          if (p === path.join(home, '.cc-sessions', 'pools')) {
+            seen.push({ op: 'readdir', timeoutMs });
+          }
+          return localIO.readdir(p);
+        },
+        readFileMeasured: async (p, timeoutMs) => {
+          if (p === path.join(home, '.cc-sessions', 'pools', 'demo')) {
+            seen.push({ op: 'readFileMeasured', timeoutMs });
+          }
+          return localIO.readFileMeasured(p);
+        },
+      };
+
+      const { ws } = await connect({ io }, { intervalMs: 8_000 });
+
+      expect(seen[0]).toEqual({ op: 'readdir', timeoutMs: 4_000 });
+      expect(seen[1]?.op).toBe('readFileMeasured');
+      expect(seen[1]?.timeoutMs).toBeGreaterThan(0);
+      expect(seen[1]?.timeoutMs).toBeLessThanOrEqual(4_000);
+      ws.close();
+    });
 
     it('cold-starts after coord, carrying the measured tags', async () => {
       tag('demo', 'pool-a');

@@ -7,9 +7,9 @@ import type { AccountDef, Roster } from '../../shared/roster.js';
  * THE SERVER'S MIRROR of the pool rule (spec §5.6), ring L1: pure decisions,
  * type-only imports plus the ONE value import of L0's `poolRule` — which is
  * the point of the file. The rule is spelled once per LANGUAGE, not once per
- * module: `shared/poolrule.ts` holds the TypeScript spelling and both this
- * module and the PWA consume it, so a "second copy" here would be a third
- * spelling of a two-spelling rule.
+ * module: `shared/poolrule.ts` holds the TypeScript spelling and this module
+ * consumes it. The wave-4 PWA renderer has not landed yet; when it does, it can
+ * consume the same L0 rule instead of minting another spelling (D-2480).
  *
  * What this module adds that L0 cannot: a ROSTER. L0 takes an account's pool;
  * the server takes a wrapper NAME and has to look it up, and the lookup can

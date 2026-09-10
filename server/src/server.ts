@@ -1028,9 +1028,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
-    // measured answer, off its own root listing.
+    // measured answer, off its own root listing. A request uses FleetIO's
+    // ordinary per-operation timeout (`null`), not the watcher's cadence budget.
     const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames, null);
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord),
       pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
@@ -1928,9 +1929,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // workdirs) and this is policy off the registry, exactly the split
     // `readiness` already draws. One root readdir feeds `readProjectPools`,
     // which needs the PARENT listing to tell an absent `pools/` from an
-    // unlistable one (`pools.ts`, spec §5.4.4).
+    // unlistable one (`pools.ts`, spec §5.4.4). This request keeps FleetIO's
+    // ordinary per-operation timeout rather than inheriting watcher policy.
     const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames, null);
     const limits = await readLimits(deps.io, deps.cfg);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
@@ -1988,7 +1990,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
           : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
       }
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), body.project);
+      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), body.project);
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
     }
@@ -2055,7 +2057,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
     const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), project);
+    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), project);
     // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
     // hand-owned copies and can lag the fleet's, so "no account carries that
     // name" is a thing worth saying and not a thing worth blocking on.
@@ -2205,8 +2207,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
     // the early 404/503 ladder and pool refusal. Every applicable refusal is
-    // decided BEFORE queue entry. `swap-route-pool.test.ts` pins both enqueue
-    // paths and each arm's held-slot refusals separately (D-1684, D-2468).
+    // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
+    // `swap-route-pool.test.ts` pins crossing-arm queueing and each arm's
+    // applicable held-slot refusals (D-1684, D-2468, D-2481).
     let argv: CcdArgv;
     if (body.crossPool === true) {
       // The declared crossing skips the verdict entirely — that IS the
@@ -2232,7 +2235,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
       }
       const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), read.record.project);
+      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), read.record.project);
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
       argv = CCD_ARGV.swap(id, body.wrapper);

@@ -83,8 +83,9 @@ export type MeasuredRangeRead =
 export interface FleetIO {
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
-   *  `timeoutMs` lets a consumer bound its own aggregate operation remotely;
-   *  local IO preserves its native filesystem behavior and ignores it. */
+   *  `timeoutMs` lets a consumer shorten a remote request. `localIO` ignores the
+   *  argument itself; a consumer that also races an aggregate deadline can
+   *  still bound how long it awaits local reads. */
   readFileMeasured(path: string, timeoutMs?: number): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
   /** Distinguishes absence from unreadability for a range read; the EOF arm

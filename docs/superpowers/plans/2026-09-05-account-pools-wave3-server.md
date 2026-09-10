@@ -473,7 +473,7 @@ Create `server/test/project-pools-read.test.ts`:
 
 ```ts
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`io.ts:96` — the one read
+// is not there" into "the directory would not list" (`server/src/io.ts:99` — the one read
 // with no measured sibling). This reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
@@ -741,7 +741,7 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * watcher's `registryRead.names` (`watch.ts:702`'s own source), or the route's
  * own `io.readdir(cfg.registryDir)`. It is a PARAMETER rather than a read of
  * our own because it is what splits "the directory is not there" from "the
- * directory would not list": `io.readdir` cannot say (`io.ts:96` — the one
+ * directory would not list": `io.readdir` cannot say (`server/src/io.ts:99` — the one
  * read in that file with no measured sibling), and the parent listing can.
  *
  * Cost: ZERO extra root readdirs for a caller that has a listing, then one
@@ -3843,8 +3843,10 @@ block above.
   WebSocket can remain healthy. The specification requires one awaited, ordered snapshot, not serial
   I/O. Bound the total pool-sweep time: let the consumer pass a per-operation timeout through
   `FleetIO` and its remote adapter, race the `pools/` listing and concurrent marker reads against one
-  shared deadline, and map every unfinished or failed marker to `unreadable`, preserving local behavior
-  and all four pool states. Separate deterministic `project-pools-read` cases prove that a never-resolving
+  shared deadline, and map every unfinished or failed marker to `unreadable`, preserving all four pool
+  states. That aggregate deadline also bounds how long the reader awaits a local implementation even
+  though `localIO` itself ignores the optional timeout argument (corrected by D-2483). Separate deterministic
+  `project-pools-read` cases prove that a never-resolving
   listing finishes as `listed:false` and several never-resolving markers finish as `unreadable`; each
   watchdog is longer than the production bound. The listing case first failed on the unbounded listing,
   and removing the marker race made the marker case red without hanging the suite; exact restoration is
@@ -3892,3 +3894,75 @@ block above.
   in `server/src/server.ts` now says the arms share only the queued invocation and enumerates their
   distinct preflights. **A shared sink does not imply shared upstream guards; describe each arm at
   the branch where the decision actually runs.**
+
+- **D-2476 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A bounded result set does not prove its marker reads overlap.** Replacing
+  `Promise.all(projectNames.map(...))` with a serial loop left all 23 reader tests green: the first stalled
+  marker consumed the shared deadline, and every later race then settled immediately against the already-
+  resolved promise, preserving both elapsed time and verdicts. The replacement test holds the first marker
+  unresolved and requires a later marker to start before releasing it; its 250 ms watchdog remains well below
+  the one-second reader budget without turning ordinary host load into the verdict. Measured against that exact
+  serial mutation it reds with `later marker did not start while the first was unresolved`; restored concurrency
+  is green. **Test concurrency by observing overlap, not by inferring it from a shared deadline's total time.**
+
+- **D-2477 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A port test proving an adapter forwards a timeout does not prove its caller supplies one.**
+  Deleting both optional timeout arguments in `readProjectPools` left the old focused suites green because
+  the aggregate race still bounded their result, while every abandoned remote request retained the client's
+  normal 15-second pending entry. A reader-level test records the listing's full budget and every marker's
+  remaining budget. Deleting both arguments now reds with three `timeoutMs: undefined` values; restored is
+  green. **Pin each side of an optional seam: what the caller passes and what the adapter forwards.**
+
+- **D-2478 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **The layer that owns a cadence must own its deadline policy.** L3's hard-coded one-second
+  budget applied watcher policy to five HTTP paths, making a slow but connected fleet report every marker
+  unreadable to create, swap, projects, fleet-first-paint and post-write measurement. `readProjectPools` now
+  requires an explicit `number | null` budget: `FleetWatcher` passes half its own interval, while every HTTP
+  caller passes `null` and retains FleetIO's request-oriented timeout. A watcher test constructs an 8-second
+  cadence and observes 4-second listing and marker budgets, so replacing the expression with a fixed second
+  reds. **Make shared readers accept policy; do not let them invent one from a single consumer's clock.**
+
+- **D-2479 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **Bounding one watcher leg does not restore the watcher's cadence when an earlier leg remains
+  serial and unbounded at the aggregate.** The same tick awaits `readRegistryMeasured` first, and its
+  `for (const id of ids) await buildRecord(...)` can still cost roughly one 15-second remote timeout per
+  session before `emitPools` starts. This wave does not widen into that pre-existing reader. `emitPools` now
+  claims only that its concurrent bounded marker reads stop the pool leg multiplying timeout by project
+  population, and explicitly records the dominant registry limitation. **State the bound at the exact leg
+  it controls; a downstream deadline cannot make an upstream serial sweep punctual.**
+
+- **D-2480 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A correction that stops at named files leaves the same stale claim class authoritative one
+  file over.** `shared/roster.ts` still called the now-shipped project-pool route a future importer;
+  `server/src/poolrule.ts` claimed the PWA already consumed `shared/poolrule.ts`, while no `pwa/src` import
+  exists; and `shared/poolrule.ts` still said no consumer existed although the server now imports it. The
+  source-wide pass graduates the server consumers while preserving the wave-4 PWA as future work. **After
+  correcting a false rollout or consumer claim, search its semantic class across the whole source ring.**
+
+- **D-2481 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`, corrected by coordinator mail 508) — **A comment cited the wrong test for one half of a shared
+  queue invariant.** `swap-route-pool.test.ts` pins crossing-arm enqueue and each arm's applicable held-slot
+  refusal, but ordinary-arm queueing is pinned in `lifecycle.test.ts`: an ordinary-only queue bypass leaves
+  the former green and reds the latter. The swap preamble now credits each file precisely; no redundant test
+  was added. **A test citation is a coverage claim — name the suite that actually turns red for that arm.**
+
+- **D-2482 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A deadline needs lifecycle and snapshot semantics, not only a race.** The first implementation
+  retained one timer closure after every fast read, launched one already-doomed request per project after an
+  exhausted listing budget, and let whichever markers happened to win produce a different partial frame on
+  each tick. The bounded path now clears its timer in `finally`, launches no marker after zero remaining
+  budget, and degrades the entire listed population when the shared deadline fires so byte-equality sees a
+  stable fail-shut snapshot. Deterministic fake-timer tests pin all three behaviors; the real-agent topology
+  cases use `null`, so they do not acquire a one-second load-sensitive correctness threshold. **A deadline's
+  output must be coherent and its losing work must not outlive or multiply the decision it bounds.**
+
+- **D-2483 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **The first deadline correction falsified its own inventories and local-behavior claim.**
+  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:99`, not
+  the now-measured `readFileB64Measured` line 96; and an aggregate race bounds local reads even though localIO
+  ignores the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
+  made D-2465's “several never-resolving markers” literal by splitting rejection into a separate case; the
+  overlap test now proves the stronger mechanism. **After inserting lines or a new outcome, re-measure every
+  positional citation and every supposedly exhaustive sentence in the same round.** The final review then
+  caught the timeout-comment edit shifting `FleetIO.readdir` once more (98 → 99), plus the overlap test's
+  losing watchdog handle; the citations were re-measured and the watchdog is cleared in `finally`.

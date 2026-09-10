@@ -1185,18 +1185,23 @@ export class FleetWatcher {
    *  sweeps could finish out of order and latch an older snapshot until the
    *  tags changed again. `tick()`'s re-entrancy guard provides that ordering.
    *
-   *  The work in front of `detectDialogs` is explicit and bounded once for the
-   *  whole listed population: zero io when names is null or does not contain
-   *  `pools`, otherwise one `pools/` readdir plus concurrent measured reads for
-   *  every non-dot entry under `readProjectPools`'s shared one-second deadline.
-   *  That total bound matters more than the operation count — serial remote
-   *  requests would multiply the client's 15-second default by the number of
-   *  projects and suppress later watcher lanes (D-2465). Both FleetIO
-   *  implementations fold read failures into measured return values, so no
-   *  catch is needed around the reads. `project-pools-read.test.ts` pins the
-   *  cost arms, concurrency and deadline. */
+   *  This POOL LEG has one caller-owned budget: half this watcher instance's
+   *  interval, shared by one `pools/` readdir and concurrent measured reads for
+   *  every non-dot entry. It prevents pool-marker cost from multiplying the
+   *  remote client's 15-second default by project population (D-2465/D-2478).
+   *  It does NOT restore a two-second whole-tick cadence: the serial
+   *  `readRegistryMeasured` above runs first and can still cost roughly one
+   *  default timeout per session (D-2479). Closing that older reader is outside
+   *  this wave.
+   *
+   *  Both FleetIO implementations fold read failures into measured return
+   *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
+   *  overlap and deadline behavior; `fleetws.test.ts` pins this cadence-derived
+   *  budget at the consumer. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
-    const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
+    const read = await readProjectPools(
+      this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)),
+    );
     const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;

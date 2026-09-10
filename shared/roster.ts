@@ -255,10 +255,10 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * BOUNDARY — the 32-character cap and the shapes just outside it — and
  * `server/test/gen-accounts.test.ts` value-imports it to hold the bare-`node`
  * mirror's hand-copied literal equal to this one, both being assertions only a
- * reader of the one definition can make. One more importer is coming: the
- * project-pool route (wave 3) will validate a request body against this object.
- * Wave 2a's parity scan will read `POOL_NAME_RE.source` the same way, to pin
- * `ccd`'s own hand-typed `POOL_NAME_RE=` bash literal equal to it.
+ * reader of the one definition can make. The wave-3 project-pool route now
+ * imports it to validate request bodies, while wave 2a's parity scan reads
+ * `POOL_NAME_RE.source` the same way to pin `ccd`'s hand-typed
+ * `POOL_NAME_RE=` bash literal equal to it (D-2480).
  *
  * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT why this is exported:
  * it hand-COPIES the literal, because a bare `node` cannot import TypeScript
