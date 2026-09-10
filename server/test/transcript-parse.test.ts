@@ -287,4 +287,7 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
   it('the sentence on an ordinary assistant row stays an assistant event — the field decides', () => {
     expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined, error: undefined })).map((e) => e.kind)).toEqual(['assistant']);
   });
+  it('a rate_limit error with no isApiErrorMessage flag stays an assistant event — both fields decide', () => {
+    expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
 });
