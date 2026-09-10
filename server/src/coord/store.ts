@@ -2669,48 +2669,44 @@ export class CoordStore {
 
   /**
    * Overwrites a delivery's stored `envelope`, once, immediately after
-   * `queueDelivery`. THREE callers, each doing exactly that and none of them a
-   * re-render: the ingress route in `routes.ts`, the system-mail queue in
-   * `rundefs.ts` (which has called it since Build 7 — this sentence said "the
-   * ingress route ONLY" for two builds while it did:
-   * D-1426) and `requeueAbandonedMail`
-   * in this file, which renders
-   * the heir's own envelope for a second delivery of one mail. Pinned by
-   * `single-definition.test.ts`'s "setDeliveryEnvelope names every caller it
-   * has", which derives the caller set from `server/src` rather than reading
-   * this sentence. It exists to close a bug fix-round
-   * finding 5 / D-41 named: the envelope's own `ack:` line has to name the
-   * DELIVERY id (what `delivery(id)`/`markAcked` resolve by, both above),
-   * but `mail.id` and `mail_deliveries.id` are two SEPARATE `AUTOINCREMENT`
-   * sequences (`schema.ts`) that only happen to walk together while every
-   * mail resolves to exactly one delivery. The delivery id does not exist
-   * until the row is inserted, so the route inserts the row with an empty
-   * envelope, renders the real one now that it can name the delivery's own
-   * id, and calls this to land it — all inside the SAME transaction
-   * `queueDelivery` ran in, so no reader ever observes the empty
-   * intermediate. This is the second half of that one INSERT, not a
-   * re-render: `renderEnvelope` itself still runs exactly once, at queue
-   * time (spec:176-177, "verbatim, never re-rendered"), and this method
-   * never re-derives its argument — it only stores what the caller already
-   * computed.
+   * `queueDelivery`. THREE direct callers, each doing exactly that and none of
+   * them a re-render: the ingress route in `routes.ts`, the system-mail queue
+   * in `rundefs.ts` (which has called it since Build 7 — this sentence said
+   * "the ingress route ONLY" for two builds while it did: D-1426), and
+   * `requeueAbandonedMail` in this file, which renders the heir's own envelope
+   * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
+   * "setDeliveryEnvelope names every caller it has", which derives the caller
+   * set from `server/src` rather than reading this sentence. It exists to
+   * close a bug fix-round finding 5 / D-41 named: the envelope's own `ack:`
+   * line has to name the DELIVERY id (what `delivery(id)`/`markAcked` resolve
+   * by, both above), but `mail.id` and `mail_deliveries.id` are two SEPARATE
+   * `AUTOINCREMENT` sequences (`schema.ts`) that only happen to walk together
+   * while every mail resolves to exactly one delivery. The delivery id does
+   * not exist until the row is inserted, so each caller inserts the row with
+   * an empty envelope, renders the real one now that it can name the
+   * delivery's own id, and calls this to land it. This is the second half of
+   * that one INSERT, not a re-render: `renderEnvelope` itself still runs
+   * exactly once, at queue time (spec:176-177, "verbatim, never re-rendered"),
+   * and this method never re-derives its argument — it only stores what the
+   * caller already computed.
    *
-   * GUARDED, and the guard is a no-op on three reachable paths — deliberately.
-   * The mail route's send `tx`, `dispatchRun`'s dispatch `tx` through
-   * `markDispatched` → `bindSession` → `requeueAbandonedMail`, and
-   * `reclaimProgram`'s `tx` each call this alongside the `queueDelivery` above
-   * it. `tx` is `BEGIN IMMEDIATE` over a synchronous `DatabaseSync`, so those
-   * callers see no concurrent writer and the row this stamps is provably
-   * `'queued'`. The fourth path — `requeueAbandonedMail` reached from the open
-   * route's `setSession` → `bindSession` — runs in autocommit after its
-   * `ws-hold` succeeds. The guard below is exactly what protects that path:
-   * the `AND state = 'queued'` clause is a no-op for the transactional callers
-   * and load-bearing for the open-route path. The clause is here
-   * anyway because a writer whose safety rests on its callers' shape is a
-   * writer that breaks silently the day an unguarded path appears — and one
-   * does, in this same wave — and because an audit with one exception in it
-   * is an audit nobody
-   * finishes. DO NOT "simplify" it away: it costs one `AND`, and it is what
-   * lets `mail-hardening.test.ts`'s writer scan say EVERY with no carve-out
+   * GUARDED. The three direct callers expand to FIVE reachable paths. Four run
+   * in the same transaction as their `queueDelivery`: the mail route's send
+   * `tx`, the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx`
+   * through `markDispatched` → `bindSession` → `requeueAbandonedMail`, and
+   * `reclaimProgram`'s `tx`. `tx` is `BEGIN IMMEDIATE` over a synchronous
+   * `DatabaseSync`, so those paths see no concurrent writer and the row this
+   * stamps is provably `'queued'`. The fifth path — `requeueAbandonedMail`
+   * reached from the open route's `setSession` → `bindSession` — runs in
+   * autocommit after its `ws-hold` succeeds. Its queue and stamp are
+   * synchronous but not atomic. The `state NOT IN ${TERMINAL_DELIVERY_SQL}`
+   * guard and the result union therefore refuse and expose a row that became
+   * terminal before the stamp instead of silently overwriting it. The guard is
+   * here because a writer whose safety rests on its callers' shape breaks
+   * silently when an unguarded path appears — as one did in this wave — and
+   * because an audit with one exception in it is an audit nobody finishes. DO
+   * NOT "simplify" it away: it costs one `AND`, and it is what lets
+   * `mail-hardening.test.ts`'s writer scan say EVERY with no carve-out
    * (D-1409).
    *
    * The result is a union rather than `void` for the reason `bumpReplayCount`

@@ -4666,12 +4666,14 @@ export interface MailSummary {
   /**
    * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
    *
-   * FREE TEXT, and it has to be treated as such: five writers put five
-   * different kinds of thing here (PR #75 review round 1, store-7) — a typed
-   * `sendPrompt` error code, `'recipient not in registry'`, `'run closed'`,
-   * `'recipient rebound'` (`MAIL_REBIND_SUPERSEDED_ERROR`, a deliberate-cancel
-   * sentence for a worker re-bound to a new session), and a whole English
-   * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
+   * FREE TEXT, and it has to be treated as such: five semantic writer
+   * categories put different kinds of thing here (PR #75 review round 1,
+   * store-7) — a typed `sendPrompt` error code, `'recipient not in registry'`,
+   * a deliberate run/recipient cancel (`'run closed'`, `'coordinator
+   * reclaimed'`, or `'recipient rebound'`), and a whole English sentence
+   * (`MAIL_REPLAY_CEILING_ERROR`). The three cancel strings are three SQL
+   * assignments but one category: each explains a delivery parked because its
+   * intended run or role-holder changed. The column is a maintainer's grep
    * target, not a vocabulary, and it has never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
