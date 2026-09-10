@@ -170,6 +170,24 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     h.sh(`${STUBS(BUSY)} _auto_swap_check ${ID}`);
     expect(dispatches()).toEqual([]);
   });
+  it('a fresh stalepress stands the transcript arm down — the Enter _auto_stale_check just pressed does not lose the race to a same-tick rescue (fix-round 1 finding 1)', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+  });
+  it('control: once STALE_RESUME_GRACE has lapsed the stand-down clears and the transcript arm rescues again', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`_reg_set ${ID} stalepress $(( $(date +%s) - STALE_RESUME_GRACE - 1 ))`);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+  });
+  it('control: the pane arm is unaffected by a fresh stalepress — the grace only stands down the transcript arm', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
+    h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toHaveLength(1);
+  });
   it('control: a transcript whose newest row is a real turn does not rescue a prompt pane', () => {
     seed(); writeTranscript([L.banner(), L.assistant()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
@@ -198,6 +216,12 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     seed(); writeTranscript([L.banner()]);
     h.sh(`${STUBS('')} _tick_strand_undecidable ${ID} wrapper claude`);
     expect(stranded()).toBe(true);
+  });
+  it('the strand half stands down on a fresh stalepress too — one verdict, one stand-down (fix-round 1 finding 1)', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
+    h.sh(`${STUBS(PROMPT)} _tick_strand_undecidable ${ID} wrapper claude`);
+    expect(stranded()).toBe(false);
   });
   it('both call sites go through _session_hard_blocked (source pin)', () => {
     const src = fs.readFileSync(CCD, 'utf8');
