@@ -297,7 +297,7 @@ describe('POST /api/runs', () => {
     // delivery `sweepMail` would inject into a session nobody had held.
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing'); seed(home, 'demo-second');
-    const { run, calls } = makeRunner(home);
+    const { run } = makeRunner(home);
     let holds = 0;
     // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
     const failSecondHold: Runner = async (cmd, argv) => {
@@ -313,13 +313,12 @@ describe('POST /api/runs', () => {
     const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
     expect(second.statusCode).toBe(502);
     expect(second.json()).toEqual({ ok: false, stderr: 'ws-hold failed' });
-    expect(holds, 'the hold was never attempted').toBe(2);
+    expect(holds, 'the initial and refused re-bind holds were not both attempted').toBe(2);
     expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
     expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
     expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
     expect(w.coord.mailForRecipient('demo-second')).toHaveLength(0);
     expect(w.coord.runEvents(id).map((e) => e.detail).filter((d) => d?.startsWith('session-rebound'))).toEqual([]);
-    void calls;
   });
 
   it('permits a reused sessionId that stays in the same project', async () => {
@@ -425,12 +424,26 @@ describe('POST /api/runs', () => {
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
   });
 
-  it('refuses a present-but-empty homeProject as a malformed body', async () => {
+  it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
     const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
+    const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    expect((await postOpen(app, { ...OPEN_BODY, homeProject: '   ' })).statusCode).toBe(400);
-    expect((await postOpen(app, { ...OPEN_BODY, homeProject: 7 })).statusCode).toBe(400);
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: '   ' });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it('refuses a non-string homeProject as a malformed body, before anything is opened or homed', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 7 });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
 
   it('answers 501 not-configured without a coordination store', async () => {

@@ -960,10 +960,11 @@ describe('the account roster — config dir is data, joined in one place', () =>
 });
 
 describe('the program ledger is parsed by nothing', () => {
-  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
-  // actual mechanism is "no file under server/src mentions
-  // docs/superpowers/programs" — narrowed only as far as the shipped tree
-  // forces: ten mentions exist today, and every one but three is a comment
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4
+  // records the historical server-only claim, "no file under server/src
+  // mentions docs/superpowers/programs." The live guard scans all four source
+  // roots, narrowed only as far as the shipped tree forces: ten mentions exist
+  // today, and every one but three is a comment
   // explaining the convention (coord/db.ts's own migration-rule docstring,
   // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
   // shared/api.ts, watch.ts's own build4-dogfood citation). The three

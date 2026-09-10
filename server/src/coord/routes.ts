@@ -310,7 +310,8 @@ export function homeProjectVerdict(input: {
 export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
 
 /**
- * A home is a single path segment under `projectsRoot`, and nothing else:
+ * A home is a single path segment under `projectsRoot`, and nothing else
+ * (D-2349):
  * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
  * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
  * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
@@ -1116,7 +1117,7 @@ export function registerCoordRoutes(
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
         // is a single path segment — because the first non-NULL home a
         // programme stores is permanent and `ledgerAbsPath` joins it under
-        // `projectsRoot` (PR #75 review round 1, F2 + F4).
+        // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
         !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
@@ -1163,8 +1164,9 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
     }
     if (homeVerdict.kind === 'required') {
-      // Its OWN sentence, not the body-shape guard's bare `bad-request` 36
-      // lines up: two conditions whose remedies differ — "your JSON is
+      // Its OWN sentence (D-2349), not the body-shape guard's bare
+      // `bad-request` 36 lines up: two conditions whose remedies differ —
+      // "your JSON is
       // malformed" versus "this build requires a home" — must not reach the
       // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
       // true; the day wave 3 flips the constant, this is the one refusal the
@@ -1198,7 +1200,8 @@ export function registerCoordRoutes(
 
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
     // wave 1 held): place the hold FIRST, and bind the id onto the row only
-    // once the hold stands (PR #75 review round 1, store-1). `setSession`
+    // once the hold stands (D-2350; PR #75 review round 1, store-1).
+    // `setSession`
     // funnels into `bindSession`, which on a RE-bind re-issues the
     // predecessor's outstanding worker mail to the heir and parks the
     // predecessor's rows — writes that run in autocommit, outside any `tx()`
@@ -1209,7 +1212,7 @@ export function registerCoordRoutes(
     // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
     //
     // A re-bind is RECORDED on the run's own trail, naming both occupants and
-    // how many deliveries moved (store-2): `openRun`'s dup arm keys on
+    // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
     // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
     // a retried open naming a different session reaches this line with a
     // predecessor — a live path, not a store-test-only one — and an occupant
@@ -1226,6 +1229,10 @@ export function registerCoordRoutes(
       const predecessor = coord.resolveWorker(opened.id);
       const bound = coord.setSession(opened.id, sessionId);
       if (bound.rebound) {
+        // `bindSession` reports a rebound only when its pre-read found a
+        // non-null predecessor distinct from `sessionId`; keep that invariant
+        // visible rather than interpolating the impossible `null` silently.
+        if (predecessor === null) throw new Error('rebound reported without a predecessor');
         coord.recordRunEvent(opened.id, 'coordinator',
           'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
       }

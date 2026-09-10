@@ -1539,8 +1539,8 @@ export class CoordStore {
    */
   setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
     // Delegated, not re-implemented: `bindSession` above is the writer of this
-    // column. Its answer is RETURNED, not dropped (PR #75 review round 1,
-    // store-2): the open route is a live RE-bind path — a retried open of a
+    // column. Its answer is RETURNED, not dropped (D-2351; PR #75 review
+    // round 1, store-2): the open route is a live RE-bind path — a retried open of a
     // still-`planned` wave naming a different session reaches it with a
     // predecessor — and records what it was told on the run's trail. The
     // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
@@ -3329,7 +3329,7 @@ export class CoordStore {
    * and stamping the reconstruction time on a wave that in reality
    * dispatched long ago would falsify `dispatchedIn24h` for it too.
    *
-   * A FIFTH thing this does NOT carry: `programs.homeProject`. None of the
+   * A FIFTH thing this does NOT carry (D-2352): `programs.homeProject`. None of the
    * three artefacts this rebuilds from names a
    * home — the ledger header carries the slug and title, the registry a
    * project, `.prhistory` a branch — so the programme row this INSERT writes
