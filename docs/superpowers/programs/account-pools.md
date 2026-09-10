@@ -2418,3 +2418,63 @@ rewrite had silently dropped six measured facts the older copy explicitly flagge
 the tree"* — the uncapped PreCompact stdout, the 10,000-char `additionalContext` spill, the hook ordering,
 `readFileState`. Merged them back rather than taking the newer copy. **"Newest wins" would have destroyed
 measured work — the same shape as IMPORTANT 1, in a different medium, on the same afternoon.**
+
+## 21:3x UTC — #81 round three (`c8f8c93a`): the bound shipped, the mechanism did not
+
+The worker closed D-2464 at `be44395b`, then D-2465..D-2468 at `c8f8c93a` — a shared one-second
+deadline over the `pools/` listing and now-concurrent marker reads, plus consumer-owned `timeoutMs`
+threaded through `FleetIO` to the remote client, plus three prose classes. Four required checks and
+the PWA build were green at `be44395b`; `c8f8c93a`'s run is still settling.
+
+I gated it with four independent lenses (deadline runtime, mutation adequacy, claim truth, blast
+radius), each finding refuted by a separate adversary. **22 raised, 20 survived — and 20 is not the
+answer.** They cluster into eight decisions, allocator-issued as D-2476..D-2483 and mailed as 506.
+Two refuters contradicted each other outright; I resolved both by measurement rather than by vote.
+
+### The two that matter most, and they are the same failure twice
+
+**D-2476 — the round's own new property has no mechanism.** Keep the shared deadline and restore the
+serial loop: `demo` resolves at once, `quiet-basin`'s race settles null when the shared deadline
+fires, and `acct-a-demo` then settles null *immediately* because that deadline has already resolved.
+Same launch order, same four verdicts, ~1 s elapsed, inside the case's own 2500 ms watchdog. **Green.**
+So the concurrency this round exists to introduce is pinned by nothing — while `watch.ts`'s new
+comment says the test file "pins the cost arms, concurrency and deadline". A comment is a request.
+The deadline IS pinned; only the concurrency is not, and only one of the four marker arms actually
+depends on the race at all.
+
+**D-2480 — the class search stopped at the files the review named.** D-2466 and D-2467 exist to close
+exactly that habit, and it repeated one file over in the same commit: `shared/roster.ts` still says
+*"One more importer is coming: the project-pool route (wave 3) will validate a request body against
+this object"* — that route ships in this PR — and `server/src/poolrule.ts` still says *"both this
+module and the PWA consume it"* when measured, **nothing under `pwa/src` imports `poolrule` at all**.
+That second one is D-2467's phantom-renderer defect in a neighbouring file, written by the same hand
+in the same round that corrected it. `correcting-the-instance-is-not-correcting-the-claim`, again.
+
+### The design finding I had before the reviewers did, and they sharpened
+
+**D-2478.** The budget is justified in its own docstring by the watcher's 2 s cadence, but
+`readProjectPools` has six callers and **five are HTTP routes with no cadence at all**. On a
+slow-but-CONNECTED fleet every marker loses the shared race together, so `poolUndecidable` is true
+for every project: 503 `pool-unreadable` on every create and every ordinary swap, `unmeasurable`
+placement on every project row, and a 200 carrying `state:'unreadable'` from the tag route
+*immediately after a ccd write that succeeded* — with nothing logging the episode. Before this round
+those callers waited and answered correctly. The remedy is the mechanism this same commit added and
+documented as exactly that: make the budget a parameter and let each consumer own it.
+
+**D-2479 is the honest limit on all of it.** On the stalled-agent tick the constant is written for,
+the same tick already awaits `readRegistryMeasured` — a serial `for (const id of ids) await
+buildRecord(...)`, roughly N_sessions × 15 s — *before* `emitPools` is reached. Bounding the
+smallest, already-concurrent leg cannot restore a cadence that is already gone by two orders of
+magnitude. I ruled explicitly against widening this wave to fix that: it predates the PR and is
+main's shape. Correct the justification, disclose the dominant read, do not chase it here.
+
+### The merge gate is not a review question any more
+
+Measured, not taken on report: the identity `gh` is authenticated as on this box is the same account
+that authored PR #81 — one GitHub login serves the whole fleet. GitHub will not
+accept a self-approval, so **ruleset 22520257's one approving review cannot be satisfied by any
+session on this fleet.** The identity holds `admin: true`, so the bypass exists — capability, not
+authorization. Two peer sessions independently reached the same conclusion and declined to approve.
+`bright-meadow` also cleared the sequencing question against PR #75 (`660d576d`): conflict-free
+either way, #75's only `server/src/server.ts` hunk being `runId: null` on the ask-answer feed event.
+So #81 is blocked on an operator decision, not on anything the worker or I can measure.
