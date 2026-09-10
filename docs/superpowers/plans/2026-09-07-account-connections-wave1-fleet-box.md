@@ -18009,3 +18009,99 @@ op answer *no readable row*, so the choice of cap site was load-bearing and is n
 reasoned. And D-2272's timing claim — 10 006 ms before, 9 ms after — was **re-measured independently by
 someone who did not write it**, which is the only reason D-2332 was found: verifying the number meant
 reading the callers, and reading the callers falsified the sentence beside it.
+
+### D-2354 — TWO FIXES FROM ONE ROUND, EACH RIGHT ALONE, COMBINING TO REPRODUCE THE DEFECT ONE CLOSED
+
+The best finding this wave has produced, and neither fix is wrong.
+
+D-2330 moved the remedy **before** the editorial clause in all four triage branches, because the note cap
+cuts from the right and the remedy was being eaten. Correct. D-2331 then gave the 125 branch the action
+it had always lacked — but that action is ~490 characters with the actionable command buried ~330
+characters in. Correct order, wrong outcome: **at the very 772-character HOME D-2330's ruling was
+measured at, 127 keeps its remedy, 126 keeps its remedy, and 125 loses the one D-2331 just gave it.**
+
+Neither entry is at fault on its own terms. The interaction is: *ordering* protects the remedy only while
+the remedy is short, and the round that fixed the ordering and the round that lengthened the text were
+the same round. **A cap plus a reorder is not a mechanism; it is a budget, and nobody measured the
+budget.** The deep-HOME test covers the 127 branch alone — a 50-character remedy — so the one branch
+whose remedy cannot fit is the one branch not tested deep.
+
+Remedy: shorten the 125 action to its imperative and put the command first, and extend the deep-HOME test
+to **every** branch, so the budget is measured rather than assumed for each.
+
+### D-2355 — the "Nothing was written." clause was fixed at two sites and its own banner says two; there are at least six
+
+`ccd/ccrc:6141-6142` states the clause was hard-coded at two sites. Measured: four more are reachable on
+the same run, all of them composed **after** the cheap question has already run the lane's own launcher —
+`:6194` (probe-cwd) and `:5881`, `:5888`, `:5890` (bad-timeout, inside the deadline validator). Two were
+constructed end to end with the telemetry file on disk afterwards: probe-cwd answers exit 1 and
+bad-timeout exit 2, both saying nothing was written while the file had moved.
+
+**And the existing coverage cannot see it, for a reason worth stating.** The probe-cwd case drives that
+refusal through a **non-anthropic** lane, where the cheap question never runs — so its assertion that the
+detail ends in *"Nothing was written."* is a TRUE claim on that path, pinning a sentence that is false on
+the path the test does not take. A green test asserting something true of the fixture and false of the
+world; D-2153's shape, at a seam the fix had just visited.
+
+The remedy is one token per site — the helper already exists and still ends in the same sentence when
+nothing moved, so the existing rows stay green.
+
+**My own commit message repeated the undercount**, saying both refusal paths were closed. That is the
+third claim of mine in this task to be stronger than what was measured (D-2332, D-2335, this). The
+pattern is specific and worth naming: **I restate a fix's own framing when I write the message, so an
+error in the fix's self-description becomes an error in the record.** Read what the fix DID, not what its
+banner says it did.
+
+### D-2356 — D-2331's own defect survives at the fourth address, with a red control on the identical guard
+
+The `killed` arm's expectation in the triage table is `'signal 9'` — a slice of that row's own **cause**
+sentence (`exit 137 is signal 9`), not of its remedy, under a table whose column means *names a remedy*.
+Deleting the arm's actual next step leaves the whole file **250/250 green**.
+
+The green is disambiguated three ways rather than shrugged at: the mutation is APPLIED and REACHED (the
+operator-facing note demonstrably loses its only next step), there is a RED CONTROL on the identical
+guard (deleting the 127 arm's remedy instead reds at the same line with the same expectation shape), and
+no other suite covers it. So: unpinned, not unreachable.
+
+D-2331 fixed exactly this defect at one address in this same commit. **A fix that names a defect class
+and repairs one instance of it is a census that was never taken** — the same lesson as D-2355, in the
+same file, in the same round.
+
+### D-2357 — the acceptance test worked, and this is what it bought
+
+D-2328 shipped with an explicit acceptance test: move the cap out of the factory into the 401 arm alone —
+the exact mutation that left round 1 green — and the new loop must red. **It reds**, and not merely as a
+failed assertion: it reds by reproducing the original defect end to end, E2BIG on the argv, node exiting
+126, the verb answering `no-answer`, on a slot round 1's fixture did not cover.
+
+Three properties beyond the ask were then measured, and two of them mattered:
+- **The exact-length assertion is what caught `slice(0, 0)`; the marker assertion did not.** A cap
+  asserted only by "the marker is present" passes for a cap that keeps nothing.
+- **Per-slot pinning was proved with a targeted mutant** — only the residual bypassing the cap — so the
+  loop cannot be passing on an early row. The residual reds under its own name.
+- The both-sides case is a byte-equality on a 500-character detail, so an unconditional cap reds it.
+
+Recorded because this wave has spent most of its entries on what verification caught. **This is what it
+looks like when a fix is asked to prove its own generality and can.**
+
+### D-2358 — a coverage shape worth naming: the lane that cannot reach the seam
+
+Twice now a case has driven a refusal through a lane whose provider gate means the code under test never
+runs the path that would falsify the assertion — D-2268's original scoping, and D-2355's probe-cwd row.
+The test is green, the assertion is true, and the mechanism is unmeasured, because **the fixture's lane
+kind decides which of two seams the run reaches.**
+
+For every case in this cluster the question is therefore not only *which line, on which input*, but
+**which lane** — a fixture axis this plan has now been bitten by twice and which no reviewer thought to
+enumerate until a fix landed on top of it.
+
+### D-2359 — round 3's shape, and why the rounds are not converging on nothing
+
+Round 1 closed six findings and opened four. Round 2 closed eight and opened three. Each round's openings
+are **narrower and more specific** than the last — round 1 opened an unpinned central property, round 2
+opened a text-length budget and a census taken at one address — which is what convergence looks like when
+the reviewer is adversarial rather than agreeable.
+
+What is NOT converging is my own claim discipline: three overstatements in three rounds, every one of
+them a case of restating a fix's self-description instead of its diff. That is the thing to fix in the
+process, not in the code.
