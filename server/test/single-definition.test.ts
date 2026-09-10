@@ -410,10 +410,10 @@ describe('Build 7 nouns', () => {
   // the mechanism it claimed to be standing on.
   //
   // Same shape as the terminal-trio scan below, and for the same reason: the
-  // shipped list is BUILT by interpolation from the two exported constants, so
+  // shipped list is BUILT by interpolation from the three exported constants, so
   // this scanner sees no literal at all in the real source, and any hand-written
-  // SQL list of the pair scores a hit. Either order, because a copy written from
-  // memory is as likely to be the other way round.
+  // SQL list of the SET scores a hit. Any order, because a copy written from
+  // memory is as likely to land in any of the three's six permutations.
   //
   // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
@@ -430,6 +430,8 @@ describe('Build 7 nouns', () => {
     const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
+    // …and the one definition is still built from the three named constants, so
+    // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
       /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
@@ -439,6 +441,8 @@ describe('Build 7 nouns', () => {
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
     }
+    // The readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from all of them.
     expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
   });
