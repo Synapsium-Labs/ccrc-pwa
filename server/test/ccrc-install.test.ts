@@ -540,6 +540,23 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  // The stamp arm quotes GIT'S OWN stderr, so git's message LANGUAGE is a
+  // fixture input like every `CCRC_*` above — and the one this file forgot to
+  // decide. Homebrew git links GNU libintl, which on macOS falls back to the
+  // OS preferred language when no LC_*/LANG is set: measured on a Mac whose UI
+  // is Polish, `git rev-parse HEAD` outside a repo answers `fatal: to nie jest
+  // repozytorium gita …` with LANG, LC_ALL, LANGUAGE and LC_MESSAGES ALL empty.
+  // So the English assertion at the `not a git checkout` arm reds on that box
+  // and stays green on Linux CI (C/en) for ever — an environment-dependent red
+  // that names nothing about the code under test.
+  //
+  // C, BY NAME, at the one call site every runner in this file goes through —
+  // the same doctrine as the deletes above ("the fixture decides and never the
+  // ambient shell"). Loosening the regex to `fatal: .*` was the alternative and
+  // is worse: quoting git's own sentence is exactly what that arm exists to
+  // prove, so the English text is load-bearing, not incidental.
+  env['LC_ALL'] = 'C';
+  env['LANGUAGE'] = '';
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
