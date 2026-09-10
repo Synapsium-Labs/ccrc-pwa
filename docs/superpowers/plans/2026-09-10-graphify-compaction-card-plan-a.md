@@ -3246,7 +3246,7 @@ The second review (2026-09-10, three opus refuters and a scout over the amended 
 
 The execution pass found the following corrections; D-2446–D-2455 were allocated together before these definitions were written:
 
-- **D-2446 — a bare `timeout` conflicts with the shebang portability scanner and independent hook install.** The hook cannot borrow ccd's platform block. Fix: `_hook_timeout` locally resolves `timeout` then `gtimeout`; neither tool returns 127, which the existing silent call site swallows so the feature remains inert after the hook-owned set writes.
+- **D-2446 — a bare `timeout` conflicts with the shebang portability scanner and independent hook install.** The hook cannot borrow ccd's platform block. Fix: `_hook_timeout` locally resolves `timeout` then `gtimeout`; when neither tool exists it returns 127, which the existing silent call site swallows so the feature remains inert after the hook-owned set writes.
 - **D-2447 — the helper CLI main guard failed under symlink invocation.** Fix: `realpathSync` establishes executable identity.
 - **D-2448 — `readWindow`'s boundary-first chunk ignored the caller cap.** Fix: bound that read by cap minus already-read bytes.
 - **D-2449 — `tokenRegex`'s leading lookbehind is output-neutral but a linear-time cost guard.** The output-only proof caused a reversal; a 64 KiB timing-effect test now pins it.
