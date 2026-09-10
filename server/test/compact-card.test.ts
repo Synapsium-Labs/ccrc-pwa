@@ -181,11 +181,26 @@ describe('mining — the working set out of the window (spec §3.2)', () => {
     expect(mineTokens(win, null)).toEqual([{ token: '/w/c', tag: 'touched' }]);
   });
 
-  it('the token regex is DERIVED from the graph\'s own extensions, longest first, anchored on both sides', () => {
+  it('the token regex is DERIVED from the graph\'s own extensions, longest first, with the leading lookbehind and the trailing lookahead both in effect', () => {
     expect(extensionsOf(['a/b.ts', 'c.tsx', 'ccd/ccd', 'x.d.mts', '.hidden', 'noext.'])).toEqual(['mts', 'tsx', 'ts']);
     expect(tokenRegex([])).toBeNull();
     expect('run foo.tsx and bar.ts, not baz.tsz nor _qux.ts_'.match(tokenRegex(['tsx', 'ts'])!)).toEqual(['foo.tsx', 'bar.ts']);
     expect('a c++ file x.c+ and y.c'.match(tokenRegex(['c+', 'c'])!)).toEqual(['x.c+', 'y.c']);   // escaped
+  });
+
+  it('a 64 KB run of class characters with no file token mines in linear time — the leading lookbehind is a cost guard, not a match guard', () => {
+    // One unbroken run of allowed characters with no "." in it at all, so no
+    // extension can ever match — exactly the shape that forces the engine to
+    // restart its greedy scan at every position when the lookbehind is gone.
+    // Bound is 1000ms; shipped cost on this string is ~1ms (three orders of
+    // magnitude of headroom, so ordinary load cannot flake it) — without the
+    // lookbehind the same string measured ~7.5s (server/test's own machine).
+    const run = 'src/a-b_c/'.repeat(Math.ceil(65536 / 10)).slice(0, 65536);
+    expect(run.includes('.')).toBe(false);
+    const win = tl.toolUse('Bash', { command: run });
+    const t0 = Date.now();
+    mineTokens(win, re);
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });
 
@@ -242,6 +257,13 @@ describe('the working set — ranked, counted, capped (spec §3.2)', () => {
     expect(workingSet(tokens, same, '/w').files).toEqual([
       { path: 'z.ts', tag: 'touched', count: 3 }, { path: 'a.ts', tag: 'touched', count: 1 },
     ]);
+  });
+  it('a token whose tag is not in TAGS is ignored — counted nowhere, no entry, never upgrades or corrupts an existing one', () => {
+    const one = fileIndex(['a/b.ts']);
+    const tokens = [{ token: 'a/b.ts', tag: 'bogus' as any }, { token: 'a/b.ts', tag: 'edited' as const }];
+    const { files: ws, stats } = workingSet(tokens, one, '/w');
+    expect(ws).toEqual([{ path: 'a/b.ts', tag: 'edited', count: 1 }]);
+    expect(stats).toEqual({ tokens: 2, resolved: 1, ambiguous: 0, outside: 0, nomatch: 0 });
   });
   it('the set keeps at most WORKSET_CAP files', () => {
     const many = fileIndex(Array.from({ length: 150 }, (_, i) => `f${i}.ts`));

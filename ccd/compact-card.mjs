@@ -119,7 +119,9 @@ export function readWindow(path, cap = WINDOW_CAP, chunkSize = CHUNK) {
 // ── MINING (spec §3.2) ───────────────────────────────────────────────────
 /** Ranked tags, strongest first. */
 export const TAGS = Object.freeze(['edited', 'touched', 'carried']);
-const TAG_RANK = { edited: 0, touched: 1, carried: 2 };
+/** DERIVED from `TAGS`, never a second hand-kept copy. */
+const TAG_RANK = Object.fromEntries(TAGS.map((t, i) => [t, i]));
+const TAG_SET = new Set(TAGS);
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 /** The working set is capped here; the card prints the first `--max-files`
  *  of it (two populations, spec §3.2). */
@@ -138,16 +140,24 @@ export function extensionsOf(files) {
   return [...exts].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** `[A-Za-z0-9_./-]+\.(<ext>)`, anchored on the trailing side so `baz.tsz`
- *  never matches; null when the graph names no extension.
- *  No leading lookbehind: the prefix class already contains its own
- *  separators (`.`, `/`, `-`), so a match starting mid-run is always also
- *  found starting from the run's own beginning — measured (a 700k-string
- *  fuzz), a leading lookbehind changes nothing. */
+/** `[A-Za-z0-9_./-]+\.(<ext>)`, trailing lookahead so `baz.tsz` never
+ *  matches; null when the graph names no extension.
+ *  The LEADING lookbehind is not a match filter — it never changes what
+ *  matches: the prefix class already contains its own separators (`.`, `/`,
+ *  `-`), so a match starting mid-run is always also found starting from the
+ *  run's own beginning (proven, and differentially measured against 2.3M
+ *  random strings with zero output differences). It is a START-POSITION
+ *  FILTER kept for COST: without it, a class-char run with no token in it
+ *  forces the engine to restart the greedy `+` scan at every position in the
+ *  run, which is quadratic in run length — measured: a 64 KB such run mines
+ *  in ~7.5 s without the lookbehind and ~0.8 ms with it (32 KB: ~1.5 s vs
+ *  ~0.3 ms). The helper runs under an 8 s deadline against a 16 MiB window
+ *  and fails SILENTLY when killed, so that cost is disqualifying, not just
+ *  slow. */
 export function tokenRegex(exts) {
   if (exts.length === 0) return null;
   const alt = exts.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return new RegExp(`[A-Za-z0-9_./-]+\\.(?:${alt})(?![A-Za-z0-9_])`, 'g');
+  return new RegExp(`(?<![A-Za-z0-9_./-])[A-Za-z0-9_./-]+\\.(?:${alt})(?![A-Za-z0-9_])`, 'g');
 }
 
 const textOf = (content) => {
@@ -225,11 +235,16 @@ export function resolveToken(token, index, cwd) {
 
 /** The working set: every resolved file, the strongest tag it earned, its
  *  occurrence count; ranked edited > touched > carried, then count, then
- *  path; capped. `stats` is what tells a thin card from a thin session. */
+ *  path; capped. `stats` is what tells a thin card from a thin session. A
+ *  token whose tag is not in `TAGS` is ignored — counted nowhere, no entry,
+ *  never upgrades or corrupts one that already exists — rather than let an
+ *  out-of-vocabulary tag reach the rank lookup, where it would be `undefined`
+ *  and the comparator would return `NaN`. */
 export function workingSet(tokens, index, cwd, cap = WORKSET_CAP) {
   const stats = { tokens: tokens.length, resolved: 0, ambiguous: 0, outside: 0, nomatch: 0 };
   const acc = new Map();
   for (const { token, tag } of tokens) {
+    if (!TAG_SET.has(tag)) continue;
     const r = resolveToken(token, index, cwd);
     if (!r.path) { stats[r.reason]++; continue; }
     stats.resolved++;
