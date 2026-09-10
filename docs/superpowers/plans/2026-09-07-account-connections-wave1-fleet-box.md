@@ -18067,6 +18067,20 @@ D-2331 fixed exactly this defect at one address in this same commit. **A fix tha
 and repairs one instance of it is a census that was never taken** — the same lesson as D-2355, in the
 same file, in the same round.
 
+**CORRECTED AT ROUND 4 (D-2396), and by its own lesson.** This entry's fix shipped a banner
+saying *"Both triage tables in this file carried the identical row and both are fixed here"*. **There
+were three.** `_acct_no_answer` (`ccd/ccrc:3972-3978`) is the same shape — an if/elif on `$rc`, a cause
+and a next step per arm — and it hid because it is pinned by three separate `it(…)` cases rather than by
+one `Array<[name, plant, says, alsoSays]>` table, so a reader counting *tables* never counted it. Two of
+its three arms were unpinned on their remedy, not one: deleting the killed arm's next step left the file
+**251/251 green**, and so did deleting the else arm's; the rc=2 arm's next step IS asserted and reds on
+the identical guard, which is the red control that makes both greens findings rather than shrugs. So the
+count in this entry was wrong in the same way D-2355's was, one entry later, written by the same hand
+that had just named the failure mode. **The banner now states the RULE — every arm of every rc-triage
+table asserts a slice of its own cause under an expectation that means cause and a slice of its own
+remedy under one that means remedy — and points at the command that re-takes the census
+(`grep -n 'elif \[ "$rc"' ccd/ccrc`) instead of freezing a number in prose.**
+
 ### D-2357 — the acceptance test worked, and this is what it bought
 
 D-2328 shipped with an explicit acceptance test: move the cap out of the factory into the 401 arm alone —
@@ -18105,3 +18119,129 @@ the reviewer is adversarial rather than agreeable.
 What is NOT converging is my own claim discipline: three overstatements in three rounds, every one of
 them a case of restating a fix's self-description instead of its diff. That is the thing to fix in the
 process, not in the code.
+
+### D-2395 — the guard built to stop a class from recurring fired on the REPAIR and was silent on the DEFECT
+
+Round 3 closed the hard-coded-clause class and added a scan so it could not come back. The scan counted
+**call sites of the helper** against a number in the banner. Measured as a pair at one insertion point:
+
+- a seventh refusal past the seam spelling the sentence **by hand** → the suite stayed **green**;
+- the identical refusal written **correctly** through the helper → **red**, "expected 7 to be 6".
+
+**A ratchet that fires when the next author gets it right and stays silent when they get it wrong.** It
+was reached on every run — the second direction's red proves that — so unpinned, not unreachable.
+
+Round 4's repair is a fixed-string scan for the sentence over the region past the seam, and three things
+about it are the actual work:
+
+**The region is drawn by execution reachability, anchored on code rather than line numbers** — two spans,
+because the deadline validator sits 500 lines *above* the seam yet is inside the rule (a second path
+reaches it after a launcher has run), while `_acct_check`'s own argv loop sits below the function's first
+line yet is *outside* it and spells the flat sentence twice, correctly. Every anchor is asserted unique,
+so a rename reds instead of silently emptying the region — the failure mode a region scan is heir to.
+
+**Comments are stripped, and that is load-bearing:** `ccd/ccrc` quotes the sentence in order to argue
+about it, so an unstripped scan reds on the documentation of its own rule. Third instance in this wave of
+a scan reading the prose written to explain it.
+
+**The coherence check compares against the live call-site count, never a literal.** A literal there
+re-creates the inversion one layer down — measured, because the first draft did exactly that.
+
+### D-2396 — a second rc-triage table, and why a reader counting tables never finds it
+
+D-2356's banner said both triage tables carried the vacuous row and both were fixed. Measured over the
+source: **there are two rc-triage constructs in `ccd/ccrc`** — `_acct_auth_why` and `_acct_no_answer` —
+and the banner's "both" meant the two **test** tables that pin the first of them. `_acct_no_answer` is
+pinned by three separate cases rather than by a table, **so a reader counting tables never counts it,
+because it is not shaped like one.** That asymmetry is the whole mechanism of the miscount, and it is now
+the corrected banner's first sentence.
+
+Its `killed` arm asserted only a slice of its own cause; its `else` arm had **neither** half asserted,
+under a comment claiming the property in prose — a comment is a request, a red suite is a mechanism, and
+the defect was sitting underneath a sentence saying it was not there. Deleting either remedy left the
+file green. Both arms now pin cause and remedy separately, and the banner states the **rule** plus the
+command that re-takes the census rather than a number the next edit falsifies.
+
+### D-2397 — the fix wrote its own lesson down, applied it at one address, and broke it next door
+
+The sharpest instance of this task's signature shape.
+
+Round 4 wrote, at the site it was repairing: *kept rather than replaced … swapping it for the remedy
+would have closed one gap by opening another — the trap round 3 hit at the other two addresses.* It then
+did exactly that swap in the two `_acct_auth_why` tables one section away, replacing the `says` column
+rather than widening it.
+
+Measured: change the killed arm's opening clause so it claims the lane **answered** — arithmetic and
+remedy left intact — and the file stays at **251 passed**. The operator-facing note then reads
+*"auth status answered on this box"* for a launcher that was killed, **which is the precise false
+statement D-2220 exists to prevent.** Red control on the identical guard: restore the pre-round-4 `says`
+in both tables and the same mutation reds twice, by name.
+
+Remedy: keep the clause assertion and add the arithmetic as a third expectation. Widen the tuple; never
+swap a column that is holding something.
+
+### D-2398 — the rule the round wrote is false of a fifth arm, and that arm is D-2331 unrepaired
+
+The corrected banner claims every arm of every rc-triage table asserts a slice of its own cause **and** a
+slice of its own remedy. `_acct_auth_why`'s `else` arm names **no next step at all**, so no expectation
+can assert one — the same shape D-2331 closed for the 125 branch, surviving at a fifth address. Its
+sibling in the other table does name one, and round 4 pinned it correctly.
+
+Either the arm gets a next step, or the rule gets its exception written down. **A rule stated more
+broadly than the code supports is a claim, and this one is currently false** — which makes it worse than
+no rule, because the next author will trust it.
+
+### D-2399 — the region is drawn by file position; the rule it enforces is about execution order
+
+D-2395's scan delimits its region by anchors in the file, and the class it guards is defined by what runs
+after the cheap question. Those coincide today because of how the file happens to be laid out. A refusal
+reachable past the seam but written outside the anchored spans is invisible to it — the same gap in kind
+as the one the scan closed, one level up.
+
+Recorded rather than fixed: a static scan cannot compute reachability, and the honest options are to
+widen the region to the whole account section, or to say in the test that position stands in for
+execution and name what that costs.
+
+### D-2400 — the documented fallback for an unreachable allocator cannot land in a tree
+
+A worker that cannot reach the allocator is told to write `D-TBD-<slug>` and report. **`dtbd.test.ts`
+git-greps every tracked file for exactly that and reds the package.** So the fallback can be written and
+must then be immediately removed; it cannot survive a commit, a handoff, or a package run.
+
+Round 4's implementer found this by following the documented instruction into a red suite, and it caught
+all seven of its placeholders. The behaviour is right — placeholders must not ship — but the instruction
+and the gate disagree, and the instruction is the one a subagent reads first. What the worker did instead
+is the pattern worth keeping: a neutral in-tree marker plus an explicit "these need minting" in its
+report, so the numbers were issued by the party that defines them.
+
+**And it declined to mint, correctly**, on the grounds that minting numbers it would not define in the
+same act seals a band permanently. That is the ledger's own rule, honoured by an agent that was never
+told it in those words.
+
+### D-2401 — my brief conflated two counting bases, and the conflation is the finding
+
+I wrote that there were three rc-triage tables. There are two source constructs; the third thing I was
+counting was a second **test** table over one of them. The verifier corrected it by taking the census
+over `ccd/ccrc` rather than over the test file, which is the right basis because the class is a property
+of the shipped code.
+
+The correction matters beyond the arithmetic: **the reason D-2356 miscounted is the same reason I did** —
+one construct is pinned by tables and the other by loose cases, so any census taken over the tests
+answers a question about the tests. Fourth claim of mine in this task to need correcting, and the second
+where the cause was counting the wrong artefact rather than counting badly.
+
+### D-2402 — measuring the pair caught two successive re-creations of the defect inside its own fix
+
+Round 4's repair was inverted **twice** before it was right, and only insisting on measuring both
+directions found it.
+
+Draft 1 put the counts before the scan. Vitest aborts at the first failing expectation, so the correct
+direction never reached the scan at all — and the round could have reported *the scan is silent on a
+correct change* with no evidence for it, which is exactly the shape of claim this wave keeps having to
+retract. Draft 2 moved the scan first but expressed its coherence check as a literal, **re-creating the
+inversion one layer down, inside the mechanism built to undo it.**
+
+The lesson is narrow and worth stating plainly: **when a guard is meant to fire on one of two directions,
+"it went red" is not the measurement — the measurement is the pair**, and a guard that aborts before
+reaching its own load-bearing assertion cannot be observed at all. Order of assertions is part of the
+mechanism, not presentation.
