@@ -106,9 +106,10 @@ const mergedPushes = (
   notify.mock.calls.map(([p]) => p).filter((p) => p.tag?.startsWith(`merged-${id}#`) === true);
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one op of the ~21 a session's
- *  `readRegistry` fires in parallel times out: null, indistinguishable at
- *  `field()` from a file that is not there. */
+ *  the shape `remote/io.ts` produces when one of the 23
+ *  [registry-read-census:fields] reads a session's `readRegistry` fires in
+ *  parallel times out: null, indistinguishable at `field()` from a file that
+ *  is not there. */
 const holdUnreadableIO: FleetIO = {
   ...localIO,
   readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
@@ -364,8 +365,9 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires ~21 field reads per
-    // session. A `ccd ws-release` anywhere in that window leaves the name in
+    // `readRegistry` lists the directory, then fires 23
+    // [registry-read-census:fields] reads per session. A `ccd ws-release`
+    // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
     // from a read that failed, so a perfectly ordinary release was reported as
     // HOLD_UNREADABLE, the registry-is-broken sentence, and `sweepMerged`

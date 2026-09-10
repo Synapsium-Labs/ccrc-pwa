@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -39,6 +39,18 @@ function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
   return claims;
 }
 
+const GENERATED_DIRS = new Set(['node_modules', 'dist', 'coverage']);
+
+function filesUnder(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory() && !GENERATED_DIRS.has(entry.name)) files.push(...filesUnder(absolute));
+    else if (entry.isFile()) files.push(absolute);
+  }
+  return files;
+}
+
 describe('registry read census', () => {
   it('derives the single-session and 24-session remote costs from buildRecord', () => {
     const root = path.resolve(import.meta.dirname, '..', '..');
@@ -51,20 +63,15 @@ describe('registry read census', () => {
     ]);
     expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
 
-    const files = [
-      'server/src/registry.ts',
-      'server/src/fleet.ts',
-      'server/src/watch.ts',
-      'server/src/server.ts',
-      'server/test/registry.test.ts',
-      'server/test/routes.test.ts',
-    ];
+    const files = filesUnder(path.join(root, 'server'))
+      .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
     const seen = new Map<string, number>();
-    for (const file of files) {
+    for (const absolute of files) {
+      const file = path.relative(root, absolute);
       const src = file === 'server/src/registry.ts'
         ? registrySrc
-        : readFileSync(path.join(root, file), 'utf8');
-      expect(src.includes(`[${REGISTRY_CENSUS_TAG}:`), `${file} has no tagged registry census claim`).toBe(true);
+        : readFileSync(absolute, 'utf8');
+      if (!src.includes(`[${REGISTRY_CENSUS_TAG}:`)) continue;
       for (const [kind, values] of taggedRegistryCensusClaims(src)) {
         const derived = expected.get(kind);
         expect(derived, `${file} has an unknown ${REGISTRY_CENSUS_TAG} kind: ${kind}`).toBeDefined();

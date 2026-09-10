@@ -371,6 +371,27 @@ describe('POST /api/sessions/:id/swap — every refusal is decided before the qu
     });
   });
 
+  it('answers a malformed pool-tag 503 while the slot is held', async () => {
+    tag('demo', 'Pool A');
+    const queue = new RecordingQueue();
+    app = await open({ queue });
+    const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude-b' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'malformed' });
+  });
+
+  it('answers an unreadable pool-tag 503 while the slot is held', async () => {
+    tag('demo', 'pool-a');
+    const queue = new RecordingQueue();
+    app = await open({
+      io: degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/demo`)),
+      queue,
+    });
+    const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude-b' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+  });
+
   it('answers the ordinary 404 while the unlisted id\'s slot is held', async () => {
     const queue = new RecordingQueue();
     app = await open({ queue });

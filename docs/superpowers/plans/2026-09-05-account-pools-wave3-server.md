@@ -3771,8 +3771,27 @@ block above.
   wave 3's pools imports, but a keep-both resolution could have retained `readSessionRecord` with no
   call site: green under this tree's TypeScript settings, and one `noUnusedLocals` switch away from a
   build failure. Measured on `d7c11dd7`: the token appears exactly once in `watch.ts`, inside the
-  historical comment that explains the deletion, while the import names only `measuredIdentity`,
-  `readRegistry` and `readRegistryMeasured`. **For a deletion/addition overlap, the merge question is
+  current fail-shut return's logging comment that names the two registry readers sharing episode
+  state, while the import names only `measuredIdentity`, `readRegistry` and `readRegistryMeasured`.
+  **For a deletion/addition overlap, the merge question is
   not "does each parent's text survive?"; it is "does every retained import still have a caller in the
   composed tree?"** This is a review rule rather than new runtime machinery, so the measured caller
   census is the mechanism and no ornamental source guard was added.
+
+- **D-2458 (2026-09-10)** (the #81 independent refute pass) — **A table claiming every pre-queue
+  refusal can still miss two branches hidden behind one shared status and response shape.** The held-slot
+  table covered the unsupported crossing, mismatch, absent session and unlistable registry, but its sole
+  ordinary 503 exited from `readSessionRecord`; it never reached `readProjectPools`, so neither a malformed
+  nor unreadable project tag was proven to answer ahead of a held same-session write. Moving only those
+  two `refusePool` branches behind `queue.run` would have left the table green. Both project-tag states now
+  hold the slot independently and assert their exact 503 bodies, no second queue key and no ccd call.
+  **Enumerate decisions, not HTTP codes: several distinct guards can deliberately share one status.**
+
+- **D-2459 (2026-09-10)** (the #81 independent refute pass) — **A source-derived value guarded only
+  in a hand-maintained file list lets stale claims sit beside the mechanism while the mechanism stays
+  green.** The new registry census scanned six named files, but `hold-gate.test.ts` and
+  `push-copy.test.ts` still said approximately 21 reads against `buildRecord`'s measured 23. The missed
+  claims are corrected and tagged; the census now discovers every tagged TypeScript/JavaScript source
+  under `server/` rather than enumerating claim holders. A future claim must opt into the tag, but once
+  tagged its location cannot fall outside a hand-maintained corpus. **A derived guard must discover its
+  population; a list of today's holders is another unguarded census.**
