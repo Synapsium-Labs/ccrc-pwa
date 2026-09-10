@@ -12,6 +12,7 @@ import { tl, GRAPH, graphJson } from './compactCardFixtures.js';
 import {
   EXIT, WINDOW_CAP, CHUNK, isBoundaryLine, readWindow, parseArgs,
   extensionsOf, tokenRegex, mineTokens, fileIndex, resolveToken, workingSet, WORKSET_CAP,
+  GRAPH_MAX_BYTES, loadGraph, loadLabels, fileFacts, renderCard, slotIsMine, cardCommand,
 } from '../../ccd/compact-card.mjs';
 
 const HELPER = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -270,5 +271,194 @@ describe('the working set — ranked, counted, capped (spec §3.2)', () => {
     const tokens = [...many.files].map((t) => ({ token: t, tag: 'touched' as const }));
     expect(workingSet(tokens, many, '/w').files).toHaveLength(WORKSET_CAP);
     expect(WORKSET_CAP).toBe(100);
+  });
+});
+
+describe('the card from the graph (spec §3.2)', () => {
+  const plant = (): { graph: string; labels: string } => ({
+    graph: write('graphify-out/graph.json', graphJson(GRAPH, 'deadbeefcafe')),
+    labels: write('graphify-out/.graphify_labels.json', JSON.stringify(GRAPH.labels)),
+  });
+  const FOOTER = 'Re-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
+
+  it('loadGraph reads node-link JSON: nodes by id and by file, the edges under `links`, degree per node, the basename index; refuses an oversized file before parsing', () => {
+    const { graph } = plant();
+    const g = loadGraph(graph);
+    expect(g.files.size).toBe(12);
+    expect(g.index.byBase.get('watch.ts')).toEqual(['server/src/watch.ts']);
+    expect(g.byFile.get('server/src/pane/statusline.ts')!.map((n) => n.id)).toEqual(['f_statusline', 'parseStatusline', 'parseCtxPct']);
+    expect(g.degree.get('parseStatusline')).toBe(2);   // contains + calls
+    expect(g.degree.get('s1')).toBe(5);                // contains + 4 calls
+    expect(g.degree.get('f_hook')).toBe(0);
+    expect(() => loadGraph(write('bad.json', '{"nodes": 3}'))).toThrow(/nodes\/links/);
+    expect(() => loadGraph(graph, 100)).toThrow(/too large/);
+    expect(GRAPH_MAX_BYTES).toBe(96 * 1024 * 1024);
+    expect(loadLabels(path.join(dir, 'absent.json'))).toEqual({});
+  });
+
+  it('fileFacts: the community label, top FIVE symbols by degree, the top three dependents OUTSIDE the working set with the rest counted', () => {
+    const { graph, labels } = plant();
+    const g = loadGraph(graph), l = loadLabels(labels);
+    const ws = new Set(['server/src/pane/statusline.ts', 'server/src/watch.ts']);
+    expect(fileFacts('server/src/pane/statusline.ts', g, l, ws)).toEqual({
+      community: 'watch.ts', symbols: ['parseCtxPct:L105', 'parseStatusline:L132'], usedBy: ['server/src/fleet.ts'] });
+    // watch.ts is IN the set, so its imports_from/calls into statusline.ts are not "outside"
+    expect(fileFacts('server/src/pane/statusline.ts', g, l, new Set(['server/src/pane/statusline.ts'])).usedBy)
+      .toEqual(['server/src/watch.ts', 'server/src/fleet.ts']);    // watch.ts carries 2 links (calls + imports_from), fleet.ts 1
+    expect(fileFacts('ccd/session-hook.sh', g, l, ws)).toEqual({ community: null, symbols: [], usedBy: [] });
+    // six symbols → five, by degree then label; four dependents, by link count then path
+    expect(fileFacts('server/src/big.ts', g, l, new Set(['server/src/big.ts']))).toEqual({
+      community: 'big.ts', symbols: ['s1:L10', 's2:L20', 's3:L30', 's4:L40', 's5:L50'],
+      usedBy: ['server/src/d1.ts', 'server/src/d2.ts', 'server/src/d3.ts', 'server/src/d4.ts'] });
+    // no `metadata.kind`, no L1 node named after the file: the top-degree node stands in
+    expect(fileFacts('shared/api.ts', g, l, new Set(['shared/api.ts']))).toEqual({
+      community: 'api.ts', symbols: ['FLEET_PROTO:L5'], usedBy: ['pwa/src/session/ModelSheet.tsx', 'server/src/fleet.ts'] });
+  });
+
+  it('renders the card: header with the graph commit and freshness, one line per file, blast radius, the footer', () => {
+    const { graph, labels } = plant();
+    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'deadbeefcafe',
+      fresh: 'fresh', steered: false, stats: null,
+      files: [{ path: 'server/src/pane/statusline.ts', tag: 'edited', count: 3 }, { path: 'server/src/watch.ts', tag: 'touched', count: 1 }] };
+    const text = renderCard(set as any, loadGraph(graph), loadLabels(labels), { maxChars: 4000, maxFiles: 12, built: 'deadbeefcafe', fresh: 'fresh', scope: 'main', agent: null });
+    expect(text.split('\n')).toEqual([
+      'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):',
+      '- server/src/pane/statusline.ts [edited] · community "watch.ts" · symbols parseCtxPct:L105 parseStatusline:L132 · used by server/src/fleet.ts',
+      '- server/src/watch.ts [touched] · community "watch.ts" · symbols sweepMail:L40',
+      'Blast radius: 1 file imports or calls something in these 2 files.',
+      FOOTER,
+    ]);
+    const sub = renderCard(set as any, loadGraph(graph), loadLabels(labels), { maxChars: 4000, maxFiles: 12, built: '', fresh: '', scope: 'subagent', agent: 'a43142b934b4bf501' });
+    expect(sub.split('\n')[0]).toBe('graphify card — this context\'s working set at compaction (subagent a43142b934b4bf501), from graphify-out/ (built at unknown):');
+  });
+
+  it('truncation drops WHOLE files from the bottom and always says how many were not shown', () => {
+    const { graph, labels } = plant();
+    const g = loadGraph(graph), l = loadLabels(labels);
+    const files = [...g.files].sort().map((p) => ({ path: p, tag: 'touched' as const, count: 1 }));
+    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null, files };
+    const o = { built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null };
+    const full = renderCard(set as any, g, l, { maxChars: 4000, maxFiles: 12, ...o });
+    expect(full).not.toContain('files not shown');
+    const capped = renderCard(set as any, g, l, { maxChars: 4000, maxFiles: 2, ...o });
+    expect(capped).toContain('(+10 files not shown)');
+    expect(capped.split('\n').filter((x) => x.startsWith('- '))).toHaveLength(2);
+    const tight = renderCard(set as any, g, l, { maxChars: 420, maxFiles: 12, ...o });
+    expect(tight.length).toBeLessThanOrEqual(420);
+    expect(tight).toMatch(/\(\+\d+ files not shown\)/);
+    for (const line of tight.split('\n')) expect(line.endsWith('·')).toBe(false);   // never mid-line
+    expect(tight).toContain(FOOTER);
+  });
+
+  it('when one file still overflows, its `used by` list collapses to its count — never mid-line', () => {
+    const { graph, labels } = plant();
+    const g = loadGraph(graph), l = loadLabels(labels);
+    const set = { v: 1, at: 1, scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null,
+      files: [{ path: 'server/src/big.ts', tag: 'edited' as const, count: 1 }] };
+    const o = { built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null, maxFiles: 12 };
+    const full = renderCard(set as any, g, l, { maxChars: 4000, ...o });
+    expect(full).toContain('· used by server/src/d1.ts server/src/d2.ts server/src/d3.ts (+1)');
+    const collapsed = renderCard(set as any, g, l, { maxChars: full.length - 1, ...o });
+    expect(collapsed).toMatch(/· used by \(\+4\)$/m);
+    expect(collapsed).not.toContain('server/src/d1.ts');
+    expect(collapsed.length).toBeLessThan(full.length);
+  });
+
+  /** The set the HOOK writes before the helper runs (Task 2's shape): the
+   *  slot the helper must find its own `at` in, and the fields it carries. */
+  const hookSet = (set: string, at: number, extra: object = {}): void =>
+    fs.writeFileSync(set, JSON.stringify({ v: 1, at, scope: 'main', agent: null, transcript: '/t', parentLive: null, liveAgents: 0,
+      cwd: dir, built: null, fresh: null, steered: false, served: false, files: null, stats: null, ...extra }) + '\n');
+
+  it('cardCommand rewrites the hook\'s set and writes the card, `at` and `transcript` before `files`, the hook\'s fields carried, the nonce as the card\'s first line, and exits 0', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', [
+      tl.toolUse('Read', { file_path: path.join(dir, 'server/src/pane/statusline.ts') }),
+      tl.boundary(),
+      tl.toolUse('Edit', { file_path: path.join(dir, 'server/src/pane/statusline.ts') }),
+      tl.toolUse('Bash', { command: 'sed -n 1,40p server/src/watch.ts; cat /etc/passwd.ts' }),
+      tl.summary('carried pwa/src/lib/models.ts'),
+    ].join('\n') + '\n');
+    const out = path.join(dir, 'reg', 'x.compactcard'), set = path.join(dir, 'reg', 'x.compactset');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1789330000000, { scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1 });
+    const rc = cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'deadbeefcafe', fresh: 'fresh', scope: 'subagent', agent: 'a1', at: 1789330000000 });
+    expect(rc).toBe(EXIT.OK);
+    const s = JSON.parse(fs.readFileSync(set, 'utf8'));
+    expect(Object.keys(s)).toEqual(['v', 'at', 'scope', 'agent', 'transcript', 'parentLive', 'liveAgents', 'cwd', 'built', 'fresh', 'steered', 'served', 'files', 'stats']);
+    expect(s).toMatchObject({ v: 1, at: 1789330000000, scope: 'subagent', agent: 'a1', transcript, parentLive: false, liveAgents: 1,
+      cwd: dir, built: 'deadbeefcafe', fresh: 'fresh', steered: false, served: false,
+      files: [{ path: 'server/src/pane/statusline.ts', tag: 'edited', count: 1 },
+              { path: 'server/src/watch.ts', tag: 'touched', count: 1 },
+              { path: 'pwa/src/lib/models.ts', tag: 'carried', count: 1 }],
+      stats: { tokens: 4, resolved: 3, ambiguous: 0, outside: 1, nomatch: 0 } });
+    const card = fs.readFileSync(out, 'utf8').split('\n');
+    expect(card[0]).toBe('1789330000000');                                            // the nonce
+    expect(card[1]).toContain('(subagent a1)');
+    expect(card[2]).toBe('- server/src/pane/statusline.ts [edited] · community "watch.ts" · symbols parseCtxPct:L105 parseStatusline:L132 · used by server/src/fleet.ts');
+    expect(fs.readdirSync(path.join(dir, 'reg')).sort()).toEqual(['x.compactcard', 'x.compactset']);   // no temp left
+  });
+
+  it('THE SLOT CHECK: a set whose `at` is not the helper\'s, or no set at all, is refused — exit 1, nothing written', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
+    const args = { transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12, built: 'b', fresh: 'fresh', scope: 'main' as const, agent: null, at: 7 };
+    expect(() => cardCommand(args)).toThrow(/slot/);                 // no set: the hook always writes one first
+    hookSet(set, 8, { scope: 'ambiguous', transcript: null });          // an overlapping PreCompact took the slot
+    const before = fs.readFileSync(set, 'utf8');
+    expect(() => cardCommand(args)).toThrow(/slot/);
+    expect(fs.readFileSync(set, 'utf8')).toBe(before);
+    expect(fs.existsSync(out)).toBe(false);
+    expect(slotIsMine(set, 8)).not.toBeNull();
+    expect(slotIsMine(set, 7)).toBeNull();
+    expect(slotIsMine(path.join(dir, 'absent'), 7)).toBeNull();
+  });
+
+  it('an empty working set writes the set with files [] and NO card, exit 3', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.user('hello') + '\n');
+    const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
+    hookSet(set, 1);
+    expect(cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: '', fresh: '', scope: 'main', agent: null, at: 1 })).toBe(EXIT.EMPTY);
+    expect(JSON.parse(fs.readFileSync(set, 'utf8'))).toMatchObject({ files: [], built: null, fresh: null, stats: { tokens: 0 }, steered: false, served: false });
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
+  it('a write that cannot complete leaves no temp behind', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    const out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(out);                                                  // a DIRECTORY at the card's name: the rename fails
+    hookSet(set, 1);
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1 })).toThrow();
+    expect(fs.readdirSync(path.join(dir, 'reg')).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('as the hook runs it: exit 0 with nothing on stdout; a malformed graph is exit 1 with nothing rewritten; --steer is accepted and changes nothing', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const out = path.join(dir, 'x.compactcard'), set = path.join(dir, 'x.compactset');
+    hookSet(set, 1);
+    const args = ['card', '--transcript', transcript, '--cwd', dir, '--graph', graph, '--labels', labels,
+      '--out', out, '--set', set, '--max-chars', '4000', '--max-files', '12', '--built', 'b', '--fresh', 'fresh', '--scope', 'main', '--at', '1'];
+    const ok = helper(args);
+    expect(ok).toEqual({ status: EXIT.OK, stdout: '', stderr: '' });
+    fs.rmSync(out); hookSet(set, 1);
+    expect(helper([...args, '--steer']).status).toBe(EXIT.OK);
+    expect(JSON.parse(fs.readFileSync(set, 'utf8')).steered).toBe(false);
+    fs.rmSync(out); hookSet(set, 1);
+    fs.writeFileSync(graph, '{not json');
+    const bad = helper(args);
+    expect(bad.status).toBe(EXIT.FAILURE);
+    expect(bad.stdout).toBe('');
+    expect(JSON.parse(fs.readFileSync(set, 'utf8')).files, 'a failure rewrites nothing').toBeNull();
+    expect(helper([...args, '--scope', 'nope']).status).toBe(EXIT.USAGE);
+    expect(helper([...args, '--at', 'soon']).status).toBe(EXIT.USAGE);
   });
 });

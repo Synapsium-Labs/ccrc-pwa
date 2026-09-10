@@ -23,3 +23,25 @@ export function fileIndex(files: Iterable<string>): FileIndex;
 export function resolveToken(token: string, index: FileIndex, cwd: string):
   { path: string; reason?: undefined } | { reason: 'outside' | 'ambiguous' | 'nomatch'; path?: undefined };
 export function workingSet(tokens: Token[], index: FileIndex, cwd: string, cap?: number): { files: SetFile[]; stats: SetStats };
+export interface GraphNode { id: string; label: string; source_file: string; source_location?: string; community?: number; metadata?: { kind?: string } }
+export interface GraphLink { source: string; target: string; relation: string }
+export const GRAPH_MAX_BYTES: number;
+export interface Graph { nodes: Map<string, GraphNode>; byFile: Map<string, GraphNode[]>; files: Set<string>; index: FileIndex; links: GraphLink[]; degree: Map<string, number> }
+export function loadGraph(graphPath: string, maxBytes?: number): Graph;
+export function loadLabels(labelsPath: string): Record<string, string>;
+export interface FileFacts { community: string | null; symbols: string[]; usedBy: string[] }
+export function fileFacts(file: string, graph: Graph, labels: Record<string, string>, workset: Set<string>): FileFacts;
+export interface CompactSet {
+  v: 1; at: number; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
+  parentLive: boolean | null; liveAgents: number | null;
+  cwd: string | null; built: string | null; fresh: string | null; steered: boolean; served: boolean;
+  files: SetFile[] | null; stats: SetStats | null;
+}
+export function slotIsMine(setPath: string, at: number): CompactSet | null;
+export function renderCard(set: CompactSet & { files: SetFile[] }, graph: Graph, labels: Record<string, string>,
+  opts: { maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent'; agent: string | null }): string;
+export function cardCommand(o: {
+  transcript: string; cwd: string; graph: string; labels: string; out: string; set: string;
+  maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent';
+  agent: string | null; at: number;
+}): number;

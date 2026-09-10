@@ -20,7 +20,7 @@
 // stdout; `measure` prints exactly one JSON object. Every failure names itself
 // on stderr, which the hook discards — the hook's contract is silence.
 import { openSync, readSync, closeSync, fstatSync, statSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const EXIT = Object.freeze({ OK: 0, FAILURE: 1, USAGE: 2, EMPTY: 3 });
@@ -255,6 +255,193 @@ export function workingSet(tokens, index, cwd, cap = WORKSET_CAP) {
   const ranked = [...acc.values()].sort((a, b) =>
     TAG_RANK[a.tag] - TAG_RANK[b.tag] || b.count - a.count || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { files: ranked.slice(0, cap), stats };
+}
+
+// ── THE GRAPH (spec §3.2) ────────────────────────────────────────────────
+/** graph.json is networkx node-link JSON (measured on this repo's 0.9.9
+ *  graph: 8,914 nodes, 17,452 links, 13 relations): `nodes[]` carry `id`,
+ *  `label`, `source_file`, `source_location` (`L<n>`), `community`; the edges
+ *  are under `links[]` as `{source, target, relation, …}`. `built_at_commit`
+ *  is the LAST key — a duplicate at the head is the decoy `plantGraph` plants
+ *  for the hook's tail read, and JSON.parse takes the last. Parsed ONCE per
+ *  run: 0.13–0.18 s at 9 MB, measured. */
+/** A graph.json larger than this is not parsed: node's peak RSS runs about
+ *  five times the file (measured 249 MB at 51 MB), on a box that runs ~20
+ *  sessions under a memory.high cgroup. The 70 MB MekWarLive graph passes. */
+export const GRAPH_MAX_BYTES = 96 * 1024 * 1024;
+
+export function loadGraph(graphPath, maxBytes = GRAPH_MAX_BYTES) {
+  const size = statSync(graphPath).size;
+  if (size > maxBytes) throw new Error(`graph.json: too large (${size} bytes over ${maxBytes})`);
+  const g = JSON.parse(readFileSync(graphPath, 'utf8'));
+  if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.links)) throw new Error('graph.json: no nodes/links arrays');
+  const nodes = new Map(), byFile = new Map(), files = new Set(), degree = new Map();
+  for (const n of g.nodes) {
+    if (!n || typeof n.id !== 'string' || typeof n.source_file !== 'string') continue;
+    nodes.set(n.id, n);
+    files.add(n.source_file);
+    const list = byFile.get(n.source_file);
+    if (list) list.push(n); else byFile.set(n.source_file, [n]);
+    degree.set(n.id, 0);
+  }
+  const links = [];
+  for (const l of g.links) {
+    if (!l || typeof l.source !== 'string' || typeof l.target !== 'string') continue;
+    links.push(l);
+    degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
+    degree.set(l.target, (degree.get(l.target) ?? 0) + 1);
+  }
+  return { nodes, byFile, files, index: fileIndex(files), links, degree };
+}
+
+/** `.graphify_labels.json` is `{"<community>": "<label>"}`. Absent or
+ *  malformed → `{}`: every community clause is then omitted, which is what
+ *  the spec says for a file "absent from it". */
+export function loadLabels(labelsPath) {
+  try {
+    const o = JSON.parse(readFileSync(labelsPath, 'utf8'));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The link relations that mean "depends on" (spec §3.2 `used by`). */
+const DEPENDS = new Set(['imports', 'imports_from', 'calls', 'references', 'indirect_call']);
+const lineOf = (n) => { const m = /^L(\d+)$/.exec(String(n.source_location ?? '')); return m ? m[1] : null; };
+const isFileNode = (n, file) =>
+  (n.metadata && n.metadata.kind === 'file') || (n.source_location === 'L1' && n.label === basename(file));
+
+/** One file's facts: the community label of its file node; its top five
+ *  symbols by total degree, as `label:L<line>`; the files OUTSIDE the working
+ *  set that carry a depends-on link INTO any of its nodes, by link count then
+ *  path. A dependent that is in the working set is not "outside". */
+export function fileFacts(file, graph, labels, workset) {
+  const nodes = graph.byFile.get(file) ?? [];
+  const deg = (n) => graph.degree.get(n.id) ?? 0;
+  const byDegree = (a, b) => deg(b) - deg(a) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+  const fileNode = nodes.find((n) => isFileNode(n, file)) ?? [...nodes].sort(byDegree)[0] ?? null;
+  const community = fileNode && fileNode.community !== undefined ? labels[String(fileNode.community)] : undefined;
+  const symbols = nodes.filter((n) => n !== fileNode).sort(byDegree).slice(0, 5)
+    .map((n) => { const l = lineOf(n); return l ? `${n.label}:L${l}` : String(n.label); });
+  const ids = new Set(nodes.map((n) => n.id));
+  const dependents = new Map();
+  for (const l of graph.links) {
+    if (!DEPENDS.has(l.relation) || !ids.has(l.target)) continue;
+    const src = graph.nodes.get(l.source);
+    if (!src || src.source_file === file || workset.has(src.source_file)) continue;
+    dependents.set(src.source_file, (dependents.get(src.source_file) ?? 0) + 1);
+  }
+  const usedBy = [...dependents.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map((e) => e[0]);
+  return { community: typeof community === 'string' ? community : null, symbols, usedBy };
+}
+
+const FOOTER = 'Re-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
+
+/** The card (spec §3.2): file-centric, one line per carded file, terse, no
+ *  tables. Truncation drops WHOLE files from the bottom until the text fits,
+ *  then collapses `used by` lists to their `(+n)`, never mid-line, and ALWAYS
+ *  prints `(+k files not shown)` when anything was dropped — a short card must
+ *  never read as a small working set (the prototype's `(not in graph)` meant
+ *  both; this repo calls that an overloaded null). */
+export function renderCard(set, graph, labels, opts) {
+  const workset = new Set(set.files.map((f) => f.path));
+  const facts = new Map(set.files.map((f) => [f.path, fileFacts(f.path, graph, labels, workset)]));
+  const blast = new Set();
+  for (const f of facts.values()) for (const d of f.usedBy) blast.add(d);
+  const built = (opts.built || '').slice(0, 8) || 'unknown';
+  const who = opts.scope === 'subagent' ? ` (subagent ${opts.agent ?? 'unknown'})` : '';
+  const header = `graphify card — this context's working set at compaction${who}, from graphify-out/ (built at ${built}${opts.fresh ? ', ' + opts.fresh : ''}):`;
+  const row = (f, collapsed) => {
+    const x = facts.get(f.path);
+    let s = `- ${f.path} [${f.tag}]`;
+    if (x.community) s += ` · community "${x.community}"`;
+    if (x.symbols.length) s += ` · symbols ${x.symbols.join(' ')}`;
+    if (x.usedBy.length) {
+      if (collapsed) s += ` · used by (+${x.usedBy.length})`;
+      else {
+        const shown = x.usedBy.slice(0, 3), rest = x.usedBy.length - shown.length;
+        s += ` · used by ${shown.join(' ')}${rest > 0 ? ` (+${rest})` : ''}`;
+      }
+    }
+    return s;
+  };
+  const assemble = (n, collapsed) => {
+    const shown = set.files.slice(0, n);
+    const lines = [header, ...shown.map((f) => row(f, collapsed))];
+    const hidden = set.files.length - shown.length;
+    if (hidden > 0) lines.push(`(+${hidden} files not shown)`);
+    lines.push(`Blast radius: ${blast.size} ${blast.size === 1 ? 'file imports or calls' : 'files import or call'} something in these ${set.files.length} files.`);
+    lines.push(FOOTER);
+    return lines.join('\n');
+  };
+  let n = Math.min(opts.maxFiles, set.files.length);
+  let text = assemble(n, false);
+  while (text.length > opts.maxChars && n > 1) { n--; text = assemble(n, false); }
+  if (text.length > opts.maxChars) text = assemble(n, true);
+  return text;
+}
+
+// ── THE TWO FILES ────────────────────────────────────────────────────────
+/** Dot-prefixed temp beside the target, then rename: the hook's own idiom.
+ *  Nothing partial is ever left at the target's name. */
+function writeAtomic(target, text) {
+  const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, text);
+    renameSync(tmp, target);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* nothing to remove */ }
+    throw e;
+  }
+}
+
+/** THE SLOT CHECK (spec §3.0, overlap). The hook wrote the set before
+ *  running this helper; if the set on disk no longer carries this helper's
+ *  `at`, an overlapping PreCompact has taken the slot and marked it
+ *  ambiguous — this helper must not overwrite that verdict. Re-read
+ *  immediately before EACH write; what remains is the interval between the
+ *  read and the rename. Returns the set when it is ours (its fields are
+ *  carried into the rewrite), else null. */
+export function slotIsMine(setPath, at) {
+  try {
+    const cur = JSON.parse(readFileSync(setPath, 'utf8'));
+    return cur && typeof cur === 'object' && cur.at === at ? cur : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `card`: window → tokens → working set → set file (always) → card (when
+ *  the set is non-empty). Key ORDER in the set is part of the contract: `at`
+ *  and `transcript` sit in the first 4 KiB, where the hook reads them with a
+ *  bounded, fork-free `read -N` (spec §3.3 step 2). `at` is the hook's nonce
+ *  — never Date.now() here — and it is ALSO the card's first line, which is
+ *  what pairs a card to its set. `parentLive`, `liveAgents` and `served` are
+ *  the hook's and are CARRIED; `steered` is always false here — the hook
+ *  stamps it after the print (Plan C), never the helper. A refused slot
+ *  throws, which `main` reports as exit 1 with nothing written. */
+export function cardCommand(o) {
+  const graph = loadGraph(o.graph);
+  const labels = loadLabels(o.labels);
+  const win = readWindow(o.transcript);
+  const re = tokenRegex(extensionsOf(graph.files));
+  const tokens = mineTokens(win.text, re);
+  const { files, stats } = workingSet(tokens, graph.index, o.cwd);
+  const mine = slotIsMine(o.set, o.at);
+  if (!mine) throw new Error(`set at ${o.set} is no longer this helper's slot`);
+  const set = { v: 1, at: o.at, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
+    parentLive: typeof mine.parentLive === 'boolean' ? mine.parentLive : null,
+    liveAgents: Number.isInteger(mine.liveAgents) ? mine.liveAgents : null,
+    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.served === true, files, stats };
+  writeAtomic(o.set, JSON.stringify(set) + '\n');
+  if (files.length === 0) return EXIT.EMPTY;
+  const text = renderCard(set, graph, labels, { maxChars: o.maxChars, maxFiles: o.maxFiles,
+    built: o.built, fresh: o.fresh, scope: o.scope, agent: o.agent ?? null });
+  if (!slotIsMine(o.set, o.at)) throw new Error(`set at ${o.set} changed hands before the card was written — slot taken`);
+  writeAtomic(o.out, `${o.at}\n${text}\n`);
+  return EXIT.OK;
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────
