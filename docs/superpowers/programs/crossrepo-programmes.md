@@ -36,8 +36,14 @@ census keeps its single-line-signature premise — minted by a fix-round subagen
 not use", ratified by the coordinator 2026-09-09 23:1x UTC rather than re-pointed, because the number was
 issued, spent and defined; the title stays as the row's history) and **D-2342** (Task 2's dispatch rung reads
 `.project` through `fieldMeasured` — unreadable refuses `registry-unmeasurable`, absent permits, `by` names
-what was read; minted by the coordinator on the worker's `deviation-request`, COUNT 1). An execution-time
-deviation gets its own allocator
+what was read; minted by the coordinator on the worker's `deviation-request`, COUNT 1). Review round 1 added
+**D-2349–D-2353**, minted in one call on the worker's COUNT 5 (2026-09-10 02:1x UTC), one per ruled fix whose
+shipped form departs from the plan's text: D-2349 the home shaped at the door (trim, single path segment, 400
+with detail); D-2350 the open route binds AFTER the hold; D-2351 `setSession` returns `bindSession`'s answer and
+a `session-rebound` run event records an occupant change; D-2352 `homeProject` joins the reconstruction drill's
+UNRECOVERABLE census; D-2353 the dispatch `project-mismatch` row says abandon first, never a blind retry. Same-
+bytes derivations, test-only pins and prose fixes carry no number. An execution-time deviation gets its own
+allocator
 call: the worker writes `D-TBD-<slug>` with a full entry and mails a `deviation-request` naming the count;
 the coordinator mints exactly that many, defines them in the same act, and mails the numbers back.
 
