@@ -347,7 +347,7 @@ export async function assembleFleet(
   /**
    * The registry rows this assembly must describe, when the caller has
    * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
-   * `watch.ts`'s own `sweepTasks`/`archiveMerged` lanes use.
+   * `watch.ts`'s own `sweepTasks`/`sweepMerged` lanes use.
    *
    * Load-bearing for correctness, not just for the saved round trips
    * (bba5c09; restated here — blocking review finding 4 — on its REAL ground,

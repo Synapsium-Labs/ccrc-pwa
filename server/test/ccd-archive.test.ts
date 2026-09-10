@@ -1199,9 +1199,11 @@ describe('ws-archive refuses rather than record a manifest that lies', () => {
 /** Drift between the registry's branch name and git's worktree record is a
  *  DESCRIBABLE fact about a healthy directory, not an unreadable one — so archive
  *  records it and folds the workspace out of the live fleet. Refusing was
- *  non-convergent: Task 14's sweep fires `ccd ws-archive` every 120 s with no
- *  human in the loop and swallows the exit code, so a permanent refusal keeps the
- *  workspace in the live fleet forever with nothing on screen to explain it. The
+ *  non-convergent: until the operator ruled the auto-archive out (2026-09-10),
+ *  Task 14's sweep fired `ccd ws-archive` every 120 s with no human in the loop
+ *  and swallowed the exit code, so a permanent refusal would have kept the
+ *  workspace in the live fleet forever with nothing on screen to explain it —
+ *  the same shape a human re-running `ws-archive` by hand still hits today. The
  *  destructive verb still refuses — `_ws_reap_eval` has `registry-branch-drift`,
  *  `detached-head` and `branch-missing` for exactly these three states — which is
  *  the same division of labour Task 2's Context already draws for a dirty tree,

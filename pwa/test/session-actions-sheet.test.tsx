@@ -361,37 +361,37 @@ describe('hold and release', () => {
   it('Release names its consequence before acting', () => {
     render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
-    // The confirm says what release re-enables BEFORE anything is sent:
-    expect(screen.getByText(/may archive it once its PR merges/)).toBeInTheDocument();
+    // The confirm says what release re-enables BEFORE anything is sent, and
+    // what it re-enables is the audited cleanup flow — the one thing the hold
+    // was gating.
+    expect(screen.getByText(/cleanup stops refusing/)).toBeInTheDocument();
     expect(released).toHaveLength(0);   // nothing sent yet — the copy precedes the act
   });
 
-  it('Release promises a MAY, not a WILL — the gate has a deferral the hold knows nothing about', () => {
-    // FIX-WAVE OBSERVATION. The copy read "released — will archive on the next
-    // sweep after its PR merges", under a comment claiming it was ccd's own
-    // fact restated. ccd's `cmd_ws_release` says the next sweep MAY archive,
-    // and `archiveMerged` still defers on `archiveSafety` (busy/attached) —
-    // which the PrSheet two taps away is careful to name as a separate reason.
-    // An operator who released to unblock a merge and then watched three
-    // sweeps go by was told a certainty that was never on offer.
+  it('Release promises no archive at all — there is no sweep left to promise one', () => {
+    // Two earlier waves had to walk this string back from a future act it
+    // could not guarantee: first "will archive on the next sweep" when ccd's
+    // own `cmd_ws_release` said MAY, then a hedged MAY that a newly added
+    // second deferral could still break. `sweepMerged` archives nothing now,
+    // so both spellings are false in the same way and neither may come back.
     render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
     expect(screen.queryByText(/will archive on the next sweep/)).not.toBeInTheDocument();
-    // And the deferral itself is named, not merely hedged away.
-    expect(screen.getByText(/busy or attached session defers/)).toBeInTheDocument();
+    expect(screen.queryByText(/may archive it once its PR merges/)).not.toBeInTheDocument();
+    // Said outright, not merely left unsaid — an operator who released to
+    // unblock a merge is exactly the one who needs to hear it.
+    expect(screen.getByText(/No archive follows: ccrc does not archive on merge/))
+      .toBeInTheDocument();
   });
 
-  it('the release consequence no longer promises a sweep the run can veto', () => {
-    // Build 8 Wave 2: `archiveMerged` now asks coord.db as well, so an absent
-    // hold is not sufficient — releasing does NOT re-arm the sweep while a run
-    // is open. This is the PWA half of ccd's own corrected `cmd_ws_release`
-    // comment; left uncorrected, the phone tells the operator the opposite of
-    // what the box will do.
+  it('the release consequence leaves the archive with the operator, by hand', () => {
+    // The workspace outlives its merge now, so the sentence has to end
+    // somewhere true: nobody is coming to archive it.
     renderSheet(heldSession());
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
     const text = screen.getByText(/released —/).textContent ?? '';
-    expect(text).toMatch(/open run/i);
-    expect(text).toMatch(/may/);              // still a MAY, never a WILL
+    expect(text).toMatch(/stays live until you archive it by hand/);
+    expect(text).not.toMatch(/sweep/);
   });
 
   it('confirming Release posts /release and closes the sheet', async () => {

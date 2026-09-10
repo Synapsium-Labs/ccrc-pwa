@@ -289,10 +289,15 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
  * the agent WS is enough (`readRegistry` fires ~22 reads per session under one
- * request timeout). Held with an unreadable reason, never unheld: the
- * consumer is `archiveMerged`'s `held !== null` gate, and `ccd ws-archive` has
- * no held rung of its own, so a misread that read as released would kill a
- * live pane at a wave boundary.
+ * request timeout). Held with an unreadable reason, never unheld: the consumer
+ * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
+ * which binds a candidate workspace only on `cutShort(res) === true &&
+ * winner.held === null` — on the stated ground that a workspace a cut-short
+ * `ws-add` just created never carries a hold while a live coordinated worker
+ * always does — so a misread that read as released is what lets a slow
+ * dispatch adopt a LIVE worker's workspace as its own. `watch.ts`'s naming
+ * sweep and its merged push read the same field, and both would speak as if
+ * nothing were in the way.
  *
  * A human-readable sentence rather than a marker value because the reason
  * string IS the display — this text is what the PWA chip and the merged push
@@ -872,7 +877,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   // the name in the listing and no bytes behind it, indistinguishable at
   // `field()` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
-  // `archiveMerged` fired a held-merged push announcing corruption seconds
+  // `sweepMerged` fired a held-merged push announcing corruption seconds
   // after the operator tapped Release.
   //
   // `.hold`'s ordinary race is resolved WITHOUT a second listing now: a

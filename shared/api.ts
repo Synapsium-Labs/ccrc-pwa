@@ -74,8 +74,10 @@ export interface FleetSession {
   pr: PrState | null;
   /** Epoch SECONDS this workspace was archived (ccd writes `$REG/<id>.archived`
    *  as an epoch), or null. Every piece of archive copy in the UI derives from
-   *  THIS, never from `pr.phase`: a merged PR whose archive was deferred
-   *  because the session was busy must not claim it was archived. */
+   *  THIS, never from `pr.phase`: nothing archives a workspace on merge — a
+   *  merged workspace stays live and supervised until a human archives it — so
+   *  a merged PR whose workspace is still here must not claim it was
+   *  archived. */
   archivedAt: number | null;
   /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
    *  manifest is absent or half-written — never 0, which would argue
@@ -1275,14 +1277,15 @@ export function sessionBucket(
     if (s.pr?.phase === 'merged') {
       // `cleanup` needs BOTH conjuncts, so it is entered at the LATER of the
       // two events — not at whichever one this branch happens to read first.
-      // The auto-archive path makes them nearly coincide (sweepPr flips the
-      // phase, archiveMerged archives seconds later), which is why plain
-      // `archivedAt` looked correct: there, archiving IS the later event.
-      // The MANUAL path inverts it. Archive a workspace whose PR is still
-      // open at T0, open it at T1 (which acks it at T1), let the PR merge at
-      // T2: the session enters `cleanup` at T2 while `archivedAt` still says
-      // T0, so `isUnseen` compares T0 > T1 and the leapfrog bucket's badge
-      // never fires in the exact flow it exists for. `pr.mergedAt` is already
+      // Plain `archivedAt` reads correct in the ordinary order: nothing
+      // archives a workspace on merge, so the stamp comes from a human who
+      // has already seen the PR land, and archiving IS the later event there.
+      // ARCHIVING FIRST INVERTS IT, and nothing stops a human doing that.
+      // Archive a workspace whose PR is still open at T0, open it at T1
+      // (which acks it at T1), let the PR merge at T2: the session enters
+      // `cleanup` at T2 while `archivedAt` still says T0, so `isUnseen`
+      // compares T0 > T1 and the leapfrog bucket's badge never fires in the
+      // exact flow it exists for. `pr.mergedAt` is already
       // on the wire (prstate.ts parses gh's own `mergedAt`), so the honest
       // stamp costs nothing. Null when the registry fallback supplied the
       // phase without a timestamp (`persistedPr`), which degrades to exactly

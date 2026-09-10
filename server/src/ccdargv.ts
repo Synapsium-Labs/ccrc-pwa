@@ -151,8 +151,9 @@ export function deviceActor(device: string | null): string {
  * and the residual is DISCLOSED rather than papered over: the word names the
  * agent LANE, not the ccrc-agent process, so it cannot on its own tell the
  * agent apart from the server's own timers. That is precisely why `actor` is
- * NOT optional on `ActorFlags` — the actor is what makes `archiveMerged`'s
- * timer and an operator's tap distinguishable — and why a fifth surface word is
+ * NOT optional on `ActorFlags` — the actor is what makes an unattended lane's
+ * own write (the naming sweep's `sweep:names`, a run close's `run:<id> close`)
+ * and an operator's tap distinguishable — and why a fifth surface word is
  * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
  * set that `ccd:1523` also spells would be one enumeration in two languages
  * drifting apart.
@@ -319,8 +320,8 @@ export const CCD_ARGV = {
   wsRelease: (id: string, dec: ActorFlags | null) =>
                argv(['ws-release', '--session', id, ...decFlags(dec)]),
   /** The second ccd write with no human in the loop — after `wsArchive`, which
-   *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
-   *  first whose argv is derived from model output. `--branch` carries a name
+   *  `coord/close.ts`'s failed-run close fires unattended — and the first whose
+   *  argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>

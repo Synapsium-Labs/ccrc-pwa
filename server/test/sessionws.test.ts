@@ -77,19 +77,26 @@ const collect = (ws: WebSocket) => {
 };
 
 /**
- * `next()` that skips the hook-ask channel — fix round 1 (I1): every fresh
- * connect now sends an explicit `ask_cleared` the moment checkHookAsk first
- * runs (its sentinel starts `undefined`, not `null`, precisely so a
- * possibly-stale client gets told there is truly nothing pending — see that
- * field's own comment in sessionws.ts). These fixtures never seed a
- * hookstate file, so that frame always lands somewhere in the early message
- * sequence; the tests below are about the transcript/backlog channel and
- * would otherwise race it non-deterministically.
+ * The channels a fresh connect states UNPROMPTED, whatever a given test is
+ * about. `ask_cleared` — fix round 1 (I1): every connect sends one the moment
+ * checkHookAsk first runs (its sentinel starts `undefined`, not `null`,
+ * precisely so a possibly-stale client gets told there is truly nothing
+ * pending — see that field's own comment in sessionws.ts), and these fixtures
+ * never seed a hookstate file. `status` — the opening statement `start()` now
+ * makes, for the same reason one connection's reading must never be left
+ * standing as the next connection's truth.
+ *
+ * Tests about the transcript/backlog or dialog channels filter these out
+ * rather than race them; the ones ABOUT the status channel read the raw
+ * frames instead.
  */
-const nextIgnoringAsk = async (next: ReturnType<typeof collect>, timeoutMs?: number): Promise<any> => {
+const COLD_START_CHANNELS = new Set(['ask', 'ask_cleared', 'status']);
+
+/** `next()` that skips the frames above — see {@link COLD_START_CHANNELS}. */
+const nextIgnoringColdStarts = async (next: ReturnType<typeof collect>, timeoutMs?: number): Promise<any> => {
   for (;;) {
     const m = await next(timeoutMs);
-    if (m.type !== 'ask' && m.type !== 'ask_cleared') return m;
+    if (!COLD_START_CHANNELS.has(m.type)) return m;
   }
 };
 
@@ -446,16 +453,21 @@ describe('dialog enrichment', () => {
       pane: fixture('ask-2col-chat-about.txt'), transcript: fixture('transcript-ask-2col.jsonl'),
     });
     const without = await streamWith({ pane: fixture('ask-2col-chat-about.txt'), transcript: null });
-    expect(withAsk.frames[0]!.dialog.ask).toBeDefined();
-    expect(without.frames[0]!.dialog.ask).toBeUndefined();
-    expect(withAsk.frames[0]!.dialog.id).toBe(without.frames[0]!.dialog.id);
+    // The DIALOG frame, found rather than indexed: `frames[0]` was a
+    // positional bet on which channel cold-starts first, and it lost the day
+    // `status` got its own opening statement.
+    const a = withAsk.frames.find((f) => f.type === 'dialog')!;
+    const b = without.frames.find((f) => f.type === 'dialog')!;
+    expect(a.dialog.ask).toBeDefined();
+    expect(b.dialog.ask).toBeUndefined();
+    expect(a.dialog.id).toBe(b.dialog.id);
     // The whole design rests on enrichment riding ALONGSIDE the scraped menu:
     // the keystrokes an answer sends come from the pane and nothing else. `id`
     // cannot witness that — it is sha1'd inside parseDialog, BEFORE the ask is
     // attached, so a post-parse rewrite of every label leaves it byte-identical.
     // Pin the rows themselves, and the cursor that decides which one Enter takes.
-    expect(withAsk.frames[0]!.dialog.options).toEqual(without.frames[0]!.dialog.options);
-    expect(withAsk.frames[0]!.dialog.selectedIndex).toBe(without.frames[0]!.dialog.selectedIndex);
+    expect(a.dialog.options).toEqual(b.dialog.options);
+    expect(a.dialog.selectedIndex).toBe(b.dialog.selectedIndex);
   });
 
   it('delivers an ask that only becomes readable on a later poll', async () => {
@@ -520,12 +532,13 @@ describe('dialog enrichment', () => {
       paneSequence: [ask, fixture('busy.txt'), ask, ask],
       transcriptSequence: [t],
     });
-    // Fix round 1 (I1): a no-hookstate fixture like this one now also emits a
+    // Fix round 1 (I1): a no-hookstate fixture like this one also emits a
     // single explicit `ask_cleared` on the first check (checkHookAsk's
-    // sentinel starts `undefined`, not `null` — see its own comment). This
-    // test is about the DIALOG channel; filter the unrelated hook-ask noise
-    // out before pinning its sequence.
-    expect(frames.filter((f) => f.type !== 'ask' && f.type !== 'ask_cleared').map((f) => f.type)).toEqual([
+    // sentinel starts `undefined`, not `null` — see its own comment), and
+    // every connect now opens with a `status` besides. This test is about the
+    // DIALOG channel; filter the unrelated cold starts out before pinning its
+    // sequence.
+    expect(frames.filter((f) => !COLD_START_CHANNELS.has(f.type)).map((f) => f.type)).toEqual([
       'dialog', 'dialog_cleared', 'dialog',
     ]);
     const dialogs = frames.filter((f) => f.type === 'dialog');
@@ -638,7 +651,7 @@ describe('session WS', () => {
     expect(backlog.offset).toBe(statSync(fileA).size);
 
     appendFileSync(fileA, userLine('u3', 'three'));
-    const ev = await nextIgnoringAsk(next, 6000);
+    const ev = await nextIgnoringColdStarts(next, 6000);
     expect(ev.type).toBe('events');
     expect(ev.uuid).toBe(UUID_A);
     expect(ev.events).toHaveLength(1);
@@ -677,7 +690,7 @@ describe('session WS', () => {
     const next = collect(ws);
     await opened(ws);
 
-    const first = await nextIgnoringAsk(next, 6000);
+    const first = await nextIgnoringColdStarts(next, 6000);
     expect(first.type).toBe('backlog');
     expect(first.file).toBe(fileA);
     expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
@@ -701,7 +714,7 @@ describe('session WS', () => {
     // Resumed from 0, so the tailer — not a `backlog` frame — delivers what is
     // already in the file. Asserting the type alone would pass on a build that
     // sent nothing at all.
-    const first = await nextIgnoringAsk(next, 6000);
+    const first = await nextIgnoringColdStarts(next, 6000);
     expect(first.type).toBe('events');
     expect(first.uuid).toBe(UUID_A);
     expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
@@ -720,7 +733,7 @@ describe('session WS', () => {
     const next = collect(ws);
     await opened(ws);
 
-    const first = await nextIgnoringAsk(next, 6000);
+    const first = await nextIgnoringColdStarts(next, 6000);
     expect(first.type).toBe('backlog');                    // NOT a silent resume
     expect(first.file).toBe(fileA);
     expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1', 'u2']);
@@ -737,7 +750,7 @@ describe('session WS', () => {
     await opened(ws);
 
     appendFileSync(fileA, userLine('u9', 'after resume'));
-    const first = await nextIgnoringAsk(next, 6000);
+    const first = await nextIgnoringColdStarts(next, 6000);
     expect(first.type).toBe('events');
     expect(first.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
     ws.close();
@@ -795,7 +808,7 @@ describe('session WS', () => {
     expect(backlog.offset).toBe(0);
 
     writeFileSync(fileA, userLine('u1', 'file appeared'));
-    const ev = await nextIgnoringAsk(next, 6000);
+    const ev = await nextIgnoringColdStarts(next, 6000);
     expect(ev.type).toBe('events');
     expect(ev.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u1']);
 
@@ -1243,6 +1256,139 @@ describe('chat header: an unmeasured live status file is not a session at rest (
   });
 });
 
+// The status channel is a CHANGE notification, and until this fix it had no
+// opening statement: `start()` seeded `this.status` from its own resolve and
+// SENT nothing, so `tick()`'s gate only ever spoke when the reading moved
+// AFTER the connect. Every other channel on this socket already cold-starts
+// (backlog, dialog, tasks, hook ask, mail — and `/ws/fleet` sends a whole
+// snapshot per connection, server.ts); this one did not, while the PWA keeps
+// one store per session id for the life of the tab (`getSessionStore`) whose
+// `status` is written by this frame and nothing else.
+//
+// So a status learned in an EARLIER connection outlived it. MEASURED
+// 2026-09-10 on `expoAI-assistant-warm-cove`: a swap into another lane left
+// the pane gone for 4.8s (`ccd swap` 10:20:19 -> re-spawn 10:20:23), a client
+// watching it was told `dead`, and the socket that would have corrected it on
+// its next poll was replaced instead (screen closed and reopened, phone
+// backgrounded, or the agent restart at 10:35:24 — every exec unmeasurable,
+// D-309's collapse to dead). The next connect reseeded the SERVER silently,
+// and the operator kept "Not running — the chat is read-only" over a disabled
+// composer for 50 minutes while that same view streamed the session's live
+// transcript. "It heals on the next change" is no answer either, and the same
+// measurement says why: that pane's reading sat at `busy` from 10:20:23 to
+// 11:24:00 — 63 minutes — because the session was inside ONE turn. That is a
+// property of long turns, not of any lane or wrapper.
+describe('chat header: the stream STATES the status on connect, it does not only report changes', () => {
+  it('cold-starts one status frame carrying the measured reading, after the backlog', async () => {
+    const home = mkTmp('ccrc-status-cold-');
+    seedRoster(home);
+    seed(home);                      // live file says idle @ 1784582728369
+    const frames: { type: string; status?: string; statusUpdatedAt?: number | null }[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string; statusUpdatedAt?: number | null }));
+    try {
+      await stream.start();
+      const st = frames.filter((f) => f.type === 'status');
+      expect(st).toHaveLength(1);
+      expect(st[0]!.status).toBe('idle');
+      // The reading's own timestamp rides along — the header renders it as the
+      // `· 1m ago` beside the word, and a cold start that dropped it would put
+      // a stale clock under a status that was measured perfectly well.
+      expect(st[0]!.statusUpdatedAt).toBe(1784582728369);
+      // Order is part of the contract: the transcript is what the operator
+      // opened the screen for, and this file's sequential readers take the
+      // backlog as the first frame off the socket.
+      expect(frames.findIndex((f) => f.type === 'status'))
+        .toBeGreaterThan(frames.findIndex((f) => f.type === 'backlog'));
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('cold-starts it on a RESUME too — the reconnect that sends no backlog is the one that stranded the operator', async () => {
+    // A `?since=` naming the file about to be tailed skips the backlog by
+    // design (§5.3), and that is exactly the shape of the reconnect that
+    // carried the stale `dead` forward. A cold start hung off the backlog
+    // branch would fix the case that was never broken and miss this one.
+    const home = mkTmp('ccrc-status-cold-');
+    seedRoster(home);
+    seed(home);
+    const fileA = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const frames: { type: string; status?: string }[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
+      (m) => frames.push(m as { type: string; status?: string }),
+      { uuid: UUID_A, offset: statSync(fileA).size, file: fileA });
+    try {
+      await stream.start();
+      expect(frames.filter((f) => f.type === 'backlog')).toHaveLength(0);   // resumed, as designed
+      const st = frames.filter((f) => f.type === 'status');
+      expect(st).toHaveLength(1);
+      expect(st[0]!.status).toBe('idle');
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('and the tick gate still speaks only on CHANGE — a cold start is not a per-poll status broadcast', async () => {
+    const home = mkTmp('ccrc-status-cold-');
+    seedRoster(home);
+    seed(home);
+    const frames: { type: string }[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID,
+      (m) => frames.push(m as { type: string }));
+    try {
+      await stream.start();
+      frames.length = 0;
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      await (stream as unknown as { tick: () => Promise<void> }).tick();
+      expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('says NOTHING about status when the registry could not be measured — an unmeasured session is not a dead one', async () => {
+    // Rule (b), in the direction that matters here: `resolve()` answers
+    // `unmeasurable` before it ever reaches a pane, so there is no reading to
+    // state. Cold-starting `status`'s `dead` DEFAULT off that arm would paint
+    // the read-only banner over a session this box merely failed to read —
+    // the same defect, inverted, and a `notice` already says the true thing.
+    const home = mkTmp('ccrc-status-cold-');
+    seedRoster(home);
+    seed(home);
+    const frames: { type: string }[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, unreadableField(ID, 'uuid')), new Bus(), ID,
+      (m) => frames.push(m as { type: string }));
+    try {
+      await stream.start();
+      expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('… nor for a proven-absent id, which gets its own sentence and no reading at all', async () => {
+    const home = mkTmp('ccrc-status-cold-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const frames: { type: string }[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), 'no-such-session',
+      (m) => frames.push(m as { type: string }));
+    try {
+      await stream.start();
+      expect(frames.filter((f) => f.type === 'status')).toHaveLength(0);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+
 describe('registry ladder: a mid-stream degrade never interrupts the open tail (Task 2, end to end)', () => {
   it('events keep arriving over the SAME tail while every registry read degrades — no rotated frame, no ' +
      'notice, the transcript stream is simply unaffected', { timeout: 20_000 }, async () => {
@@ -1273,7 +1419,7 @@ describe('registry ladder: a mid-stream degrade never interrupts the open tail (
 
       degrade = true; // every registry read for this id degrades from here on
       appendFileSync(fileA, userLine('u9', 'during a degrade'));
-      const ev = await nextIgnoringAsk(next, 8000);
+      const ev = await nextIgnoringColdStarts(next, 8000);
       expect(ev.type).toBe('events'); // arrived over the SAME open tail
       expect(ev.events.map((e: { uuid: string }) => e.uuid)).toEqual(['u9']);
 
@@ -1505,7 +1651,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const next = collect(ws);
     await opened(ws);
 
-    const first = await nextIgnoringAsk(next, 6000);
+    const first = await nextIgnoringColdStarts(next, 6000);
     expect(first.type).toBe('backlog');
     let mailFrame: { type: string; mail: unknown[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
@@ -1563,7 +1709,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
     const next = collect(ws);
     await opened(ws);
-    await nextIgnoringAsk(next, 6000); // backlog — nothing outstanding yet
+    await nextIgnoringColdStarts(next, 6000); // backlog — nothing outstanding yet
 
     // Drain the initial explicit empty `mail` frame this fix now always
     // sends on first check (finding 3) before asserting on the one the poll
@@ -1601,7 +1747,7 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);
     const next = collect(ws);
     await opened(ws);
-    await nextIgnoringAsk(next, 6000); // backlog
+    await nextIgnoringColdStarts(next, 6000); // backlog
 
     let mailFrame: { type: string; mail: { subject: string }[] } | undefined;
     for (let i = 0; i < 6 && !mailFrame; i++) {
@@ -1647,9 +1793,9 @@ describe('outstanding mail push (Build 7 Task 6)', () => {
       const ws = new WebSocket(`ws://127.0.0.1:${noCoordPort}/ws/session/${ID}`);
       const next = collect(ws);
       await opened(ws);
-      const first = await nextIgnoringAsk(next, 6000);
+      const first = await nextIgnoringColdStarts(next, 6000);
       expect(first.type).toBe('backlog');
-      await expect(nextIgnoringAsk(next, 300)).rejects.toThrow();
+      await expect(nextIgnoringColdStarts(next, 300)).rejects.toThrow();
       ws.close();
     } finally {
       await noCoordApp.close();

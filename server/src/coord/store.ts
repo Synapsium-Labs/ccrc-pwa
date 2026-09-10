@@ -55,7 +55,7 @@ const TERMINAL_RUN_STATES: readonly RunState[] =
 export interface RunRow extends RunSummary { prLineage: PrLineageEntry[] }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
- *  the three consumers (`closeRun`, `FleetWatcher.archiveMerged`, the by-hand
+ *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
  *  archive route) need, and hydrating a whole run to answer "is this
  *  workspace still claimed?" would drag `prLineage` JSON and a `programs`
  *  join through a decision that turns on four integers and a slug. */
