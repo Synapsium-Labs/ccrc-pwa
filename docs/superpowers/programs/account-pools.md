@@ -2933,3 +2933,67 @@ this repo, and they are unreliable by construction.** That is a repo-level findi
 
 CI at this head: server, agent, pwa and build-pwa green; macOS running. Nothing changed about the
 two open questions — the approver, and D-2517.
+
+## PR #81 MERGED — `b879510f`, 2026-09-11 11:58Z
+
+Squash-merged by the operator. Verified on `main` directly rather than on report: `pools.ts`'s
+deadline and `server.ts`'s `crossPool` predicate are both present at `origin/main`.
+
+**Protocol, in the order that matters.** Run 43 opened (`account-pools`, positional wave 5/6, the PWA
+wave) BEFORE run 35 was closed — close-first would have taken the open-run count to zero and retired
+the program. Run 35 then closed `done` with `released:false`, its sibling holding the claim.
+
+Two things worth recording about the close. The fingerprint I sent was built from
+`origin/ws/clear-meadow`, and that remote ref no longer exists — GitHub deleted the branch on merge,
+so I was reading a stale remote-tracking ref. It gave the right sha only because the workspace's local
+branch is at the same commit, and the close passed because `verifyDone` measures the workspace's own
+git refs, which is the authority. Right answer, wrong source; the rule is
+[[remote-tracking-ref-is-not-evidence]] and I used one anyway.
+
+And the dispatch of run 43 was refused `worker-busy` — idle-gated like mail. Run 43 stays `planned`;
+it retries.
+
+### The squash-merge carry the next wave would have tripped over
+
+`ws/clear-meadow` is **not an ancestor of main**: the squash left 75 commits on the branch that main
+does not have, while the two **trees are byte-identical**. A wave-5 PR opened from it unrebased would
+carry 75 phantom commits. The dispatch brief now says to re-base first and to prove it **by content**
+— `git diff origin/main` printing nothing — never by ancestry, which on a squash merge cannot fail
+and therefore proves nothing ([[ancestry-is-not-content]]).
+
+## D-2000 is not a deploy gate — it is a live fail-open, and I had the premise wrong
+
+The operator asked whether the D-2517 exposure (the deploy hold has no mechanism) was worth a PR. It
+sent me to read D-2000 itself, which I had been citing for weeks without reading:
+
+> **D-2000** — REPORTED, NOT TAKEN. The `.project` fold described under D-1990: an unreadable
+> `.project` reads `untagged` and lifts the pool constraint for that row, at four sites.
+
+That is a DEFECT, not a deployment policy. "Do not deploy while D-2000 is open" is an inference
+someone drew from it — a sound one, but the deviation says nothing about deploying.
+
+**Measured against main's own code, in a fixture:**
+
+| registry state | `_reg_get demo project` | `_project_pool_state "$project"` |
+|---|---|---|
+| healthy | `myproj` | `named pool-a` |
+| `chmod 000` | `''` | **`untagged`** — constraint LIFTED |
+| `chmod 000`, real name passed | — | `unreadable` — the correct arm |
+
+`_reg_get` folds unreadable to `""`; `_project_pool_state`'s first statement short-circuits an empty
+argument to `untagged` *before* its own `$REG` check. So the condition that should trigger the
+fail-shut arm is the same condition that empties its argument, and that arm is unreachable from every
+call site. The overloaded null this repo's rules forbid, in the enforcement path itself.
+
+**And the recorded scope is too small.** D-2000 says four sites, D-2009 says three refusals, and an
+in-file comment also says four. Measured: **nine** live `_project_pool_state` call sites —
+`_ws_least_loaded`, `cmd_ws_add`, `_swap_target`, `_auto_swap_check`, `cmd_start`, `_strand_why`,
+`_strand_mark`, `cmd_swap`, `cmd_prefer`.
+
+**So the right PR is not a deploy gate.** A gate would enforce a hold whose cause stays live. Closing
+D-2000 removes the reason for the hold — and it matters more now than it did yesterday, because wave 3
+just made the SERVER enforce pools while ccd still lifts them exactly when the registry is unreadable.
+The two halves now disagree precisely when the box is sick.
+
+Design is out to a panel: three approaches, each required to measure in a fixture, judged on
+fleet-safety and on which one actually removes the overloaded null rather than relocating it.
