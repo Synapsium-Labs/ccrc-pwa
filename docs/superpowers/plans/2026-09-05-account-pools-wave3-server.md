@@ -4228,9 +4228,11 @@ block above.
   the interface inventory names required `budgetMs` plus both root-source forms, and the deviation entries state
   the finite watcher/request policies, callback-started route roots, best-effort cancellation boundary,
   `setImmediate` overlap sentinel, fake-timer deadline tests and coherent whole-population degradation.
-  Positional `FleetIO.readdir` citations were re-measured at `server/src/io.ts:105`; D-2498 records that this
-  measurement preceded a same-commit docstring edit and therefore did not describe the published tree. **When a
-  correction rejects a plan's mechanism, amend the executable task block and its historical claims in the same change.**
+  At correction head `9736a70e`, positional `FleetIO.readdir` citations were re-measured at
+  `server/src/io.ts:103` and correctly described that tree. The next correction, `d978afc6`, inserted two
+  docstring lines above the member and moved it to `:105` without updating those citations; D-2498 records the
+  resulting drift. **When a correction rejects a plan's mechanism, amend the executable task block and its
+  historical claims in the same change.**
 
 - **D-2490 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A rollout correction must sweep
   the shared contract imported by both ends, not only the server source that implements it.** `shared/api.ts`
@@ -4301,8 +4303,9 @@ block above.
 
 - **D-2497 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`, corrected by D-2498 and D-2504) —
   **A semantic sweep is evidence only when its corpus, query class, and classifications are reproducible.**
-  D-1680's positional citation was re-measured at `server/src/io.ts:105` before the same commit inserted two lines
-  above it, so that claim did not describe the published tree; D-2498 replaces shipped offsets with symbol citations.
+  D-1680's positional citation was re-measured at `server/src/io.ts:103` before the same commit inserted two lines
+  above it, moving the member to `:105`, so that claim did not describe the published tree; D-2498 replaces shipped
+  offsets with symbol citations.
   D-2490 now admits its false exhaustive conclusion; the wave input no
   longer says a live wave-2b strand producer has not shipped; and `shared/generate.mjs` now says the supervisor's
   live five-second loop calls `_ccrc_pool`, rather than that a new `ccd` will call it later. The class search was
@@ -4349,12 +4352,13 @@ block above.
   install run, so `ccd/ccd` now says both `deploy/deploy.sh` and `ccrc install` generate `accounts.sh`; it no longer
   says that install support will land later. **A sentence about when a verb lands must be checked against that verb's tree.**
 
-- **D-2502 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **"Both directions"
-  requires two assertions.** `ccd-refusal-scan.test.ts` already rejected producer tokens absent from the combined
-  L0/SENTENCES vocabulary; it now also rejects each journal-only `LC_REFUSAL_TOKENS` member with no `ccd` producer.
-  `wsaudit.test.ts` separately keeps SENTENCES set-equal to its stdout producers. Removing a journal token's final
-  call site now reds as `declared journal-only tokens with no ccd producer`.
-  **State vocabulary equality only when stale declarations and unknown emissions both fail.**
+- **D-2502 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`, corrected by
+  D-2512) — **"Both directions" requires two assertions.** `ccd-refusal-scan.test.ts` already rejected literal
+  refusal arguments absent from the combined L0/SENTENCES vocabulary; it now also rejects each journal-only
+  `LC_REFUSAL_TOKENS` member absent from the three scanned literal argument positions. `wsaudit.test.ts`
+  separately keeps SENTENCES set-equal to its stdout producers. Removing a journal token's final literal call-site
+  argument now reds as `declared journal-only tokens with no literal ccd call-site argument`.
+  **State literal-vocabulary equality only when stale declarations and unknown literal arguments both fail.**
 
 - **D-2503 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A disposer call on
   an abort callback registered `{ once:true }` does not prove listener cleanup on paths where the listener never
@@ -4366,7 +4370,62 @@ block above.
 
 - **D-2504 (2026-09-11)** (the #81 coordinator round-six ruling on exact head `d978afc6`) — **The repeated defect
   class is not "staged pool prose"; it is a sentence asserting who consumes something, or when something lands,
-  that the current tree has since falsified.** D-2497's corpus omitted shipped `ccd/` and deploy-side consumers, and
-  its pool-term-plus-rollout-verb query could not reach D-2500's present-tense "one consumer" census. Per the ruling,
-  this correction fixes D-2498 through D-2503 and records the class without running another sweep.
+  that the current tree has since falsified.** D-2497's corpus omitted shipped `ccd/`, deploy-side and `pwa/`
+  consumers plus `server/test/` evidence; D-2499 needed both the PWA importer and the absence of the claimed test
+  imports to refute its rationale. Its pool-term-plus-rollout-verb query also could not reach D-2500's present-tense
+  "one consumer" census. Per the ruling, this correction fixes D-2498 through D-2503 and records the class without
+  running another sweep.
   **A search method that structurally cannot match a known counterexample cannot close that counterexample's class.**
+
+- **D-2509 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **A historical
+  correction must distinguish a citation that was correct at its own commit from one invalidated within the same
+  commit.** Git proves the sequence: `c833746b` put `FleetIO.readdir` at `:99`; `9736a70e` moved it to `:103`
+  and correctly updated the plan; `d978afc6` inserted two docstring lines, moved it to `:105`, and left `:103`
+  behind. D-2489 now says its `:103` measurement was correct at `9736a70e` and the next commit invalidated it;
+  D-2497 says its same-commit measurement was `:103` before the edit moved the member to `:105`.
+  **A correction's chronology is part of the claim: name the commit that changed the fact.**
+
+- **D-2510 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`, amended by
+  coordinator delivery 523) — **Fixing one positional-citation family does not protect plans citing other files
+  edited elsewhere in the PR.** Edits to `shared/generate.mjs` and `shared/roster.ts` shifted six verified citation
+  sites across the telemetry-keepalive, account-health-probe and two model-class-registry plans; one roster citation
+  moved in opposite directions across two commits, so hunk arithmetic could not recover its current target. Those
+  sites now name `generateAccountsSh`'s `measuredIds`/`CCRC_MEASURED` anchors, `ExecSpec`, or
+  `AccountDef.telemetry`, so adjacent comment edits cannot silently turn the evidence into a plausible but unrelated line.
+  **When a change moves cited code, update every plan that cites that file before publishing the change.**
+
+- **D-2511 (2026-09-11)** (the #81 coordinator round-seven ruling on exact head `e0a0c4cd`) — **Repeated line
+  drift makes the positional-citation convention the defect, not the latest set of numbers.** Every citation this PR
+  writes or touches into a file this PR edits now uses a symbol or anchor quote where the cited thing has a name;
+  D-2510's six verified sites use those stable anchors, following the `ccd/ccd` precedent that records a grep rather
+  than a line number. The roughly 85 untouched repository citations are deliberately outside this correction: sweeping them
+  would expand a targeted review fix into an unrequested repository-wide documentation rewrite.
+  **Cite identity by symbol and use a range only when the range itself carries the meaning.**
+
+- **D-2512 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **A regex that
+  recognizes bare literals in fixed argument positions pins literal call-site coverage, not semantic production.**
+  `ccd/ccd` already passes the dynamic `$REAP_VERDICT` through `_lc_emit`, a producer shape the scan deliberately
+  cannot name. The test label, failure text and `shared/api.ts` contract now say exactly that the three regexes hold
+  literal refusal arguments against the vocabularies in both directions; they no longer call every match a producer.
+  **Name the syntax a source scan observes, especially when the same executable carries a dynamic counterexample.**
+
+- **D-2513 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Adding a refusal
+  token is not a two-line edit, and a reverse literal scan imposes an ordering constraint.** A new union member also
+  needs its `LC_REFUSAL_WORD`, exhaustive test inventory, and literal `ccd` emission; the union may not name it before
+  that emission exists in the tested tree. `shared/api.ts` now states the coordinated edit and ordering rule rather
+  than promising an already-false edit count.
+  **A maintenance recipe must include every red mechanism that guards the change.**
+
+- **D-2514 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Once redundant
+  abort-path disposal is removed, `{ once:true }` is the sole listener-release mechanism on that settlement path.**
+  The real-WebSocket abort test now spies on registration and requires the exact
+  `('abort', function, { once:true })` shape before aborting. Removing the option reds that assertion while the
+  timer/pending/late-response checks continue to exercise the rest of the path.
+  **When simplification leaves one owner for a resource, pin the ownership mechanism itself.**
+
+- **D-2515 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Cleanup in a
+  disconnect helper is not protected until a real pending request crosses that boundary.** A real-WebSocket test now
+  issues a request with a caller-held signal, terminates the server socket, requires a `disconnected` rejection and
+  requires `removeEventListener` once. Removing only the disposer reds the listener assertion; gutting
+  `rejectAllPending` leaves the promise unsettled and times the test out rather than leaving the full suite green.
+  **Test lifecycle helpers through the event that invokes them, not by trusting their call sites.**

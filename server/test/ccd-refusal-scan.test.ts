@@ -124,12 +124,12 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   });
 });
 
-describe('every refusal token ccd passes is a token L0 or wsaudit already owns', () => {
-  it('holds the vocabularies set-equal in both directions', () => {
+describe('every literal refusal argument ccd carries is a token L0 or wsaudit already owns', () => {
+  it('holds literal refusal arguments set-equal to the vocabularies in both directions', () => {
     // Wave 1 shipped `LC_REFUSAL_WORD` and a disjointness guard but could not
-    // assert either cross-language direction until wave 3 landed. A typo at a
-    // call site would reach the PWA untranslated; a stale declared token would
-    // preserve dead vocabulary after its final producer disappeared.
+    // assert either cross-language direction until wave 3 landed. A literal typo
+    // at a call site would reach the PWA untranslated; a stale declared token
+    // would preserve dead vocabulary after its final literal producer disappeared.
     const known = new Set<string>([...LC_REFUSAL_TOKENS, ...Object.keys(SENTENCES)]);
     const found = new Set<string>();
     for (const m of src.matchAll(/_lc_refuse\s+[a-z-]+\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
@@ -138,6 +138,6 @@ describe('every refusal token ccd passes is a token L0 or wsaudit already owns',
     expect(found.size, 'the scan found almost no tokens — it is vacuous').toBeGreaterThanOrEqual(14);
     expect([...found].filter((t) => !known.has(t)).sort(), 'tokens no vocabulary owns').toEqual([]);
     expect(LC_REFUSAL_TOKENS.filter((t) => !found.has(t)).sort(),
-      'declared journal-only tokens with no ccd producer').toEqual([]);
+      'declared journal-only tokens with no literal ccd call-site argument').toEqual([]);
   });
 });

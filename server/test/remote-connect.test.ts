@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, FleetClient, type ConnectedFleet } from '../src/remote/client.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
@@ -182,15 +182,19 @@ describe('FleetClient.request — every settlement releases its pending resource
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, 'addEventListener');
     vi.useFakeTimers();
     const request = fleet.client.request(
       { t: 'req', op: 'readdir', path: '/fleet/.cc-sessions/pools' },
       60_000,
       controller.signal,
     );
+    void request.catch(() => {});
     const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
     expect(reachable.pending.size).toBe(1);
     expect(vi.getTimerCount()).toBe(1);
+    expect(add, 'abort settlement relies on one-shot listener removal')
+      .toHaveBeenCalledWith('abort', expect.any(Function), { once: true });
 
     controller.abort();
     await expect(request).rejects.toThrow('aborted');
@@ -264,6 +268,49 @@ describe('FleetClient.request — every settlement releases its pending resource
     )).resolves.toMatchObject({ ok: true, entries: [] });
     expect(remove, 'response settlement must detach the caller-held abort listener')
       .toHaveBeenCalled();
+  });
+
+  it('detaches the abort listener when the socket disconnects', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    wss = server;
+    let requestSocket: WebSocket | undefined;
+    let noteRequestSeen!: () => void;
+    const requestSeen = new Promise<void>((resolve) => { noteRequestSeen = resolve; });
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString()) as { t?: unknown };
+        if (msg.t === 'hello') {
+          ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+        } else if (msg.t === 'req') {
+          requestSocket = ws;
+          noteRequestSeen();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${port}`,
+      token: TOKEN,
+      heartbeatMs: 60_000,
+      reconnectMinMs: 60_000,
+    });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    const request = fleet.client.request(
+      { t: 'req', op: 'readdir', path: '/fleet/.cc-sessions/pools' },
+      60_000,
+      controller.signal,
+    );
+    await requestSeen;
+    requestSocket!.terminate();
+
+    await expect(request).rejects.toThrow('disconnected');
+    expect(remove, 'disconnect settlement must detach the caller-held abort listener')
+      .toHaveBeenCalledTimes(1);
   });
 
   it('rejects a pre-aborted signal before registering a request, timer, or listener', async () => {

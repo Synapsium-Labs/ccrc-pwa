@@ -5901,10 +5901,14 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  * THE CONTRACT THE LIFECYCLE JOURNAL HONOURS, AND WHAT ENFORCES IT: every token
  * handed to `_lc_refuse` / `_lc_fail` is a member of this union OR already a
  * SENTENCES key. The cross-language scan over `ccd/ccd` asserts that every
- * emitted token is known and that every member of this journal-only union has a
- * producer, with a coverage floor; `wsaudit.test.ts` separately holds the
- * SENTENCES vocabulary set-equal to its stdout producers. Adding a tenth token is a two-line edit;
- * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
+ * literal token in its three journal-refusal argument positions is known and
+ * that every member of this journal-only union appears in one of those literal
+ * positions, with a coverage floor; `wsaudit.test.ts` separately holds the
+ * SENTENCES vocabulary set-equal to its stdout producers. A new union member may
+ * not precede its literal `ccd` emission in the tested tree, and adding one is a
+ * coordinated edit to that emission, this union, `LC_REFUSAL_WORD`, and the
+ * exhaustive test inventory. `Record<LcRefusalToken, string>` makes forgetting
+ * its word a TS2739.
  */
 export type LcRefusalToken =
   | 'scratch-unwritable'       // ws-rm could not make the scratch file it reads $workdir with
