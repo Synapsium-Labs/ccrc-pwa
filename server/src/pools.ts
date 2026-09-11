@@ -78,7 +78,10 @@ function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
  * difference is the whole reason this type exists. `poolFor` reads the first
  * as `unreadable` (nobody decides) and the second as `untagged`
  * (unconstrained); folding them would silently LIFT every constraint on the
- * box the moment a listing dropped.
+ * box the moment a listing dropped. The deliberately disclosed D-2516
+ * dangling-marker residual is narrower: `FleetIO.readFileMeasured` follows
+ * the listed symlink to ENOENT, so that single marker still reads untagged
+ * here while ccd detects the link and remains the fail-shut authority.
  */
 export type ProjectPoolsRead =
   | { listed: false }

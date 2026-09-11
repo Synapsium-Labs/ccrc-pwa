@@ -4156,8 +4156,8 @@ block above.
 
 - **D-2483 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `4470ea21`) — **The first deadline correction falsified its own inventories and local-behavior claim.**
-  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:105`, not
-  the now-measured `readFileB64Measured`; and an aggregate race bounds local reads even though localIO ignores
+  `listed:false` can also mean the caller's budget elapsed before the listing; the `FleetIO.readdir` member in
+  `server/src/io.ts` is not the now-measured `readFileB64Measured`; and an aggregate race bounds local reads even though localIO ignores
   the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
   made D-2465's “several never-resolving markers” literal by splitting rejection into a separate case; the
   overlap test now proves the stronger mechanism. **After inserting lines or a new outcome, re-measure every
