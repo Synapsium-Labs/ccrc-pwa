@@ -1218,7 +1218,13 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
 # writer.
 # `local` is sufficient and is deliberately not `export`: bash re-reads the
 # locale on assignment, the shadow reaches a function called from here by
-# dynamic scoping, and it does not leak back to the caller — all three measured.
+# dynamic scoping, and it does not leak back to the caller. All three were
+# MEASURED on bash 5.2.21 / glibc 2.39, which is what this fleet runs — and that
+# is the honest scope of the claim, not "every bash". The behaviour rests on bash
+# calling `setlocale` when `LC_ALL` is assigned; if some supported bash ever did
+# not, the failure is LOUD rather than silent, because `pool-tag-parity.test.ts`
+# drives these same inputs through the real binary in more than one locale and
+# reds when the two answers differ.
 _pool_name_valid() { local LC_ALL=C; [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # NO PROJECT ON THIS BOX CAN BE IN ANY POOL — the one question whose answer does
 # not depend on reading a project's name (#69 review round 3, R3). `$POOLS_DIR`
@@ -4235,6 +4241,19 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # ever existing in the first place, so the read side does not need to
 # police it too.
 _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
+  # SAME SHADOW, SAME REASON AS `_pool_name_valid` (D-2542, and D-2522 is the
+  # argument). `[A-Za-z0-9._-]` is TWO collation ranges, so under `en_US.UTF-8`
+  # this accepts the same non-ASCII letters that one did. `cmd_project_pool`
+  # calls BOTH — this for the project and `_pool_name_valid` for the pool — so
+  # shadowing only the pool half would leave the verb half-fixed.
+  # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
+  # locale-independent; this gate was not. A project tagged from an interactive
+  # shell (`LANG=en_US.UTF-8`) could then not be CLEARED from the fleet's own
+  # `claude-session@*` environment, which carries no `LANG` at all: the tag
+  # keeps constraining placement and `ccd project-pool --clear` refuses the very
+  # name that created it. A constraint you can create and cannot remove with the
+  # supported verb is worse than either locale's behaviour on its own.
+  local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
 }

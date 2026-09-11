@@ -98,8 +98,15 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
 
   it('a tag padded to 64 bytes is malformed, and 63 still strips to a name', async () => {
     // RULING 1's case, and the one that decides the CAP rather than the strip.
-    // `ccd`'s `IFS= read -r -d '' -n 64` succeeds AT 64 characters, so 64 is
-    // already `malformed` there (measured: 63 -> rc 1, 64 -> rc 0). The pair
+    // `ccd`'s `IFS= read -r -d '' -n 64` succeeds AT 64 BYTES, so 64 is
+    // already `malformed` there (measured: 63 -> rc 1, 64 -> rc 0). It counts
+    // BYTES and not characters because `_project_pool_state` shadows
+    // `LC_ALL=C` before reading (D-2520); this sentence said "characters" until
+    // that shadow landed, and was correct when it did. For the ASCII pair below
+    // the two units coincide, so the boundary this test pins is the same one
+    // either way — but the sentence has to track the code, because the next
+    // reader of it will be deciding what the cap means for a NON-ASCII tag.
+    // The pair
     // below is deliberately one byte apart, because a cap written `> 64`
     // passes the 64 case, strips it, and answers `tagged` — agreeing with
     // `ccd` on 65 and disagreeing on exactly the boundary (D-2010).

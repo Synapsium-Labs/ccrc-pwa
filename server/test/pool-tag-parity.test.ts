@@ -21,12 +21,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_TAG_CASES, stateWordForCcd } from './fixtures/poolTag.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { POOLS_DIR_NAME, poolFor, readProjectPools } from '../src/pools.js';
+import { POOL_NAME_RE } from '../../shared/roster.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -121,7 +123,11 @@ const localeWhere = (probe: string): string | null => {
 /** A locale in which bash's `[a-z]` really does collate a non-ASCII letter into
  *  range — the condition D-2522's shadow exists to neutralise. */
 const collatingLocale = localeWhere(
-  '[[ "pool-"$(printf "\\xc3\\xa9") =~ ^[a-z][a-z0-9-]{0,31}$ ]] && echo yes || echo no',
+  // THE GRAMMAR COMES FROM `POOL_NAME_RE`, not from a fifth hand-typed copy.
+  // `pool-name-parity.test.ts` exists to hold three spellings equal; a literal
+  // here would be a fourth that no scan can see, which is the exact shape of
+  // the defect D-2522 is about.
+  `[[ "pool-"$(printf "\\xc3\\xa9") =~ ${POOL_NAME_RE.source} ]] && echo yes || echo no`,
 );
 
 /** A locale in which `[[:space:]]` really does classify U+3000 as space — the
@@ -139,12 +145,13 @@ describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
   });
   afterEach(() => { h.cleanup(); });
 
-  it('guards the guard: a locale that classifies U+3000 as space exists here', () => {
-    // Without this the block below contrasts two locales that AGREE, which is
-    // what made the first version of this file green under mutation.
-    expect(wideSpaceLocale, 'no locale on this box classifies U+3000 as ' +
-      '[[:space:]]; the contrast below cannot run and must not be read as ' +
-      'evidence that the shadow works').not.toBeNull();
+  it('guards the guard: the locale PROBE works, whatever this box happens to have', () => {
+    // Asserts the MACHINERY, not the host. `localeWhere` returning null must
+    // mean "this box has no such locale" and never "the probe is broken", or
+    // every skip below is silently meaningless.
+    expect(localeWhere('echo yes'), 'the probe found no usable UTF-8 locale at ' +
+      'all, so a null result above cannot be read as a fact about collation')
+      .not.toBeNull();
   });
 
   // The rows whose verdict MOVED with the locale before the shadow landed:
@@ -152,9 +159,9 @@ describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
   // under C, and `[a-z]` collates non-ASCII letters into range under a UTF-8
   // locale. Every row is driven anyway — the defect was never confined to
   // these, they are just the ones that were measured moving.
-  it.each(POOL_TAG_CASES.map((c) => [c.name, c] as const))(
+  it.skipIf(wideSpaceLocale === null)
+    .each(POOL_TAG_CASES.map((c) => [c.name, c] as const))(
     'same answer under C and under a UTF-8 locale: %s', (_n, c) => {
-      if (wideSpaceLocale === null) return;   // reported by the guard above
       plant(h.home, c.bytes);
       const snippet = `{ _project_pool_state ${JSON.stringify(PROJECT)}; } 2>&1`;
       const underC = h.sh(snippet, { LC_ALL: 'C' });
@@ -169,7 +176,76 @@ describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
 // ---------------------------------------------------------------------------
 // D-2522 — the WRITER and the reader must accept the same names
 // ---------------------------------------------------------------------------
-describe('the ccd verb never writes a tag the server cannot read (D-2522)', () => {
+describe('the harness really delivers LC_ALL to ccd (the channel every locale claim rides)', () => {
+  let h: CcdHarness;
+  beforeEach(() => {
+    h = makeCcdHarness('ccrc-pool-tag-env-');
+    seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  });
+  afterEach(() => { h.cleanup(); });
+
+  // EVERY locale assertion in this file is delivered through `h.sh(snippet,
+  // { LC_ALL })`. The probes above verify the PROPERTY over `execFileSync` — a
+  // different channel. If `sh()` dropped or overrode the variable, both locale
+  // blocks would compare two runs in the SAME locale, agree trivially, and pin
+  // nothing, exactly the way choosing `C.utf8` by name did. Cheap to check, and
+  // nothing else checks it.
+  it('sh() passes LC_ALL through to the shell it spawns', () => {
+    expect(h.sh('printf %s "$LC_ALL"', { LC_ALL: 'C' })).toBe('C');
+    expect(h.sh('printf %s "$LC_ALL"', { LC_ALL: 'POSIX' })).toBe('POSIX');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The source-level pin: runs on EVERY box, including those that cannot show
+// the behaviour
+// ---------------------------------------------------------------------------
+describe('the locale shadows are present in the source (D-2520/D-2522/D-2542)', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const ccdSrc = fs.readFileSync(path.join(root, 'ccd', 'ccd'), 'utf8');
+  const checksSrc = fs.readFileSync(path.join(root, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+
+  /** The body of a bash function, from its `name() {` to the first line that is
+   *  a bare `}` at column 0 — enough for these four, all of which are written
+   *  that way, and a miss throws rather than returning an empty string that
+   *  would make every assertion below vacuous. */
+  const body = (src: string, name: string): string => {
+    const start = src.indexOf(`${name}() {`);
+    if (start < 0) throw new Error(`${name} not found — this pin is measuring nothing`);
+    const end = src.indexOf('\n}\n', start);
+    if (end < 0) throw new Error(`${name} has no closing brace at column 0`);
+    return src.slice(start, end);
+  };
+
+  it.each([
+    ['_project_pool_state', 'the strip, the -n 64 cap and the grammar it calls'],
+    ['_pool_name_valid', 'the grammar, at BOTH the reader and the writer'],
+    ['_ws_project_valid', 'the project-name grammar the same verb also gates on'],
+  ])('ccd/ccd %s shadows the locale — %s', (fn) => {
+    expect(body(ccdSrc, fn), `${fn} lost its 'local LC_ALL=C'; on a box with a ` +
+      'collating or wide-space locale its answers move with the environment')
+      .toContain('local LC_ALL=C');
+  });
+
+  it('ccd/ccrc-doctor-checks _check_pools shadows the locale', () => {
+    expect(body(checksSrc, '_check_pools')).toContain('local LC_ALL=C');
+  });
+
+  it('guards the guard: the extractor really reads a body, and a body without the shadow fails', () => {
+    // Without this, a `body()` that silently returned '' would make all four
+    // assertions above pass for the wrong reason.
+    expect(body(ccdSrc, '_project_pool_state').length).toBeGreaterThan(200);
+    expect(body(ccdSrc, '_lane_enabled')).not.toContain('local LC_ALL=C');
+  });
+});
+
+// NAMED FOR WHAT IT RUNS. An earlier title said "the ccd verb never writes a tag
+// the server cannot read", and the block does not run `ccd project-pool` — it
+// drives `_pool_name_valid`, the gate `cmd_project_pool` puts in front of the
+// write (ccd/ccd, the `_pool_name_valid "$pool"` call). That is the unit where
+// the defect lives, and pinning it is what makes the verb safe; but the title
+// has to say which of the two it measures.
+describe('_pool_name_valid — the gate cmd_project_pool writes through (D-2522)', () => {
   let h: CcdHarness;
   beforeEach(() => {
     h = makeCcdHarness('ccrc-pool-tag-writer-');
@@ -184,17 +260,18 @@ describe('the ccd verb never writes a tag the server cannot read (D-2522)', () =
   // the documented path rather than by a hand edit.
   const COLLATION_TRAPS = ['pool-\u00E9', 'pool-\u00E5', 'pool-\u00FC', 'pool-\u00F1'];
 
-  it('guards the guard: a locale whose [a-z] collates non-ASCII exists here', () => {
-    // THE defect this block exists for only manifests in a locale with real
-    // collation. `C.utf8` is UTF-8 and collates by codepoint, so selecting a
-    // UTF-8 locale by NAME can pick one that cannot show the bug — measured,
-    // and it is what made this block pass with the guard deleted.
-    expect(collatingLocale, 'no locale on this box collates a non-ASCII letter ' +
-      'into [a-z]; the rows below cannot exercise D-2522 and must not be read ' +
-      'as evidence').not.toBeNull();
-  });
-
-  it.each(COLLATION_TRAPS)('_pool_name_valid rejects %j in every locale', (name) => {
+  // THE defect this block exercises only manifests in a locale with real
+  // collation. `C.utf8` is UTF-8 and collates by CODEPOINT, so a box whose only
+  // UTF-8 locale is `C.utf8` — a stock node container, and possibly the macOS
+  // CI leg — cannot show the bug at all. That is a fact about the HOST, and the
+  // suite is documented hermetic, so it must NOT become a red run there.
+  // Skipped is visible in vitest's output; red would be a lie.
+  // What covers those boxes instead is `the shadows are present in the source`
+  // below: a guard whose input is derived from the environment can only be
+  // EXERCISED where that environment exists, so it also needs a pin that reads
+  // the source and runs everywhere.
+  it.skipIf(collatingLocale === null)
+    .each(COLLATION_TRAPS)('_pool_name_valid rejects %j in every locale', (name) => {
     for (const loc of ['C', collatingLocale].filter((l): l is string => l !== null)) {
       const rc = h.sh(
         `_pool_name_valid ${JSON.stringify(name)}; echo $?`, { LC_ALL: loc },
@@ -205,7 +282,8 @@ describe('the ccd verb never writes a tag the server cannot read (D-2522)', () =
     }
   });
 
-  it('guards the guard: a plain ASCII name is still ACCEPTED in every locale', () => {
+  it.skipIf(collatingLocale === null)(
+    'guards the guard: a plain ASCII name is still ACCEPTED in every locale', () => {
     // Without this, "rejects everything" would satisfy the block above.
     for (const loc of ['C', collatingLocale].filter((l): l is string => l !== null)) {
       expect(h.sh('_pool_name_valid "pool-a"; echo $?', { LC_ALL: loc }), loc).toBe('0');
@@ -223,15 +301,19 @@ describe('the ccd verb never writes a tag the server cannot read (D-2522)', () =
 // corpus. A doctor that disagrees with the reader is a check reporting on a
 // world its own subject does not live in.
 describe('ccd/ccrc-doctor-checks _check_pools agrees with the other two readers', () => {
-  const ccrcRoot = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname), '..', '..',
-  );
+  // `fileURLToPath`, not `new URL(...).pathname` — the sibling suite this block
+  // is modelled on uses it, and pathname keeps percent-encoding, so a checkout
+  // under a path with a space resolves to a directory that does not exist.
+  const ccrcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const checks = path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks');
 
-  /** Runs the doctor's pool check against a fixture HOME and says whether it
-   *  called this project malformed. PATH is emptied exactly as
-   *  `pool-name-parity.test.ts` does, so no real binary can be reached. */
-  const doctorSaysMalformed = (bytes: string, locale: string): boolean => {
+  /** The doctor's verdict for this project, as one of three WORDS rather than a
+   *  boolean. A boolean `saysMalformed` folds `pools-unreadable`, `pools-
+   *  unlistable`, an unrecognised future verdict and an interpreter that never
+   *  ran into the single value `false`, so every row expecting `tagged` would
+   *  pass on all of them — the block would report parity while the doctor and
+   *  the authority disagreed. Raised in review; it was a real hole. */
+  const doctorVerdict = (bytes: string, locale: string): string => {
     const home = mkTmp('ccrc-pool-tag-doctor-');
     try {
       plant(home, bytes);
@@ -246,21 +328,33 @@ describe('ccd/ccrc-doctor-checks _check_pools agrees with the other two readers'
       const r = execFileSync(BASH, [
         '-c', `set -uo pipefail; . ${JSON.stringify(checks)}; _check_pools`,
       ], { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: '', LC_ALL: locale } });
-      return r.includes(`pools-malformed: ${PROJECT}`);
+      return classify(r);
     } catch (e) {
-      const out = String((e as { stdout?: string }).stdout ?? '');
-      return out.includes(`pools-malformed: ${PROJECT}`);
+      // A non-zero exit is NORMAL here: `_check_pools` returns 1 on FAIL. What
+      // is not normal is no verdict line at all, and `classify` says so.
+      return classify(String((e as { stdout?: string }).stdout ?? ''));
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
   };
 
+  /** Maps the doctor's own contract — `PASS|WARN|FAIL <name>: <detail>` — onto
+   *  the two words this corpus knows, and refuses to guess at anything else. */
+  const classify = (out: string): string => {
+    if (out.includes(`pools-malformed: ${PROJECT}`)) return 'malformed';
+    if (/^PASS pools:/m.test(out)) return 'tagged';
+    const line = out.split('\n').find((l) => /^(PASS|WARN|FAIL) pools:/.test(l));
+    return line ? `other: ${line.slice(0, 90)}` : `NO VERDICT LINE: ${out.slice(0, 90)}`;
+  };
+
   it.each(POOL_TAG_CASES.map((c) => [c.name, c] as const))(
     'same verdict as the table, in every locale: %s', (_n, c) => {
-      const want = c.expect.state === 'malformed';
+      const want = c.expect.state === 'malformed' ? 'malformed' : 'tagged';
       for (const loc of ['C', collatingLocale, wideSpaceLocale]
         .filter((l): l is string => l !== null)) {
-        expect(doctorSaysMalformed(c.bytes, loc),
+        // Asserts the WORD, so `pools-unreadable`, a new verdict, or a dead
+        // interpreter all fail loudly instead of satisfying "not malformed".
+        expect(doctorVerdict(c.bytes, loc),
           `${c.name} under LC_ALL=${loc} — ${c.why}`).toBe(want);
       }
     });

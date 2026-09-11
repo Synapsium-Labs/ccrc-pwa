@@ -10,18 +10,25 @@
 // cross-referencing comments rather than by a shared corpus. A comment is a
 // request; a shared table is a mechanism.
 //
-// THE READERS THIS IS DRIVEN THROUGH (`pool-tag-parity.test.ts`):
+// THE THREE READERS THIS IS DRIVEN THROUGH (`pool-tag-parity.test.ts`):
 //   * `server/src/pools.ts` — TypeScript, via `readProjectPools` + `localIO`.
 //   * `ccd/ccd` `_project_pool_state` — bash, sourced under a fixture HOME.
-// A third reader, `ccd/ccrc-doctor-checks`'s `_check_pools`, repeats the same
-// cap/strip/grammar and is pinned separately by `pool-name-parity.test.ts`.
+//   * `ccd/ccrc-doctor-checks` `_check_pools` — bash, the doctor's own copy of
+//     the same cap, strip and grammar. `pool-name-parity.test.ts` pins its
+//     regex BYTE-EQUAL to the other two; byte-equal is not behaviour-equal, so
+//     it is driven here as well.
 //
 // EVERY BYTE IS WRITTEN AS AN ESCAPE, NEVER AS A LITERAL. Half these rows turn
 // on a character that is INVISIBLE in an editor — U+00A0 and U+0020 are one
 // pixel apart and mean opposite things here. A literal would make the table
 // unreviewable and would silently survive a copy-paste through a terminal that
-// normalises it. `source-bytes.test.ts` keeps this file ASCII; so does the rule
-// that a reviewer must be able to SEE the input that produced a verdict.
+// normalises it.
+// NOTHING ENFORCES THAT, and saying otherwise would be this file committing the
+// defect it exists to catch. An earlier draft of this header claimed
+// `source-bytes.test.ts` "keeps this file ASCII"; it does not — that suite bans
+// NUL, DEL and the other C0 bytes and permits every byte above 0x7F. The escape
+// discipline here is a CONVENTION a reviewer enforces, and the reason to keep
+// it is that a reviewer must be able to SEE the input that produced a verdict.
 
 /** What every reader must answer for one tag file's exact bytes. */
 export interface PoolTagCase {
@@ -51,6 +58,12 @@ export const POOL_TAG_CASES: readonly PoolTagCase[] = [
     why: "ASCII tab is in the C locale's [[:space:]] and in the spelled-out JS class" },
   { name: 'trailing CR+LF', bytes: 'pool-a\r\n', expect: tagged('pool-a'),
     why: 'an editor writing CRLF is still a legal writer' },
+  { name: 'trailing VT (U+000B)', bytes: 'pool-a\u000B', expect: tagged('pool-a'),
+    why: 'VT is in the C locale [[:space:]] and in the spelled-out JS class. Without this row the \\v could be deleted from that class and every other row would stay green - found by mutation review, not by reasoning' },
+  { name: 'trailing FF (U+000C)', bytes: 'pool-a\u000C', expect: tagged('pool-a'),
+    why: 'FF, same as VT: the sixth character of the class had nothing pinning it' },
+  { name: 'a DIFFERENT legal name', bytes: 'pool-b-2\n', expect: tagged('pool-b-2'),
+    why: 'every other legal row is `pool-a`, so a reader that returned the constant `pool-a` would pass them all. This pins the NAME PAYLOAD, and exercises a digit and a second hyphen while it is here' },
 
   // ---- the strip's CLASS: the four that diverged, plus the two that did ----
   // ---- not but were locale-dependent on ccd's side (D-2519 / D-2520)    ----
@@ -119,8 +132,18 @@ export const stateWordForCcd = (e: PoolTagCase['expect']): string =>
     'no row carries a non-ASCII byte — the strip-class and collation rows are gone',
   );
   // Both sides of the cap boundary, which is the pair D-2010 turns on.
-  need(POOL_TAG_CASES.some((c) => c.bytes.length === 63), 'no 63-byte row');
-  need(POOL_TAG_CASES.some((c) => c.bytes.length === 64), 'no 64-byte row');
+  // MEASURED IN BYTES, because `ccd`'s cap is a BYTE cap (D-2520's shadow) and
+  // `String.length` counts UTF-16 code units. Writing `.length` here and calling
+  // it "bytes" in the message would be D-2521's own confusion, in the file that
+  // ships D-2521's correction — which is precisely how that one survived.
+  const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+  need(POOL_TAG_CASES.some((c) => byteLen(c.bytes) === 63), 'no 63-byte row');
+  need(POOL_TAG_CASES.some((c) => byteLen(c.bytes) === 64), 'no 64-byte row');
+  // And the row that separates the two caps: over ccd's BYTE cap while under
+  // the server's UTF-16 unit cap. Losing it would leave the two caps' DISAGREEMENT
+  // untested while every other row still passed.
+  need(POOL_TAG_CASES.some((c) => byteLen(c.bytes) >= 64 && c.bytes.length < 64),
+    'no row sits over the byte cap and under the UTF-16 unit cap');
   // Every name is distinct, or `it.each` titles collide and one row hides another.
   need(new Set(POOL_TAG_CASES.map((c) => c.name)).size === POOL_TAG_CASES.length,
     'two rows share a name');
