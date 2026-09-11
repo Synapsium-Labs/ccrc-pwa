@@ -651,6 +651,41 @@ describe('StartProgramSheet', () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it('previews the ledger from the SHAPED slug, so a traversal spelling never renders as a path', async () => {
+    // D-2508 made `ledgerPath` a pure interpolator whose callers shape first;
+    // this preview was the last reader still handing it raw input, so a slug the
+    // sheet will never send rendered as a real-looking path. It is display-only
+    // — the guards already stop the create — but a preview that disagrees with
+    // the act it previews is exactly the overloaded surface the rule forbids.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={vi.fn()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    // The project must be picked for this section to render at all; the TITLE is
+    // then cleared, which is what pins that the preview reads the SLUG decision
+    // and not the kickoff verdict (that one also refuses a blank title, and
+    // would blank this line while the operator is still typing one).
+    await fillAndPick('build_4-name', 'x');
+    const slugField = screen.getByLabelText(/program slug/i);
+    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: '' } });
+
+    fireEvent.change(slugField, { target: { value: '  build_4-name  ' } });
+    expect(await screen.findByText(/Its ledger: docs\/superpowers\/programs\/build_4-name\.md/))
+      .toBeInTheDocument();
+
+    // A traversal spelling renders the placeholder, never the escaping path.
+    fireEvent.change(slugField, { target: { value: '../other' } });
+    expect(await screen.findByText(/Its ledger: docs\/superpowers\/programs\/…\.md/))
+      .toBeInTheDocument();
+    // Scoped to the ledger LINE on purpose: the start button legitimately echoes
+    // the raw spelling the operator typed ("Start ../other on …"), which is a
+    // different surface making a different claim — it quotes input, this one
+    // names a path.
+    expect(document.querySelector('.program-start-ledger')?.textContent)
+      .not.toContain('../other');
+  });
+
   it('accepts exactly 8,192 kickoff bytes and blocks one byte more before create', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);

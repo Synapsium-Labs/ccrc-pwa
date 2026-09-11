@@ -57,8 +57,11 @@ and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
 
 **The hold, precisely.** When this call names `sessionId` (wave ≥ 2, reclaiming
 an existing workspace), the server places the hold immediately, reason
-`program:<slug> wave:<N>/M`. Wave 1's open has no workspace yet — nothing is
-held until wave 1's own dispatch (§2) places it, same reason, `wave:1/M`. A
+`program:<slug> wave:<N>/M run:<id>`, naming the run it has just opened. Wave
+1's open has no workspace yet — nothing is held until wave 1's own dispatch
+(§2) places it, same shape, `wave:1/M run:<id>`. The only hold that carries no
+`run:` suffix is the one an ordinary close writes for wave N+1 when no
+successor run exists yet (§5, step 4) — there is no id to name at that moment. A
 coordinator that checks for a hold between wave 1's open and its dispatch and
 finds none has not found a bug — it has found the exact window before the
 workspace exists. Either way the reason is **display-only** — never parse a
@@ -180,7 +183,7 @@ what your brief may weigh. Trim against the ceiling, not against `limit`.
 covered where it actually bites on the ordinary path, §4 below.
 
 For wave 1, this call is also where the workspace's hold actually lands
-(reason `program:<slug> wave:1/M` — see §1's own note on this). For wave ≥ 2,
+(reason `program:<slug> wave:1/M run:<id>` — see §1's own note on this). For wave ≥ 2,
 this route itself resumes the held workspace and injects `/clear` through
 the send path before it queues the brief — recording `resumed`/`clearedAt`
 on the response. This session never sends `/clear` to a worker by any other
@@ -499,7 +502,8 @@ whole time, which is the only prevention this ordering rule buys.
    Commit it.
 3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
    session this wave's run has) — this opens wave N+1's run row and re-holds
-   the same workspace with reason `program:<slug> wave:<N+1>/M`. The program
+   the same workspace with reason `program:<slug> wave:<N+1>/M run:<id>`,
+   naming the run row it has just opened. The program
    now has two open runs (this wave's, still `working`/`awaiting-review`/
    `merging`, and the new `planned` one) — it can never read as zero from
    here.
@@ -507,8 +511,9 @@ whole time, which is the only prevention this ordering rule buys.
    wave's** run id — re-measures the SAME facts, against the SAME codes, as
    `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
    closes this wave's run row as `done`, and places the SAME hold reason
-   again (`program:<slug> wave:<N+1>/M` — idempotent; step 3 already wrote
-   it). The response SHAPE differs from §4's table, though: a mismatch here
+   again (`program:<slug> wave:<N+1>/M run:<id>` — idempotent; step 3 already
+   wrote it, and close takes its SURVIVOR arm here, so it re-writes that same
+   run's reason byte for byte). The response SHAPE differs from §4's table, though: a mismatch here
    answers `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
    `reject.code` — so read `$body.error` on this route, not `$body.reject`.
    Two refusals besides the re-measurement codes: `not-dispatched` (this

@@ -265,7 +265,8 @@ not after.
    only once its installer has run there, so say it again even though the skill
    says it (`references/wave-lifecycle.md` §2). This
    is also where wave 1's hold actually lands, reason `program:<slug>
-   wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
+   wave:1/M run:<id>` — the run's own id is part of the reason, so size a slug
+   against that full string, not against the prefix. For wave ≥ 2 the route itself resumes the workspace and injects
    `/clear` before queuing the brief — this session never sends `/clear`
    itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** What actually lands in your session is a tiny one-line

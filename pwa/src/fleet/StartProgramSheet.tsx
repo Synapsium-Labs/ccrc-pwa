@@ -40,7 +40,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
-import { ledgerPath, programKickoffVerdict } from '../../../shared/api';
+import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { accountLabel } from '../lib/accounts';
@@ -576,6 +576,11 @@ export function StartProgramSheet({
   const runVerdict: OpenRunVerdict | null =
     project === null ? null : openRunVerdict(openRunProjects, project.name);
   const kickoffVerdict = programKickoffVerdict(slug, title);
+  // The ledger line previews a SLUG, not a kickoff: `programKickoffVerdict`
+  // also refuses a blank title, and gating the path on that would blank a
+  // perfectly good preview while the operator is still typing one. Same
+  // shared shape decision, taken at the granularity this line needs.
+  const slugPreview = shapeProgramSlug(slug);
   const kickoffOversize = !kickoffVerdict.ok && kickoffVerdict.kind === 'oversize';
   const showKickoffError = slug !== '' && !kickoffVerdict.ok
     && (kickoffOversize || kickoffVerdict.detail !== 'program title must not be blank');
@@ -994,8 +999,17 @@ export function StartProgramSheet({
                       + 'coordinator afterwards just as a pause refuses it.'}
                 </p>
               )}
+              {/* THE SHAPED SLUG, never the raw one (D-2508's own rule, which
+                  this preview was the last reader to break): `ledgerPath` is a
+                  pure interpolator, so previewing `../other` here would render a
+                  path this sheet will never send and the server would refuse —
+                  a preview that disagrees with the act it previews. The verdict
+                  is the single shape decision already computed above, so the
+                  line now shows exactly the path a successful start would use,
+                  and falls back to the placeholder while there is no valid slug
+                  to show one for. */}
               <p className="program-start-ledger">
-                {`Its ledger: ${ledgerPath(slug.trim() === '' ? '…' : slug.trim())}`}
+                {`Its ledger: ${ledgerPath(slugPreview.ok ? slugPreview.slug : '…')}`}
               </p>
               <p className="program-start-note">
                 The kickoff is queued as mail and lands at the session&rsquo;s next quiet moment,
