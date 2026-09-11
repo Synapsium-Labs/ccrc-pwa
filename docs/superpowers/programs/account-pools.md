@@ -2708,3 +2708,54 @@ it. Sent as an amendment with all six current values measured by content, plus a
 The general rule this keeps proving: **relaying a reviewer's measurement makes it my claim.** A gate
 that verifies its own load-bearing findings and relays the rest has not raised its evidence standard,
 it has only moved where the unverified claims enter.
+
+## PR #81, round eight — `b6b7fb4a`: clean, and the recurring class finally closes
+
+All seven round-seven corrections verified closed **by my own measurement, none relayed**. Five
+mutations, five red; full server suite matches the sandbox baseline exactly (8004 passed, the same
+nine no-`.git` files failing); `ccd/ccd`'s provenance marker verifies `ccrc-unmodified`.
+
+| pin | mutation | result |
+|---|---|---|
+| D-2514 `{ once: true }` | delete the option | RED |
+| D-2515 `rejectAllPending` | gut the whole body | RED |
+| D-2515, precisely | remove **only** `entry.dispose()` there | RED |
+| D-2512 reverse scan | orphan a declared token | RED |
+| regression | `dispose()` off the timeout callback | RED |
+
+The third row is the one that matters. Last round the same call site went green and I could not tell
+whether the guard was unpinned or the function simply unreachable; only gutting the entire body
+settled it. Now the narrow mutation reds on its own, which is what a pin is supposed to do.
+
+### The class closed, and I checked it mechanically rather than believing it
+
+D-2511 told the worker to stop writing positional citations and cite symbols instead. They did, and
+every new symbol resolves: `ExecSpec` at `roster.ts:66`, `AccountDef.telemetry` at `:89`,
+`generateAccountsSh` at `generate.mjs:200` with `measuredIds` inside it at `:203`, and the
+`CCRC_MEASURED` contract comment at `:160` really does state the `telemetry === 'anthropic'` rule.
+
+Then the check that actually matters, because three rounds running the *correction* introduced fresh
+drift: **did this round move anything anyone cites?** Measured, not assumed —
+`shared/api.ts`'s hunk is at `:5901` and the highest citation into that file anywhere in the repo is
+`:5615`; `remote-connect.test.ts` gained 47 lines but its three cited lines (29, 31, 37) are
+byte-identical across the two heads; nothing cites the four other plan files by line at all.
+
+**Zero drift. First round in this PR to introduce none.**
+
+### The replacement sentence, executed rather than read
+
+D-2513 replaced "Adding a tenth token is a two-line edit" with a claim that adding one is a
+coordinated edit to the `ccd` emission, the union, `LC_REFUSAL_WORD`, and the test inventory. Reading
+that would not tell me whether it is true, so I performed exactly the edit it describes — all four
+parts — and ran the full suite. One new failure, and it was `ownership.test.ts` telling me I had
+edited `ccd/ccd` without re-stamping its provenance marker: my own artifact, not a fifth surface.
+The sentence is true.
+
+### Asking the right question
+
+Every gate so far has been asked *what is wrong with this round*, and a gate asked that finds things.
+Rounds six and seven each returned seven findings, and not one of the fourteen touched the code. So
+this time I ran a different instrument — three independent judges on the only question actually open:
+**is this ready to merge, what breaks if it does, and which of the remaining prose imperfections
+would genuinely mislead a maintainer versus merely being imperfect?** A reviewer that can never
+conclude "this is done" is not a useful reviewer, and I told them so explicitly.
