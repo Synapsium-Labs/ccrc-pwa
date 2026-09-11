@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6b77b39f56b22c636458b048d282c04fbecfabf4e3d9529d5ad5d20ad3d9d435
+# ccrc:generated 1 sha256=81294573b4a69c8d5e008abdf03aaba91f36a13662ea084f94a55a4516e54a20
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -970,6 +970,9 @@ RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this sessio
 RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
+STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
+STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
+TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
@@ -1810,8 +1813,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 133
-# invocations across 109 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 138
+# invocations across 114 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -12606,8 +12609,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # do) — _avail on a hard-blocked wrapper reads exactly like a wrapper that
   # is fine, so the ordinary "home is fine: stay" / "cur still works: stay"
   # branches would never fire the rescue at all. The caller (_auto_swap_check)
-  # passes force iff _pane_hard_blocked already confirmed the session is
-  # stuck regardless of what telemetry says. The home-recovered MOVE below
+  # passes force iff `_session_hard_blocked` confirmed the session — pane-first,
+  # with D-2363's transcript fallback — is stuck regardless of telemetry. The home-recovered MOVE below
   # stays reachable under force when cur != home: in that branch cur is the
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
@@ -12897,6 +12900,102 @@ _pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waitin
   # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
   # injection, and the fallback re-drive — must not.
   grep -qiE "continuing automatically|continuing shortly" <<<"$1"
+}
+
+_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner and nobody is typing (D-2363)
+  # THE PANE FIRST, UNCHANGED. `_pane_hard_blocked` is the detector every landing,
+  # rescue and strand verdict has run on since Wave 3 and it stays primary — its
+  # contract (a visible banner swaps, draft or not) is not touched here. The
+  # transcript is the SECOND detector, for the two shapes the pane cannot see:
+  #   - a BLANK capture (`compact-skip … pane-blank` is a measured condition on
+  #     this fleet), which used to return before any verdict;
+  #   - a banner whose TEXT the regex does not match and no "continuing
+  #     automatically" line beside it — auto-resume off, its re-arm cap hit, a
+  #     human's Esc. D-2364 records why the regex is NOT widened for that instead.
+  # Two stand-downs of its own:
+  #   - a running turn ("esc to interrupt") cannot be sitting on a banner, and the
+  #     fleet's busy steady state should not pay a transcript read every 5 s;
+  #   - a NON-EMPTY INPUT BOX. `cmd_swap` carries the transcript and never the box,
+  #     so a human mid-sentence on a limited account would lose the sentence to
+  #     the rescue. `-e` capture, through the whole-box reader D-2457 added.
+  # A THIRD STAND-DOWN, the transcript arm's own (D-2443): a FRESH
+  # `$REG/<id>.stalepress` stamp. `_auto_stale_check` runs earlier in the SAME
+  # supervise tick and, on a stale auto-continue, presses Enter and stamps
+  # `stalepress` BEFORE this function is ever reached from `_auto_swap_check`
+  # microseconds later — Claude Code has not had time to append the resumed
+  # turn's row to the transcript yet, so the newest real row the transcript arm
+  # can see is still the old rate_limit banner, and without this it would fire a
+  # swap that discards the continuation the Enter press just submitted.
+  # STALE_RESUME_GRACE gives Claude Code a few ticks to redraw before the
+  # transcript arm trusts what it reads; it does not touch the pane arm above,
+  # which decides on what is on screen NOW regardless of any stale press.
+  #
+  # THE TRANSCRIPT VERDICT IS CACHED FOR 30s (D-2444), after the pane, busy and
+  # stale-press gates above. The final review measured an idle negative at
+  # ~30-35 ms/call, ~11-13x the pane classifier, most of it in
+  # `_transcript_path`; paying that every five seconds across the fleet was a
+  # standing tax for a detector whose rescue already has up to 120s of jitter.
+  # `$REG/<id>.tscan` is "<epoch> <0|1>" and records BOTH answers — including a
+  # missing/unreadable transcript as 0 — so the common negative is cached too.
+  # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
+  # GUARD stays outside the cache and is re-asked on every positive: caching a
+  # transcript must never let a swap carry away what a human started typing.
+  local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  _pane_hard_blocked "$pane" && return 0
+  grep -q "esc to interrupt" <<<"$pane" && return 1
+  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
+  scan=$(_reg_get "$id" tscan)
+  scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
+  if [[ "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
+        && $((now - scan_ts)) -lt "$TRANSCRIPT_ARM_INTERVAL" ]]; then
+    verdict="$scan_verdict"
+  else
+    if f=$(_transcript_path "$id") && _transcript_limit_banner "$f" >/dev/null; then
+      verdict=1
+    fi
+    _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
+  fi
+  [[ "$verdict" -eq 1 ]] || return 1
+  ! _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)"
+}
+
+_pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
+  # THE BUNDLE'S OWN SENTENCE (2.1.267: `mu(l)` returns it for `phase:"stale"`,
+  # reached when the auto-resume tick finds a gap past the reset larger than its
+  # grace — a throttled or suspended process). Enter in that phase submits the
+  # continuation Claude Code already holds (`tengu_quota_auto_resume_stale_resumed`).
+  # Gated on the exact sentence so a changed one fails CLOSED — no keystroke —
+  # which is the lesson of 2026-09-08's trust dialog (a bare Enter exited five
+  # sessions). `ccd-limit-stale.test.ts` carries the sentence verbatim.
+  grep -qiE "usage limit has reset.*press enter to continue" <<<"$1"
+}
+
+_auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its own auto-continue went stale.
+  # Runs on the supervise tick BEFORE `_auto_swap_check`: the account has reset,
+  # the continuation is right there, and Enter is Claude Code's documented
+  # affordance for this phase — a swap would cost a restart and a transcript copy
+  # for nothing. Four stand-downs, each pinned: no prompt, a running turn, a
+  # non-empty box (a human is at the keyboard; Enter would submit THEIR text),
+  # and the cooldown, which also keeps the box-not-empty line from repeating
+  # every five seconds (D-2361).
+  local id="$1" t pane now last
+  t=$(_tmux "$id")
+  pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
+  [[ -n "$pane" ]] || return 0
+  _pane_limit_stale "$pane" || return 0
+  echo "$pane" | grep -q "esc to interrupt" && return 0
+  echo "$pane" | grep -q "❯" || return 0
+  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
+  _reg_set "$id" stalepress "$now"
+  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
+    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but the input box is not empty [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+    return 0
+  fi
+  echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  tmux send-keys -t "$t" Enter
+  return 0
 }
 
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
@@ -13261,7 +13360,24 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     return 0
   fi
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
-  [[ -n "$pane" ]] || return 0
+  # THE VERDICT BEFORE THE BLANK-PANE RETURN (D-2363): a blank capture used to
+  # return here, ahead of any classifier, and a limited session with a blank
+  # pane was never rescued. `_session_hard_blocked` reads the transcript for
+  # that case; a blank pane that is NOT blocked still stands still, as before.
+  # THE VERDICT'S OWN COST, DISCLOSED (final review finding 3, 2026-09-10;
+  # mitigated by D-2444). Replacing `_pane_hard_blocked` with
+  # `_session_hard_blocked` here added a price. In a FIXTURE HOME (roster via
+  # `shared/generate.mjs`, 200 iterations x 3 runs, box load 9-32), the old
+  # uncached path measured `_pane_hard_blocked` alone at ~2.6-2.9 ms/call and
+  # `_session_hard_blocked` at ~30-35 ms/call — roughly +27-32 ms, an order of
+  # magnitude (~11-13x), mostly in `_transcript_path`. D-2444 now caches both
+  # verdicts for 30s, so an IDLE, HEALTHY row pays that full transcript scan at
+  # most once per interval rather than on every 5s tick. Intervening calls still
+  # pay the registry/cache read; a positive also re-measures the draft. The
+  # `_tick_strand_undecidable` block at its own call site below discloses that
+  # its same-cadence call shares this cache rather than adding another scan.
+  _session_hard_blocked "$id" "$pane" && hard_blocked=1
+  [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
   #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
   #  rotation on 2026-09-07 through `_default_pool`, as an ordinary candidate
@@ -13276,7 +13392,6 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # and the rescue below would never fire. `force` skips straight to the
   # must-leave candidate loop so a hard block always finds a destination when
   # one exists, regardless of what telemetry has to say about cur/home.
-  _pane_hard_blocked "$pane" && hard_blocked=1
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
@@ -13395,7 +13510,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _is_valid_wrapper "$wrapper" && ! _is_home_able "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]" >> "$REG/swap.log"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$(_pane_hard_blocked "$pane" || printf ' via=transcript')" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -13541,7 +13656,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # this session at all" or "this session is over its threshold and we are declining anyway" —
   # the two shapes that were silent, and the second is the one that matters.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t cur
+  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t
   now=$(date +%s)
   last=$(_reg_get "$id" lastcompact)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
@@ -13654,8 +13769,8 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
+    && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
@@ -13666,9 +13781,10 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
 }
 
-# The input box's own row, from a pane capture — `draftOf`'s rule
-# (server/src/inject/send.ts), in one place, so ccd's two injectors cannot
-# drift from each other or from the server's reader.
+# Two readings of the input box from one normalised pane: `_pane_box_draft`
+# keeps `draftOf`'s marker-row contract, while `_pane_box_has_content` asks the
+# safety question every synthesized ccd action needs — whether ANY box row is
+# occupied. Both share the dim/SGR normalizer, so those rules cannot drift.
 #
 # TWO corrections to the inline first-match, plain-space-anchored grep this
 # replaces, both measured live on 2026-08-14. (The old pattern is DESCRIBED
@@ -13723,9 +13839,13 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
 # is needed (and ERE has none): the interleaved alternative cannot match a reset
 # and `[^\e]` cannot match an ESC, so the match physically cannot run past the
 # first terminator.
-_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row, or empty
+_pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghosts and SGR removed
+  LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g'
+}
+
+_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty
   printf '%s\n' "$1" \
-    | LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g' \
+    | _pane_box_plain \
     | LC_ALL=C grep $'^\xe2\x9d\xaf' \
     | tail -1 \
     | LC_ALL=C sed -E $'s/^\xe2\x9d\xaf(\xc2\xa0| )*//; s/[[:space:]]*$//'
@@ -13734,6 +13854,40 @@ _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own row,
   # status of the pipeline would leak out as a failure the callers (which read
   # the STDOUT, `[[ -n "$cur" ]]`) never asked about.
   return 0
+}
+
+_pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any real box row is occupied (D-2457)
+  # `_pane_box_draft` deliberately answers only the marker row, matching
+  # `draftOf`. That is not enough before a synthesized action: a human can press
+  # Alt+Enter first, leaving an EMPTY marker row and real text on an indented
+  # continuation row. Scan from the LAST marker to the closing horizontal rule,
+  # exactly like server `hasContentBelowMarker`; chrome after the rule is not box
+  # content. The shared normalizer keeps dim ghost suggestions empty here too.
+  # Ask the marker-row reader first both to keep ONE rule for that row and so a
+  # test that stubs the seam beneath an injector still controls the full guard.
+  [[ -n "$(_pane_box_draft "$1")" ]] && return 0
+  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+    function nonblank(s) { gsub(/[[:space:]]/, "", s); return s != "" }
+    function rule(s, n) {
+      gsub(/[[:space:]]/, "", s)
+      n = gsub(/─/, "", s)
+      return n >= 8 && s == ""
+    }
+    {
+      line = $0
+      if (index(line, "❯") == 1) {
+        active = 1; found = 0
+        sub(/^❯( | )*/, "", line)
+        if (nonblank(line)) found = 1
+        next
+      }
+      if (active) {
+        if (rule(line)) { active = 0; next }
+        if (nonblank(line)) found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
 }
 
 # Auth screens must never receive synthesized keystrokes: on a numbered login
@@ -14299,7 +14453,7 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
 
 _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   [[ -n "$SPAWN_EFFORT" ]] || return 0
-  local t="$1" cur
+  local t="$1"
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
     echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
   fi
@@ -14307,8 +14461,9 @@ _inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  if [[ -n "$cur" ]]; then echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0; fi
+  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
+    echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0
+  fi
   sleep 1
   tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
@@ -14330,7 +14485,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   # substring inside quoted content can only break the pair, i.e. read "not
   # stalled" — the status quo, never a spurious keystroke.
   local f="$1" line state=0
-  [[ -r "$f" ]] || return 2
+  [[ -f "$f" && -r "$f" ]] || return 2   # D-2370: -r alone admits a FIFO (D-2347)
   while IFS= read -r line; do
     [[ "$line" == *'"type":"user"'* || "$line" == *'"type":"assistant"'* ]] || continue
     if [[ "$line" == *'"isMeta":true'* && "$line" == *'Continue from where you left off.'* ]]; then state=1; continue; fi
@@ -14341,6 +14496,63 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
     state=0
   done < <(tail -n "$REDRIVE_TAIL_LINES" "$f")
   [[ "$state" -eq 2 ]]
+}
+
+_transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>") | 1 not | 2 unreadable (D-2362, D-2456)
+  # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
+  # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
+  # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
+  # rateLimitType:"seven_day"}`). Its TEXT is not a detector, and neither are
+  # field-shaped strings nested in `message.content`: a JSON parser reads the
+  # envelope so an assistant discussing this feature cannot force-swap itself.
+  # Same window and the same chatter rule as `_transcript_stalled_pair`:
+  # local-command rows are not turns; any other user/assistant row after the
+  # banner means the session moved on (a re-drive, a human message, a new turn).
+  # `-f && -r`, never `-r` alone — D-2347's class: `-r` is true for a FIFO and an
+  # unbounded character device, and `tail` on either blocks for ever (D-2370).
+  local f="$1" rows rc
+  [[ -f "$f" && -r "$f" ]] || return 2
+  rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+
+found = None
+for raw in sys.stdin:
+    try:
+        row = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        found = None
+        continue
+    if not isinstance(row, dict):
+        found = None
+        continue
+    if row.get("type") not in ("user", "assistant"):
+        continue
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "rate_limit":
+        found = row
+        continue
+    chatter = row.get("type") == "user" and isinstance(content, str) and content.startswith(
+        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
+    )
+    if chatter:
+        continue
+    found = None
+
+if found is None:
+    raise SystemExit(1)
+quota = found.get("quotaLimits")
+quota = quota if isinstance(quota, dict) else {}
+reset = quota.get("resetsAt")
+kind = quota.get("rateLimitType")
+reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
+print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
+' 2>/dev/null
+  rc=$?
+  [[ "$rc" -le 1 ]] && return "$rc"
+  return 2
 }
 
 _redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
@@ -14373,9 +14585,9 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this
   # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
-  # on precisely the sessions this fallback exists to rescue. `_pane_box_draft` alone keeps the
-  # full `-e` capture: it already reads only the LAST `❯` line, so a wider window costs it nothing.
-  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane cur
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
+  # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
+  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
@@ -14393,8 +14605,8 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   echo "$pane" | grep -q "esc to interrupt" && return 0
   _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  cur=$(_pane_box_draft "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
-  [[ -n "$cur" ]] && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
+    && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "$RESUME_PROMPT"; sleep 1; tmux send-keys -t "$t" Enter
   return 0
@@ -15100,7 +15312,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
-        _sync_uuid "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
         beat=$((beat + tick))
         (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
         ;;
@@ -16041,9 +16253,9 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # A session standing still on an unmeasurable field is not by itself
   # stranded — it may be idle, mid-turn, or perfectly happy — and marking it
   # would be the same fabricated positive claim this commit removes one seam
-  # up. `_pane_hard_blocked` is the same classifier the ordinary rescue path
-  # uses, asked the same way; it needs only `_tmux "$1"`, never the field that
-  # could not be read.
+  # up. `_session_hard_blocked` is the same classifier the ordinary rescue path
+  # uses, asked pane-first with D-2363's transcript fallback; it needs only
+  # `_tmux "$1"`, never the field that could not be read.
   # THE CAPTURE'S COST, DISCLOSED (#69 review round 1 S7, ruled NO FIX as
   # D-2162, re-measured in round 3, and re-measured AGAIN on the #70 merge —
   # which moved it). This `capture-pane` is unconditional and sits above
@@ -16097,13 +16309,24 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # replicating the cooldown tests here, now removes only 6 of those 18 cells —
   # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
   # one, with every case green.
-  local pane
+  local pane blocked=""
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
-  # AN UNMEASURABLE PANE CLEARS NOTHING, and this line stays a BARE return
-  # (#69 review, S2). An empty capture is a pane nobody could read; clearing on
-  # it would be the fabricated clear C1 exists to prevent, and it is the one
-  # place the clear below must NOT move up to.
-  [[ -n "$pane" ]] || return 0
+  # AN UNMEASURABLE PANE WITH NO TRANSCRIPT VERDICT CLEARS NOTHING (#69 review,
+  # S2, amended by D-2363). An empty capture is normally a pane nobody could
+  # read; only `_session_hard_blocked`'s transcript fallback may make a positive
+  # claim from it. Without either measurement, the return below must stay ahead
+  # of the clear or it would fabricate recovery.
+  # THIS CALL'S OWN COST, DISCLOSED SEPARATELY FROM THE CAPTURE ABOVE (final
+  # review finding 3, 2026-09-10; mitigated by D-2444) — the capture-pane essay
+  # above this function is about the `tmux capture-pane` fork alone. This
+  # `_session_hard_blocked` call runs on the same 5s cadence as
+  # `_auto_swap_check`, but both calls share `$REG/<id>.tscan`: whichever misses
+  # first may pay the ~+27-32 ms uncached transcript path measured at the other
+  # call site, while the later same-tick call normally pays only cache lookup.
+  # An idle negative gets at most one full scan per 30s interval; a positive
+  # additionally re-measures the draft on every call.
+  _session_hard_blocked "$1" "$pane" && blocked=1
+  [[ -n "$pane" || -n "$blocked" ]] || return 0
   # THE MARKER MUST FOLLOW THE TRUTH — `_strand_mark`'s own docstring says so,
   # and until this line it could not, from here. The caller returns at the
   # `wrapper` guard ABOVE the tick's only automatic healthy-pane clear, so a
@@ -16118,7 +16341,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # classifier, same refusal to act on an empty one. `_strand_clear`'s own `-e`
   # guard keeps the steady state silent, so a healthy row with an unreadable
   # field writes nothing at all.
-  _pane_hard_blocked "$pane" || { _strand_clear "$1"; return 0; }
+  [[ -n "$blocked" ]] || { _strand_clear "$1"; return 0; }
   # THE GROUP CARRIES THE REDIRECT (#69 review, S6), same spelling and same
   # reason as `_tick_undecidable` above: `_strand_mark`'s two `_reg_set` writes
   # and its own `swap.log` append are unwrapped, and this caller runs every five

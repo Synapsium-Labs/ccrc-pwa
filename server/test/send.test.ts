@@ -714,6 +714,52 @@ describe('sendPrompt', () => {
   });
 });
 
+describe('holdIfAutoContinueArmed (D-2368)', () => {
+  const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n';
+  it('refuses auto-continue-armed before any keystroke when the caller opts in', async () => {
+    const { tmux, calls } = fakeTmux([ARMED]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('the hold is decided before the menu check — an armed screen with a menu is still reported as the limit', async () => {
+    const { tmux, calls } = fakeTmux([`${ARMED}❯ 1. Yes\n  2. No\n  Enter to select\n`]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('control: without the option the same pane is typed into — a human typing is Claude Code\'s documented cancel', async () => {
+    // Frames: the armed prompt, the echo of our text, the empty box after Enter —
+    // copy the frame sequence an existing ok-path case in this file uses.
+    const { tmux, calls } = fakeTmux([ARMED, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
+  });
+  // Final review finding 2 (2026-09-10): the whole `captureAnsi` output is not the
+  // decision window — a 220x50 pane routinely carries the ordinary English phrase
+  // ("continuing automatically") scrolled off above the fold (swap.log, this very
+  // file, a prior limit episode on screen), which is not Claude Code's own armed
+  // banner. Decided on the LAST 8 LINES, matching ccd's `_pane_auto_continue_armed`
+  // window, so a stale phrase far above the input box must not hold mail.
+  it('the armed phrase exactly 8 real rows from the end still holds with a trailing newline', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const pane = [stale, ...Array.from({ length: 6 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('the same phrase 9 real rows from the end is above the fold and does not hold', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const pane = [stale, ...Array.from({ length: 7 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
+  });
+});
+
 // F3 / bug #21 (build4 dogfood, docs/superpowers/programs/build4.md): the
 // mail delivery lane types an envelope via sendPrompt; when its Enter is
 // lost, the text sits in the box as a "draft" that the LANE'S OWN NEXT
