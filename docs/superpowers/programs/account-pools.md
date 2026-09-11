@@ -2535,3 +2535,84 @@ process defect, and handing over a fifth list of instances would only buy a fift
 Full CI green at `9736a70e` — all five legs, `test-macos` 33 minutes. This PR is failing MY gate, not
 GitHub's, and has been for three heads. The merge itself remains blocked on the approver question
 that only the operator can answer: the one GitHub login on this fleet authored the PR.
+
+## PR #81, round six — `d978afc6`: the code is right, the prose still is not
+
+The worker published `d978afc6` closing D-2491..D-2497. One functional change reached `server/src`:
+the creation route folds `body.crossPool !== true` into its `needsPools` predicate. Everything else
+in `src/` and `shared/` is comment text; the rest is tests and plan entries.
+
+### Ten mutations, ten red
+
+I ran every guard this round claims, alone, on an isolated `git archive` export. Baseline 118/118.
+
+| mutation | result |
+|---|---|
+| drop `body.crossPool !== true &&` (D-2491) | RED |
+| delete `controller.abort()` from the deadline timer (D-2492) | RED — **green at `9736a70e`** |
+| bare `completedRoot`, no late-root normalization (D-2494) | RED across 3 suites |
+| drop `clearTimeout` on the abort path (D-2495) | RED |
+| delete the pre-aborted early guard (D-2495) | RED |
+| make `dispose` a no-op (D-2495) | RED |
+| stop forwarding `signal` into the local read (D-2496) | RED |
+| predicate → `() => false` | RED, 2 tests |
+| predicate → `() => true` | RED, 2 tests |
+| predicate → `() => body.crossPool !== true` | RED |
+
+The last three are the ones worth keeping. A pin that reds on the exact clause proves only that the
+test and the code were written together; mutating the predicate in all four directions is what shows
+each clause is independently held rather than merely correlated.
+
+### Seven findings — D-2498..D-2504, none a blocker
+
+Four lenses (opus) over the round, each finding refuted by two sonnet skeptics: 11 raised, 11
+survived. **A 100% survival rate is an instrument reading, not a result** — my refuters refuted
+nothing, which is the opposite miscalibration to the one I corrected last round. So I verified every
+load-bearing claim myself, deduplicated three clusters down to one finding each, and corrected one
+reviewer's sentence that my own measurement falsified.
+
+- **D-2498** — the round moved `readdir` from `io.ts:103` to `:105` with a docstring edit, and left
+  six citations at 103. Line 103 now holds `readFileB64Measured`, the exact counterexample to the
+  sentence pointing at it. The round also re-measured D-1680 from `:100` to `:103` **against the
+  pre-edit file**, so D-2489 and D-2497 both assert a number the commit carrying them invalidated.
+  D-2483 had already named this class. Remedy is the tree's own precedent, not my invention:
+  `ccd/ccd:1365` abandoned line numbers for a grep and says why.
+- **D-2499** — `shared/roster.ts`'s new `HUES` rationale names test consumers that do not exist; the
+  sole importer is `pwa/src/lib/offline.ts:10`. The sentence it replaced was true and had just gone
+  live — it warned against "a second copy" of the order, and `ccd/ccrc-adopt:103` is now exactly
+  that, unpinned.
+- **D-2500** — `shared/generate.mjs:131` claims one consumer for `CCRC_MEASURED`;
+  `ccd/ccd-telemetry-keepalive:640` refuses to run without it.
+- **D-2501** — `ccd/ccd:1045` still says `ccrc install` is a verb "once that verb lands". It landed.
+- **D-2502** — `shared/api.ts:5903` says the ccd scan "asserts it in both directions". It asserts
+  one; the test's own title says so. Inherited, but the round rewrote that sentence.
+- **D-2503** — D-2495 pinned `dispose` on the one path where `{ once: true }` makes it a no-op, and
+  left it unpinned on the two where it prevents a listener leak. Measured across all eight
+  remote-client suites: abort-path removal RED, timeout-path removal GREEN, resolve/reject removal
+  GREEN, **control** (neuter `resolve`) RED at 26 failures across 5 files. Without that control the
+  two greens would have been ambiguous.
+- **D-2504** — the class, ruled rather than swept again.
+
+### The class, fifth appearance — and why I stopped asking
+
+D-2497 did what I asked: it published the method. The method is the defect, and now in a way I can
+name precisely instead of counting recurrences.
+
+**Corpus.** The sweep covered `shared/**`, `server/src/**` and the plan. D-2500 and D-2501 live in
+`ccd/`, which is shipped, agent-first, and full of this program's rollout prose.
+
+**Query class.** The sweep paired pool terms with a nine-verb list. D-2500 is a false *consumer
+census* in the present tense — "their one consumer is X" — with no rollout verb and no pool term in
+it. No query of that shape can reach it.
+
+So the class was never "staged pool prose". It is **a sentence asserting who consumes something, or
+when something lands, that the tree has since falsified** — and that is what I recorded, with an
+explicit instruction not to enumerate it a fourth time. Asking a worker to search harder for a class
+you have defined too narrowly buys another recurrence, which is what the previous three rounds bought.
+
+### Gate state
+
+CI at `d978afc6`: agent, pwa and build-pwa green; server and macos still running when the gate
+closed. The code in this PR is correct and, for the first time, every guard it claims is pinned —
+what is failing my gate is text. The merge remains blocked on the approver question that only the
+operator can answer.
