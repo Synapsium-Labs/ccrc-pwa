@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e1f8de75c12f6f4b612f0300c4d2f2f9f6fd012d7584cdd256c84cb77771b99c
+# ccrc:generated 1 sha256=f70dacff29d13d1d5d3b361dcccfc8f46de0b3e0ce0b8eb7feb9e516f2d56a41
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1201,7 +1201,31 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   t=$(cat "$f" 2>/dev/null); t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]]
 }
-_pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
+# THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
+# in bash's `=~` is a COLLATION range, not a codepoint range: under
+# `en_US.UTF-8` it ACCEPTS U+00E9, U+00E5, U+00FC and U+00F1 — measured, not
+# reasoned — while the TypeScript `POOL_NAME_RE` this is pinned BYTE-EQUAL to
+# (`shared/roster.ts`, D-2480, enforced by `pool-name-parity.test.ts`) is
+# codepoint-based and rejects all four. The pin held the STRING while the two
+# engines disagreed about what it MEANS, which is the one thing a text pin
+# cannot see.
+# BOTH CALL SITES NEED IT AND THE WRITER IS THE ONE THAT BITES: `cmd_project_pool`
+# validates through here before writing the tag, so without this shadow
+# `ccd project-pool <p> pool-<U+00E9>` is ACCEPTED and WRITTEN, and the server
+# then reads that same file `malformed` — a tag the supported verb creates and
+# the console cannot decide. The reader's call (`_project_pool_state`) is
+# already covered by that function's own shadow; this one is what covers the
+# writer.
+# `local` is sufficient and is deliberately not `export`: bash re-reads the
+# locale on assignment, the shadow reaches a function called from here by
+# dynamic scoping, and it does not leak back to the caller. All three were
+# MEASURED on bash 5.2.21 / glibc 2.39, which is what this fleet runs — and that
+# is the honest scope of the claim, not "every bash". The behaviour rests on bash
+# calling `setlocale` when `LC_ALL` is assigned; if some supported bash ever did
+# not, the failure is LOUD rather than silent, because `pool-tag-parity.test.ts`
+# drives these same inputs through the real binary in more than one locale and
+# reds when the two answers differ.
+_pool_name_valid() { local LC_ALL=C; [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # NO PROJECT ON THIS BOX CAN BE IN ANY POOL — the one question whose answer does
 # not depend on reading a project's name (#69 review round 3, R3). `$POOLS_DIR`
 # has exactly one `mkdir` in the tree, inside `cmd_project_pool`, so until an
@@ -1268,6 +1292,22 @@ _pool_untaggable() {   # rc 0 = no project can be in any pool, whatever its name
 # as empty, i.e. as untagged. There is nothing to forget here.
 _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | malformed ; always rc 0
   local f v
+  # ONE LINE, THREE LOCALE-DEPENDENT DECISIONS BELOW (D-2520). The trailing
+  # strip (`[[:space:]]`), the `-n 64` cap, and `_pool_name_valid` — reached
+  # from here by dynamic scoping — are all meant to be ASCII rules about a file
+  # whose only legal content is ASCII. Without this shadow all three follow
+  # whatever locale the CALLER happened to be running under, and `ccd` sets none.
+  # Measured on this box: `pool-a` + U+3000 answers `malformed` under `LC_ALL=C`
+  # and `named pool-a` under `en_US.UTF-8`. The SAME BYTES, two verdicts, from
+  # the function spec 5.1 makes the AUTHORITY — and nothing anywhere can report
+  # which one you got. A systemd unit's minimal environment and an interactive
+  # shell are enough to disagree.
+  # `ccd` already owns this idiom and says why: `_lc_dec_ok` shadows `LC_ALL=C`
+  # to make `${#1}` count BYTES. This is the same move for the same reason.
+  # It also makes `-n 64` a BYTE cap, which is what `ccd-project-pool.test.ts`
+  # has always claimed it was (D-2521) and what lets it agree with the server's
+  # `.length >= 64`: UTF-8 never spends fewer bytes than UTF-16 spends units.
+  local LC_ALL=C
   # A registry row with no `.project` field (pre-2026-07-28 rows have none)
   # must never resolve to the DIRECTORY: `$POOLS_DIR/` would trip the `-f`
   # check below (a directory is never a regular file) and read `unreadable`
@@ -4201,6 +4241,19 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # ever existing in the first place, so the read side does not need to
 # police it too.
 _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
+  # SAME SHADOW, SAME REASON AS `_pool_name_valid` (D-2542, and D-2522 is the
+  # argument). `[A-Za-z0-9._-]` is TWO collation ranges, so under `en_US.UTF-8`
+  # this accepts the same non-ASCII letters that one did. `cmd_project_pool`
+  # calls BOTH — this for the project and `_pool_name_valid` for the pool — so
+  # shadowing only the pool half would leave the verb half-fixed.
+  # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
+  # locale-independent; this gate was not. A project tagged from an interactive
+  # shell (`LANG=en_US.UTF-8`) could then not be CLEARED from the fleet's own
+  # `claude-session@*` environment, which carries no `LANG` at all: the tag
+  # keeps constraining placement and `ccd project-pool --clear` refuses the very
+  # name that created it. A constraint you can create and cannot remove with the
+  # supported verb is worse than either locale's behaviour on its own.
+  local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
 }

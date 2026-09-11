@@ -201,11 +201,20 @@ async function readProjectPoolsWithinDeadline(
     // `pool-a` + 58 spaces is exactly 64.
     //
     // BYTES vs UTF-16 UNITS, said once so nobody re-derives it: `.length`
-    // counts UTF-16 code units and `read -n` counts characters in the shell's
-    // locale, so the two agree only for ASCII. That is sufficient here because
-    // anything non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both
-    // sides regardless of which side's cap it trips — the boundary only ever
-    // decides an all-ASCII input, where the three units coincide.
+    // counts UTF-16 code units, and `read -n` counts BYTES on `ccd`'s side
+    // because `_project_pool_state` shadows `LC_ALL=C` (D-2520). UTF-8 never
+    // spends FEWER bytes than UTF-16 spends units, so `units >= 64` implies
+    // `bytes >= 64`: whenever THIS cap trips, `ccd`'s has tripped too.
+    //
+    // The other direction — over `ccd`'s byte cap, under this one — is closed
+    // by the STRIP below rather than by the cap, and this is the argument this
+    // comment used to get wrong (D-2519). It used to say non-ASCII "fails
+    // `POOL_NAME_RE` below and is `malformed` on both sides regardless", which
+    // reasoned about the regex as if it were the last gate. The strip runs in
+    // FRONT of it, so a character the strip removed never reached the regex at
+    // all. That is true only now that the strip is ASCII-only: a strip that
+    // cannot remove a non-ASCII byte leaves one behind for the regex to fail
+    // on, and the sentence finally holds.
     if (read.content.length >= 64 || read.content.includes('\0')) {
       tags.set(name, { state: 'malformed' });
       continue;
@@ -214,7 +223,18 @@ async function readProjectPoolsWithinDeadline(
     // a leading space is not. The quote this comment used to carry —
     // `v=${v%"${v##*[![:space:]]}"}` — is still verbatim at `ccd`'s strip, but
     // it is no longer the whole rule (D-1850); the cap above is the rest of it.
-    const value = read.content.replace(/\s+$/, '');
+    //
+    // THE CLASS IS SPELLED OUT, AND IT IS NOT `\s` (D-2519). JS `\s` is
+    // Unicode: it strips U+00A0, U+2007, U+202F and U+FEFF, none of which
+    // `ccd`'s `[[:space:]]` strips under `LC_ALL=C`. Measured, that was four
+    // inputs on which THIS reader answered `tagged pool-a` while the authority
+    // answered `malformed` — the server inventing PERMISSION over a constraint
+    // `ccd` refuses, which is the one direction `shared/poolrule.ts` exists to
+    // rule out. The class below is exactly C's `[[:space:]]` — space, tab,
+    // newline, vertical tab, form feed, carriage return — so the two strips now
+    // remove the same bytes and nothing else. Do not "simplify" it back to
+    // `\s`; that is the defect, spelled shorter.
+    const value = read.content.replace(/[ \t\n\v\f\r]+$/, '');
     tags.set(name, POOL_NAME_RE.test(value)
       ? { state: 'tagged', name: value }
       : { state: 'malformed' });
