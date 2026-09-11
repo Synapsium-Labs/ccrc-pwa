@@ -2478,3 +2478,60 @@ authorization. Two peer sessions independently reached the same conclusion and d
 `bright-meadow` also cleared the sequencing question against PR #75 (`660d576d`): conflict-free
 either way, #75's only `server/src/server.ts` hunk being `runId: null` on the ask-answer feed event.
 So #81 is blocked on an operator decision, not on anything the worker or I can measure.
+
+## 05:4x UTC — #81 rounds four and five: the gate is converging, and one class is not
+
+Two more rounds since `c8f8c93a`. Both fixed what the previous gate found and both introduced
+something new, which is the ordinary shape of this work — what matters is the trend.
+
+| head | raised | survived | worst |
+|---|---|---|---|
+| `c8f8c93a` | 22 | 20 | 4 blockers |
+| `c833746b` | 26 | 22 | 1 blocker |
+| `9736a70e` | 13 | 11 | 2 important |
+
+The drop at the last head is partly mine: I gave the reviewers explicit severity calibration
+("blocker = I would refuse the merge") and told them **"no findings" is an acceptable answer**. Two
+gates of 20+ survivors with a long minor tail was my instrument being loose, not the tree being bad.
+
+### The finding I caused
+
+Round four's D-2478 remedy — mine — said the routes should pass "a bound appropriate to a request
+**(or none)**". The worker implemented `null` exactly as written, and `null` turned out to mean *no
+bound whatsoever*: `localIO` takes no `timeoutMs` parameter at all, `index.ts` wires it directly in
+the default single-box mode, and `Fastify({ logger: false })` sets no `requestTimeout`. A FIFO under
+`$REG/pools/` would have hung a route forever — worse than the 1 s constant I had objected to.
+Recorded as D-2484 with the error attributed where it belongs. Round five closed it properly:
+`budgetMs` is a required `number`, `null` is unrepresentable, and the route's own root listing moved
+inside the deadline.
+
+### What I measured rather than argued, across both rounds
+
+- Re-serialize the marker reads at `c833746b`: **RED**. D-2476 closed. (It was 23/23 green before.)
+- Delete both `timeoutMs` arguments at `c833746b`: **RED**. D-2477 closed. (85/85 green before.)
+- Raise the route budget to a day at `9736a70e`: **4 tests RED** across three route suites, on fake
+  timers. D-2485 closed.
+- Delete `controller.abort()` from the deadline timer at `9736a70e`: **39/39 GREEN**, including the
+  case named *"aborts losing reads when the shared deadline expires"*. D-2492 — the round's own new
+  guard, unpinned, because the assertion reads the flag after `close()` aborts the same controller.
+- An aborted local read throws `ABORT_ERR`, and `failureFor` maps only `ENOENT` to `absent`, so
+  cancellation reads `unreadable`. The fail-shut direction. No overloaded null at that seam.
+
+I also caught myself: I sent D-2481 with a remedy ("pin the ordinary arm's enqueue too") that was
+wrong, because both swap arms converge on ONE `queue.run`. Measured: an ordinary-arm bypass is green
+in the file the comment cited and **red in `lifecycle.test.ts`**. Corrected to documentation-only and
+told the worker explicitly *not* to add the redundant test I had just asked for.
+
+### The one thing that is not converging
+
+The stale-rollout claim class has now appeared **four times in one PR** — D-2466, D-2467, D-2480,
+D-2490 — and D-2490 asserted a "semantic sweep across `shared/`" that `shared/generate.mjs`
+falsifies. Every correction has searched the files a review named rather than the class. So for
+D-2497 I asked for something different: **report the method, not the result.** Four recurrences is a
+process defect, and handing over a fifth list of instances would only buy a fifth recurrence.
+
+### Gate state
+
+Full CI green at `9736a70e` — all five legs, `test-macos` 33 minutes. This PR is failing MY gate, not
+GitHub's, and has been for three heads. The merge itself remains blocked on the approver question
+that only the operator can answer: the one GitHub login on this fleet authored the PR.
