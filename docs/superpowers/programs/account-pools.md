@@ -2616,3 +2616,75 @@ CI at `d978afc6`: agent, pwa and build-pwa green; server and macos still running
 closed. The code in this PR is correct and, for the first time, every guard it claims is pinned —
 what is failing my gate is text. The merge remains blocked on the approver question that only the
 operator can answer.
+
+## PR #81, round seven — `e0a0c4cd`: the code is finished; the ledger is what keeps moving
+
+Six of the seven round-six corrections verified closed by measurement, six earlier pins re-checked
+and still red, no regressions. Then seven more findings, D-2509..D-2515 — and **not one of them
+touches the code**. That is the shape of this round and the reason to write it down.
+
+### What closed, measured rather than reported
+
+`FleetIO.readdir` really is at `io.ts:105` and the two shipped citations now name the symbol.
+`pwa/src/lib/offline.ts:10` is `HUES`'s only importer and `ccd/ccrc-adopt:103` is the second copy the
+new sentence names. `ccd/ccd-telemetry-keepalive:640` is the second `CCRC_MEASURED` consumer;
+`ccd/ccrc:5349` defines `_inst_accounts_sh`; `ccd/ccd`'s provenance marker re-stamps as
+`ccrc-unmodified`. D-2502's new reverse assertion is real **and isolated** — orphaning `session-live`
+reds on `declared journal-only tokens with no ccd producer` specifically, with the unknown-token
+control reding on the old direction. D-2503's two new tests both bite.
+
+### I was half wrong, and the wrong half was the inference
+
+D-2503 told the worker the `resolve`/`reject` `dispose()` wrappers were load-bearing. They were
+duplicates — `entry.dispose()` at `onMessage:292` and `rejectAllPending:410` already covered those
+paths, which I had not read. I measured a green mutation and inferred *load-bearing and unpinned*
+from *unpinned*. Deleting them, as the worker did, was the better reading than the test I asked for.
+
+That is the same error I have been charging the worker with for six rounds: a measurement taken
+correctly, an inference reaching past it. It belongs in the ledger under my name, not folded into the
+next round's findings.
+
+### Three citation drifts in one PR — the convention is the defect
+
+D-2483 named it. D-2498 named it again and prescribed "apply every hunk before measuring". Then this
+round landed `+1` in `shared/generate.mjs` and `+2` in `shared/roster.ts`, swept only the
+`FleetIO.readdir` family, and silently falsified seven citations across four **other** programs'
+plans — `telemetry-keepalive.md:72` now points at `homeAbleIds` and `CCRC_HOME_ABLE=` instead of the
+telemetry derivation and its emit, which is the dangerous shape because both read plausibly.
+
+And both new disclosures inverted the number they disclose: D-2489 and D-2497 attach "did not
+describe the published tree" to `:105`, which **is** the published value, leaving `:103` — the number
+that actually went stale — unnamed. Traced from git: `c833746b` :99 → `9736a70e` :103 (correct at its
+own commit) → `d978afc6` :105 with the plan still saying :103. So D-2489's measurement was right for
+the tree it shipped in and was falsified by the *next* commit; only D-2497's was same-commit.
+
+So D-2511 stops asking for numbers to be re-measured a fourth time and adopts the ruling this tree
+already made at `ccd/ccd:1365` — *"stated as a GREP rather than as line numbers — the numbers this
+sentence first carried were wrong the day they were written, and would have gone wrong anyway."*
+That correction is against my own D-2498, which told the worker to re-measure when it should have
+told them to stop writing.
+
+### Two guards the round left singly-held
+
+- **`{ once: true }`** (`client.ts:204`) became the *sole* abort-path listener release when
+  `entry.dispose()` came out of `abort()`. Delete the option and all 8157 server tests stay green.
+  The one red I saw was `boot.test.ts`'s 3000 ms boot-timing assertion — a load flake from my own
+  concurrent run; isolated it passes 3/3 with the mutation and 3/3 without.
+- **`rejectAllPending`'s `entry.dispose()`** is new in this PR and ships with no mechanism, because
+  the function has none: gutting its entire body — dispose *and* reject — produces zero new failures
+  across the whole suite.
+
+Both greens needed a control before they were findings. The first needed the flake excluded; the
+second needed the whole-body gut, because the single-line green proved nothing on its own.
+
+### Where this actually stands
+
+Round six: seven findings. Round seven: seven findings. The count is not falling — but the
+**character** has changed completely. For two heads now the code has been correct and every guard it
+claims has been pinned; all fourteen findings since have been ledger accuracy, citation hygiene, and
+which call site a test sits on. What is iterating is documentation discipline, and each round's
+corrections have introduced fresh documentation errors of the same class.
+
+That is a real decision point, not a gate result, and it is the operator's: keep gating prose to
+convergence, or merge a PR whose code has been finished for two rounds and carry the remaining
+ledger corrections as follow-up. I am not going to decide it by continuing to send rounds.
