@@ -50,16 +50,18 @@ Acceptance after PR #75 had already merged added **D-2505–D-2508**, allocated 
 fully defined in the wave-1 plan: D-2505 makes the successful post-hold worker bind, mail transfer/park and rebound
 event one SQLite transaction; D-2506 makes programme-home backfill and its audit event one transaction; D-2507
 makes the armed feed read exempt-but-authenticated for either a PWA session or the cookieless box-token client; and
-D-2508 shapes programme slugs before either HTTP ingress can turn one into a ledger path. An execution-time
-deviation gets its own allocator call: the worker writes `D-TBD-<slug>` with a full entry and mails a
-`deviation-request` naming the count; the coordinator mints exactly that many, defines them in the same act, and
-mails the numbers back.
+D-2508 shapes programme slugs before either HTTP ingress can turn one into a ledger path. Correction review then
+allocated **D-2518**: the shared shape needs a byte bound before the PWA creates a coordinator, because an arbitrarily
+long safe-character slug can pass shape, start the session, and make the composed kickoff exceed the mail cap forever;
+a long hold reason also exceeds the session card's readable limit. An execution-time deviation gets its own allocator
+call: the worker writes `D-TBD-<slug>` with a full entry and mails a `deviation-request` naming the count; the
+coordinator mints exactly that many, defines them in the same act, and mails the numbers back.
 
 ## Waves
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75, #86 | **correction in progress** — PR #75 was merged externally as main `ec11030d` before acceptance closed. Four defects measured on that merged tree became D-2505–D-2508; run 36 returned to `working`. Correction PR #86 opened at `41daae5f`, with its first full local gates and five CI legs green. The coordinator then required integration of main `43c86c00` (#85); before that head could push, main advanced again to `b879510f` through #81, with real conflicts in `server/src/server.ts` and `server/test/auth-gate.test.ts`. Awaiting semantic integration, full combined-tree rerun, fresh CI and a new exact fingerprint. No correction deploy or merge. |
+| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75, #86 | **correction in progress** — PR #75 was merged externally as main `ec11030d` before acceptance closed. Four defects measured on that merged tree became D-2505–D-2508; run 36 returned to `working`. Correction PR #86 opened at `41daae5f`, with its first full local gates and five CI legs green. The coordinator then required integration of main `43c86c00` (#85); before that head could push, main advanced again to `b879510f` through #81, with real conflicts in `server/src/server.ts` and `server/test/auth-gate.test.ts`. During semantic-integration review, D-2518 exposed the missing safe-character slug length bound; awaiting that fix, exact-main integration, full combined-tree rerun, fresh CI and a new exact fingerprint. No correction deploy or merge. |
 | 2 | Skills + PWA: the coordinator skill's boundary sentences, the worker skill's foreign-plan sentence, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, the mail screen's programme grouping and chip. AGENT-FIRST. | — | not opened |
 | 3 | Docs + the legacy flip: README sections, the Aug 11 spec's status line, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | not opened |
 
