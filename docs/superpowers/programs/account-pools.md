@@ -3088,3 +3088,50 @@ ref: each is a correct measurement of the wrong object. I have spent ten rounds 
 someone else's work and produced three instances of it in a morning. The common cause is not
 carelessness about measuring — every one of these was measured — it is failing to check that the
 thing measured is the thing in question.
+
+### Wave-3 carries, recovered (mail 575)
+
+The prose half of wave-done, re-sent after my early close destroyed it. Recording it here because the
+ledger is its durable home and a mail row is not.
+
+**For wave 4 (PWA):** preserve all three evidence levels — an absent `pool` key is an older server or
+no evidence and renders nothing, an explicit `untagged` is measured and unconstrained, `unreadable`
+or `malformed` means nobody decides; a collapsed listing maps every project to `unreadable`, never
+`untagged`. The degraded `GET /api/fleet` arm omits pools deliberately (tags are not persisted), so
+`projectPools: unknown` means stay silent and only `unavailable` arms the redeploy banner — never
+cache tags or infer policy from a prior frame. All five HTTP consumers share one server-owned 10s
+budget and the watcher half its cadence; expiry degrades the whole listed population coherently,
+which is a snapshot rule and not a partial-success rule. A declared `crossPool` skips the server
+verdict after the shared root read, so an unreadable tag can surface ccd's 502 rather than the
+server's 503. And D-2516 stays a reporting divergence only: **the PWA must not turn the HTTP forecast
+into authority.**
+
+**For wave 5 (docs):** D-1916 (`cmd_project_pool`'s census uses `CCRC_ACCOUNTS`, placement uses
+`CCRC_HOME_ABLE`), D-1917 (the strand banner names a pool while its census names `_pool_for`), D-1919
+only if its #61 owner has not closed it; the canonical README section for D-1918; W3-1 and D-1957's
+ccd prose sweep, measuring citations **at a named ref** rather than copying old counts; spec §5.4.4's
+obsolete reader algorithm and its trailing-whitespace claim, because the 64-byte cap runs BEFORE the
+strip; and D-2516/D-2517's status.
+
+The worker has already absorbed this morning's correction without being told twice — their own last
+carry reads *"Do not carry D-2000/D-2009's live fail-open premise as current fact."*
+
+### D-2008's boundary, verified rather than filed
+
+One carry had operational teeth, so I measured it instead of recording it: **the pool verdict is
+capped at 64 bytes; the read and the transfer are not.**
+
+- `localIO.readFileMeasured` → `readFile(p, {encoding:'utf8', signal})`. No size limit.
+- The agent's plain `read` op → `readWhole` → `readFile(p,'utf8')`. **No cap** — the 12 MB
+  `MAX_READ_B64_BYTES` guards the B64 op only, and the result returns in one JSON WS frame.
+- `pools.ts:209` then applies `content.length >= 64` — after the whole file is in memory, and on a
+  remote fleet after it has crossed the wire.
+
+So a large file at `$REG/pools/<project>` is read whole and shipped whole, every marker, every
+watcher tick, to be classified `malformed` by a 64-byte test. Honest bounds on it: planting one needs
+fleet-box shell, which is already a trusted position, so this is a robustness gap rather than an
+attack surface; and it is **inert today**, because until the first tag exists `pools/` is absent from
+the root listing and the reader does no I/O at all. It arms with the first tag written.
+
+That is worth a mechanism eventually — a `statMeasured` rung before the read, or a capped read op —
+but it is wave-3's recorded D-2008, not something to bolt on now.
