@@ -967,7 +967,7 @@ describe('coord.db: migration 11 — the automations tables, on a file the four 
     });
   });
 
-  it('derives COORD_SCHEMA_VERSION from MIGRATIONS.length IN SOURCE — a hand-edited literal would still read 7 at runtime and pass every behavioural pin above, so this is a text scan, not a value check', () => {
+  it('derives COORD_SCHEMA_VERSION from MIGRATIONS.length IN SOURCE — a hand-edited literal would read the same number at runtime and pass every behavioural pin above, so this is a text scan, not a value check', () => {
     const src = readFileSync(path.join(root, 'server', 'src', 'coord', 'schema.ts'), 'utf8');
     expect(src).toMatch(/export const COORD_SCHEMA_VERSION = MIGRATIONS\.length;/);
   });
