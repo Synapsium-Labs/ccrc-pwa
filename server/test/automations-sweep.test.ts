@@ -1,0 +1,1108 @@
+// Task 8 (docs: .superpowers/sdd/2026-08-31-automations/task-8-brief.md, spec
+// §6, §8), PLUS the controller's ruling on `POST /:id/run` (2026-09-01): the
+// act (spawn, identify, adopt, prompt) belongs on the TICK, in exactly one
+// place — this sweep. `POST /:id/run` now only claims (fast, one
+// transaction) and answers 202; the run stays `outcome='running'` with an
+// open lease until THIS sweep notices it and hands it to `fireAutomation`.
+// That is why `fireAutomation` has exactly one caller in the whole tree
+// after this task, and it is also what makes the property survive a server
+// restart mid-run.
+//
+// Every `it` below drives `w.sweepAutomations()` DIRECTLY, never a timer —
+// `tick()` void-dispatches it, so a test awaiting `tick()` has not awaited
+// the sweep (its own docstring states this, matching `sweepNames`/
+// `sweepMail`/`sweepLifecycle`).
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { FleetWatcher } from '../src/watch.js';
+import { Bus } from '../src/bus.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { AUTOMATION_PUNCTUAL_MS } from '../src/auto/schedulepolicy.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+import type { Deps } from '../src/server.js';
+import type { Runner } from '../src/exec.js';
+import type { Cadence } from '../../shared/schedule.js';
+
+const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
+const NOW = 1_785_300_000_000;
+const PROJECT = 'demo';
+
+// `mail-sweep.test.ts:239-245`'s shipped idiom, verbatim: only `Date` is
+// faked, so `fs` and the microtask queue (and `vi.waitFor`'s own real-timer
+// polling) behave.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+afterEach(() => { vi.useRealTimers(); });
+const advance = (ms: number): void => { vi.setSystemTime(Date.now() + ms); };
+
+const wallClock = (over: Partial<{ days: number; minuteOfDay: number; tz: string }> = {}): Cadence =>
+  ({ kind: 'wall-clock', days: 0b1111111, minuteOfDay: 540, tz: 'UTC', ...over });
+
+/** `automations-store.test.ts`'s own `makeArmed`, reused verbatim in shape:
+ *  prove the automation with a DIRECT, fake manual run (bypassing
+ *  `fireAutomation` entirely — this is setup, not the thing under test),
+ *  then arm it at the caller's own `nextRunAt`. */
+const makeArmed = (
+  s: CoordStore, now: number, nextRunAt: number, graceMs = 1_800_000, project = PROJECT,
+): number => {
+  const { id } = s.insertAutomation(
+    { name: 'nightly', project, prompt: 'go', cadence: wallClock(), graceMs }, now,
+  );
+  const claim = s.claimAndOpenRun({ automationId: id, now, occurrence: { trigger: 'manual' } });
+  if (!('runId' in claim)) throw new Error('setup: manual proving claim was refused');
+  s.markAutomationSpawn({
+    runId: claim.runId, spawnRc: 0,
+    identity: {
+      bound: true, sessionId: 'proof-session', workspace: 'ws', branch: 'main',
+      wrapper: 'claude', adopted: false,
+    },
+  });
+  s.settleAutomationRun({ runId: claim.runId, settlement: { outcome: 'ok' }, now: now + 1 });
+  const armed = s.armAutomation(id, nextRunAt, now + 2);
+  if (!armed.ok) throw new Error('setup: arm was refused');
+  return id;
+};
+
+/** One registry row on disk — `automations-fire.test.ts`'s `seedSession`,
+ *  renamed to match this file's `automations-routes.test.ts` sibling. */
+const seedRow = (home: string, id: string, project = PROJECT): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const fields: Record<string, string> = {
+    wrapper: 'claude', project, workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+  };
+  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+};
+
+/** A scripted `Runner` that answers `ws-add` (seeding exactly one new
+ *  registry row, ONCE — idempotent, so a second `ws-add` call from a bug
+ *  would be visible in `calls` without corrupting the fixture) and
+ *  `capture-pane` (an empty->echoed->empty pane so `sendPrompt` lands),
+ *  `automations-routes.test.ts`'s `makeRunner` shape. */
+function makeRunner(home: string, promptText: string, project = PROJECT):
+{ run: Runner; calls: string[][]; sessionId: string } {
+  const calls: string[][] = [];
+  const sessionId = `${project}-auto-quiet-basin`;
+  const panes = ['scrollback\n❯ \n', `scrollback\n❯ ${promptText}\n`, 'scrollback\n❯ \n'];
+  let capIdx = 0;
+  let seeded = false;
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    if (args[0] === 'ws-add') {
+      if (!seeded) { seedRow(home, sessionId, project); seeded = true; }
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'capture-pane') {
+      const p = panes[Math.min(capIdx, panes.length - 1)]!;
+      capIdx++;
+      return { code: 0, stdout: p, stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  return { run, calls, sessionId };
+}
+
+/** Primes a watcher the same way `mail-sweep.test.ts`'s `primedWatcher` does
+ *  — a listable-but-empty registry (`.cc-sessions` created first), one
+ *  `tick()`, THEN the caller seeds/arms fixtures — plus a `NotifyLog` every
+ *  test gets whether it reads it or not (harmless unused, and it lets the
+ *  NotifyEvent cases below share this one rig). */
+async function rig(): Promise<{
+  w: FleetWatcher; coord: CoordStore; home: string; calls: string[][]; deps: Deps; log: NotifyLog;
+}> {
+  const home = mkTmp('ccrc-auto-sweep-');
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  const { run, calls } = makeRunner(home, 'go');
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const log = new NotifyLog(path.join(home, 'notify.json'));
+  await log.load();
+  const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+  const w = new FleetWatcher(deps, new Bus(), 2000);
+  await w.tick();
+  return { w, coord, home, calls, deps, log };
+}
+
+describe('the soft lease is renewed while the act is in flight', () => {
+  /** `makeRunner` with a gate the fixture opens, so an act can be held across
+   *  the soft-lease horizon the way a real 240 s spawn holds it. */
+  function gatedRunner(home: string): { run: Runner; calls: string[][]; open: () => void } {
+    const calls: string[][] = [];
+    let open = (): void => { /* replaced below, before anything can await it */ };
+    const gate = new Promise<void>((resolve) => { open = () => resolve(); });
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') { await gate; return { code: 0, stdout: '', stderr: '' }; }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { run, calls, open };
+  }
+
+  it('keeps both overlap guards awake past the horizon the lease would otherwise have lapsed at', async () => {
+    // THE PROPERTY, not the mechanism: while one act is in flight, a second
+    // claim on the same automation must keep refusing `overlap`. Both guards
+    // read the SOFT bound — `checkPreClaim` rung 1 and `claimAndOpenRun`'s
+    // in-transaction CAS, whose docstring says "the SOFT bound, never the hard
+    // one" precisely BECAUSE renewal moves it — and `AUTOMATION_LEASE_MS` is
+    // documented as "Twelve sweep ticks of renewal tolerance", twelve being
+    // 120 s over a 10 s lane gate. Nothing renewed it during the act, so at
+    // 120 s into a spawn ccd allows 240 s for, both guards went blind and a
+    // due occurrence could open a SECOND run for the same automation.
+    const home = mkTmp('ccrc-auto-renew-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const r = gatedRunner(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, r.run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      // The act is now held inside `ws-add`, so this run is in flight.
+      await vi.waitFor(() => {
+        expect(r.calls.filter((c) => c.includes('ws-add')).length).toBeGreaterThanOrEqual(1);
+      });
+      const firstHorizon = coord.automation(id)!.leaseUntil;
+      expect(firstHorizon).not.toBeNull();
+
+      // Past the ORIGINAL soft horizon, with the act still held. Several lane
+      // gates' worth of ticks, which is exactly the tolerance the constant's
+      // own docstring describes.
+      for (let i = 0; i < 13; i++) {
+        advance(10_000 + 1);
+        await w.sweepAutomations();
+      }
+      expect(Date.now(), 'the clock really is past the first horizon').toBeGreaterThan(firstHorizon!);
+
+      expect(coord.automation(id)!.leaseUntil!,
+        'the soft bound must have moved with the ticks').toBeGreaterThan(firstHorizon!);
+      const second = coord.claimAndOpenRun({
+        automationId: id, now: Date.now(), occurrence: { trigger: 'manual' },
+      });
+      expect(second, 'a second claim during one act is the overlap this lease exists to refuse')
+        .toMatchObject({ refused: 'overlap' });
+      // And the HARD bound is untouched, or a wedged act would hold the
+      // automation for ever instead of lapsing.
+      expect(coord.automation(id)!.leaseHardUntil).toBe(NOW + 600_000);
+    } finally {
+      r.open();
+      w.stop();
+    }
+  });
+});
+
+describe('a restart is not a second spawn', () => {
+  it('never re-performs the act for a run that already bound a session', async () => {
+    // THE WINDOW. Pass 3 fires "every open lease this process has not already
+    // started", and its only single-flight guard, `automationsInFlight`, is a
+    // PRIVATE FIELD OF THE WATCHER — in memory by design, so that a run a
+    // CRASHED process left leased is picked up again. That resume is wanted.
+    // What was missing is the distinction inside it: "claimed and never
+    // started" and "claimed, spawned, and interrupted before the settle" are
+    // the same row to a predicate that reads `leaseRunId` alone.
+    //
+    // The second act is silent, not loud. `markAutomationSpawn` is an
+    // unconditional `UPDATE automation_runs SET ... WHERE id = ?`, so the
+    // second identify OVERWRITES sessionId/workspace/branch on the one run row
+    // and the first session becomes an orphan no run row names — what
+    // `store.ts`'s own docstring calls "spec §6's orphan-manufacture rule".
+    // The window is not only the spawn: the prompt ladder's `pending` arm and
+    // `fireAutomation`'s own `.catch` both leave the run `running` with its
+    // lease held for the full hard lease.
+    //
+    // A run whose session exists is therefore left alone. It settles `lost`
+    // when its hard lease lapses, with its sessionId preserved — an honest
+    // record of a session that WAS created, which is the outcome spec §6
+    // asks for and a second session is not.
+    const { w, coord, calls, deps } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the proving claim was refused');
+    coord.markAutomationSpawn({
+      runId: claim.runId, spawnRc: 0,
+      identity: {
+        bound: true, sessionId: 'demo-auto-quiet-basin', workspace: 'ws', branch: 'main',
+        wrapper: 'claude', adopted: false,
+      },
+    });
+    // The state a process that died between the spawn and the settle leaves:
+    // running, session bound, lease still open. The row is `paused` and has no
+    // `nextRunAt`, so `dueAutomations` excludes it — pass 3 is the only actor
+    // that can reach it, which is what makes this measurement about pass 3.
+    expect(coord.automationRuns(id, 5)[0]!.sessionId).not.toBeNull();
+    expect(coord.automation(id)!.leaseRunId).toBe(claim.runId);
+
+    // A SECOND watcher over the SAME deps is the restart: one coord.db, a
+    // fresh and empty `automationsInFlight`.
+    const restarted = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await restarted.tick();
+      await restarted.sweepAutomations();
+      // A REAL wait, not one microtask turn. `fireOne` void-dispatches, and
+      // `fireAutomation`'s first step is an `io.readdir` against the real
+      // filesystem, so a single `setImmediate` returns long before the act
+      // could have reached `ws-add` — an assertion there measures nothing and
+      // passed on the BROKEN tree too, which is how this fixture was caught
+      // lying before it was ever used. Only `Date` is faked in this file, so
+      // `setTimeout` is real, and the first fixture in this file completes a
+      // whole spawn AND prompt well inside this window.
+      await new Promise((resolve) => { setTimeout(resolve, 400); });
+      expect(calls.filter((c) => c.includes('ws-add')),
+        'a run that already has a session must never be spawned a second time').toEqual([]);
+      expect(coord.automationRuns(id, 5)[0]!.sessionId).toBe('demo-auto-quiet-basin');
+    } finally {
+      restarted.stop();
+    }
+    w.stop();
+  });
+
+  it('never re-performs the act for a run that BEGAN it, before any session is bound', async () => {
+    // THE OTHER HALF OF THE SAME WINDOW, and the wider one. `sessionId` is
+    // not written until `markAutomationSpawn`, which runs AFTER `ccd ws-add`
+    // returns — and ccd allows a spawn 240 s. So for the whole length of a
+    // real spawn the run reads exactly like a claim nobody ever started, and
+    // a process that restarts inside it issues a SECOND `ws-add` for one
+    // firing. The agent's socket-close handler kills PTYs and tails, never an
+    // in-flight `execFile`, so the first session is created and registered
+    // regardless: two live sessions, one run row, and `markAutomationSpawn`
+    // can name at most one of them.
+    //
+    // The distinction pass 3 needs is therefore not "did this bind a session"
+    // but "did anyone BEGIN this act", and the durable evidence for that is
+    // the run's own event trail — `fireAutomation` writes its `precheck` row
+    // (and the home score) BEFORE its first mutating call, so a resume that
+    // reads the trail can never race the spawn.
+    const { w, coord, calls, deps } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the proving claim was refused');
+    // Exactly what a performer has written by the time it enters `ws-add`,
+    // in `fireAutomation`'s own order: the measured home score, then the
+    // `precheck` row. Nothing else — no spawn, no session.
+    coord.markRunHomeScore(claim.runId, 3);
+    coord.appendRunEvent(claim.runId, 'precheck', true, 'placed on claude, homeScore 3', NOW);
+    expect(coord.automationRuns(id, 5)[0]!.sessionId,
+      'the state under test is a run mid-spawn: begun, nothing bound').toBeNull();
+
+    const restarted = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await restarted.tick();
+      await restarted.sweepAutomations();
+      // A REAL wait, for the reason the fixture above states in full.
+      await new Promise((resolve) => { setTimeout(resolve, 400); });
+      expect(calls.filter((c) => c.includes('ws-add')),
+        'a run whose act was already begun must never be spawned a second time').toEqual([]);
+    } finally {
+      restarted.stop();
+    }
+    w.stop();
+  });
+
+  it('still resumes a claim NOBODY began — the manual door depends on it', async () => {
+    // The complement, so the predicate above cannot be narrowed into a
+    // blanket refusal: `POST /:id/run` claims and answers 202 WITHOUT
+    // performing the act, so a claim with an empty event trail is the
+    // ordinary state of every *Run now*, and pass 3 is the only actor that
+    // will ever perform it.
+    const { w, coord, calls } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the claim was refused');
+    try {
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(coord.automationRun(claim.runId)!.endedAt,
+          'the untouched claim is performed and settles').not.toBeNull();
+      });
+      expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+    } finally {
+      w.stop();
+    }
+  });
+
+  it('stops asking to renew a run that can never be renewed again', async () => {
+    // `automationsInFlight` is added to before any await and removed only on
+    // a TERMINAL settle — deliberately, so a throw cannot manufacture a
+    // second spawn. But a `pending` prompt ladder and a thrown act both leave
+    // the entry behind for ever, and pass 1 settles those very runs `lost` a
+    // few minutes later without touching the set. Every leaked id then costs
+    // one prepare + one zero-row UPDATE against the box's hottest sqlite file
+    // on every 10 s sweep, for the life of the process. The store already
+    // returns the boolean that answers this: `false` means the lease is gone.
+    const home = mkTmp('ccrc-auto-prune-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      // A pane with a half-typed draft in it: `sendPrompt` answers
+      // `draft-present`, which the ladder treats as a RETRY (C2.7), so the
+      // act returns `pending` and settles nothing.
+      if (args[0] === 'capture-pane') return { code: 0, stdout: 'scrollback\n❯ half-typed thought\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const renew = vi.spyOn(coord, 'renewAutomationLeaseForRun');
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      const runId = await vi.waitFor(() => {
+        const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+        expect(r, 'the scheduled run opened').toBeDefined();
+        expect(r!.sessionId, 'and its session was bound, so the act reached the prompt').not.toBeNull();
+        return r!.id;
+      });
+      expect(coord.automationRun(runId)!.endedAt,
+        'the ladder is live, so nothing terminal was written').toBeNull();
+
+      // Past the HARD bound: pass 1 settles this run `lost`, and no renewal
+      // can ever match it again.
+      advance(600_001);
+      renew.mockClear();
+      await w.sweepAutomations();
+      expect(renew.mock.calls.map((c) => c[0]),
+        'the sweep asks once more, and the store answers false').toContain(runId);
+      expect(coord.automationRun(runId)!.outcome, 'and pass 1 settles it').toBe('lost');
+
+      advance(10_001);
+      renew.mockClear();
+      await w.sweepAutomations();
+      expect(renew.mock.calls.map((c) => c[0]),
+        'a run whose lease is gone must not be asked again on every tick for the life of the process')
+        .not.toContain(runId);
+    } finally {
+      w.stop();
+    }
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — the schedule path', () => {
+  it('a due armed automation fires exactly once — spawns and prompts a real session', async () => {
+    const { w, coord, calls } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      const fired = coord.automationRuns(id, 5).find((r) => r.trigger === 'schedule');
+      expect(fired?.outcome).toBe('ok');
+    });
+    const fired = coord.automationRuns(id, 5).find((r) => r.trigger === 'schedule')!;
+    expect(fired.sessionId).not.toBeNull();
+    expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+  });
+
+  it('a recorded MISSED occurrence carries the shift it was measured with, not a literal false', async () => {
+    // `dstShifted` is a measured property of the occurrence being consumed,
+    // and L1 measures it — but the record-missed arm of `FireDecision` did
+    // not carry it, so L4 wrote `dstShifted: false` as a literal into the run
+    // row. That is L4 DECIDING (a fact it never measured), and it is the one
+    // shape the delivery ring may not take. The fire arms carried the
+    // measurement all along; only the missed arm invented one.
+    //
+    // A stored occurrence at a wall clock OTHER than the one the cadence
+    // names is exactly what `occurrenceShifted` answers true for — that is
+    // what a spring-forward gap leaves behind, and here it is set directly.
+    const { w, coord } = await rig();
+    const id = makeArmed(coord, NOW, NOW, 60_000);
+    // 09:00 UTC is the cadence; put the pending occurrence at 10:00 UTC and
+    // make it later than grace, so the decision is record-missed.
+    const shifted = Date.UTC(2026, 6, 1, 10, 0, 0);
+    coord.db.prepare('UPDATE automations SET nextRunAt = ? WHERE id = ?').run(shifted, id);
+    vi.setSystemTime(shifted + 3_600_000);
+    await w.sweepAutomations();
+    const missed = coord.automationRuns(id, 5).find((r) => r.outcome === 'missed');
+    expect(missed, 'the occurrence was recorded missed').toBeDefined();
+    expect(missed!.dstShifted,
+      'the run row must carry the shift L1 measured for that occurrence').toBe(true);
+    w.stop();
+  });
+
+  it('a paused automation does not fire, even past its old due time', async () => {
+    const { w, coord } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    coord.setAutomationState(id, 'paused', NOW);
+    await w.sweepAutomations();
+    // Only the direct proving run from setup exists — nothing new fired.
+    expect(coord.automationRuns(id, 5).length).toBe(1);
+  });
+
+  it('a row with scheduleError set is excluded — dueAutomations() itself refuses it', async () => {
+    const { w, coord } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    // The invariant (`state='armed' AND scheduleError IS NULL <=> nextRunAt
+    // IS NOT NULL`) is a CHECK constraint — nextRunAt must clear alongside.
+    coord.db.prepare("UPDATE automations SET scheduleError = 'bad-cadence', nextRunAt = NULL WHERE id = ?").run(id);
+    await w.sweepAutomations();
+    expect(coord.automationRuns(id, 5).length).toBe(1);
+  });
+
+  it('provedAt IS NULL excludes an automation from dueAutomations — it cannot even be armed to test the sweep against', async () => {
+    const { w, coord } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'never proved', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 }, NOW,
+    );
+    const armed = coord.armAutomation(id, NOW, NOW);
+    expect(armed).toEqual({ ok: false, why: 'never-run-by-hand' });
+    await w.sweepAutomations();
+    expect(coord.automationRuns(id, 5).length).toBe(0);
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — the gate', () => {
+  it('is GATED — a second call inside AUTOMATION_SWEEP_MS does no work; the first call after construction runs immediately', async () => {
+    const { w, coord } = await rig();
+    await w.sweepAutomations();                       // the FIRST sweep always runs (nothing due yet)
+    const id = makeArmed(coord, NOW, NOW);
+    await w.sweepAutomations();
+    expect(
+      coord.automationRuns(id, 5).some((r) => r.trigger === 'schedule'),
+      'the gate did not hold',
+    ).toBe(false);
+    advance(10_000 + 1);                               // AUTOMATION_SWEEP_MS
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      const fired = coord.automationRuns(id, 5).find((r) => r.trigger === 'schedule');
+      expect(fired?.outcome).toBe('ok');
+    });
+  });
+
+  it('the priming tick fires nothing — restart-quiet', async () => {
+    const home = mkTmp('ccrc-auto-sweep-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run } = makeRunner(home, 'go');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const id = makeArmed(coord, NOW, NOW);             // already due BEFORE the watcher ever primes
+    const deps: Deps = { ...testDeps(home, run), coord };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    await w.tick();                                    // the priming tick — `sweepAutomations` is
+                                                         // dispatched but must no-op: `primed` is still
+                                                         // false at the instant it is called.
+    expect(coord.automationRuns(id, 5).length).toBe(1); // only the direct proving run
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — lateness and the per-restart catch-up bound', () => {
+  it('a five-hours-late occurrence past a 30-minute grace records missed and fires nothing', async () => {
+    const { w, coord, calls } = await rig();
+    const graceMs = 30 * 60_000;
+    const id = makeArmed(coord, NOW, NOW, graceMs);
+    advance(5 * 3_600_000);
+    await w.sweepAutomations();
+    const runs = coord.automationRuns(id, 5);
+    expect(runs[0]).toMatchObject({ outcome: 'missed', refusal: null });
+    expect(coord.automation(id)!.nextRunAt).not.toBeNull();
+    expect(coord.automation(id)!.nextRunAt!).toBeGreaterThan(Date.now());
+    expect(calls.some((c) => c.includes('ws-add'))).toBe(false);
+  });
+
+  it('a ten-minutes-late occurrence fires once as a catchup, with a truthful lateMs', async () => {
+    const { w, coord } = await rig();
+    const graceMs = 30 * 60_000;
+    const id = makeArmed(coord, NOW, NOW, graceMs);
+    advance(10 * 60_000);
+    expect(10 * 60_000).toBeGreaterThan(AUTOMATION_PUNCTUAL_MS);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      const fired = coord.automationRuns(id, 5).find((r) => r.trigger === 'catchup');
+      expect(fired?.outcome).toBe('ok');
+    });
+    const fired = coord.automationRuns(id, 5).find((r) => r.trigger === 'catchup')!;
+    expect(fired.lateMs).toBeGreaterThanOrEqual(10 * 60_000);
+  });
+
+  it('three missed occurrences across a restart produce ONE catch-up, not three', async () => {
+    const { w, coord } = await rig();
+    const graceMs = 3_600_000;                          // 1 h grace
+    // An interval automation (10-minute period, far shorter than grace) armed
+    // 35 minutes in the past — the "box off for a weekend" shape spec §8
+    // names. Without the per-restart bound, EVERY occurrence inside the
+    // grace window would fire as its own catchup as the sweep walks forward.
+    const { id } = coord.insertAutomation(
+      { name: 'frequent', project: PROJECT, prompt: 'go', cadence: { kind: 'interval', everyMinutes: 10 }, graceMs },
+      NOW - 35 * 60_000,
+    );
+    const claim = coord.claimAndOpenRun({
+      automationId: id, now: NOW - 35 * 60_000, occurrence: { trigger: 'manual' },
+    });
+    if (!('runId' in claim)) throw new Error('setup');
+    coord.markAutomationSpawn({
+      runId: claim.runId, spawnRc: 0,
+      identity: { bound: true, sessionId: 'proof', workspace: 'ws', branch: 'main', wrapper: 'claude', adopted: false },
+    });
+    coord.settleAutomationRun({ runId: claim.runId, settlement: { outcome: 'ok' }, now: NOW - 35 * 60_000 + 1 });
+    const armed = coord.armAutomation(id, NOW - 35 * 60_000, NOW - 35 * 60_000 + 2);
+    if (!armed.ok) throw new Error('setup: arm was refused');
+
+    // Walk several sweep ticks — each `dueAutomations()` call only ever
+    // offers the CURRENT `nextRunAt`, so the backlog is discovered one
+    // occurrence per tick, not all at once.
+    for (let i = 0; i < 6; i++) {
+      await w.sweepAutomations();
+      advance(10_000 + 1);                              // past AUTOMATION_SWEEP_MS
+      const row = coord.automation(id)!;
+      if (row.nextRunAt !== null && row.nextRunAt > Date.now()) break;
+    }
+    await vi.waitFor(() => {
+      const catchup = coord.automationRuns(id, 20).find((r) => r.trigger === 'catchup');
+      expect(catchup?.outcome).toBe('ok');
+    });
+
+    const runs = coord.automationRuns(id, 20);
+    const catchups = runs.filter((r) => r.trigger === 'catchup');
+    expect(catchups.length).toBe(1);
+    expect(catchups[0]!.outcome).toBe('ok');
+    // AND NO `missed` ROWS — every occurrence here sits INSIDE the 1h grace,
+    // and spec §8 scopes that outcome to the other side of it: "an occurrence
+    // within `graceMs` fires ONCE with `trigger='catchup'` and its real
+    // `lateMs`. BEYOND grace it records `outcome='missed'` and advances."
+    //
+    // This is not a hole in the history, which is the thing §8 actually
+    // forbids ("an operator told nothing would reasonably believe it ran").
+    // The single catch-up row carries `lateMs` for the WHOLE span — measured
+    // at 35 minutes, the full distance back to the first skipped occurrence —
+    // so the operator reads "ran, 35 minutes late", which is the true story.
+    // Writing a row per collapsed occurrence would contradict the rule this
+    // test exists for: one catch-up per restart, "never one per missed
+    // occurrence", because a box off for a weekend must not wake and spawn
+    // ninety sessions.
+    //
+    // The beyond-grace case — where `missed` rows ARE required — is pinned by
+    // 'a five-hours-late occurrence past a 30-minute grace records missed and
+    // fires nothing' above.
+    expect(runs.filter((r) => r.outcome === 'missed')).toEqual([]);
+    expect(catchups[0]!.lateMs).toBeGreaterThanOrEqual(30 * 60_000);
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — the lease lapse', () => {
+  it('a running run past leaseHardUntil settles lost — a record written, nothing on the fleet touched', async () => {
+    const { w, coord, calls } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    // A lease with no one working it, exactly what a crashed prior process
+    // (or the new claim-only `/run` route) leaves standing.
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup');
+    advance(600_000 + 1);                               // past AUTOMATION_LEASE_HARD_MS
+    await w.sweepAutomations();
+    const run = coord.automationRun(claim.runId)!;
+    expect(run.outcome).toBe('lost');
+    expect(calls.some((c) => c.includes('ws-add'))).toBe(false);
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — a throwing fireAutomation does not kill the tick', () => {
+  it('the sweep resolves; the run stays leased rather than being retried', async () => {
+    const home = mkTmp('ccrc-auto-sweep-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    let wsAddCalls = 0;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'ws-add') { wsAddCalls++; throw new Error('boom — simulated transport failure'); }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps: Deps = { ...testDeps(home, run), coord };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    await w.tick();
+    const id = makeArmed(coord, NOW, NOW);
+
+    await expect(w.sweepAutomations()).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(wsAddCalls).toBe(1));
+
+    // A SECOND tick, once the gate reopens, must not retry: the throw could
+    // have happened AFTER a real spawn, and firing again would manufacture a
+    // second session for the same automation.
+    advance(10_000 + 1);
+    await w.sweepAutomations();
+    // A REAL wait, not one microtask turn. `fireOne` void-dispatches and the
+    // act's first step is an `io.readdir` against the real filesystem, so a
+    // single `setImmediate` returns long before a re-fired act could reach
+    // `ws-add` — the assertion that stood here measured nothing at all and
+    // would have passed on a tree that DID retry. Only `Date` is faked in
+    // this file, so `setTimeout` is real, and this file's first fixture
+    // completes a whole spawn and prompt well inside this window.
+    await new Promise((resolve) => { setTimeout(resolve, 400); });
+    expect(wsAddCalls).toBe(1);
+    const row = coord.automation(id)!;
+    expect(row.leaseRunId).not.toBeNull();              // still leased — a crash, not a lie
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — the controller ruling: /run only claims, this sweep performs the act', () => {
+  it('a run claimed (simulating POST /:id/run) but not yet started is picked up by the next sweep tick, exactly once', async () => {
+    const { w, coord, calls } = await rig();
+    const id = makeArmed(coord, NOW, NOW - 500);
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup');
+    expect(coord.automationRun(claim.runId)!.outcome).toBe('running');
+
+    await w.sweepAutomations();
+    await vi.waitFor(() => expect(coord.automationRun(claim.runId)!.outcome).not.toBe('running'));
+    expect(coord.automationRun(claim.runId)!.outcome).toBe('ok');
+    expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+
+    // A LATER tick must not re-fire the now-settled run. A REAL wait, for the
+    // reason the throwing fixture above states in full: a `setImmediate` here
+    // returns before a re-fired act could have reached `ws-add`, so it would
+    // pass whether or not the property held.
+    advance(10_000 + 1);
+    await w.sweepAutomations();
+    await new Promise((resolve) => { setTimeout(resolve, 400); });
+    expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+  });
+
+  it('does not double-fire within the SAME tick: the schedule path\'s own fresh claim is not re-picked-up by the leased-run scan that follows it', async () => {
+    const { w, coord, calls } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    await w.sweepAutomations();
+    await vi.waitFor(() => expect(coord.automationRuns(id, 5)[0]?.outcome).toBe('ok'));
+    expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+  });
+});
+
+describe('the prompt ladder is LIVE — attempts 2..N ride the sweep', () => {
+  /** A runner whose capture-pane answers a half-typed DRAFT for the first
+   *  `failures` attempts (`sendPrompt` refuses `draft-present` without
+   *  sending anything) and the ordinary empty -> echoed -> empty script after
+   *  that, so an attempt lands. One `sendPrompt` performs several captures,
+   *  so the gate counts ATTEMPTS by counting `send-keys`, not captures. */
+  function ladderRunner(home: string, failures: number, promptText = 'go'):
+  { run: Runner; calls: string[][]; sends: () => number } {
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    let failsLeft = failures;
+    let landScript = 0;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        // ONE capture per refused attempt: `sendPrompt` reads the pane, sees a
+        // draft, and returns `draft-present` without sending anything — which
+        // is why the failure count is spent HERE and not on `send-keys`.
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          return { code: 0, stdout: 'scrollback\n❯ half-typed thought\n', stderr: '' };
+        }
+        const p = ['scrollback\n❯ \n', `scrollback\n❯ ${promptText}\n`, 'scrollback\n❯ \n'][Math.min(landScript++, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { run, calls, sends: () => calls.filter((c) => c.includes('send-keys')).length };
+  }
+
+  async function ladderRig(failures: number): Promise<{
+    w: FleetWatcher; coord: CoordStore; calls: string[][]; sends: () => number; log: NotifyLog;
+  }> {
+    const home = mkTmp('ccrc-auto-ladder-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const r = ladderRunner(home, failures);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, r.run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    await w.tick();
+    return { w, coord, calls: r.calls, sends: r.sends, log };
+  }
+
+  it('waits out the backoff, then sends attempt 2 and settles ok', async () => {
+    // `promptLadder`, `promptAttempts` and `deliverPrompt`'s attempts 2..N
+    // shipped as EXPORTED policy with no production caller: a run whose first
+    // attempt failed sat `running` with its lease held until the hard bound
+    // lapsed and pass 1 settled it `lost`, after ONE try. The pane a fresh
+    // session shows is exactly the transient case the ladder was written for
+    // (C2.7) — a trust dialog, a not-yet-alive pane, a draft left in the box
+    // — so the one attempt was the least likely to succeed.
+    const { w, coord, sends, log } = await ladderRig(1);
+    const id = makeArmed(coord, NOW, NOW);
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    const runId = await vi.waitFor(() => {
+      const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+      expect(r?.sessionId, 'the session was created').toBeDefined();
+      expect(r!.sessionId).not.toBeNull();
+      return r!.id;
+    });
+    await vi.waitFor(() => {
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+    });
+    expect(coord.automationRun(runId)!.endedAt, 'nothing terminal — the ladder is live').toBeNull();
+    const sendsAfterFirst = sends();
+
+    // BEFORE the backoff: the lane must not retry early. One whole sweep gate
+    // passes, which is less than the 30 s the ladder's first backoff is.
+    advance(10_001);
+    await w.sweepAutomations();
+    await new Promise((resolve) => { setTimeout(resolve, 300); });
+    expect(sends(), 'the backoff is the ladder, not a suggestion').toBe(sendsAfterFirst);
+    expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+
+    // PAST the backoff: attempt 2 goes, lands, and the run settles ok.
+    advance(30_001);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      expect(coord.automationRun(runId)!.outcome).toBe('ok');
+    });
+    expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(2);
+    expect(coord.automationRunEvents(runId).find((e) => e.step === 'close')!.ok).toBe(true);
+    expect(log.seq, 'and the ✓ push rides the settle, once').toBe(seqBefore + 1);
+    w.stop();
+  });
+
+  it('never ENTERS a second attempt while one is in flight for that run', async () => {
+    // The retry pass runs off a STORE read, so without an "a call is in
+    // flight" guard every 10 s tick would start another attempt against the
+    // same session while the previous one was still inside `sendPrompt` —
+    // duplicate keystrokes into a live pane, which is the one thing this lane
+    // must never do. `automationsInFlight` cannot answer this: a parked run
+    // stays in it on purpose (that is what renews its lease), so the question
+    // "is an attempt executing right now" needs its own set.
+    const home = mkTmp('ccrc-auto-overlap-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    let failsLeft = 1;
+    let held = 0;
+    let landScript = 0;
+    let openGate = (): void => { /* replaced before anything awaits it */ };
+    const gate = new Promise<void>((resolve) => { openGate = () => resolve(); });
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (failsLeft > 0) { failsLeft -= 1; return { code: 0, stdout: 'scrollback\n❯ draft\n', stderr: '' }; }
+        // Attempt 2 is HELD inside its FIRST pane read, the way a real capture
+        // on a busy box is, so further sweeps land while it is still running.
+        // Past the hold it is the ordinary empty -> echoed -> empty script, so
+        // the attempt can finish and the run can settle.
+        if (held === 0) { held = 1; await gate; }
+        const p = ['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n'][Math.min(landScript++, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      const runId = await vi.waitFor(() => {
+        const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+        expect(r?.sessionId).not.toBeNull();
+        return r!.id;
+      });
+      await vi.waitFor(() => {
+        expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+      });
+
+      // Attempt 2 starts and blocks inside the capture.
+      advance(30_001);
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(calls.filter((c) => c.includes('capture-pane')).length).toBeGreaterThanOrEqual(2);
+      });
+      const capturesDuring = calls.filter((c) => c.includes('capture-pane')).length;
+
+      // WHAT THE GUARD ACTUALLY DECIDES, measured where it acts. `sendPrompt`
+      // rides the process-wide `KeyedQueue`, which serialises per session — so
+      // "two attempts run at the same instant" is impossible with or without
+      // this guard, and a fixture counting pane reads measures the QUEUE, not
+      // the set (measured: it stayed green with the guard deleted). What the
+      // guard decides is whether pass 4 ENTERS another attempt at all, and
+      // every entry reads the ladder's state exactly once — so the store read
+      // is the observable. Without the guard each tick enqueues another send
+      // behind the held one, and they all fire when it finishes: a burst of
+      // duplicate prompts into one live pane, arriving late rather than at
+      // once.
+      const ladderReads = vi.spyOn(coord, 'automationRunEvents');
+      for (let i = 0; i < 2; i++) { advance(240_001); await w.sweepAutomations(); }
+      await new Promise((resolve) => { setTimeout(resolve, 300); });
+      expect(ladderReads.mock.calls.length,
+        'pass 4 must not enter a second attempt for a run whose attempt is in flight').toBe(0);
+      expect(calls.filter((c) => c.includes('capture-pane')).length,
+        'and no further pane read happened either').toBe(capturesDuring);
+      ladderReads.mockRestore();
+
+      openGate();
+      await vi.waitFor(() => {
+        expect(coord.automationRun(runId)!.outcome).not.toBe('running');
+      });
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length,
+        'the failed first attempt and the one that landed').toBe(2);
+    } finally {
+      openGate();
+      w.stop();
+    }
+  });
+
+  it('settles failed:prompt-refused at the ceiling, without sending again', async () => {
+    // The other end of the same ladder. `AUTOMATION_PROMPT_MAX_ATTEMPTS`
+    // failed `prompt` steps is exhaustion, and the run must close — spec §6's
+    // own sentence is that `sessionId` STAYS SET, because "the operator gets a
+    // live session with no prompt in it, which is strictly better than a lie".
+    const { w, coord, sends } = await ladderRig(99);
+    const id = makeArmed(coord, NOW, NOW);
+    await w.sweepAutomations();
+    const runId = await vi.waitFor(() => {
+      const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+      expect(r?.sessionId).not.toBeNull();
+      return r!.id;
+    });
+    await vi.waitFor(() => {
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+    });
+    // The five further failed attempts the ladder allows, written the way the
+    // ladder itself reads them — its state is the durable step trail, not a
+    // column, so this is the same fact a real five-attempt run would leave.
+    for (let i = 2; i <= 6; i++) {
+      coord.appendRunEvent(runId, 'prompt', false, `attempt ${i} of 6: draft-present`, Date.now());
+    }
+    const sendsBefore = sends();
+
+    advance(240_001);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      expect(coord.automationRun(runId)!.outcome).not.toBe('running');
+    });
+    const run = coord.automationRun(runId)!;
+    expect(run.outcome).toBe('failed');
+    expect(run.refusal).toBe('prompt-refused');
+    expect(run.sessionId, 'the session it DID create stays named').not.toBeNull();
+    expect(sends(), 'an exhausted ladder sends nothing more').toBe(sendsBefore);
+    expect(coord.automation(id)!.leaseRunId, 'and the lease is released').toBeNull();
+    w.stop();
+  });
+});
+
+describe('a settle the store refused is not a settle', () => {
+  it('an act whose run was lapsed `lost` mid-flight closes ok:false and raises nothing', async () => {
+    // `settleAutomationRun` answers a three-arm union — the port declares the
+    // distinction — and every call site discarded it, so a settle the store
+    // REFUSED was indistinguishable from one it applied. The live case is not
+    // exotic: an act that outlives `AUTOMATION_LEASE_HARD_MS` is settled
+    // `lost` by pass 1 (the soft renewal deliberately never moves the hard
+    // bound), and when the act then finishes it appends `close ok "settled
+    // ok"` onto a row whose own outcome says `lost`, reports `settle:'ok'` to
+    // the sweep, and pushes `✓ automation › <name>` to the operator's phone.
+    // The trail IS the log (spec §6) and it contradicted itself.
+    const home = mkTmp('ccrc-auto-superseded-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let openGate = (): void => { /* replaced before anything can await it */ };
+    const gate = new Promise<void>((resolve) => { openGate = () => resolve(); });
+    let seeded = false;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        await gate;
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        // empty -> echoed -> empty, so the prompt LANDS and the act reaches
+        // its `ok` settle: the point is that the store refuses it.
+        const p = ['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n'][Math.min(calls.filter((c) => c.includes('capture-pane')).length - 1, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+      });
+      const runId = coord.automation(id)!.leaseRunId!;
+      expect(runId, 'the act is in flight, holding the lease').not.toBeNull();
+
+      // Someone else closes this run while the act is still inside `ws-add`:
+      // the hard lease lapses, which is pass 1's own job.
+      coord.db.prepare('UPDATE automations SET leaseHardUntil = ? WHERE id = ?').run(NOW - 1, id);
+      coord.lapseAutomationRuns(NOW);
+      expect(coord.automationRun(runId)!.outcome, 'the record that now stands').toBe('lost');
+      const seqBefore = log.seq;
+
+      openGate();
+      await vi.waitFor(() => {
+        const close = coord.automationRunEvents(runId).find((e) => e.step === 'close');
+        expect(close, 'the act finished and wrote its close step').toBeDefined();
+      });
+      const close = coord.automationRunEvents(runId).find((e) => e.step === 'close')!;
+      expect(close.ok, 'a settle the store refused must not be written as a clean close').toBe(false);
+      expect(close.detail, 'and it must name what actually stands').toContain('already-settled');
+      expect(coord.automationRun(runId)!.outcome, 'the durable outcome is untouched').toBe('lost');
+      expect(log.seq, 'and no ✓ notification is raised for an act whose record is not its own')
+        .toBe(seqBefore);
+    } finally {
+      openGate();
+      w.stop();
+    }
+  });
+});
+
+describe('FleetWatcher.sweepAutomations — NotifyEvent (kind:\'run\'), only when a session was created', () => {
+  it('ok WITH a sessionId raises exactly one NotifyEvent', async () => {
+    const { w, coord, log } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    await vi.waitFor(() => expect(coord.automationRuns(id, 5)[0]?.outcome).toBe('ok'));
+    expect(log.seq).toBe(seqBefore + 1);
+  });
+
+  it('refused (a post-claim rung, e.g. coordinator-paused) raises none', async () => {
+    const { w, coord, log, deps } = await rig();
+    const id = makeArmed(coord, NOW, NOW - 500);
+    writeFileSync(path.join(deps.cfg.registryDir, COORDINATOR_PAUSE_MARKER), '');
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup');
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    await vi.waitFor(() => expect(coord.automationRun(claim.runId)!.outcome).not.toBe('running'));
+    expect(coord.automationRun(claim.runId)!.outcome).toBe('refused');
+    expect(log.seq).toBe(seqBefore);
+  });
+
+  it('missed raises none', async () => {
+    const { w, coord, log } = await rig();
+    const graceMs = 30 * 60_000;
+    const id = makeArmed(coord, NOW, NOW, graceMs);
+    advance(5 * 3_600_000);
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    expect(coord.automationRuns(id, 5)[0]!.outcome).toBe('missed');
+    expect(log.seq).toBe(seqBefore);
+  });
+
+  it('skipped (overlap, a pre-claim rung) raises none', async () => {
+    const { w, coord, log } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    // Take the lease directly, simulating a run already in flight when this
+    // automation's OWN scheduled occurrence also comes due.
+    coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    const runs = coord.automationRuns(id, 5);
+    expect(runs.find((r) => r.refusal === 'overlap')).toBeTruthy();
+    expect(log.seq).toBe(seqBefore);
+  });
+
+  it('lost (a lapsed lease) raises none', async () => {
+    const { w, coord, log } = await rig();
+    const id = makeArmed(coord, NOW, NOW);
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup');
+    advance(600_000 + 1);
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    expect(coord.automationRun(claim.runId)!.outcome).toBe('lost');
+    expect(log.seq).toBe(seqBefore);
+  });
+});
+
+describe('the tick itself', () => {
+  const src = fs.readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
+
+  it('adds NO new timer — the sweep rides the tick that already exists', () => {
+    expect(src.match(/setInterval\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('dispatches the sweep from tick(), never awaited', () => {
+    expect(src).toContain('void this.sweepAutomations().catch(');
+  });
+});
+
+
+// ── Task 10: the automations FRAME ──────────────────────────────────────────
+// Additive, and `FLEET_PROTO` is NOT bumped: a PWA that does not know this
+// frame type drops it silently, which is the whole reason the wire is
+// additive-only. The byte-equality guard starts at `null`, NEVER at `'[]'` —
+// "no automations" and "never measured" are two different facts, and a first
+// measurement of an empty fleet must still reach the client or the screen
+// cannot tell them apart (which is exactly the three-empty-states rule the
+// PWA is held to).
+describe('the automations frame — additive, byte-diffed, and it survives a bad read', () => {
+  it('emits on the FIRST measurement even when the list is empty', async () => {
+    // A FRESH watcher that has never ticked — `rig()` ticks once, which spends
+    // the first measurement, and this test is about exactly that measurement.
+    const { deps } = await rig();
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 2000);
+    const seen: unknown[][] = [];
+    bus.on('automations', (rows) => seen.push(rows));
+
+    w.emitAutomations();
+    expect(seen.length, 'an empty first measurement did not emit — "none" is indistinguishable from "never measured"').toBe(1);
+    expect(seen[0]).toEqual([]);
+
+    // ...and does NOT emit again for an unchanged list.
+    w.emitAutomations();
+    expect(seen.length).toBe(1);
+  });
+
+  it('re-emits when the list changes', async () => {
+    const { deps, coord } = await rig();
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 2000);
+    const seen: unknown[][] = [];
+    bus.on('automations', (rows) => seen.push(rows));
+    w.emitAutomations();
+    makeArmed(coord, NOW, NOW);
+    w.emitAutomations();
+    expect(seen.length).toBe(2);
+    expect((seen[1] as unknown[]).length).toBe(1);
+  });
+
+  it('a throwing store leaves the tick alive rather than killing the server', async () => {
+    const { deps } = await rig();
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const broken = { automations: () => { throw new Error('disk full'); } };
+    (w as unknown as { deps: { coord: unknown } }).deps.coord = broken;
+    expect(() => w.emitAutomations()).not.toThrow();
+  });
+});

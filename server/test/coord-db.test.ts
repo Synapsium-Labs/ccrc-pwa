@@ -657,9 +657,15 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(10);
-    expect(MIGRATIONS.length).toBe(10);
+  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
+    // ELEVEN, and the number moves on every merge with `main`: an unmerged
+    // branch's migration is the one that renumbers, because the entries
+    // already on `main` may have been applied on a box. The automations entry
+    // has been 7, 9, 10 and now 11 — taken past by the dispatch-decision
+    // columns, the ledger repair, the ask pre-emption lane and cross-repo
+    // programmes in turn.
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(MIGRATIONS.length).toBe(11);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -844,5 +850,125 @@ describe('coord.db: migration 10 — the programme knows its home, the feed row 
       .toBe(COORD_SCHEMA_VERSION + 3);
     warnSpy.mockRestore();
     b.close();
+  });
+});
+
+describe('coord.db: migration 11 — the automations tables, on a file the four entries before it already ran', () => {
+  // Structured the way `main` structures every other per-migration block in
+  // this file, rather than grown inside the version test the way this branch
+  // first wrote it: the merge that brought cross-repo programmes in made the
+  // difference visible, because two branches growing ONE test is a conflict
+  // every time while two describes are not.
+  const nowSeconds = 1_700_000_000;
+
+  // A minimally-valid armed row, satisfying the invariant this migration must
+  // enforce (`state='armed' AND scheduleError IS NULL <=> nextRunAt IS NOT
+  // NULL`) — every mutation test below starts from this and breaks exactly
+  // one field.
+  const insertAutomation = (
+    db: DatabaseSync,
+    overrides: Partial<{
+      state: string; nextRunAt: number | null; scheduleError: string | null;
+    }> = {},
+  ): void => {
+    const row = {
+      name: 'nightly build', state: 'armed', project: 'demo',
+      prompt: 'do the thing', cadenceKind: 'wall-clock', cadenceDays: 127,
+      cadenceMinute: 60, cadenceEvery: null, tz: 'UTC', graceMs: 60_000,
+      createdAt: nowSeconds, updatedAt: nowSeconds, provedAt: nowSeconds,
+      nextRunAt: nowSeconds + 3600, scheduleError: null,
+      ...overrides,
+    };
+    db.prepare(
+      'INSERT INTO automations (name, state, project, prompt, cadenceKind, cadenceDays, ' +
+      'cadenceMinute, cadenceEvery, tz, graceMs, createdAt, updatedAt, provedAt, nextRunAt, ' +
+      'scheduleError) VALUES (@name, @state, @project, @prompt, @cadenceKind, @cadenceDays, ' +
+      '@cadenceMinute, @cadenceEvery, @tz, @graceMs, @createdAt, @updatedAt, @provedAt, ' +
+      '@nextRunAt, @scheduleError)',
+    ).run(row);
+  };
+
+  it('reaches a database ALREADY at user_version 10 — every entry below this one is frozen', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      // Seeds every entry BELOW this one and stamps the version it left, so
+      // the loop has exactly this migration to run.
+      for (let i = 0; i <= 9; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 10');
+    });
+    raw.prepare(
+      "INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')",
+    ).run();
+    raw.prepare(
+      'INSERT INTO runs (program, wave, project, state, openedAt) ' +
+      "VALUES ('p', 1, 'demo', 'planned', 1)",
+    ).run();
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
+      { name: string }[]).map((r) => r.name);
+    expect(tables).toEqual(expect.arrayContaining([
+      'automations', 'automation_runs', 'automation_run_events', 'automations_state',
+    ]));
+    // The rows written before the migration ran are still there — additive
+    // means additive.
+    expect((db.prepare('SELECT count(*) AS c FROM runs').get() as { c: number }).c).toBe(1);
+    db.close();
+  });
+
+  // spec:344-346's invariant, as a mechanism rather than a comment: "A comment
+  // is a request; a red suite is a mechanism" (CLAUDE.md). Enforced by a CHECK
+  // constraint on `automations` so a direct INSERT that violates it — not just
+  // one routed through a future writer — is refused by the database itself.
+  describe('the armed invariant — state=\'armed\' AND scheduleError IS NULL <=> nextRunAt IS NOT NULL', () => {
+    it('accepts an armed, unerrored row with a nextRunAt', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(db)).not.toThrow();
+      db.close();
+    });
+
+    it('accepts a paused row with nextRunAt NULL', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(db, { state: 'paused', nextRunAt: null })).not.toThrow();
+      db.close();
+    });
+
+    it('accepts an armed row with a scheduleError and nextRunAt NULL', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(
+        db, { scheduleError: 'bad-cadence', nextRunAt: null },
+      )).not.toThrow();
+      db.close();
+    });
+
+    it('REFUSES an armed, unerrored row with nextRunAt NULL — "due at T" cannot silently mean "never"', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(db, { nextRunAt: null })).toThrow(/CHECK constraint failed/);
+      db.close();
+    });
+
+    it('REFUSES a paused row that still carries a nextRunAt — "paused" cannot silently mean "still due"', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(db, { state: 'paused' })).toThrow(/CHECK constraint failed/);
+      db.close();
+    });
+
+    it('REFUSES an armed row with BOTH a scheduleError and a nextRunAt — "cannot be scheduled" cannot silently mean "due at T"', () => {
+      const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(() => insertAutomation(db, { scheduleError: 'bad-cadence' })).toThrow(
+        /CHECK constraint failed/,
+      );
+      db.close();
+    });
+  });
+
+  it('derives COORD_SCHEMA_VERSION from MIGRATIONS.length IN SOURCE — a hand-edited literal would read the same number at runtime and pass every behavioural pin above, so this is a text scan, not a value check', () => {
+    const src = readFileSync(path.join(root, 'server', 'src', 'coord', 'schema.ts'), 'utf8');
+    expect(src).toMatch(/export const COORD_SCHEMA_VERSION = MIGRATIONS\.length;/);
   });
 });

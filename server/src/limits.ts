@@ -102,7 +102,7 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  only exclusion. Two languages, one fact, half-rolled rows included;
  *  `projected-home.test.ts` runs both over the same bytes and
  *  `half-rolled-window` is the case that says so. */
-const measured = (l: AccountLimits | undefined): number | null =>
+export const measured = (l: AccountLimits | undefined): number | null =>
   !l || l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
     ? null
     : Math.max(l.five, l.seven);

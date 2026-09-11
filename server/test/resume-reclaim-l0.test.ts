@@ -119,9 +119,14 @@ describe('the sixth refusal union', () => {
     expect(src).toContain('|| isReclaimRefuseCode(tok)');
     // …imported, not just mentioned in prose — read the NAMED-IMPORT LIST off
     // `shared/api.js`'s own import line and require the guard to be one of its
-    // members. A comma-separated membership check, not a tail anchor: a later
-    // union appending its own guard after this one (as `isAskRefuseCode` did)
-    // must not red this.
+    // members. BOTH SIDES OF THIS MERGE FIXED THE SAME DEFECT (the old form
+    // anchored on the literal `isReclaimRefuseCode }`, which held only while
+    // that symbol happened to sit LAST in a one-line import and died the
+    // moment a second vocabulary joined it and reflowed it — `main` hit it
+    // with `isAskRefuseCode`, the automations branch with four automation
+    // guards). This is main's version, kept because it is the stronger of the
+    // two: a comma-separated MEMBERSHIP check rather than a substring one, so
+    // a longer sibling (`isReclaimRefuseCodeX`) cannot satisfy it.
     const apiImport = /import \{([\s\S]*?)\} from '\.\.\/\.\.\/shared\/api\.js';/.exec(src);
     expect(apiImport, "mail-routes.test.ts's shared/api.js import line moved shape").not.toBeNull();
     const apiImportNames = (apiImport as RegExpExecArray)[1]!.split(',').map((s) => s.trim());

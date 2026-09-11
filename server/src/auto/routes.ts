@@ -1,0 +1,411 @@
+// server/src/auto/routes.ts — L4. The ten routes spec §10 names, `get`/`post`
+// only, each a union -> status-code map and NOTHING ELSE — this file is not
+// allowed to DECIDE (CLAUDE.md's ring rule); every decision (the schedule
+// arithmetic, the precondition ladder, the act) lives in `./schedulepolicy.js`
+// / `./fire.js`, already L1.
+//
+// GATING (spec §10 "Gating"): session-cookie ONLY. Nothing here calls
+// `requireMailToken`, nothing is added to `auth/gate.ts`'s `EXEMPT`. The
+// global `onRequest` hook (`installGate`, wired once in `server.ts`) already
+// stands in front of every route in every file — that is the whole point of
+// a ONE-HOOK gate (`auth/gate.ts`'s own docstring) — so a route registered
+// here needs no gate wiring of its own to be covered by the 401 sweep
+// (`auth-gate.test.ts`). The box token authenticates the FLEET HOST, and
+// every session on that single-uid box holds it; a schedule the fleet could
+// write is a schedule any session could install for itself, standing and
+// unattended — strictly wider than the path `gh` was refused.
+//
+// ADD NO UNGATED DOOR HERE. The ungated doors this tree has are named, not
+// counted — `POST /api/coord/pause`, `POST /api/runs/:id/abandon`, `POST
+// /api/claims/:id/break` and `POST /api/runs/:id/reclaim` — each with its own
+// D-282 argument, which is that the party a gate would lock out is the one
+// holding the token. No automations route has that argument. This banner
+// stated a CARDINAL for one wave — a smaller one than `coord-pause-route
+// .test.ts`'s `UNGATED` set held — which is worse than saying nothing: it
+// told the next author that reclaim's slot was free.
+// `box-token-census.test.ts` scans this file now and requires the doors to be
+// named with no count stated at all; a cardinal is unspellable here,
+// deliberately, because that scan reads any number word in this passage as a
+// claim about this surface.
+//
+// D-280 — RUN-NOW CONSTRUCTS ITS DANGEROUS FIELDS AS LITERALS AT THE CALL
+// SITE. `POST /:id/run` reads NOTHING off the request body: `project`,
+// `prompt`, `trigger` and every other fact that ends up on the fleet come off
+// the STORED automation row this server already trusted, never off what the
+// caller typed today. This is what makes "the phone can trigger; the phone
+// can never re-target" structural rather than a promise — see the source
+// scan in `automations-routes.test.ts`.
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { Deps } from '../server.js';
+import { planSchedule } from './schedulepolicy.js';
+import {
+  toAutomationSummary, type AutomationEdit, type AutomationEditResult, type AutomationFilter,
+  type AutomationTransitionResult, type ArmResult,
+  type NewAutomation,
+} from '../coord/store.js';
+import type { Cadence, StoredCadence } from '../../../shared/schedule.js';
+import {
+  AUTOMATION_GRACE_MS_DEFAULT, AUTOMATION_PROMPT_MAX_BYTES,
+  isAutomationOutcome, isAutomationState,
+} from '../../../shared/api.js';
+
+const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
+
+/** A stored (possibly-degraded) cadence, narrowed to what `planSchedule`
+ *  accepts — `'unknown'` (a rollback fact, never something a producer wrote,
+ *  `schedulepolicy.ts:30-32`) degrades to `null`, exactly as
+ *  `AutomationRow.cadence` documents for the fire-path reader. */
+const cadenceOf = (sc: StoredCadence): Cadence | null => (sc.kind === 'unknown' ? null : sc);
+
+/** A NUMBER THIS STORE CAN READ BACK. `typeof === 'number'` is not enough at
+ *  a wire edge that writes to INTEGER columns: `node:sqlite` stores an
+ *  integral double at or above 2^53 happily and then throws `RangeError:
+ *  Value is too large to be represented as a JavaScript number` on every
+ *  subsequent read — and `.all()` throws for the WHOLE result set, not the
+ *  one row. So a single accepted `everyMinutes: 2**53` (or `graceMs: 1e16`,
+ *  or a `days` mask whose int32 truncation happens to be legal) would make
+ *  `GET /api/automations` fail for EVERY automation for ever, freeze the
+ *  live frame, and leave the operator no id to retire the row by — the
+ *  route's own read-back throws before it can answer. Refusing at the door
+ *  is the only place this is cheap. This is the MECHANICAL half; whether a
+ *  well-formed number is a sane SCHEDULE stays `planSchedule`'s decision
+ *  (`409 bad-schedule`), which is a different question with a different
+ *  answer. */
+const storableInt = (v: unknown): number | null =>
+  (typeof v === 'number' && Number.isSafeInteger(v) ? v : null);
+
+/** `req.body`/`req.query`'s unknown shape, parsed by hand — no schema layer
+ *  in this tree (`coord/routes.ts`'s own idiom throughout). */
+function parseCadence(v: unknown): Cadence | null {
+  if (v === null || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (o.kind === 'wall-clock') {
+    const days = storableInt(o.days);
+    const minuteOfDay = storableInt(o.minuteOfDay);
+    if (days === null || minuteOfDay === null || typeof o.tz !== 'string') return null;
+    return { kind: 'wall-clock', days, minuteOfDay, tz: o.tz };
+  }
+  if (o.kind === 'interval') {
+    const everyMinutes = storableInt(o.everyMinutes);
+    if (everyMinutes === null) return null;
+    return { kind: 'interval', everyMinutes };
+  }
+  return null;
+}
+
+interface ParsedAutomationBody {
+  readonly name: string; readonly project: string; readonly prompt: string;
+  readonly cadence: Cadence;
+  /** `null` = THE BODY SAID NOTHING, which is not the same fact as a value
+   *  and must not be collapsed into one here (GC 9). On create, absence means
+   *  "start at the default"; on edit it means "do not touch it" — the editor
+   *  sheet exposes no grace field at all, so every edit it sends omits this,
+   *  and filling the create default in was silently resetting an operator's
+   *  own grace on an unrelated rename. Grace decides whether a late
+   *  occurrence fires as a catch-up or is recorded `missed`. */
+  readonly graceMs: number | null;
+}
+
+/** create/edit share every field. `'invalid'` is its own return arm rather
+ *  than `null` — the caller's ONE 400 site distinguishes "the shape was
+ *  wrong" from a cadence this build cannot schedule, which is `409
+ *  bad-schedule`'s job, one call site down (GC 9 — no overloaded null at a
+ *  seam). */
+function parseAutomationBody(body: unknown): ParsedAutomationBody | 'invalid' {
+  if (body === null || typeof body !== 'object') return 'invalid';
+  const o = body as Record<string, unknown>;
+  if (typeof o.name !== 'string' || o.name.trim() === '') return 'invalid';
+  if (typeof o.project !== 'string' || o.project.trim() === '') return 'invalid';
+  // `.trim()`, like its two siblings above, and for a harder reason than
+  // theirs: a prompt with no non-blank line composes to the empty string, and
+  // an empty needle disables BOTH halves of `sendPrompt`'s proof — the echo
+  // check is pre-satisfied and an untouched empty box reads as proof the turn
+  // was submitted. So a blank prompt would spawn a real session, deliver
+  // nothing, and settle the run `ok`: the run history, which is the
+  // operator's only review instrument and the whole basis of the §7 arm gate,
+  // would report a clean tick for a session that was never prompted, and the
+  // `ok` would reset `consecutiveFailures` so the ceiling never braked it.
+  // The sibling caller of the same `sendPrompt` (`POST /api/sessions/:id/
+  // prompt`) has refused an empty text all along.
+  if (typeof o.prompt !== 'string' || o.prompt.trim() === '') return 'invalid';
+  const cadence = parseCadence(o.cadence);
+  if (cadence === null) return 'invalid';
+  let graceMs: number | null = null;
+  if (o.graceMs !== undefined) {
+    const g = storableInt(o.graceMs);
+    if (g === null || g <= 0) return 'invalid';
+    graceMs = g;
+  }
+  return { name: o.name, project: o.project, prompt: o.prompt, cadence, graceMs };
+}
+
+function sendArmOutcome(reply: FastifyReply, r: ArmResult) {
+  if (r.ok) return reply.code(200).send({ ok: true, nextRunAt: r.nextRunAt });
+  switch (r.why) {
+    case 'unknown-automation': return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    case 'never-run-by-hand': return reply.code(409).send({ ok: false, error: 'never-run-by-hand' });
+    case 'bad-transition':
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from });
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', why: (_exhaustive as { why: string }).why });
+    }
+  }
+}
+
+function sendStateOutcome(reply: FastifyReply, r: AutomationTransitionResult) {
+  if (r.ok) return reply.code(200).send({ ok: true, state: r.state });
+  switch (r.why) {
+    case 'unknown-automation': return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    case 'bad-transition':
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from });
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', why: (_exhaustive as { why: string }).why });
+    }
+  }
+}
+
+function sendEditOutcome(reply: FastifyReply, r: AutomationEditResult) {
+  if (r.ok) return reply.code(200).send({ ok: true, automation: toAutomationSummary(r.row) });
+  switch (r.why) {
+    case 'unknown-automation': return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    case 'bad-transition':
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from });
+    default: {
+      const _exhaustive: never = r;
+      return reply.code(500).send({ ok: false, error: 'internal', why: (_exhaustive as { why: string }).why });
+    }
+  }
+}
+
+export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
+  // ── GET /api/automations — list ────────────────────────────────────────
+  app.get('/api/automations', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const q = req.query as { state?: unknown; project?: unknown; last?: unknown };
+    const filter: AutomationFilter = {
+      ...(typeof q.state === 'string' && isAutomationState(q.state) ? { state: q.state } : {}),
+      ...(typeof q.project === 'string' && q.project.trim() !== '' ? { project: q.project } : {}),
+      ...(q.last === 'never-ran'
+        ? { last: 'never-ran' as const }
+        : typeof q.last === 'string' && isAutomationOutcome(q.last) ? { last: q.last } : {}),
+    };
+    // `paused` RIDES THIS READ. The global kill switch had a setter and no
+    // reader anywhere — not on the frame, not here, no GET of its own — so a
+    // phone could throw it but never see which way it points, which is why it
+    // shipped with no door. Additive, and read in exactly one place: this
+    // list is what the screen's cold read already asks for, and every action
+    // on that screen re-reads it.
+    return reply.code(200).send({
+      ok: true,
+      automations: coord.automations(filter).map(toAutomationSummary),
+      paused: coord.automationsPaused().paused,
+    });
+  });
+
+  // ── POST /api/automations — create, always `paused` (§7's arm gate) ────
+  app.post('/api/automations', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const parsed = parseAutomationBody(req.body);
+    if (parsed === 'invalid') return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const bytes = Buffer.byteLength(parsed.prompt, 'utf8');
+    if (bytes > AUTOMATION_PROMPT_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: AUTOMATION_PROMPT_MAX_BYTES, bytes });
+    }
+    const now = Date.now();
+    const plan = planSchedule(parsed.cadence, now, null);
+    if (plan.scheduleError !== null) {
+      return reply.code(409).send({ ok: false, error: 'bad-schedule', scheduleError: plan.scheduleError });
+    }
+    const input: NewAutomation = {
+      name: parsed.name, project: parsed.project, prompt: parsed.prompt,
+      cadence: parsed.cadence, graceMs: parsed.graceMs ?? AUTOMATION_GRACE_MS_DEFAULT,
+    };
+    const { id } = coord.insertAutomation(input, now);
+    return reply.code(201).send({ ok: true, automation: toAutomationSummary(coord.automation(id)!) });
+  });
+
+  // ── GET /api/automations/:id — one, with its recent runs ────────────────
+  app.get('/api/automations/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const row = coord.automation(id);
+    if (!row) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    return reply.code(200).send({
+      ok: true, automation: toAutomationSummary(row), runs: coord.automationRuns(id, 20),
+    });
+  });
+
+  // ── POST /api/automations/:id — edit ────────────────────────────────────
+  app.post('/api/automations/:id', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const parsed = parseAutomationBody(req.body);
+    if (parsed === 'invalid') return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const bytes = Buffer.byteLength(parsed.prompt, 'utf8');
+    if (bytes > AUTOMATION_PROMPT_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize', limit: AUTOMATION_PROMPT_MAX_BYTES, bytes });
+    }
+    // The row FIRST, for the grace: an omitted `graceMs` means "unchanged"
+    // here, so this route needs the stored value, and a 404 answered from
+    // the read is the same answer `updateAutomation` would have given.
+    const stored = coord.automation(id);
+    if (!stored) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    const now = Date.now();
+    const plan = planSchedule(parsed.cadence, now, null);
+    if (plan.scheduleError !== null) {
+      return reply.code(409).send({ ok: false, error: 'bad-schedule', scheduleError: plan.scheduleError });
+    }
+    const edit: AutomationEdit = {
+      name: parsed.name, project: parsed.project, prompt: parsed.prompt,
+      cadence: parsed.cadence, graceMs: parsed.graceMs ?? stored.graceMs, nextRunAt: plan.nextRunAt,
+    };
+    return sendEditOutcome(reply, coord.updateAutomation(id, edit, now));
+  });
+
+  // ── POST /api/automations/:id/arm — refuses `never-run-by-hand` ────────
+  app.post('/api/automations/:id/arm', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const row = coord.automation(id);
+    if (!row) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    const now = Date.now();
+    const plan = planSchedule(cadenceOf(row.cadence), now, null);
+    if (plan.scheduleError !== null) {
+      return reply.code(409).send({ ok: false, error: 'bad-schedule', scheduleError: plan.scheduleError });
+    }
+    return sendArmOutcome(reply, coord.armAutomation(id, plan.nextRunAt, now));
+  });
+
+  // ── POST /api/automations/:id/state — pause | retire ────────────────────
+  app.post('/api/automations/:id/state', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const body = (req.body ?? {}) as { state?: unknown };
+    const now = Date.now();
+    // Any token but the two live transitions — `'armed'` included, arming has
+    // exactly ONE door (`POST /:id/arm`, §7's gate) — is `409 bad-transition`.
+    // Spec §10's status map for this route carries no `400`.
+    if (body.state !== 'paused' && body.state !== 'retired') {
+      const row = coord.automation(id);
+      if (!row) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: row.state });
+    }
+    return sendStateOutcome(reply, coord.setAutomationState(id, body.state, now));
+  });
+
+  // ── POST /api/automations/:id/run — *Run now*, D-280 ────────────────────
+  //
+  // NEVER reads `req.body` — see the file banner. `trigger:'manual'` and the
+  // automation's own `project`/`prompt` are the ONLY facts this call carries,
+  // and both come off the row this server already trusted, never off today's
+  // request. Fires on ANY state but `retired` (spec §6 "A manual run does not
+  // ride the sweep"), ignoring `provedAt`/`nextRunAt` — this is the ONLY door
+  // that can fire an unarmed automation, which is what makes the arm gate
+  // (§7) reachable at all: a new automation is `paused` with `provedAt`
+  // NULL, so the sweep's due predicate excludes it by construction.
+  app.post('/api/automations/:id/run', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const row = coord.automation(id);
+    if (!row) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    // `retired` (terminal) AND `unknown` — a row whose stored state token this
+    // build cannot read. This door was the only fail-OPEN one: every state
+    // door refuses `unknown` through the transition table, so a degraded row
+    // could be FIRED — a real `ccd ws-add` for a row this build cannot model
+    // — and not stopped. `dueAutomations` already takes this stance for an
+    // unreadable CADENCE; this is the same rule for an unreadable STATE.
+    if (row.state === 'retired' || row.state === 'unknown') {
+      return reply.code(409).send({ ok: false, error: 'bad-transition', from: row.state });
+    }
+    const now = Date.now();
+    const claim = coord.claimAndOpenRun({ automationId: id, now, occurrence: { trigger: 'manual' } });
+    if ('refused' in claim) {
+      if (claim.refused === 'unknown-automation') {
+        return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+      }
+      return reply.code(409).send({ ok: false, refused: claim.refused, leaseUntil: claim.leaseUntil });
+    }
+    // THE CLAIM IS THE WHOLE OF THIS ROUTE'S WORK. `claimAndOpenRun` is one
+    // synchronous store transaction; the act — spawn, identify, adopt, prompt,
+    // close — is performed by the watcher's sweep pass 3, which picks up
+    // "every open lease this process has not already started" and cannot tell
+    // this claim from a scheduled one, because they are the same fact.
+    //
+    // This route USED TO await `fireAutomation` here, and that was a live
+    // defect rather than merely a slow answer. The sweep's single-flight
+    // guard, `automationsInFlight`, is a private field of the watcher
+    // (`watch.ts:649`, added only in `fireOne`), so an act performed HERE
+    // could not register in it: every sweep landing inside the spawn window
+    // (ccd's `SPAWN_SETTLE_S` is 240 s; the automations lane sweeps every
+    // 10 s) read the same `leaseRunId` as un-started and fired it again.
+    // `markAutomationSpawn` has no idempotency guard, so the second identify
+    // overwrote sessionId/workspace/branch on the one run row and the first
+    // session became an orphan no run row names — `store.ts`'s own
+    // "spec §6 orphan-manufacture rule". Measured, before the change:
+    // one *Run now* issued TWO `ws-add` calls
+    // (`automations-routes.test.ts`, "a manual run spawns exactly one
+    // session"). `fireAutomation` now has exactly ONE caller in the tree,
+    // which `single-definition.test.ts` pins mechanically — the property was
+    // prose in three places and measured in none.
+    //
+    // WHAT THE CALLER LOSES, said plainly: the post-claim ladder (rungs 3-9)
+    // runs on the sweep, so its refusals no longer come back as `409
+    // {refused}`. They are not lost — `fireAutomation` settles the run row on
+    // every refusal path before returning, so each one reaches the phone as
+    // the run's own `outcome:'refused'` plus `refusal`, and as the parent's
+    // `lastOutcome`/`lastRefusal` on the `{type:'automations'}` frame, which
+    // needs no re-fetch. The one refusal this route can still answer is
+    // `overlap`, which `claimAndOpenRun` decides.
+    return reply.code(202).send({ ok: true, runId: claim.runId });
+  });
+
+  // ── GET /api/automations/:id/runs — history, clamped to the ceiling ─────
+  app.get('/api/automations/:id/runs', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // A retired automation still serves its runs (spec §9 "retire, never
+    // delete") — this read does not filter by state at all.
+    if (!coord.automation(id)) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
+    const q = req.query as { limit?: unknown };
+    const limit = typeof q.limit === 'string' && q.limit.trim() !== '' && Number.isFinite(Number(q.limit))
+      ? Number(q.limit) : undefined;
+    return reply.code(200).send({ ok: true, runs: coord.automationRuns(id, limit) });
+  });
+
+  // ── GET /api/automations/runs/:runId — one run and its steps ────────────
+  app.get('/api/automations/runs/:runId', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const runId = Number((req.params as { runId: string }).runId);
+    if (!Number.isInteger(runId)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const run = coord.automationRun(runId);
+    if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    return reply.code(200).send({ ok: true, run, steps: coord.automationRunEvents(runId) });
+  });
+
+  // ── POST /api/automations/pause — the global kill switch ────────────────
+  app.post('/api/automations/pause', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const body = (req.body ?? {}) as { paused?: unknown };
+    if (typeof body.paused !== 'boolean') return reply.code(400).send({ ok: false, error: 'bad-request' });
+    coord.setAutomationsPaused(body.paused, Date.now());
+    return reply.code(200).send({ ok: true, paused: body.paused });
+  });
+}

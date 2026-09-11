@@ -836,6 +836,7 @@ describe('every stylesheet under src/ is audited', () => {
     // array, which exempted it from BOTH audits while the array looked
     // complete. A list of files is the same drift class as a list of colours.
     expect(report.sheets).toEqual([
+      'src/auto/auto.css',
       'src/components/primitives.css',
       'src/fleet/fleet.css',
       'src/session/chat.css',

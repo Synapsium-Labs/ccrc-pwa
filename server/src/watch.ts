@@ -20,8 +20,8 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent, PrState,
-  RunSummary, SessionStatus, TaskProgress,
+  AutomationSummary, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
+  MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -44,16 +44,37 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
-import type { ProvenancePair } from './coord/store.js';
+import type {
+  ProvenancePair, AutomationRow as StoreAutomationRow, FiringOccurrence, ScheduleStamp,
+} from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow } from './coord/store.js';
+import {
+  MAIL_REPLAY_CEILING_ERROR, toRunSummary, toAutomationSummary, type AskRow, type CoordStore,
+} from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
+// Task 8 (`.superpowers/sdd/2026-08-31-automations`), plus the controller's
+// ruling on `POST /:id/run` (2026-09-01): `fireAutomation` — the whole act,
+// spawn through prompt — has exactly ONE caller in the tree after this
+// change, and it is `sweepAutomations` below. `checkPreClaim` (rungs 1-2)
+// is the only ladder half this file calls directly; rungs 3-9
+// (`checkPostClaim`) run exclusively inside `fireAutomation` itself.
+import {
+  checkPreClaim, fireAutomation, retryPrompt,
+  type FireDeps, type FireOutcome, type RunFacts,
+} from './auto/fire.js';
+import {
+  decideFire, zoneWarning, type AutomationRow as PolicyAutomationRow, type SchedulePlan,
+} from './auto/schedulepolicy.js';
+// L0, and reached for exactly one question: whether this node build can keep a
+// wall clock at all. See `zoneWarning`'s own docstring for why a small-ICU
+// build is silent rather than loud.
+import { icuHasZones } from '../../shared/schedule.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 
@@ -203,6 +224,16 @@ const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
  *  which is the point: mail lands at a turn boundary, not mid-thought. */
 const MAIL_SWEEP_MS = 10_000;
 
+/** The automations lane's clock (`.superpowers/sdd/2026-08-31-automations`,
+ *  Task 8). Same cadence and the same argument as `MAIL_SWEEP_MS` just
+ *  above: this is not how fast a schedule fires — `AUTOMATION_PUNCTUAL_MS`
+ *  and each automation's own `graceMs` (`schedulepolicy.ts`) decide that —
+ *  it is how often this lane is allowed to ASK whether anything is due, and
+ *  it is also the cadence at which a run this process finds LEASED BUT NOT
+ *  YET STARTED (a fresh claim from `POST /:id/run`, or one a crashed prior
+ *  process left standing) gets picked up and handed to `fireAutomation`. */
+const AUTOMATION_SWEEP_MS = 10_000;
+
 /** How long a session must have been idle before it is interruptible. ccd's
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
@@ -333,6 +364,42 @@ const ASKS_DISABLED_MARKER = 'asks-disabled';
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
 // `shared/api.ts`, which is the only module all three sides can import.
+
+/** `SchedulePlan` (`schedulepolicy.ts`) -> `ScheduleStamp` (`coord/store.ts`)
+ *  — the same two facts (an occurrence's epoch ms, or the `ScheduleError`
+ *  that prevented one), spelled under the two different field names each
+ *  side already committed to (`nextRunAt`/`scheduleError` vs `at`/`error`). */
+function toScheduleStamp(plan: SchedulePlan): ScheduleStamp {
+  return plan.scheduleError === null ? { at: plan.nextRunAt } : { error: plan.scheduleError };
+}
+
+/**
+ * The store's `AutomationRow` (wire summary + lease triple) -> the fire
+ * path's `AutomationRow` (`schedulepolicy.ts`) — TWO DIFFERENT shapes under
+ * one name, by design (L2 ports are declared BY THE CONSUMER; `fire.ts`'s
+ * own docstring on why it does not import the store's type). `cadence` in
+ * particular is a different TYPE on each side (`StoredCadence` vs `Cadence
+ * | null`), which is the seam this closes.
+ *
+ * `auto/routes.ts` already needs this identical conversion (`toPolicyRow`/
+ * `cadenceOf` there) for the identical reason: `fireAutomation` is called
+ * from two different L4 delivery files with no shared L1/L2 home either may
+ * reach into without one importing the other. Flagged in
+ * task-8-report.md as a real, minimal duplication a later task could hoist
+ * into `schedulepolicy.ts` itself.
+ */
+function toPolicyAutomationRow(row: StoreAutomationRow): PolicyAutomationRow {
+  return {
+    id: row.id, name: row.name, state: row.state, project: row.project, prompt: row.prompt,
+    cadence: row.cadence.kind === 'unknown' ? null : row.cadence,
+    graceMs: row.graceMs,
+    provedAt: row.provedAt, nextRunAt: row.nextRunAt, scheduleError: row.scheduleError,
+    lastFireAt: row.lastFireAt, lastOutcome: row.lastOutcome, lastRefusal: row.lastRefusal,
+    leaseUntil: row.leaseUntil, leaseHardUntil: row.leaseHardUntil,
+    consecutiveFailures: row.consecutiveFailures, runsEvicted: row.runsEvicted,
+    createdAt: row.createdAt, updatedAt: row.updatedAt,
+  };
+}
 
 /**
  * Polls the fleet: captures every registered pane to detect menu dialogs
@@ -614,6 +681,15 @@ export class FleetWatcher {
    *  least once, even into an empty fleet — mirroring `lastJson`'s own
    *  initial value. */
   private lastRunsJson: string | null = null;
+
+  /** `null`, NEVER `'[]'` — and the difference is the whole point. A fleet
+   *  with no automations and a process that has never measured are two
+   *  different facts, and the PWA is required to render them as two different
+   *  empty states. Seeding this with `'[]'` would swallow the FIRST
+   *  measurement of an empty list, so a client connecting to a quiet fleet
+   *  would sit in "no answer yet" for ever. Same reasoning as
+   *  `lastRunsJson`/`lastCoordJson` above. */
+  private lastAutomationsJson: string | null = null;
   /** The `coord` frame's last value and its own byte-equality guard, beside
    *  `lastRunsJson` and for the same reasons. `coord` is `null` until the first
    *  tick measures — see `currentCoord()`. */
@@ -630,6 +706,67 @@ export class FleetWatcher {
   /** Same watermark discipline as `lastMailNotifyId`, over `run_events.id`
    *  for the `run` NotifyEvent lane. */
   private lastRunNotifyId = 0;
+  /** The automations lane's own clock (Task 8), `sweepLifecycle`'s exact
+   *  `!== 0` idiom. */
+  private lastAutomationSweep = 0;
+  /**
+   * Runs currently handed to `fireAutomation` BY THIS PROCESS — the
+   * cross-sweep single-flight guard `sweepAutomations` needs for the
+   * identical reason `mailInFlight` states above it, sharpened by the
+   * controller's own ruling: `fireAutomation` is never awaited by the loop
+   * that dispatches it (the act must not block the tick — ccd's
+   * `SPAWN_SETTLE_S` is 240 s), so a run can still be mid-spawn when a
+   * LATER sweep tick's leased-run scan runs again and would otherwise see
+   * the identical `leaseRunId` and fire it a second time.
+   *
+   * Claimed the moment a run is handed to `fireAutomation`, before any
+   * `await` (`fireOne`'s own discipline). Removed ONLY on a TERMINAL settle
+   * (`ok`/`refused`/`failed`) — NEVER on a `pending` prompt-ladder outcome
+   * (the run stays this process's responsibility: its soft lease is renewed
+   * off this set, and pass 4 owes it attempts 2..N) and NEVER when the call
+   * throws (the throw may
+   * have landed AFTER a real spawn, and calling `fireAutomation` again on
+   * the same `runId` would manufacture a second session for one
+   * automation — spec §6's orphan-manufacture rule). IN MEMORY BY DESIGN: a
+   * restart forgets it, but a run this process never started still shows up
+   * with `leaseRunId` set on the automation row and nothing here to say
+   * otherwise — which is exactly the "survives a restart mid-run" property
+   * the controller ruling asks for.
+   */
+  private automationsInFlight = new Set<number>();
+  /**
+   * WHICH RUNS HAVE A CALL IN FLIGHT RIGHT NOW — a different question from
+   * `automationsInFlight` above, and the ladder is what made the difference
+   * load-bearing. That set means "this process is RESPONSIBLE for this run":
+   * it holds the run's soft lease up and keeps pass 3 off it, and a run parked
+   * between prompt attempts must stay in it for both of those reasons. This
+   * one means "a `sendPrompt`/`ws-add` is executing for this run at this
+   * instant", so the retry pass can tell a parked run (its turn may be due)
+   * from a busy one (leave it alone). Added before any `await`, removed in a
+   * `finally`, so an attempt that throws does not wedge the ladder — unlike
+   * the responsibility set, where a throw must NOT release the guard, because
+   * it may have landed after a real spawn.
+   */
+  private automationsActing = new Set<number>();
+  /** Said once per process, never per tick — a repeated warning about a fact
+   *  that cannot change while the process lives is noise that trains the
+   *  operator to skip the log. */
+  private zoneWarned = false;
+  /**
+   * The per-restart catch-up bound (spec §8). An automation id enters this
+   * set the first time THIS PROCESS fires a `catchup` occurrence or records
+   * a late one as `missed` for it, and `decideFire`'s `catchup` arm may be
+   * offered only for an id NOT in it. `primed` cannot serve this role:
+   * `sweepAutomations` returns early while `!primed`, so by the time it
+   * runs at all the priming tick is already past — there is no "first armed
+   * sweep after a restart" flag left to read. IN MEMORY, deliberately: the
+   * bound is per *restart*, so a durable column would suppress a legitimate
+   * catch-up after the next boot. Without it, an `interval` automation
+   * whose period is shorter than `graceMs` would yield one catch-up per
+   * occurrence inside the window as this sweep walks the backlog forward —
+   * the ninety-session wake this rule forbids.
+   */
+  private caughtUp = new Set<number>();
   /** C0.1: `tick()` had NO re-entrancy guard — `start()` fires it every
    *  `intervalMs` off a bare `setInterval`, unconditionally, so a tick still
    *  in flight past the next interval edge (a slow agent-WS registry read, a
@@ -988,6 +1125,16 @@ export class FleetWatcher {
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as the two ledger lanes just above:
+      // `fireAutomation` can spawn (ccd's `SPAWN_SETTLE_S` is 240 s), and this
+      // tick must return long before that. NOT beside `sweepMail`'s own
+      // dispatch (Task 8's own instruction, D9/D10's rule restated once more:
+      // a second producer lands BESIDE the most load-bearing loop on the box,
+      // never inside it) — placed here instead, immediately before `primed`
+      // flips, which is also what makes the priming tick fire nothing: the
+      // `!this.primed` gate inside `sweepAutomations` reads `false` at the
+      // instant this line calls it.
+      void this.sweepAutomations().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1080,6 +1227,7 @@ export class FleetWatcher {
       // clock from sessions, and an unchanged session snapshot must not
       // suppress a run transition from reaching an already-connected client.
       this.emitRuns();
+    this.emitAutomations();
       const json = JSON.stringify(sessions);
       if (json === this.lastJson) return;
       this.lastJson = json;
@@ -1124,6 +1272,47 @@ export class FleetWatcher {
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
     this.bus.emit('runs', runs);
+  }
+
+  /** The `{type:'automations'}` frame (spec §10). Modelled on `emitRuns`
+   *  above, including its `try`/`catch`: this is a synchronous `node:sqlite`
+   *  read on the tick, and an unguarded throw here kills the poll for every
+   *  socket rather than the one bad read. Skipping a frame is the honest
+   *  degrade — the next changed measurement re-broadcasts to everyone.
+   *
+   *  The list is a FULL snapshot of every automation the DEFAULT FILTER
+   *  carries, unlike `runs`' active-only frame, so there is no
+   *  active/finished split for a client to reconcile. `automations({})` is a
+   *  filter, not the absence of one: its absent-`state` branch appends
+   *  `state != 'retired'` (spec §9, "a retired automation leaves the default
+   *  list"), so a retired row rides no frame and the PWA's retired chip asks
+   *  for those by name over HTTP. This docstring claimed "regardless of
+   *  state" for one wave, which left that chip filtering a list that could
+   *  never contain a match. Run history is deliberately NOT here (spec §10)
+   *  — it is a cold read, because a frame carrying every run of every
+   *  automation would grow without bound on the wire. */
+  emitAutomations(): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    let rows: AutomationSummary[];
+    try { rows = coord.automations({}).map(toAutomationSummary); }
+    catch (err) {
+      console.warn(`ccrc-server: emitAutomations failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      return;
+    }
+    const json = JSON.stringify(rows);
+    if (json === this.lastAutomationsJson) return;
+    this.lastAutomationsJson = json;
+    this.bus.emit('automations', rows);
+  }
+
+  /** The most recent automations measurement, for a connecting socket's cold
+   *  start. `null` until this process has measured once — a fabricated empty
+   *  list would claim a measurement nobody took, the rule `currentCoord()`
+   *  already follows. */
+  currentAutomations(): AutomationSummary[] | null {
+    return this.lastAutomationsJson === null
+      ? null : (JSON.parse(this.lastAutomationsJson) as AutomationSummary[]);
   }
 
   /** The `{type:'coord'}` frame (spec §4.2). Derived from the SAME registry
@@ -2272,6 +2461,365 @@ export class FleetWatcher {
         `ccrc-server: ${stale.length} allocated deviation number(s) never landed in a plan ` +
         'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
         ' — reported, never reclaimed (D13)');
+    }
+  }
+
+  /**
+   * The automations lane (`.superpowers/sdd/2026-08-31-automations`, Task 8),
+   * PLUS the controller's own ruling on `POST /:id/run` (2026-09-01):
+   * `sweepLifecycle`'s exact gate shape — `!this.primed` (restart-quiet),
+   * then the `!== 0` interval gate stamped BEFORE any awaited I/O, then
+   * `deps.coord`. UNLIKE `sweepLifecycle`, every `node:sqlite` read below is
+   * wrapped: a full disk or a second writer holding `coord.db`'s lock throws
+   * SYNCHRONOUSLY, straight into a `void`-dispatched tick with no
+   * `unhandledRejection` handler anywhere in this tree — the same fault
+   * `pushNewMail`/`pushNewRuns`/the claim sweep already earn the guard
+   * against, a few hundred lines up.
+   *
+   * THE ACT NEVER RIDES THIS METHOD'S OWN `await`. `fireAutomation` can
+   * spawn (ccd's `SPAWN_SETTLE_S` is 240 s), and this sweep must return in
+   * time for the next 2 s tick — every call is `void`-dispatched through
+   * `fireOne` below, `sweepPr`'s own reasoning for its slow `gh` calls. This
+   * is also the controller's ruling made mechanical: `POST /:id/run` now
+   * only claims (`claimAndOpenRun`, one fast transaction) and answers `202`
+   * — the spawn, identify, adopt and prompt happen HERE, on the next tick,
+   * for ANY run this process finds leased but not yet started, which is why
+   * `fireAutomation` has exactly ONE caller in the whole tree after this.
+   *
+   * THREE PASSES, in this order, and the order is load-bearing:
+   *
+   *   1. Lapse (`lapseAutomationRuns`) FIRST — a `running` run whose
+   *      `leaseHardUntil` has passed settles `lost` and releases its lease
+   *      before pass 3 below gets a chance to treat it as "leased but not
+   *      started" and fire it.
+   *   2. The schedule (`dueAutomations`): `decideFire` (L1) answers
+   *      fire / record-missed / unschedulable; a `fire` arm still runs the
+   *      pre-claim rungs (`checkPreClaim`, L1) before claiming — an overlap
+   *      or cap-concurrency loser opens an UN-LEASED row and is done. A
+   *      winner's claim (`claimAndOpenRun`) only OPENS the lease; it is
+   *      NEVER itself the act — pass 3 is what performs it, uniformly.
+   *   3. Every non-retired automation with an open lease
+   *      (`automations().leaseRunId !== null`) this process has not already
+   *      handed to `fireAutomation` — pass 2's own fresh claims, a manual
+   *      claim `POST /:id/run` just opened, and a claim a CRASHED prior
+   *      process left standing, all read the identical way, because they
+   *      are the identical fact: a lease with no one working it.
+   *      `automationsInFlight` is what stops pass 2's own fresh claim from
+   *      being picked up a SECOND time by this very pass, in this very
+   *      tick — see its own docstring for why membership is never removed
+   *      except on a terminal settle.
+   *
+   * DECIDES NOTHING (CLAUDE.md's L4 rule): `decideFire`/`checkPreClaim`/
+   * `checkPostClaim` (inside `fireAutomation`) own every rung; this method
+   * only reads their answers and calls the store's already-committed
+   * writers.
+   *
+   * PUBLIC for the reason `sweepNames`/`sweepMail`/`sweepLifecycle` all
+   * state: `tick()` dispatches this with `void`, so a test awaiting `tick()`
+   * has not awaited the sweep.
+   */
+  async sweepAutomations(): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastAutomationSweep !== 0 && now - this.lastAutomationSweep < AUTOMATION_SWEEP_MS) return;
+    this.lastAutomationSweep = now;
+
+    // RENEW THE SOFT LEASE OF EVERY ACT THIS PROCESS IS STILL PERFORMING,
+    // with THIS tick's clock. `AUTOMATION_LEASE_MS` is documented as "Twelve
+    // sweep ticks of renewal tolerance" — twelve because the lane's gate is
+    // 10 s and the soft lease is 120 s — and `claimAndOpenRun`'s CAS docstring
+    // says it reads "the SOFT bound, never the hard one" precisely BECAUSE
+    // renewal moves it. Nothing moved it: the only renewal call sat in
+    // `fireAutomation`'s post-prompt `pending` arm, so at 120 s into a spawn
+    // ccd allows 240 s for, rung 1 AND the in-transaction CAS both went blind
+    // and a due occurrence could claim the same automation a second time.
+    //
+    // `automationsInFlight` is exactly the right set: membership is added
+    // synchronously before any await and removed only on a terminal settle,
+    // so it names the acts in progress and nothing else. The renewal is keyed
+    // on the RUN, so a stale entry whose lease was released and re-claimed
+    // renews nothing rather than extending someone else's.
+    // AND STOP ASKING once the answer is no. `false` means this run's lease
+    // is gone — settled, hard-lapsed, or re-claimed by another run — so no
+    // renewal can ever match it again. Membership is otherwise removed only
+    // on a TERMINAL settle (deliberately: see the field's docstring), and a
+    // `pending` prompt ladder or a thrown act never reaches one, so without
+    // this every such run would leave a permanent entry costing one prepare
+    // and one zero-row UPDATE against the box's hottest sqlite file on every
+    // sweep for the life of the process. Pruning cannot resurrect a spawn:
+    // pass 3 is keyed on `leaseRunId`, which the settle has already cleared.
+    for (const runId of this.automationsInFlight) {
+      try {
+        if (!store.renewAutomationLeaseForRun(runId, now)) this.automationsInFlight.delete(runId);
+      } catch (err) {
+        console.warn(`ccrc-server: lease renewal failed for automation run ${runId} (${err instanceof Error ? err.message : String(err)}) — one bad renewal must not kill the sweep`);
+      }
+    }
+
+    // ONE LINE, ONCE PER PROCESS, and only on a build that cannot keep a wall
+    // clock. `icuHasZones()` is true on a full-ICU node, so on every ordinary
+    // box this costs a single boolean and never touches the store. L4 decides
+    // nothing here: `zoneWarning` (L1) owns the question of whether there is
+    // anything to say, including "no wall-clock automation exists, so this box
+    // cannot mis-fire one".
+    if (!this.zoneWarned && !icuHasZones()) {
+      try {
+        const wall = store.automations({}).filter((a) => a.cadence.kind === 'wall-clock').length;
+        const msg = zoneWarning(false, wall);
+        if (msg !== null) {
+          console.warn(`ccrc-server: ${msg}`);
+          this.zoneWarned = true;
+        }
+      } catch {
+        // A bad read must not kill the sweep, and the warning can wait a tick.
+      }
+    }
+
+    try {
+      store.lapseAutomationRuns(now);
+    } catch (err) {
+      console.warn(`ccrc-server: automations lease-lapse failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      return;
+    }
+
+    let due: readonly StoreAutomationRow[] = [];
+    try {
+      due = store.dueAutomations(now);
+    } catch (err) {
+      console.warn(`ccrc-server: dueAutomations failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of due) {
+      try {
+        this.processDueAutomation(store, row, now);
+      } catch (err) {
+        console.warn(`ccrc-server: automation ${row.id}'s due-processing failed (${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the sweep`);
+      }
+    }
+
+    // Pass 3 — every open lease this process has not already started. The
+    // query is `leasedAutomations()`, NOT `automations({})`: the latter's
+    // default filter drops `retired`, which made a lease on a row retired
+    // between a *Run now*'s `202` and this tick invisible here for good — see
+    // that method's own docstring for what it cost.
+    let leased: readonly StoreAutomationRow[] = [];
+    try {
+      leased = store.leasedAutomations();
+    } catch (err) {
+      console.warn(`ccrc-server: leasedAutomations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of leased) {
+      if (row.leaseRunId === null) continue;
+      if (this.automationsInFlight.has(row.leaseRunId)) continue;
+      this.fireOne(store, row, row.leaseRunId, now);
+    }
+
+    // Pass 4 — ATTEMPTS 2..N OF THE PROMPT LADDER, for every open lease whose
+    // session EXISTS and whose prompt has not landed. This is the complement
+    // of pass 3's query, and until it existed the ladder was exported policy
+    // with no caller: a first attempt that failed on the transient conditions
+    // the ladder was written for (a trust dialog, a pane not yet alive, a
+    // draft in the box) left the run `running` until its hard lease lapsed and
+    // pass 1 settled it `lost`, after exactly ONE try.
+    //
+    // DECIDES NOTHING, as ever: `retryPrompt`/`promptLadder` (L1) own whether
+    // an attempt is due, off the run's own step trail. This pass finds the
+    // rows, skips the ones an attempt is already executing for, and hands each
+    // the facts off the run row the server itself wrote.
+    let parked: readonly StoreAutomationRow[] = [];
+    try {
+      parked = store.promptPendingAutomations();
+    } catch (err) {
+      console.warn(`ccrc-server: promptPendingAutomations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of parked) {
+      const runId = row.leaseRunId;
+      if (runId === null) continue;
+      if (this.automationsActing.has(runId)) continue;
+      try {
+        const run = store.automationRun(runId);
+        // `sessionId` non-null is what the query selected on; re-read rather
+        // than assumed, because between the two reads a settle could have
+        // landed — and a prompt into a session this run does not name is the
+        // one thing this pass must never do.
+        if (run === null || run.sessionId === null || run.endedAt !== null) continue;
+        this.retryOne(store, row, runId, {
+          sessionId: run.sessionId, workspace: run.workspace, branch: run.branch,
+          wrapper: run.wrapper, homeScore: run.homeScore, spawnRc: run.spawnRc,
+          adopted: run.adopted,
+        }, now);
+      } catch (err) {
+        console.warn(`ccrc-server: automation ${row.id}'s prompt retry failed to start (${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the sweep`);
+      }
+    }
+  }
+
+  /**
+   * Pass 2's per-row body (spec §6 steps 1-4, §7 rungs 1-2, §8's catch-up
+   * bound). SYNCHRONOUS — `decideFire` and `checkPreClaim` both read
+   * `coord.db` only, and `claimAndOpenRun`/`openUnleasedRun` are themselves
+   * synchronous store transactions — so this never yields, and nothing else
+   * in this tick can observe a half-decided row.
+   */
+  private processDueAutomation(store: CoordStore, row: StoreAutomationRow, now: number): void {
+    const policy = toPolicyAutomationRow(row);
+    const decision = decideFire(policy, now, this.caughtUp.has(row.id));
+    // Unreachable from `dueAutomations()`'s own output today (its WHERE
+    // clause already excludes every condition `decideFire` would answer
+    // `unschedulable` for), kept because `FireDecision` is a three-arm union
+    // TypeScript requires handled in full — see `schedulepolicy.ts`'s own
+    // docstring on this arm.
+    if (decision.act === 'unschedulable') return;
+
+    // spec §8: an id enters the per-restart catch-up bound the first time
+    // this process FIRES a late occurrence as a catchup, or RECORDS one as
+    // missed — never for an on-time `trigger:'schedule'` fire, which has
+    // not spent any of the restart's catch-up budget.
+    if (decision.act === 'record-missed' || decision.trigger === 'catchup') {
+      this.caughtUp.add(row.id);
+    }
+
+    if (decision.act === 'record-missed') {
+      store.openUnleasedRun({
+        automationId: row.id, now,
+        occurrence: {
+          // MEASURED BY L1, never a literal here: the missed arm carries its
+          // own `dstShifted` for exactly this write.
+          trigger: 'schedule', scheduledFor: decision.scheduledFor, dstShifted: decision.dstShifted,
+          next: toScheduleStamp(decision.advance),
+        },
+        settlement: { outcome: 'missed' },
+      });
+      return;
+    }
+
+    // decision.act === 'fire' — rungs 1-2 BEFORE the claim (spec §6 step 3):
+    // an overlap or cap-concurrency loser opens an UN-LEASED row, outside
+    // the claim, so the row survives the claim it lost.
+    const occurrence: FiringOccurrence = {
+      trigger: decision.trigger, scheduledFor: decision.scheduledFor, dstShifted: decision.dstShifted,
+      next: toScheduleStamp(decision.advance),
+    };
+    const pre = checkPreClaim({ coord: store }, row, now);
+    if ('refused' in pre) {
+      const outcome = pre.refused === 'overlap' ? ('skipped' as const) : ('refused' as const);
+      store.openUnleasedRun({ automationId: row.id, now, occurrence, settlement: { outcome, refusal: pre.refused } });
+      return;
+    }
+
+    // spec §6 step 4 — ONE transaction: the lease CAS, the run's insert, and
+    // the `nextRunAt` advance. This ONLY opens the lease; it is never
+    // itself the act (see `sweepAutomations`'s own docstring, pass 3).
+    const claim = store.claimAndOpenRun({ automationId: row.id, now, occurrence });
+    if ('refused' in claim) return; // the CAS lost a race `checkPreClaim` (synchronous, no I/O
+                                     // between the two) could not have foreseen — nothing to do;
+                                     // `dueAutomations()` re-offers this occurrence next sweep.
+    this.fireOne(store, row, claim.runId, now);
+  }
+
+  /**
+   * Hands ONE leased run to `fireAutomation` — `void`-dispatched, NEVER
+   * awaited by the caller (see `sweepAutomations`'s own docstring for why).
+   * `automationsInFlight.add` happens BEFORE any `await`, synchronously, so
+   * no other pass in this tick — and no LATER tick, until this settles —
+   * can observe this `runId` as "not yet started" and fire it again.
+   */
+  private fireOne(store: CoordStore, row: StoreAutomationRow, runId: number, now: number): void {
+    this.automationsInFlight.add(runId);
+    this.automationsActing.add(runId);
+    const policy = toPolicyAutomationRow(row);
+    void fireAutomation(this.fireDepsFor(store), policy, runId, now)
+      .then((outcome) => { this.afterAct(row, runId, outcome); })
+      .catch((err) => {
+        // The guard above is deliberately NOT cleared here — see
+        // `automationsInFlight`'s own docstring: the throw may have landed
+        // after a real spawn, and firing again would manufacture a second
+        // session for one automation.
+        console.warn(
+          `ccrc-server: fireAutomation threw for automation ${row.id} run ${runId} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the tick; ` +
+          'the run stays leased and settles lost once its hard lease lapses');
+      })
+      .finally(() => { this.automationsActing.delete(runId); });
+  }
+
+  /** The `FireDeps` both acts take — one place, so the retry cannot drift
+   *  from the fire in what it is given. */
+  private fireDepsFor(store: CoordStore): FireDeps {
+    return {
+      coord: store, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, tmux: this.deps.tmux, queue: this.deps.queue,
+    };
+  }
+
+  /**
+   * ONE PROMPT ATTEMPT for a run whose session already exists and whose
+   * prompt has not landed — pass 4's per-row body. `retryPrompt` (L1) decides
+   * whether an attempt is even due; this only hands it the row and the facts
+   * off the run the server already wrote, and never re-measures an identity.
+   *
+   * `automationsInFlight` is NOT added to here: a parked run is already in it
+   * (that is what keeps its soft lease renewed and pass 3 off it), and a run
+   * that somehow is not — this process restarted while the run was parked —
+   * is still safe to prompt, because prompting sends keystrokes to a session
+   * that exists rather than creating one. `automationsActing` is what stops
+   * two attempts overlapping.
+   */
+  private retryOne(
+    store: CoordStore, row: StoreAutomationRow, runId: number,
+    facts: RunFacts & { readonly sessionId: string }, now: number,
+  ): void {
+    this.automationsActing.add(runId);
+    void retryPrompt(this.fireDepsFor(store), { prompt: row.prompt }, runId, facts, now)
+      .then((outcome) => {
+        if ('waiting' in outcome) return;   // the backoff has not elapsed
+        this.afterAct(row, runId, outcome);
+      })
+      .catch((err) => {
+        console.warn(
+          `ccrc-server: the prompt retry threw for automation ${row.id} run ${runId} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill ` +
+          'the tick; the ladder picks up again next sweep, or the run settles lost at its hard lease');
+      })
+      .finally(() => { this.automationsActing.delete(runId); });
+  }
+
+  /**
+   * What BOTH acts do with their outcome — shared so the retry cannot settle
+   * differently from the fire, and so the `✓` push has exactly one call site.
+   */
+  private afterAct(row: StoreAutomationRow, runId: number, outcome: FireOutcome): void {
+    // The prompt ladder is live: nothing terminal was written. The
+    // responsibility guard stays SET — it is what renews this run's soft
+    // lease and what keeps pass 3 from re-spawning a session it already has —
+    // and pass 4 owes it the next attempt once the backoff elapses.
+    if ('pending' in outcome) return;
+    this.automationsInFlight.delete(runId);
+    if (outcome.settle === 'superseded') {
+      // The store REFUSED this act's settle, so the record that stands is not
+      // this act's — pass 1 closed the run `lost` when its hard lease lapsed
+      // mid-act, or the ring evicted the row. The guard clears (the act is
+      // over), and nothing is claimed on the operator's behalf: a `✓
+      // automation` push here would contradict the run's own outcome, which is
+      // what discarding the store's answer used to do.
+      console.warn(
+        `ccrc-server: automation ${row.id} run ${runId} finished but its settle was refused ` +
+        `(${outcome.refused}${outcome.standing === null ? '' : `, the record that stands is ${outcome.standing}`}) ` +
+        '— no notification raised');
+      return;
+    }
+    // Only a run that produced a session notifies (spec §10 "Notifications" —
+    // `NotifyEvent.sessionId` is non-nullable and gains no seventh kind;
+    // `refused`/`failed` carry no session id to raise one with).
+    if (outcome.settle === 'ok' && outcome.facts.sessionId !== null) {
+      this.pushOne({
+        kind: 'run', sessionId: outcome.facts.sessionId, project: row.project,
+        title: `✓ automation › ${row.name}`,
+        body: `${row.project}`,
+        tag: `automation-${row.id}-${runId}`,
+        recordAlways: true,
+      }, this.activeProjects);
     }
   }
 

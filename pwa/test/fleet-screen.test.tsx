@@ -109,6 +109,26 @@ const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState'
 
 // — FleetScreen —
 
+describe('FleetScreen — the automations door', () => {
+  it('offers a door to /automations, because a screen nothing navigates to is not shipped', () => {
+    // The screen, its ten routes and its whole sweep existed and NOTHING in
+    // the app called `navigate('/automations')` — the only occurrences of the
+    // path in `pwa/src` were app.tsx's own matcher and render arm, so the
+    // feature was reachable only by typing the URL. Every sibling has a door:
+    // `/runs` from here and from `ProjectCard`, `/mail` from `MailBadge`,
+    // `/accounts` from the accounts strip.
+    //
+    // It renders UNCONDITIONALLY, which is the runs row's own rule stated in
+    // its comment a few lines above it: "D-2's rule: the only door must never
+    // render nothing." A door that hides itself until a frame arrives is a
+    // door that is missing exactly when the operator is trying to find out
+    // why nothing has run.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    expect(screen.getByRole('button', { name: /Automations/ })).toBeInTheDocument();
+  });
+});
+
 describe('FleetScreen', () => {
   it('renders a card per session with account label and status word', () => {
     const store = makeStore();

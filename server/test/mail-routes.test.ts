@@ -6,7 +6,12 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
+import {
+  ASK_REFUSE_CODES, isAskRefuseCode, isAutomationLastFilter, isAutomationOutcome,
+  isAutomationRefusal, isAutomationRouteRefusal, isClaimRefuseCode, isLifecycleGapReason,
+  isReclaimRefuseCode, isRunRefuseCode, isSessionLifecycle, MAIL_REJECT_CODES,
+  RUN_REFUSE_CODES,
+} from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -573,6 +578,15 @@ describe('the rejection table is total, in both directions', () => {
     // never merged into one, because a run refusal and a mail refusal are
     // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
+      // AUTOMATIONS, store-internal discriminants. Both are `settleAutomationRun`'s
+      // answers to ONE in-process caller (`watch.ts`'s sweep). Verified before
+      // listing: neither appears anywhere in `auto/routes.ts`, no route maps
+      // either to a status, and nothing switches on them over the wire — the
+      // exact carve-out `refused-project` below is written for. Their wire-facing
+      // siblings took the opposite route and were ADDED to a union rather than
+      // listed here: `'unknown-automation'` is an `AutomationRouteRefusal`
+      // member because the route really does send it in a 404 body.
+      'already-settled',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
@@ -722,15 +736,34 @@ describe('the rejection table is total, in both directions', () => {
         // above gives: an allowlist accepts one spelling for ever, a guard accepts a
         // member added later and still rejects a typo'd one.
         || isReclaimRefuseCode(tok)
-        // TASK 3 (D-2174) — the SEVENTH union, checked together and never
-        // merged, on the standing rule `enter-ignored` states above. The ask
-        // pre-emption routes spell five route-level refusals (`unknown-ask`,
-        // `not-held`, `ask-moved`, `not-parent`, and `child-unmeasurable`
-        // from the whole-branch review) as literals in server/src/coord,
-        // alongside `answerAsk`'s own ten — same refusal family, one union,
-        // admitted through its own exported guard rather than NOT_CODES.
+        // AUTOMATIONS — the SEVENTH..TENTH unions, checked together and never
+        // merged, on the same standing rule. `store.ts`'s
+        // `AutomationFilter.last` narrows the list by an outcome OR by
+        // `'never-ran'` (`lastFireAt IS NULL`), which is deliberately NOT an
+        // `AutomationOutcome`: no run row can carry it, so putting it in that
+        // union would put a word there nothing can write. Admitted the way
+        // every admission above is — through the exported guard, never an
+        // allowlist pin per member.
+        || isAutomationLastFilter(tok)
+        || isAutomationOutcome(tok)
+        || isAutomationRefusal(tok)
+        || isAutomationRouteRefusal(tok)
+        // TASK 3 (D-2174) — the ask pre-emption lane's own union, checked
+        // together with the rest and never merged, on the standing rule
+        // `enter-ignored` states above. The ask routes spell five route-level
+        // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`, and
+        // `child-unmeasurable` from the whole-branch review) as literals in
+        // server/src/coord, alongside `answerAsk`'s own ten — same refusal
+        // family, one union, admitted through its own exported guard rather
+        // than NOT_CODES.
+        //
+        // BOTH SIDES OF THIS MERGE APPENDED HERE, each calling its own the
+        // "seventh" union; they are the seventh and the eighth-through-
+        // eleventh, and the admission is one expression, so they are joined
+        // rather than stacked.
         || isAskRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, `
+        + `SessionLifecycle, ReclaimRefuseCode, AskRefuseCode or automations vocabulary member`).toBe(true);
     }
   });
 });

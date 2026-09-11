@@ -50,12 +50,24 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // a real client was pinned by a source-text grep and nothing else. The positive
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
-const collect = (ws: WebSocket, opts: { dropDivergence?: boolean } = {}) => {
+// `dropAutomations` is the SAME shape and opt-in for the same reason, added
+// with Task 10's frame. `tick()` now also calls `emitAutomations`, whose
+// byte-equality guard starts at `null` — so the FIRST tick after a socket
+// opens always emits one `automations` frame, and it lands between a ticking
+// test's `runs` assertions. Two cases in this file broke on exactly that.
+//
+// It is opt-in, not blanket, for the lesson `dropDivergence` records directly
+// above: a blanket drop would make this frame untestable here by construction.
+// The positive cases live in `automations-sweep.test.ts` (the emit, the
+// byte-diff, the empty-first-measurement) and in the cold-start order case at
+// the bottom of this file, which can only exist because the drop is opt-in.
+const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; dropAutomations?: boolean } = {}) => {
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
     const m: unknown = JSON.parse(String(d));
     if (opts.dropDivergence === true && (m as { type?: unknown }).type === 'divergence') return;
+    if (opts.dropAutomations === true && (m as { type?: unknown }).type === 'automations') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -104,7 +116,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+    const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => {
       ws.on('open', () => resolve());
       ws.on('error', reject);
@@ -166,7 +178,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+    const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
     const hello = await next(); // hello precedes every fleet frame — see the test above
@@ -580,7 +592,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
       expect((await next()).type).toBe('hello');
@@ -622,7 +634,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
       expect((await next()).type).toBe('hello');
@@ -651,7 +663,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
@@ -681,7 +693,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
@@ -1038,6 +1050,70 @@ describe('fleet REST + WS', () => {
       bus.emit('divergence', []);
       expect(await next()).toEqual({ type: 'divergence', divergences: [] });
 
+      ws.close();
+    });
+  });
+
+  describe('the `automations` cold start — the case this file\'s own drop comment promised', () => {
+    /** `dropAutomations` is opt-in precisely so THIS can exist: a blanket
+     *  drop would have made the frame untestable here by construction, which
+     *  is the lesson `dropDivergence` records directly above. The comment at
+     *  the top of this file has claimed "the cold-start order case at the
+     *  bottom of this file" since Task 10 and there was no such case — and
+     *  `watcher.currentAutomations()` had no test reference anywhere in the
+     *  tree, so the one thing that carries the frame to a CONNECTING client
+     *  (as opposed to a ticking one) was pinned by nothing. */
+    const connect = async (over: Partial<Deps> = {}, opts: { tick?: boolean } = {}) => {
+      const deps = { ...testDeps(home), ...over };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      if (opts.tick !== false) await watcher.tick();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: opts.tick !== false });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      return { ws, next, watcher, bus };
+    };
+
+    it('sends automations LAST in the burst, after hello/fleet/runs/coord', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.insertAutomation(
+        { name: 'nightly', project: 'demo', prompt: 'go', graceMs: 1_800_000,
+          cadence: { kind: 'wall-clock', days: 0b1111111, minuteOfDay: 540, tz: 'UTC' } },
+        1_700_000_000_000,
+      );
+      const { ws, next } = await connect({ coord });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('runs');
+      expect((await next()).type).toBe('coord');
+      const frame = await next();
+      expect(frame.type, 'chained after coord inside the same .then, so this is the order '
+        + 'every client relies on').toBe('automations');
+      expect(frame.automations.map((a: { name: string }) => a.name)).toEqual(['nightly']);
+      ws.close();
+    });
+
+    it('sends NOTHING for automations before the first tick — never a fabricated empty list', async () => {
+      // `currentAutomations()` is null until a tick has measured, and the
+      // screen is REQUIRED to tell "none" from "no answer yet": an invented
+      // `[]` would make it claim a measurement nobody took, and its
+      // `data-state="empty"` sentence is a positive claim.
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const { ws, next, bus } = await connect({ coord }, { tick: false });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      // `runs` still arrives: its cold start reads the store, not a
+      // measurement the watcher took. `coord` and `automations` do not,
+      // because both are read off the WATCHER and both answer null until a
+      // tick — which is the distinction this case exists to keep.
+      expect((await next()).type).toBe('runs');
+      bus.emit('notice', { message: 'unrelated' });
+      expect(await next(), 'no coord and no automations frame may arrive before the notice')
+        .toEqual({ type: 'notice', message: 'unrelated' });
       ws.close();
     });
   });

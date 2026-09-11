@@ -845,6 +845,73 @@ describe('fleet store', () => {
   // instance of `runsFrameSeen`'s idiom (D-1138). The resume door on /runs has
   // to tell "this box says nothing claims that id" apart from "no frame has
   // arrived yet", and `sessions` cannot answer it in EITHER direction.
+  describe('the `automations` frame', () => {
+    /** The frame's own arm and reducer had no store test at all: the screen's
+     *  fixtures seed the slice with `setState`, which walks past both. `runs`
+     *  and `coord` each got the accepts / malformed / honest-empty trio by
+     *  this same idiom, and this frame — additive, and the one the phone's
+     *  whole automations surface is fed by — got none of it. */
+    const summary = (id: number, name: string) => ({
+      id, name, state: 'paused', project: 'ccrc-pwa', prompt: 'go',
+      cadenceKind: 'wall-clock', cadenceDays: 0b1111111, cadenceMinute: 540,
+      cadenceEvery: null, tz: 'UTC', graceMs: 1_800_000, createdAt: 0, updatedAt: 0,
+      provedAt: null, nextRunAt: null, scheduleError: null, lastFireAt: null,
+      lastOutcome: null, lastRefusal: null, consecutiveFailures: 0, runsEvicted: 0,
+    });
+
+    it('accepts a well-formed automations frame and stores it', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().automationsFrameSeen).toBe(false);
+      const automations = [summary(1, 'nightly')];
+      lastSocket().message(JSON.stringify({ type: 'automations', automations }));
+      expect(store.getState().automations).toEqual(automations);
+      expect(store.getState().automationsFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('rejects one whose `automations` is not an array, SILENTLY — the property old clients depend on', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'automations' }))).not.toThrow();
+      expect(store.getState().automations).toEqual([]);
+      expect(store.getState().automationsFrameSeen,
+        'a malformed frame must not flip "the socket has genuinely spoken" either').toBe(false);
+      store.getState().disconnect();
+    });
+
+    it('a well-formed frame carrying `[]` still flips automationsFrameSeen', () => {
+      // The distinction the screen's three empty states rest on: "answered
+      // empty" is not "no answer yet", and only this flag tells them apart.
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'automations', automations: [] }));
+      expect(store.getState().automations).toEqual([]);
+      expect(store.getState().automationsFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('a later frame REPLACES the list rather than merging into it', () => {
+      // It is a full snapshot of the store's default filter, so a row that
+      // left that filter (retired) must leave the list too — a merge would
+      // keep it on screen for ever.
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'automations', automations: [summary(1, 'nightly'), summary(2, 'weekly')] }));
+      lastSocket().message(JSON.stringify({ type: 'automations', automations: [summary(2, 'weekly')] }));
+      expect(store.getState().automations.map((a) => a.id)).toEqual([2]);
+      store.getState().disconnect();
+    });
+  });
+
   describe('the `fleet` frame and its own frameSeen', () => {
     it('accepts a well-formed fleet frame and flips `fleetFrameSeen`', () => {
       const store = createFleetStore({ makeSocket });

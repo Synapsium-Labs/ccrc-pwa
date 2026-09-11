@@ -570,6 +570,34 @@ export const INHERITED_GROUNDS = {
 // unregistered.
 
 export const OPACITY_REGISTRY = {
+  // The run row's secondary meta — trigger and timestamp — faded to keep a
+  // hierarchy the ordinary ink scale cannot supply here: the row sits on
+  // `--bg-well`, which is dark in BOTH themes, so `--ink-tertiary` is not
+  // available to it (3.17:1, the trap `chat.css:172` records). The fade
+  // composites `--ink-on-well` over the well and is measured, not assumed.
+  'auto.css .auto-run-row .auto-run-trigger, .auto-run-row .auto-run-when 0.78': {
+    pairs: [[
+      'the run trigger and time on the run row well',
+      'var(--ink-on-well)', ['var(--bg-well)'], 4.5,
+    ]],
+  },
+  // The step trail's own secondary meta, and its two waiting sentences. Same
+  // ground and same reasoning as the run row above: the trail renders INSIDE
+  // the run row, so it sits on `--bg-well` (dark in both themes) and the
+  // ordinary ink scale is unavailable to it. The fade composites
+  // `--ink-on-well` over the well and is measured, not assumed.
+  'auto.css .auto-step-row .auto-step-when 0.78': {
+    pairs: [[
+      "the step time on the run row's well",
+      'var(--ink-on-well)', ['var(--bg-well)'], 4.5,
+    ]],
+  },
+  'auto.css .auto-step-loading, .auto-step-empty 0.78': {
+    pairs: [[
+      'the step trail\'s loading/empty sentence on the run row well',
+      'var(--ink-on-well)', ['var(--bg-well)'], 4.5,
+    ]],
+  },
   'fleet.css .bell 0.55': {
     noText: 'an emoji glyph button with an aria-label; it carries its own bitmap palette, no token colour composites here, and the meaningful state (.bell--on) is opacity 1',
   },
