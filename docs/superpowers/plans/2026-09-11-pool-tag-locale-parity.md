@@ -84,6 +84,28 @@ see "What changes for a live box" below.
   **Fix:** the same `local LC_ALL=C`, in `_pool_name_valid` itself, so it covers both the reader's call
   and the writer's.
 
+- **D-2542 (2026-09-11)** — **The same collation range, in the same verb, on the project name.**
+  `_ws_project_valid`'s `[[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]` is two collation ranges with the identical
+  exposure D-2522 describes, and `cmd_project_pool` calls BOTH — `_ws_project_valid` for the project,
+  `_pool_name_valid` for the pool. Shadowing only the pool half would have shipped a half-fixed verb.
+  **The asymmetry is what makes it worth taking here rather than later.** The reader is now
+  locale-independent; this gate was not. A project tagged from an interactive shell (`LANG=en_US.UTF-8`)
+  could then not be CLEARED from the fleet's own `claude-session@*` environment, which carries no
+  `LANG` at all: the tag keeps constraining placement while `ccd project-pool --clear` refuses the very
+  name that created it. A constraint you can create and cannot remove with the supported verb is worse
+  than either locale's behaviour alone. Pre-existing on `main` — this change neither introduced it nor
+  would have fixed it without being told.
+  **Fix:** the same `local LC_ALL=C`.
+
+- **D-2543 (2026-09-11)** — **REPORTED, NOT TAKEN.** `_rc_enabled` decides whether sessions spawn with
+  `--remote-control` by squeezing whitespace out of the file's first line with
+  `${first//[[:space:]]/}` — the same locale-dependent class, so a `remote-control` file whose `on` is
+  followed by U+3000 reads `on` under a UTF-8 locale and not under `C`. Its doctor mirror
+  (`ccrc-doctor-checks`, the `case "${first//[[:space:]]/}"` arm) repeats it. Verified by measurement,
+  and deliberately NOT fixed here: it is a different subsystem from the pool tag, and a change whose
+  scope is "one tag, one answer" should not quietly grow a remote-control fix. Filed so the finding
+  survives the PR that found it.
+
 ---
 
 ## What changes for a live box
@@ -126,6 +148,8 @@ wave puts tags on boxes.
   | revert the server strip to `\s` | RED (7) | NBSP, FIGSP, NNBSP, BOM |
   | drop the doctor's shadow | RED (5) | the doctor's locale rows |
   | control: cap `>= 64` to `> 64` (D-2010) | RED (1) | the 64-byte row |
+| drop the `_ws_project_valid` shadow | RED (1) | the source-level pin (D-2542) |
+| drop `\v` and `\f` from the strip class | RED (2) | the VT and FF rows |
 
 - **The matrix found two holes in the suite itself**, which is the reason it was run rather than
   assumed. Choosing the UTF-8 locale BY NAME picked `C.utf8`, whose collation is codepoint order, so
