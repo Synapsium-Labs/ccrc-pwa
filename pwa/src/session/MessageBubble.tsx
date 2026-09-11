@@ -24,6 +24,7 @@ import go from 'highlight.js/lib/languages/go';
 import type { ChatEvent } from '../../../shared/api';
 import { splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
+import { resetClock } from '../lib/clock';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
@@ -306,6 +307,17 @@ export function MessageBubble({
       return (
         <p className="sys-divider sys-divider--stalled">
           restart · interrupted turn not re-driven — send a message to resume
+        </p>
+      );
+    }
+    if (event.origin === 'limit') {
+      // D-2366: the row Claude Code appends on a 429 is a harness event. The
+      // viewer's clock, not the box's; Claude Code's own sentence ("… resets
+      // Sep 15, 12am (UTC)") stays as the tooltip so nothing is lost.
+      const when = event.resetsAt !== undefined ? resetClock(event.resetsAt) : null;
+      return (
+        <p className="sys-divider sys-divider--limit" title={event.text}>
+          {when === null ? `usage limit · ${event.text}` : `usage limit · resets ${when}`}
         </p>
       );
     }

@@ -66,7 +66,7 @@ const storeWith = (over: { runs?: RunSummary[]; runsFrameSeen?: boolean }): Flee
  *  omission. */
 const runFor = (sessionId: string, id: number, program: string,
                 wave: number, waveOf: number | null): RunSummary => ({
-  id, program, programTitle: 'Fleet controls', wave, waveOf, project: 'demo',
+  id, program, programTitle: 'Fleet controls', wave, waveOf, project: 'demo', homeProject: null,
   sessionId, workspace: sessionId, branch: `ws/${sessionId}`,
   state: 'working', claimedBy: 'demo-coordinator', resumed: false, clearedAt: null,
   openedAt: 1785300000000, dispatchStartedAt: null,

@@ -410,40 +410,39 @@ describe('Build 7 nouns', () => {
   // the mechanism it claimed to be standing on.
   //
   // Same shape as the terminal-trio scan below, and for the same reason: the
-  // shipped list is BUILT by interpolation from the two exported constants, so
+  // shipped list is BUILT by interpolation from the three exported constants, so
   // this scanner sees no literal at all in the real source, and any hand-written
-  // SQL list of the pair scores a hit. Either order, because a copy written from
-  // memory is as likely to be the other way round.
+  // SQL list of the SET scores a hit. Any order, because a copy written from
+  // memory is as likely to land in any of the three's six permutations.
   //
   // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
-  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
-    const PAIR = new RegExp(
-      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
-    // The premise, established inside the test rather than assumed: this pattern
-    // really does recognise the copy it forbids, in both orders. Without these
-    // two lines the assertion below is satisfied by a regex that matches nothing.
-    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
-    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
-    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+  it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,2}\\)`);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound')")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
-    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the two named constants, so
+    // …and the one definition is still built from the three named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
-    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
+                        'MAIL_REBIND_SUPERSEDED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
     }
-    // The two readers that must keep reaching the constant — "the copies are
-    // gone" is also satisfied by deleting the exclusion from both.
+    // The readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from all of them.
     expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
   });
@@ -749,7 +748,7 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
       'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
     expect(doc, 'the docstring does not name the in-file caller')
-      .toContain('requeueAbandonedCoordinatorMail');
+      .toContain('requeueAbandonedMail');
   });
 
   /** Statement keywords that wear a declaration's shape at two-space indent. A
@@ -961,13 +960,15 @@ describe('the account roster — config dir is data, joined in one place', () =>
 });
 
 describe('the program ledger is parsed by nothing', () => {
-  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
-  // actual mechanism is "no file under server/src mentions
-  // docs/superpowers/programs" — narrowed only as far as the shipped tree
-  // forces: nine mentions exist today, and every one but three is a comment
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4
+  // records the historical server-only claim, "no file under server/src
+  // mentions docs/superpowers/programs." The live guard scans all four source
+  // roots, narrowed only as far as the shipped tree forces: ten mentions exist
+  // today, and every one but three is a comment
   // explaining the convention (coord/db.ts's own migration-rule docstring,
   // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
-  // shared/api.ts). The three non-comment mentions are STRING VALUES the
+  // shared/api.ts, watch.ts's own build4-dogfood citation). The three
+  // non-comment mentions are STRING VALUES the
   // running system emits or throws — never a value it reads back off disk —
   // and are named below, exactly, rather than pattern-matched: a
   // `readFile(Sync)?(` check on the same line catches only the single-line
@@ -984,9 +985,6 @@ describe('the program ledger is parsed by nothing', () => {
     // message; neither reads a byte off either path.
     "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
     "'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +",
-    // coord/routes.ts:692 — POST /api/runs's response names where a
-    // coordinator should commit the ledger; the route never opens it.
-    'ledgerPath: `docs/superpowers/programs/${program}.md`,',
     // shared/api.ts's `ledgerPath` — the same category as the entry above,
     // one ring down: it NAMES the path the operator is expected to have
     // committed, before `POST /api/runs` is ever composed, and never opens it.

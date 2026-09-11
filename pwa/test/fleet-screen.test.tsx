@@ -295,8 +295,8 @@ describe('FleetScreen', () => {
       conn: 'open',
       sessions: [],
       feed: [
-        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '' },
-        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '' },
+        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
+        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
       ],
     });
     expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
@@ -1202,7 +1202,7 @@ const RUN_FROZEN = 1_800_000_000_499;
 
 const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'OpenClawHetzner', sessionId: null, workspace: null, branch: null,
+  project: 'OpenClawHetzner', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
   openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },

@@ -290,6 +290,13 @@ const MAIL_REPLAY_MS = 600_000;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
 
+/** D-2369: how long a nudge is held when the recipient's own auto-continue is
+ *  armed. Not a backoff step: the recipient is not failing, it is waiting, so
+ *  the hold counts no attempt and `MAIL_MAX_ATTEMPTS` cannot park it. Five
+ *  minutes against a reset that may be hours away: cheap re-reads, and the
+ *  first sweep after the session resumes delivers. */
+const MAIL_ARMED_HOLD_MS = 300_000;
+
 /** The ceiling on successful, UNACKED replays (review finding 20) — see
  *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
  *  this role. At `MAIL_REPLAY_MS` (10 min) between replays, 20 attempts is
@@ -1256,6 +1263,7 @@ export class FleetWatcher {
         kind: 'mail', sessionId: m.toId, project,
         title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
+        runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
@@ -1304,6 +1312,7 @@ export class FleetWatcher {
           kind: 'run', sessionId: r.sessionId, project: r.project,
           title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
           body: `program:${r.program} wave ${r.wave}/${r.waveOf ?? '?'}`,
+          runId: r.runId,
           tag: `run-${r.runId}-${r.toState}`,
           recordAlways: true,
           recordOnly: r.toState === 'closing',
@@ -1348,6 +1357,14 @@ export class FleetWatcher {
    */
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
+    /** WHICH RUN this push is about, when the lane raising it knows one
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: four of
+     *  this method's seven call sites are about a session and about no run at
+     *  all, and an omitted field and an explicit `null` are the SAME fact for
+     *  this one field — "about no run" — which is why folding them costs
+     *  nothing. The three lanes that know a run pass the one they already
+     *  have: the mail lane, the run lane, and the blocked-sender lane. */
+    runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
      *  pass one: two different messages about one session must not replace
@@ -1380,7 +1397,8 @@ export class FleetWatcher {
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
     const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body });
+    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
+      runId: e.runId ?? null });
     void log?.flush();
     // The durable feed archive — same record, same point, ALL kinds (Task
     // 10's orchestrator-added scope). Only reachable when NotifyLog actually
@@ -2912,7 +2930,7 @@ export class FleetWatcher {
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -2992,10 +3010,22 @@ export class FleetWatcher {
             project: sessionProjects.get(senderId) ?? '',
             title: `✉ blocked › ${d.toId}`,
             body: `${origin.subject}: ${why}`,
+            runId: origin.runId,
             tag,
             recordAlways: true,
           }, projects);
         };
+
+        if (res.error === 'auto-continue-armed') {
+          // D-2369. Before the attempts ceiling on purpose: a held delivery is
+          // not a failed one. Told once per hold, like draft-present.
+          if (d.lastError !== 'auto-continue-armed') {
+            tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
+              `mail-blocked-${d.id}`);
+          }
+          store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          continue;
+        }
 
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,

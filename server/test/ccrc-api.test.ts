@@ -207,6 +207,10 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    // The durable feed, filterable by programme (cross-repo programmes §4). A
+    // NEW ROW rather than a `--program` on some existing one: the table is the
+    // client's own contract and grows by a row, never by a URL argument.
+    [['feed', 'list'], 'GET', '/api/feed'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
@@ -231,10 +235,9 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Eighteen since `runs items-list` landed. That row is NOT a widening of
-    // the surface by imitation — it is the READ half of `runs items`, which
-    // was unusable without it: settling needs ids and nothing published them.
-    expect(keys).toHaveLength(18);
+    // Nineteen since `feed list` landed — the programme-scoped read of the
+    // durable feed, which the coordinator corpus is about to name.
+    expect(keys).toHaveLength(19);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -400,10 +403,12 @@ describe('an id reaches a path template only if the table declared one', () => {
 });
 
 describe('a query key rides only if its row declared it', () => {
-  // The corpora ask for four of these and no more: `to`, `project`, `session`,
-  // `of`. Anything else is refused rather than appended, for the same reason the
-  // path is a template and not an argument — a client that forwarded arbitrary
-  // query keys would be a URL builder with extra steps.
+  // Every key any row declares, today: `to`, `program`, `all`, `limit` (mail
+  // list), `of`/`project` (peers), `session` (lifecycle), `project`/`all`
+  // (claims), `project` (ledger), `program`/`limit` (feed list). Anything else
+  // is refused rather than appended, for the same reason the path is a template
+  // and not an argument — a client that forwarded arbitrary query keys would be
+  // a URL builder with extra steps.
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
@@ -436,6 +441,30 @@ describe('a query key rides only if its row declared it', () => {
       expect(r.status, `value ${JSON.stringify(bad)} must be refused`).not.toBe(0);
       expect(seen, `value ${JSON.stringify(bad)} must not reach the wire`).toHaveLength(0);
     }
+  });
+
+  it('appends the programme filter on mail list', async () => {
+    await run(['mail', 'list', '--program', 'build4']);
+    expect(seen[0]!.url).toBe('/api/mail?program=build4');
+  });
+
+  it('exercises `all` and `limit` on mail list together — neither is a bare flag', async () => {
+    // The generic `--*` arm (`:279`–`:287`) always consumes a VALUE — there is
+    // no bare-flag form on this client — so `--all` rides as `--all 1`, exactly
+    // like `GET /api/mail?to=`'s existing `all` key.
+    await run(['mail', 'list', '--program', 'build4', '--all', '1', '--limit', '20']);
+    expect(seen[0]!.url).toBe('/api/mail?program=build4&all=1&limit=20');
+  });
+
+  it('reaches the feed, filtered and limited', async () => {
+    await run(['feed', 'list', '--program', 'build4', '--limit', '50']);
+    expect(seen[0]!.url).toBe('/api/feed?program=build4&limit=50');
+  });
+
+  it('refuses a key feed list does not declare', async () => {
+    const r = await run(['feed', 'list', '--to', 'demo-quiet-mesa']);
+    expect(r.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
   });
 });
 

@@ -1824,7 +1824,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (log) {
       try {
         const ev = log.record({
-          kind: 'ask', sessionId: id,
+          kind: 'ask', sessionId: id, runId: null,
           title: 'question answered',
           body: `operator answered ${id}'s question: ${held.question} → ` +
                 `${held.options[optionIndexes[0]!] ?? '?'}`,

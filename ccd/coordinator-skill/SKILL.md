@@ -168,6 +168,7 @@ client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
+`project-mismatch`, `home-mismatch`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
 `unknown-item`, `item-terminal`. Their meanings are in

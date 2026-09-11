@@ -10,10 +10,10 @@ import { mkTmp } from './tmpHelpers.js';
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
 describe('the asks table', () => {
-  it('is created at schema version 9 with the columns the lane needs', () => {
+  it('is still present after schema version 10 adds the cross-repo columns', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    expect(COORD_SCHEMA_VERSION).toBe(9);
+    expect(COORD_SCHEMA_VERSION).toBe(10);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

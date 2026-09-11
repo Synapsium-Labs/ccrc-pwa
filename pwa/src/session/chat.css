@@ -823,6 +823,9 @@ button.metachip:active {
    --edge-warning are not tokens this tree defines. */
 .sys-divider--restart { color: var(--ink-secondary); }
 .sys-divider--stalled { color: var(--status-attention-text); border-color: var(--status-attention-text); }
+/* D-2366: a limit is "waiting on the world", the same attention ink as the
+   stall — the tree defines no third tone for it. */
+.sys-divider--limit { color: var(--status-attention-text); border-color: var(--status-attention-text); }
 
 /* ------------------------------------------------------------------ *
  *  User turns — input: right-aligned raised bubbles + mono receipts.  *

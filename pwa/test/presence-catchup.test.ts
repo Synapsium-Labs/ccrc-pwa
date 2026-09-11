@@ -150,8 +150,8 @@ describe('the reconnect catch-up', () => {
     const catchUp = vi.fn(async (e: string | null, s: number) => {
       seen.push([e, s]);
       return resp({ seq: 5, events: [
-        { seq: 4, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '' },
-        { seq: 5, at: 2, kind: 'done', sessionId: 'cc-b', title: 'f', body: '' },
+        { seq: 4, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '', runId: null },
+        { seq: 5, at: 2, kind: 'done', sessionId: 'cc-b', title: 'f', body: '', runId: null },
       ] });
     });
     const f = fakeSocket();
@@ -175,7 +175,7 @@ describe('the reconnect catch-up', () => {
     saveMark({ epoch: 'old', seq: 9 });
     const catchUp = vi.fn(async () => resp({
       epoch: 'new', seq: 2, resync: true,
-      events: [{ seq: 1, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '' }],
+      events: [{ seq: 1, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '', runId: null }],
     }));
     const f = fakeSocket();
     const store = createFleetStore({ makeSocket: () => f.ws, catchUp });
@@ -232,8 +232,8 @@ describe('the reconnect catch-up', () => {
     f.open();                                    // reconnect while #1 is in flight
     expect(seen).toHaveLength(1);                // queued behind it, not fired
     release!(resp({ seq: 7, events: [
-      { seq: 6, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '' },
-      { seq: 7, at: 2, kind: 'done', sessionId: 'cc-b', title: 'f', body: '' },
+      { seq: 6, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '', runId: null },
+      { seq: 7, at: 2, kind: 'done', sessionId: 'cc-b', title: 'f', body: '', runId: null },
     ] }));
     await vi.waitFor(() => expect(seen).toHaveLength(2));
     // The second request read what the first one WROTE.
@@ -244,7 +244,7 @@ describe('the reconnect catch-up', () => {
 
   it('clearFeed empties the list', async () => {
     const catchUp = vi.fn(async () => resp({
-      events: [{ seq: 5, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '' }],
+      events: [{ seq: 5, at: 1, kind: 'ask', sessionId: 'cc-a', title: 'q', body: '', runId: null }],
     }));
     const f = fakeSocket();
     const store = createFleetStore({ makeSocket: () => f.ws, catchUp });

@@ -785,6 +785,34 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
     });
 
+    it('records the feed row with the run id when the mail is run-scoped (review finding 2)', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'build7/wave1', false);
+      const mail = w.coord!.insertMail({
+        fromId: 'cc-a', fromUuid: 'u-a', toId: 'coordinator', runId: run.id,
+        kind: 'status', subject: 'wave 1 update', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(mail.id, 'cc-a', 'e1');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      // `pushOne` must forward the run the mail lane already knows into the
+      // durable feed, not just onto the decorated title — GET
+      // /api/feed?program= depends on this column, and its only writer is
+      // `pushNewMail`'s `runId: m.runId` (watch.ts).
+      expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id]);
+    });
+
     // Review finding 3. `mailQueuedSince`'s `project` comes off a `LEFT
     // JOIN` to the mail's run and is NULL for ad-hoc mail with no run — a
     // fully supported case (`POST /api/mail` treats `runId` as optional) —
@@ -890,6 +918,10 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(w.coord!.feedEvents(10).map((e) => e.title)).toEqual([
         '▸ dispatched › ccrc-pwa', '▸ closing › ccrc-pwa', '▸ done › ccrc-pwa',
       ]);
+      // review finding 1 (fix round 2): the run lane's own feed rows must
+      // carry the run they are about — every one of the three, since
+      // `recordAlways` records the suppressed `closing` push too.
+      expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id, run.id, run.id]);
     });
 
     it('never pushes or records a NON-transition row on a bound run', async () => {
