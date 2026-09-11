@@ -778,11 +778,7 @@ _hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behi
 # claims remain for the existing stale `.*compact*.tmp` sweep, so a third writer
 # cannot turn a successful restore into data loss.
 _hook_compact_rollback_set() {   # <set> <nonce> <original document>
-  local set="$1" nonce="$2" original="$3" current="" claim="" restore="" claimed_nonce=""
-  # This exact-byte fast path leaves canonical untouched; after it observes the
-  # initial document, rollback makes no canonical-path action unless it claims.
-  current=$(cat "$set" 2>/dev/null) || current=""
-  [[ "$current" == "$original" ]] && return 0
+  local set="$1" nonce="$2" original="$3" claim="" restore="" claimed_nonce=""
   # This nonce shape is generated above, never supplied by an untrusted caller.
   claim="$REG/.$id.$$.${nonce}.compactset-rollback.tmp"
   restore="$REG/.$id.$$.${nonce}.compactset-restore.tmp"

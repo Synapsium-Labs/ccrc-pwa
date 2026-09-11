@@ -343,8 +343,7 @@ then prints `STEER_TEXT` (§3.5) — one line, plain text, the second and last d
 file — and stamps. Exit 3: the working set was empty — the set is rewritten with `files: []`, no card.
 Any other exit (a slot no longer the helper's, a graph over `GRAPH_MAX_BYTES`, a failure), or the
 timeout: the hook rolls back **both set and card** through atomic regular-file claims. For the set it
-first compares the canonical set with the exact original document; a match is a safe no-op. Otherwise
-it stages a regular claim placeholder and an exact-byte original-restore source, then atomically
+stages a regular claim placeholder and an exact-byte original-restore source, then atomically
 renames the set into the claim before inspecting its nonce. A claimed A set is restored only with POSIX `link source
 target` no-clobber creation from the staged original; a claimed B/C set is restored only with the
 same no-clobber link from its claim. The foreign claim remains after either a failed or successful

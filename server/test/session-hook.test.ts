@@ -2542,6 +2542,32 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(readState().state).toBe('working');
   });
 
+  it('timeout rollback restores the exact original bytes when its A-owned helper rewrite carries extra terminal LFs', () => {
+    const tree = cardTree(); plantHelper();
+    const original = path.join(home, 'hook-before-helper.compactset');
+    stub('timeout', [
+      `cp "$HOME/.cc-sessions/demo-quiet-basin.compactset" "${original}"`,
+      'shift; "$@"',
+    ].join('\n'));
+    stub('node', [
+      // This failed helper's rewrite retains the hook JSON but leaves abnormal
+      // terminal bytes while its nonce still owns the canonical set.
+      'set=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = --set ]; then set="$2"; break; fi',
+      '  shift',
+      'done',
+      '[ -n "$set" ] || exit 92',
+      `cp "${original}" "$set"`,
+      'printf "\\n\\n" >> "$set"',
+      'exit 71',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile())).toEqual(fs.readFileSync(original));
+    expect(readSet().files).toBeNull();
+  });
+
   it('timeout rollback never restores or removes a later nonce owner', () => {
     const tree = cardTree(); plantHelper();
     const laterSet = '{"v":1,"at":1,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
