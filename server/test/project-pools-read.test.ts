@@ -1,13 +1,14 @@
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`server/src/io.ts:99` — the one read
+// is not there" into "the directory would not list" (`server/src/io.ts:103` — the one read
 // with no measured sibling). This reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
 // direction silently LIFTS every project's pool constraint, which is the whole
 // class of defect this feature exists inside.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
@@ -46,7 +47,7 @@ const tag = (project: string, bytes: string): void => {
 
 describe('readProjectPools — absent, unlistable and the four per-entry states', () => {
   it('a null ROOT listing is listed:false — the registry itself could not be read', async () => {
-    const read = await readProjectPools(localIO, cfg(), null, null);
+    const read = await readProjectPools(localIO, cfg(), null, 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -54,7 +55,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   it('a root listing WITHOUT pools/ is a MEASURED absence — every project untagged', async () => {
     // Ruling 3: nothing strands on rollout. Nobody has tagged anything, and
     // that is a positive answer, not a failure to look.
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: true, tags: new Map() });
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -65,7 +66,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // `remote/io.ts` answers for a whitelist refusal (`remote/io.ts:104-112`).
     // The permissive reading — an empty map — would lift every tag on the box.
     writeFileSync(pools, 'not a directory');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -87,7 +88,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b\n');
     tag('acct-a-demo', ' pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
@@ -119,7 +120,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // `POOL_NAME_RE` ever admits a NUL, or if the cap is ever applied to the
     // STRIPPED value, or if this reader ever stops holding the whole string.
     tag('acct-a-demo', 'pool-a\0pool-b');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'malformed' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo'),
@@ -130,7 +131,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool a');
     tag('quiet-basin', 'Pool-A');
     tag('acct-a-demo', '');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     for (const p of ['demo', 'quiet-basin', 'acct-a-demo']) {
       expect(poolFor(read, p), p).toEqual({ state: 'malformed' });
     }
@@ -140,7 +141,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b');
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/quiet-basin`));
-    const read = await readProjectPools(io, cfg(), await rootNames(), null);
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
   });
@@ -150,7 +151,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // which is exactly what `readFileMeasured` exists to be able to say.
     tag('demo', 'pool-a');
     const io = absentReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames(), null);
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(read.listed && read.tags.has('demo')).toBe(false);
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -161,13 +162,13 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // skip is exact.
     tag('demo', 'pool-a');
     tag('.demo.4242.tmp', 'pool-b');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo']);
   });
 
   it('poolFor answers untagged for a project with no entry, on a listed read', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'untagged' });
   });
 });
@@ -193,16 +194,58 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
   it('does no I/O when the root listing is unmeasurable', async () => {
     tag('demo', 'pool-a');
     const { io, ops } = countingIO();
-    expect(await readProjectPools(io, cfg(), null, null)).toEqual({ listed: false });
+    expect(await readProjectPools(io, cfg(), null, 1_000)).toEqual({ listed: false });
     expect(ops).toEqual([]);
+  });
+
+  it('bounds a route-owned root listing inside the same caller budget', async () => {
+    vi.useFakeTimers();
+    const pending = readProjectPools(
+      localIO,
+      cfg(),
+      () => new Promise<never>(() => {}),
+      1_000,
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await pending).toEqual({ listed: false });
+  });
+
+  it('does not accept a route root that settles after the monotonic deadline', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(11_001);
+
+    const read = await readProjectPools(
+      localIO,
+      cfg(),
+      async () => [POOLS_DIR_NAME],
+      1_000,
+    );
+
+    expect(read).toEqual({ listed: false });
   });
 
   it('does no I/O when the measured root listing has no pools directory', async () => {
     const names = await rootNames();
     const { io, ops } = countingIO();
-    expect(await readProjectPools(io, cfg(), names, null)).toEqual({ listed: true, tags: new Map() });
+    expect(await readProjectPools(io, cfg(), names, 1_000)).toEqual({ listed: true, tags: new Map() });
     expect(ops).toEqual([]);
   });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'fails shut without I/O when a direct caller supplies unusable budget %s',
+    async (budgetMs) => {
+      tag('demo', 'pool-a');
+      const names = await rootNames();
+      const { io, ops } = countingIO();
+
+      expect(await readProjectPools(io, cfg(), names, budgetMs)).toEqual({ listed: false });
+      expect(ops).toEqual([]);
+    },
+  );
 
   it('does one readdir plus one measured read per non-dot entry', async () => {
     tag('demo', 'pool-a');
@@ -210,7 +253,7 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     tag('.demo.4242.tmp', 'pool-a');
     const names = await rootNames();
     const { io, ops } = countingIO();
-    const read = await readProjectPools(io, cfg(), names, null);
+    const read = await readProjectPools(io, cfg(), names, 1_000);
     expect(read.listed).toBe(true);
     expect(ops).toEqual(['readdir', 'readFileMeasured', 'readFileMeasured']);
   });
@@ -222,6 +265,7 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     vi.useFakeTimers();
     mkdirSync(pools, { recursive: true });
     const names = await rootNames();
+    const clear = vi.spyOn(globalThis, 'clearTimeout');
     const io: FleetIO = {
       ...localIO,
       readdir: async (p) => p === pools ? listing() : localIO.readdir(p),
@@ -231,6 +275,7 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(await pending).toEqual({ listed: false });
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 
   it('starts a later marker while the first marker is still unresolved', async () => {
@@ -254,21 +299,21 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     };
 
     const pending = readProjectPools(io, cfg(), names, 1_000);
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setImmediate> | undefined;
     try {
       await Promise.race([
         laterStarted,
         new Promise<never>((_, reject) => {
-          watchdog = setTimeout(
-            () => reject(new Error('later marker did not start while the first was unresolved')),
-            250,
+          watchdog = setImmediate(
+            () => reject(new Error('later marker did not start in the same launch turn')),
           );
         }),
       ]);
+      expect(started).toEqual(['demo', 'quiet-basin']);
     } finally {
-      if (watchdog !== undefined) clearTimeout(watchdog);
+      if (watchdog !== undefined) clearImmediate(watchdog);
+      releaseFirst();
     }
-    releaseFirst();
     const read = await pending;
 
     expect(started).toEqual(['demo', 'quiet-basin']);
@@ -276,16 +321,21 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-a' });
   });
 
-  it('degrades the whole listed population when the shared deadline expires', async () => {
+  it('degrades the whole listed population and aborts losing reads when the shared deadline expires', async () => {
     vi.useFakeTimers();
     mkdirSync(pools, { recursive: true });
     const names = await rootNames();
+    let losingSignal: AbortSignal | undefined;
     const io: FleetIO = {
       ...localIO,
       readdir: async (p) => p === pools ? ['demo', 'quiet-basin', 'acct-a-demo'] : localIO.readdir(p),
-      readFileMeasured: async (p) => path.basename(p) === 'demo'
-        ? { ok: true, content: 'pool-a' }
-        : new Promise(() => {}),
+      readFileMeasured: async (p, _timeoutMs, signal) => {
+        const name = path.basename(p);
+        if (name === 'demo') return { ok: true, content: 'pool-a' };
+        if (name === 'quiet-basin') return { ok: false, reason: 'absent' };
+        losingSignal = signal;
+        return new Promise(() => {});
+      },
     };
 
     const pending = readProjectPools(io, cfg(), names, 1_000);
@@ -296,11 +346,15 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'unreadable' });
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo', 'quiet-basin', 'acct-a-demo']);
+    expect(losingSignal?.aborted).toBe(true);
   });
 
   it('passes the caller budget to the listing and the remaining budget to every marker', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(10_000);
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_250);
     mkdirSync(pools, { recursive: true });
     const names = await rootNames();
     const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
@@ -309,7 +363,6 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
       readdir: async (p, timeoutMs) => {
         if (p !== pools) return localIO.readdir(p);
         seen.push({ op: 'readdir', timeoutMs });
-        vi.setSystemTime(10_250);
         return ['demo', 'quiet-basin'];
       },
       readFileMeasured: async (p, timeoutMs) => {
@@ -327,6 +380,121 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     ]);
   });
 
+  it('keeps the launch decision numeric when elapsed time becomes non-finite', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(Number.NaN);
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const reads = vi.fn(async () => ({ ok: true as const, content: 'pool-a' }));
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo'] : localIO.readdir(p),
+      readFileMeasured: reads,
+    };
+
+    const read = await readProjectPools(io, cfg(), names, 1_000);
+
+    expect(reads).not.toHaveBeenCalled();
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+  });
+
+  it('rejects a pools listing that settles after the monotonic deadline but before its timer callback', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000) // construct the deadline
+      .mockReturnValueOnce(10_000) // accept the already-measured root listing
+      .mockReturnValueOnce(11_001); // reject the pools listing itself
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const reads = vi.fn(async () => ({ ok: true as const, content: 'pool-a' }));
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo'] : localIO.readdir(p),
+      readFileMeasured: reads,
+    };
+
+    const read = await readProjectPools(io, cfg(), names, 1_000);
+
+    expect(read).toEqual({ listed: false });
+    expect(reads).not.toHaveBeenCalled();
+    const source = readFileSync(new URL('../src/pools.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/Number\.isFinite\(elapsedBudget\) \? Math\.max\(0, elapsedBudget\) : 0/);
+  });
+
+  it('degrades markers that settle after the monotonic deadline before its timer callback', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000) // construct the deadline
+      .mockReturnValueOnce(10_000) // accept the root listing
+      .mockReturnValueOnce(10_000) // accept the pools listing
+      .mockReturnValueOnce(11_001); // reject the completed marker burst
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo'] : localIO.readdir(p),
+      readFileMeasured: async () => ({ ok: true, content: 'pool-a' }),
+    };
+
+    const read = await readProjectPools(io, cfg(), names, 1_000);
+
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+  });
+
+  it.each([3_600_000, -3_600_000])(
+    'uses elapsed time immune to a %i ms wall-clock step',
+    async (wallClockStep) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(10_000);
+      mkdirSync(pools, { recursive: true });
+      const names = await rootNames();
+      const seen: Array<number | undefined> = [];
+      const io: FleetIO = {
+        ...localIO,
+        readdir: async (p) => {
+          if (p !== pools) return localIO.readdir(p);
+          vi.setSystemTime(10_000 + wallClockStep);
+          return ['demo'];
+        },
+        readFileMeasured: async (_p, timeoutMs) => {
+          seen.push(timeoutMs);
+          return { ok: true, content: 'pool-a' };
+        },
+      };
+
+      await readProjectPools(io, cfg(), names, 1_000);
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toBeGreaterThan(0);
+      expect(seen[0]).toBeLessThanOrEqual(1_000);
+    },
+  );
+
+  it('does not flood marker requests with less than 50 ms of useful budget', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_951);
+    mkdirSync(pools, { recursive: true });
+    const names = await rootNames();
+    const reads = vi.fn(async () => ({ ok: true as const, content: 'pool-a' }));
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p) => p === pools ? ['demo', 'quiet-basin'] : localIO.readdir(p),
+      readFileMeasured: reads,
+    };
+
+    const read = await readProjectPools(io, cfg(), names, 1_000);
+
+    expect(reads).not.toHaveBeenCalled();
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+    expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
+  });
+
   it('clears the deadline timer after a bounded read finishes early', async () => {
     vi.useFakeTimers();
     const clear = vi.spyOn(globalThis, 'clearTimeout');
@@ -339,9 +507,13 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('starts no marker requests after the listing exhausts the caller budget', async () => {
+  it('starts no marker requests when the listing leaves less than the launch floor', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(10_000);
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(10_951)
+      .mockReturnValueOnce(10_951);
     mkdirSync(pools, { recursive: true });
     const names = await rootNames();
     const reads = vi.fn(async () => ({ ok: true as const, content: 'pool-a' }));
@@ -349,7 +521,6 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
       ...localIO,
       readdir: async (p) => {
         if (p !== pools) return localIO.readdir(p);
-        vi.setSystemTime(11_000);
         return ['demo', 'quiet-basin'];
       },
       readFileMeasured: reads,
@@ -371,7 +542,7 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
       readFileMeasured: async () => Promise.reject(new Error('transport failed')),
     };
 
-    const read = await readProjectPools(io, cfg(), names, null);
+    const read = await readProjectPools(io, cfg(), names, 1_000);
 
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -383,7 +554,7 @@ describe('L3 may not narrow — four states in, four states out', () => {
     tag('quiet-basin', 'Pool A');     // malformed
     tag('acct-a-demo', 'pool-b');     // -> made unreadable below
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/acct-a-demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames(), null);
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect([
       poolFor(read, 'demo').state,
       poolFor(read, 'quiet-basin').state,
@@ -411,7 +582,7 @@ describe('poolsEnforcement — the three-state shape lifecycleState uses', () =>
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames(), null);
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolsWire(read, 'enforced')).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced',
     });
@@ -474,7 +645,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
     // a green mutation with a live control, i.e. a pin that cannot see the
     // defect it names. Supplying a listing that clears both early guards is what
     // puts the reader's own reads under the assertion.
-    const read = await readProjectPools(io, cfg, [POOLS_DIR_NAME], null);
+    const read = await readProjectPools(io, cfg, [POOLS_DIR_NAME], 1_000);
     // `io` is the REMOTE io, so this read crosses to the fleet box and is
     // refused there -> null -> `listed:false`. UNREADABLE, not untagged: a
     // whitelist regression must refuse to decide, not silently lift every
@@ -493,7 +664,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
     writeFileSync(path.join(dir, 'quiet-basin'), 'pool-b');
     const cfg = loadConfig({ CCRC_HOME: fixture!.home, CCRC_FLEET: 'remote' });
     const io = fleet!.io;
-    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), null);
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
   });
 });

@@ -83,10 +83,14 @@ export type MeasuredRangeRead =
 export interface FleetIO {
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
-   *  `timeoutMs` lets a consumer shorten a remote request. `localIO` ignores the
-   *  argument itself; a consumer that also races an aggregate deadline can
-   *  still bound how long it awaits local reads. */
-  readFileMeasured(path: string, timeoutMs?: number): Promise<MeasuredRead>;
+   *  `timeoutMs` overrides the remote client's ordinary request timeout; it can
+   *  shorten or lengthen that adapter-level timer. `localIO` ignores the
+   *  argument itself, so a consumer needing a strict aggregate bound must also
+   *  race its own deadline around local and remote reads. `signal` provides
+   *  best-effort cancellation beneath that deadline: ordinary local reads and
+   *  remote request-table entries stop, but Node cannot interrupt every local
+   *  filesystem syscall after dispatch. */
+  readFileMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
   /** Distinguishes absence from unreadability for a range read; the EOF arm
    *  is a positive answer. `readFileFrom` derives from this. */
@@ -96,7 +100,7 @@ export interface FleetIO {
    *  from this. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
   readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
-  readdir(path: string, timeoutMs?: number): Promise<string[] | null>;
+  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
    *  own absence marker could not be trusted before this existed. */
@@ -140,9 +144,9 @@ const failureFor = (err: unknown): ReadFailure =>
 
 /** node:fs implementation preserving today's exact behavior. */
 export const localIO: FleetIO = {
-  async readFileMeasured(p) {
+  async readFileMeasured(p, _timeoutMs, signal) {
     try {
-      return { ok: true, content: await readFile(p, 'utf8') };
+      return { ok: true, content: await readFile(p, { encoding: 'utf8', signal }) };
     } catch (err) {
       return { ok: false, reason: failureFor(err) };
     }

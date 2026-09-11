@@ -87,30 +87,78 @@ function menuPane(selected: number): string {
 }
 const DIALOG_ID = parseDialog(menuPane(1))!.id;
 
-type KnownIdCall = { method: 'GET' | 'POST'; routePath: string; args: string };
+type RouteSource = {
+  method: 'GET' | 'POST';
+  routePath: string;
+  code: string;
+};
+
+type KnownIdCall = Omit<RouteSource, 'code'> & { args: string };
+
+const withoutComments = (source: string): string =>
+  source.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
 
 /** The app registrations are two-column top-level statements in server.ts. */
-function knownIdCalls(): KnownIdCall[] {
+function serverRouteSources(): { src: string; routes: RouteSource[] } {
   const src = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
   const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
   expect(starts.length, 'the server route scan found no registrations').toBeGreaterThan(20);
 
+  return {
+    src,
+    routes: starts.map((start, i) => ({
+      method: start[1]!.toUpperCase() as 'GET' | 'POST',
+      routePath: start[2]!,
+      code: withoutComments(src.slice(start.index, starts[i + 1]?.index)),
+    })),
+  };
+}
+
+function knownIdCalls(): KnownIdCall[] {
   const calls: KnownIdCall[] = [];
-  for (let i = 0; i < starts.length; i++) {
-    const start = starts[i]!;
-    const body = src.slice(start.index, starts[i + 1]?.index);
-    // Comments describe knownId often; only the registration body can add a gate.
-    const code = body.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  for (const { method, routePath, code } of serverRouteSources().routes) {
     for (const call of code.matchAll(/\bknownId\(\s*([^\n)]*?)\s*\)/g)) {
       calls.push({
-        method: start[1]!.toUpperCase() as 'GET' | 'POST',
-        routePath: start[2]!,
+        method,
+        routePath,
         args: call[1]!.replace(/\s+/g, ' ').trim(),
       });
     }
   }
   return calls;
 }
+
+describe('HTTP pool-reader policy census', () => {
+  it('keeps all five consumers on a callback-started ten-second aggregate deadline', () => {
+    const { src, routes } = serverRouteSources();
+    const expected = [
+      { method: 'GET', routePath: '/api/fleet', reader: 'readProjectPools' },
+      { method: 'GET', routePath: '/api/projects', reader: 'readProjectPools' },
+      { method: 'POST', routePath: '/api/sessions', reader: 'readProjectPoolsWithRoot' },
+      { method: 'POST', routePath: '/api/projects/:project/pool', reader: 'readProjectPools' },
+      { method: 'POST', routePath: '/api/sessions/:id/swap', reader: 'readProjectPools' },
+    ];
+    const calls = routes.flatMap(({ method, routePath, code }) =>
+      [...code.matchAll(/\b(readProjectPools(?:WithRoot)?)\s*\(/g)].map((match) => ({
+        method,
+        routePath,
+        reader: match[1]!,
+      })),
+    );
+
+    expect(calls).toEqual(expected);
+    expect(withoutComments(src).match(/\breadProjectPools(?:WithRoot)?\s*\(/g)).toHaveLength(expected.length);
+    expect(src.match(/const PROJECT_POOLS_REQUEST_BUDGET_MS\s*=\s*10_000;/g)).toHaveLength(1);
+
+    const callbackAndBudget = /\b(?:readProjectPools|readProjectPoolsWithRoot)\(\s*deps\.io,\s*deps\.cfg,\s*\(\s*timeoutMs\s*,\s*signal\s*\)\s*=>\s*deps\.io\.readdir\(\s*deps\.cfg\.registryDir,\s*timeoutMs,\s*signal\s*\),\s*PROJECT_POOLS_REQUEST_BUDGET_MS(?:\s*,|\s*\))/;
+    for (const expectedCall of expected) {
+      const route = routes.find(({ method, routePath }) =>
+        method === expectedCall.method && routePath === expectedCall.routePath,
+      );
+      expect(route?.code, `${expectedCall.method} ${expectedCall.routePath} lost the bounded callback root`).toMatch(callbackAndBudget);
+    }
+  });
+});
 
 describe('knownId route census', () => {
   it('derives all request-id gates and the constructed-id revival probe', () => {
@@ -145,7 +193,7 @@ describe('knownId route census', () => {
       {
         method: 'POST',
         routePath: '/api/sessions',
-        args: '`${body.wrapper}-${body.project}`, rootNames',
+        args: 'candidateId, measured.rootNames',
       },
     ]);
     expect(calls).toHaveLength(requestGates.length + revivalProbes.length);

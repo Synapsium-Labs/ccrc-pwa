@@ -212,21 +212,26 @@ describe('remote FleetIO — readFileMeasured against a stub FleetClient (no rea
     expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
   });
 
-  it('forwards consumer-owned read and directory timeouts to FleetClient', async () => {
-    const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
+  it('forwards consumer-owned deadlines to FleetClient', async () => {
+    const seen: Array<{
+      op: string;
+      timeoutMs: number | undefined;
+      signal: AbortSignal | undefined;
+    }> = [];
     const client = ({
-      request: async (req: { op: string }, timeoutMs?: number) => {
-        seen.push({ op: req.op, timeoutMs });
+      request: async (req: { op: string }, timeoutMs?: number, signal?: AbortSignal) => {
+        seen.push({ op: req.op, timeoutMs, signal });
         return req.op === 'readdir' ? { names: ['one'] } : { data: 'hello' };
       },
     }) as unknown as FleetClient;
     const io = createIo(client);
-    expect(await io.readFileMeasured('/whatever/file.txt', 1_000))
+    const controller = new AbortController();
+    expect(await io.readFileMeasured('/whatever/file.txt', 1_000, controller.signal))
       .toEqual({ ok: true, content: 'hello' });
-    expect(await io.readdir('/whatever', 750)).toEqual(['one']);
+    expect(await io.readdir('/whatever', 750, controller.signal)).toEqual(['one']);
     expect(seen).toEqual([
-      { op: 'read', timeoutMs: 1_000 },
-      { op: 'readdir', timeoutMs: 750 },
+      { op: 'read', timeoutMs: 1_000, signal: controller.signal },
+      { op: 'readdir', timeoutMs: 750, signal: controller.signal },
     ]);
   });
 

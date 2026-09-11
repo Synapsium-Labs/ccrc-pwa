@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import { CCD_ARGV } from './ccdargv.js';
@@ -19,6 +20,53 @@ import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../
  */
 export const POOLS_DIR_NAME = 'pools';
 
+/** Do not launch a marker burst that has too little time to produce evidence. */
+const MARKER_LAUNCH_FLOOR_MS = 50;
+
+interface PoolReadDeadline {
+  budgetMs: number;
+  signal: AbortSignal;
+  expired(): boolean;
+  remaining(): number;
+  race<T>(operation: Promise<T>): Promise<T | null>;
+  close(): void;
+}
+
+/** One monotonic, aborting aggregate deadline for the complete pool read. */
+function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
+  const budget = Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 0;
+  if (budget === 0) return null;
+
+  const deadlineAt = performance.now() + budget;
+  const controller = new AbortController();
+  let deadlineExpired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort();
+      resolve(null);
+    }, budget);
+    timer.unref?.();
+  });
+
+  return {
+    budgetMs: budget,
+    signal: controller.signal,
+    expired: () => deadlineExpired,
+    remaining: () => {
+      const elapsedBudget = Math.floor(deadlineAt - performance.now());
+      return Number.isFinite(elapsedBudget) ? Math.max(0, elapsedBudget) : 0;
+    },
+    race: async <T>(operation: Promise<T>): Promise<T | null> =>
+      Promise.race([operation.catch(() => null), deadline]),
+    close: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.abort();
+    },
+  };
+}
+
 /**
  * One sweep of `$REG/pools/`, ring L3 (spec §5.4.4).
  *
@@ -36,6 +84,18 @@ export type ProjectPoolsRead =
   | { listed: false }
   | { listed: true; tags: Map<string, ProjectPoolWire> };
 
+/** A route-owned root measurement and its optional pool view. */
+export type ProjectPoolsWithRoot =
+  | { rootNames: readonly string[] | null; poolsRead: false }
+  | { rootNames: readonly string[] | null; poolsRead: true; pools: ProjectPoolsRead };
+
+type RootReader = (
+  timeoutMs: number,
+  signal: AbortSignal,
+) => Promise<readonly string[] | null>;
+
+type RootSource = readonly string[] | null | RootReader;
+
 /**
  * The verb whose PRESENCE in `ccd caps` is the evidence that the deployed ccd
  * honours pools (spec §5.11: "the verb and every reader ship in one `ccd`
@@ -51,122 +111,161 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
 /**
  * Read every project's pool tag in one pass.
  *
- * `rootNames` is the registry root listing the CALLER already took — the
- * watcher's `registryRead.names`, or the route's own
- * `io.readdir(cfg.registryDir)`. It is a PARAMETER rather than a read of our own
- * because it is what splits "the directory is not there" from "the directory
- * would not list": `io.readdir` cannot say (`server/src/io.ts:99` — the one read in that
- * file with no measured sibling), and the parent listing can.
+ * `root` is either the registry root listing the CALLER already took — the
+ * watcher's `registryRead.names` — or a callback that starts a route's listing
+ * only after the aggregate deadline exists. `readProjectPoolsWithRoot` is the
+ * variant for a route that also consumes that root answer.
+ * The parent listing is what splits "the directory is not there" from "the
+ * directory would not list": `io.readdir` cannot say (`server/src/io.ts:103` —
+ * the one read in that file with no measured sibling), and the parent can.
  *
  * `budgetMs` belongs to that caller too: a watcher supplies a slice of its poll
- * cadence; request routes pass `null` and retain the adapter's normal timeout.
- * When bounded, one shared deadline covers the listing and all concurrent
- * marker reads, and its remaining time is also forwarded to remote FleetIO.
- * The aggregate race is still necessary because local or test FleetIO
- * implementations may ignore the forwarded timeout.
+ * cadence and request routes supply their request-oriented budget. One shared
+ * deadline covers a promised root listing, the pools listing and all concurrent
+ * marker reads, and its remaining time is also forwarded to remote FleetIO. The
+ * aggregate race is still necessary because local or test FleetIO implementations
+ * may ignore the forwarded timeout. An AbortSignal also stops ordinary local reads
+ * and removes losing remote requests from the client table. Node cannot interrupt
+ * every filesystem syscall after dispatch (a FIFO blocked in open is the known
+ * example), so cancellation is best-effort beneath the strict result deadline.
  *
- * Cost: ZERO extra root readdirs for a caller that has a listing, then one
- * `pools/` readdir and concurrent measured reads for the listed projects.
+ * Cost: ZERO extra root readdirs for a caller that has a listing; a route starts
+ * exactly one root readdir here, then one `pools/` readdir and concurrent measured
+ * reads for the listed projects.
  */
-export async function readProjectPools(
+async function readProjectPoolsWithinDeadline(
   io: FleetIO,
   cfg: CcrcConfig,
   rootNames: readonly string[] | null,
-  budgetMs: number | null,
+  deadline: PoolReadDeadline,
 ): Promise<ProjectPoolsRead> {
-  if (rootNames === null) return { listed: false };
+  const rootRemainingMs = deadline.remaining();
+  if (rootNames === null || rootRemainingMs === 0) return { listed: false };
   if (!rootNames.includes(POOLS_DIR_NAME)) return { listed: true, tags: new Map() };
+
   const dir = path.join(cfg.registryDir, POOLS_DIR_NAME);
-  const bounded = budgetMs !== null;
-  const budget = budgetMs === null ? null : Math.max(0, budgetMs);
-  if (budget === 0) return { listed: false };
-  const startedAt = Date.now();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let deadlineExpired = false;
-  const deadline = budget === null
-    ? null
-    : new Promise<null>((resolve) => {
-        timer = setTimeout(() => {
-          deadlineExpired = true;
-          resolve(null);
-        }, budget);
-        timer.unref?.();
-      });
-  const raceDeadline = async <T>(operation: () => Promise<T>): Promise<T | null> => {
-    if (deadlineExpired) return null;
-    const pending = operation().catch(() => null);
-    return deadline === null ? pending : Promise.race([pending, deadline]);
-  };
+  const names = await deadline.race(io.readdir(dir, rootRemainingMs, deadline.signal));
+  const remainingMs = deadline.remaining();
+  if (names === null || remainingMs === 0) return { listed: false };
+  const projectNames = names.filter((name) => !name.startsWith('.'));
+
+  // A listing that consumed nearly all the budget proves which markers
+  // existed, but leaves no useful time for a burst of file reads. Preserve
+  // that population as unreadable without launching already-doomed requests
+  // (D-2482, D-2488).
+  const reads = remainingMs < MARKER_LAUNCH_FLOOR_MS
+    ? projectNames.map((name) => ({ name, read: null }))
+    : await Promise.all(projectNames.map(async (name) => ({
+        name,
+        read: await deadline.race(
+          io.readFileMeasured(path.join(dir, name), remainingMs, deadline.signal),
+        ),
+      })));
+  // Re-measure the monotonic deadline after the whole burst too. A blocked event
+  // loop can delay the timer callback until after late marker promises settle;
+  // callback order must not extend elapsed-time policy (D-2488).
+  const markersExpired = deadline.remaining() === 0;
+  const tags = new Map<string, ProjectPoolWire>();
+  for (const { name, read: completedRead } of reads) {
+    // If the shared deadline fired or elapsed while its callback was delayed,
+    // publish one coherent degraded snapshot. Which individual request happened
+    // to settle first is transport timing, not a stable pool fact (D-2482).
+    const read = deadline.expired() || markersExpired ? null : completedRead;
+    if (read === null || !read.ok) {
+      // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
+      // landed between the listing and this read. Anything else is the file
+      // being there and this box not being able to read it, which is a state
+      // of its own and must never read as absence (D-114's rule).
+      if (read !== null && read.reason === 'absent') continue;
+      tags.set(name, { state: 'unreadable' });
+      continue;
+    }
+    // THE CAP COMES FIRST, exactly as it does on the other side, and the
+    // COMPARISON IS `>=`, NOT `>` (D-2010 — this line said `> 64` for one
+    // commit). `ccd` reads the tag with `IFS= read -r -d '' -n 64`
+    // (`grep -n "read -r -d '' -n 64" ccd/ccd`) and answers `malformed` when
+    // that read SUCCEEDS. `read -n 64` succeeds when it gets its 64 characters
+    // OR meets the NUL; it fails only at EOF before either. So a 64-byte file
+    // is ALREADY malformed there — measured, not reasoned: 63 bytes rc 1,
+    // 64 bytes rc 0, 65 bytes rc 0. `> 64` would pass a 64-byte tag straight
+    // to the strip and answer `tagged` for the one input the cap exists to
+    // catch. `ccd`'s own comment names the same boundary from the other end:
+    // "a tag padded with 58+ characters of trailing whitespace", and
+    // `pool-a` + 58 spaces is exactly 64.
+    //
+    // BYTES vs UTF-16 UNITS, said once so nobody re-derives it: `.length`
+    // counts UTF-16 code units and `read -n` counts characters in the shell's
+    // locale, so the two agree only for ASCII. That is sufficient here because
+    // anything non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both
+    // sides regardless of which side's cap it trips — the boundary only ever
+    // decides an all-ASCII input, where the three units coincide.
+    if (read.content.length >= 64 || read.content.includes('\0')) {
+      tags.set(name, { state: 'malformed' });
+      continue;
+    }
+    // TRAILING whitespace only: `echo pool-a > …` is a legal writer (ruling 2),
+    // a leading space is not. The quote this comment used to carry —
+    // `v=${v%"${v##*[![:space:]]}"}` — is still verbatim at `ccd`'s strip, but
+    // it is no longer the whole rule (D-1850); the cap above is the rest of it.
+    const value = read.content.replace(/\s+$/, '');
+    tags.set(name, POOL_NAME_RE.test(value)
+      ? { state: 'tagged', name: value }
+      : { state: 'malformed' });
+  }
+  return { listed: true, tags };
+}
+
+export async function readProjectPools(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  root: RootSource,
+  budgetMs: number,
+): Promise<ProjectPoolsRead> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  // No production caller supplies an unusable value; this prevents future
+  // direct callers from launching I/O without a meaningful bound.
+  if (deadline === null) return { listed: false };
 
   try {
-    const names = await raceDeadline(() => io.readdir(dir, budget ?? undefined));
-    if (names === null) return { listed: false };
-    const projectNames = names.filter((name) => !name.startsWith('.'));
-    const remainingMs = budget === null
-      ? undefined
-      : Math.max(0, budget - (Date.now() - startedAt));
-
-    // A listing that consumed the budget proves which markers existed, but it
-    // leaves no time to ask for their bytes. Preserve that population as
-    // unreadable without launching already-doomed requests (D-2482).
-    const reads = remainingMs === 0 && bounded
-      ? projectNames.map((name) => ({ name, read: null }))
-      : await Promise.all(projectNames.map(async (name) => ({
-          name,
-          read: await raceDeadline(
-            () => io.readFileMeasured(path.join(dir, name), remainingMs),
-          ),
-        })));
-    const tags = new Map<string, ProjectPoolWire>();
-    for (const { name, read: completedRead } of reads) {
-      // If the shared deadline fired, publish one coherent degraded snapshot.
-      // Which individual request happened to settle first is transport timing,
-      // not a stable project-pool fact (D-2482).
-      const read = deadlineExpired ? null : completedRead;
-      if (read === null || !read.ok) {
-        // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
-        // landed between the listing and this read. Anything else is the file
-        // being there and this box not being able to read it, which is a state
-        // of its own and must never read as absence (D-114's rule).
-        if (read !== null && read.reason === 'absent') continue;
-        tags.set(name, { state: 'unreadable' });
-        continue;
-      }
-      // THE CAP COMES FIRST, exactly as it does on the other side, and the
-      // COMPARISON IS `>=`, NOT `>` (D-2010 — this line said `> 64` for one
-      // commit). `ccd` reads the tag with `IFS= read -r -d '' -n 64`
-      // (`grep -n "read -r -d '' -n 64" ccd/ccd`) and answers `malformed` when
-      // that read SUCCEEDS. `read -n 64` succeeds when it gets its 64 characters
-      // OR meets the NUL; it fails only at EOF before either. So a 64-byte file
-      // is ALREADY malformed there — measured, not reasoned: 63 bytes rc 1,
-      // 64 bytes rc 0, 65 bytes rc 0. `> 64` would pass a 64-byte tag straight
-      // to the strip and answer `tagged` for the one input the cap exists to
-      // catch. `ccd`'s own comment names the same boundary from the other end:
-      // "a tag padded with 58+ characters of trailing whitespace", and
-      // `pool-a` + 58 spaces is exactly 64.
-      //
-      // BYTES vs UTF-16 UNITS, said once so nobody re-derives it: `.length`
-      // counts UTF-16 code units and `read -n` counts characters in the shell's
-      // locale, so the two agree only for ASCII. That is sufficient here because
-      // anything non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both
-      // sides regardless of which side's cap it trips — the boundary only ever
-      // decides an all-ASCII input, where the three units coincide.
-      if (read.content.length >= 64 || read.content.includes('\0')) {
-        tags.set(name, { state: 'malformed' });
-        continue;
-      }
-      // TRAILING whitespace only: `echo pool-a > …` is a legal writer (ruling 2),
-      // a leading space is not. The quote this comment used to carry —
-      // `v=${v%"${v##*[![:space:]]}"}` — is still verbatim at `ccd`'s strip, but
-      // it is no longer the whole rule (D-1850); the cap above is the rest of it.
-      const value = read.content.replace(/\s+$/, '');
-      tags.set(name, POOL_NAME_RE.test(value)
-        ? { state: 'tagged', name: value }
-        : { state: 'malformed' });
-    }
-    return { listed: true, tags };
+    const rootNames = typeof root === 'function'
+      ? await deadline.race(root(deadline.budgetMs, deadline.signal))
+      : root;
+    return await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    deadline.close();
+  }
+}
+
+/**
+ * Route variant for a caller that also needs the parent listing itself.
+ * The root and pool answers share one deadline and one root measurement;
+ * `needsPools` may skip the remaining work when the caller proves it is a revival.
+ */
+export async function readProjectPoolsWithRoot(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  readRoot: RootReader,
+  budgetMs: number,
+  needsPools: (rootNames: readonly string[] | null) => boolean = () => true,
+): Promise<ProjectPoolsWithRoot> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  if (deadline === null) return { rootNames: null, poolsRead: false };
+
+  try {
+    const completedRoot = await deadline.race(readRoot(deadline.budgetMs, deadline.signal));
+    // A delayed timer callback must not let a late root answer prove revival.
+    // Normalize it to the same unmeasurable value as an ordinary timeout before
+    // either consumer sees it.
+    const rootNames = deadline.remaining() === 0 ? null : completedRoot;
+    return needsPools(rootNames)
+      ? {
+          rootNames,
+          poolsRead: true,
+          pools: await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline),
+        }
+      : { rootNames, poolsRead: false };
+  } finally {
+    deadline.close();
   }
 }
 

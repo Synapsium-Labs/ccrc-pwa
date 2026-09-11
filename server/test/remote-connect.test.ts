@@ -143,6 +143,63 @@ function fakeReadyAgent(
   });
 }
 
+describe('FleetClient.request — cancellation owns its pending entry', () => {
+  let wss: WebSocketServer | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (wss) {
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss!.close(() => resolve()));
+    }
+    wss = undefined;
+  });
+
+  it('aborts the request, removes it from pending, and ignores a late response', async () => {
+    let replyLate!: () => void;
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    wss = server;
+    const requestSeen = new Promise<void>((resolve) => {
+      server.on('connection', (ws) => {
+        ws.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString()) as { t?: unknown; id?: unknown };
+          if (msg.t === 'hello') {
+            ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+          } else if (msg.t === 'req' && typeof msg.id === 'number') {
+            replyLate = () => ws.send(JSON.stringify({ t: 'res', id: msg.id, ok: true, entries: [] }));
+            resolve();
+          }
+        });
+      });
+    });
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const controller = new AbortController();
+    const request = fleet.client.request(
+      { t: 'req', op: 'readdir', path: '/fleet/.cc-sessions/pools' },
+      60_000,
+      controller.signal,
+    );
+    await requestSeen;
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+    expect(reachable.pending.size).toBe(1);
+
+    controller.abort();
+    await expect(request).rejects.toThrow('aborted');
+    expect(reachable.pending.size).toBe(0);
+
+    replyLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(reachable.pending.size).toBe(0);
+  });
+});
+
 describe('FleetClient.onReady — ccdVerbs validation distinguishes null from empty/malformed', () => {
   let server: { port: number; close(): Promise<void> } | undefined;
   let fleet: ConnectedFleet | undefined;

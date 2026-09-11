@@ -57,7 +57,12 @@ type ResolvedConfig = Required<RemoteFleetConfig>;
 // call sites landing in later tasks.
 export type { FleetState };
 
-interface Pending { resolve: (v: ResOk) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+interface Pending {
+  resolve: (v: ResOk) => void;
+  reject: (e: Error) => void;
+  timer: NodeJS.Timeout;
+  dispose(): void;
+}
 
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
@@ -173,19 +178,42 @@ export class FleetClient {
     }
   }
 
-  request(payload: AgentReqPayload, timeoutMs?: number): Promise<ResOk> {
+  request(payload: AgentReqPayload, timeoutMs?: number, signal?: AbortSignal): Promise<ResOk> {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('disconnected'));
     }
+    if (signal?.aborted) return Promise.reject(new Error('aborted'));
     const ws = this.socket;
     const id = this.nextId++;
     const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
     return new Promise<ResOk>((resolve, reject) => {
+      const abort = (): void => {
+        const entry = this.pending.get(id);
+        if (entry === undefined) return;
+        clearTimeout(entry.timer);
+        this.pending.delete(id);
+        entry.dispose();
+        reject(new Error('aborted'));
+      };
+      const dispose = (): void => signal?.removeEventListener('abort', abort);
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        dispose();
         reject(new Error('timeout'));
       }, wait);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve: (value) => {
+          dispose();
+          resolve(value);
+        },
+        reject: (error) => {
+          dispose();
+          reject(error);
+        },
+        timer,
+        dispose,
+      });
+      signal?.addEventListener('abort', abort, { once: true });
       const req = { ...payload, t: 'req', id } as AgentReq;
       ws.send(JSON.stringify(req));
     });
@@ -273,6 +301,7 @@ export class FleetClient {
       if (!entry) return;
       this.pending.delete(id);
       clearTimeout(entry.timer);
+      entry.dispose();
       if (msg.ok === false) {
         entry.reject(new Error(typeof msg.err === 'string' ? msg.err : 'error'));
       } else {
@@ -390,6 +419,7 @@ export class FleetClient {
   private rejectAllPending(err: Error): void {
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
+      entry.dispose();
       entry.reject(err);
     }
     this.pending.clear();

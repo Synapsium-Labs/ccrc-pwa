@@ -1761,16 +1761,16 @@ export interface ProjectRow {
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
  * two ways NOBODY DECIDES: creation refuses, naming the file (wave 2a landed
  * it — `ccd/ccd`'s `cmd_ws_add` refusal names `$POOLS_DIR/$project`), the
- * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
+ * auto-swapper holds (wave 2b), and the server answers 503 (wave 3).
  * Folding either into `untagged` would silently LIFT the constraint — the
  * overloaded-null defect this tree refuses at a seam, in its most expensive
  * form, because the direction of the mistake is always "run the work somewhere
  * it was not allowed to run".
  *
- * No detail string beside the state, deliberately: the detail belongs in
- * exactly two places once they land — `ccrc doctor` will carry the bytes
- * (wave 2a) and the PWA's warning chip will carry the full path (wave 4) — so
- * a third rendering of the same fact would be a third thing to keep true.
+ * No detail string beside the state, deliberately: operator-facing diagnosis
+ * and remedies already live in `ccrc doctor` (wave 2a), while the PWA's warning
+ * chip will carry the full path (wave 4). A third rendering of the same fact
+ * would be a third thing to keep true.
  *
  * Declared ahead of its consumers so both ends of the wire import ONE spelling
  * rather than each inventing its own.
@@ -1797,8 +1797,9 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
  * The fleet-level pool census, as one frame carries it.
  *
  * `listed: false` is not "no projects are tagged" — it is "this server could not
- * enumerate the tags", which is the registry root being unlistable or a regular
- * file planted where `pools/` belongs. The distinction survives to the phone
+ * enumerate the tags": the registry root was unlistable, a regular file was
+ * planted where `pools/` belongs, or the caller's deadline expired before the
+ * listing completed. The distinction survives to the phone
  * because a fleet of silently untagged projects and a fleet whose tags cannot be
  * read look identical otherwise, and only one of them is a reason to stop
  * trusting the chips.

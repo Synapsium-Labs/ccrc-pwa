@@ -147,7 +147,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // The tag reaches the TS side through the real reader, not a literal —
       // so this case exercises `readProjectPools` against the same bytes ccd's
       // `_project_pool_state` is about to read.
-      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir), null);
+      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir), 1_000);
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);

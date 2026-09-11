@@ -3,8 +3,9 @@
 // and a deliberate crossing is gated on MEASURED evidence that the box parses
 // the flag — because a `--cross-pool` that an old ccd mis-binds is the
 // silent-success class, not a loud failure.
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
@@ -99,6 +100,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   if (app) await app.close();
   app = undefined;
   rmSync(home, { recursive: true, force: true });
@@ -228,6 +231,45 @@ describe('POST /api/sessions — creation-only, revival passes through', () => {
       method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'demo' },
     });
     expect(res.statusCode).toBe(200);
+    expect(calls).toEqual([['enable', 'claude-b', 'demo']]);
+  });
+
+  it('bounds the shared revival/pool root listing to the exact request policy', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValue(1_000);
+    const reg = path.join(home, '.cc-sessions');
+    const rootRead = vi.fn(async (p: string, timeoutMs?: number) => p === reg && timeoutMs !== undefined
+      ? new Promise<never>(() => {})
+      : localIO.readdir(p, timeoutMs));
+    app = await open({ io: { ...localIO, readdir: rootRead } });
+
+    const pending = app.inject({
+      method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'quiet-basin' },
+    });
+    await vi.waitFor(() => {
+      expect(rootRead.mock.calls.find(([p, timeoutMs]) => p === reg && timeoutMs !== undefined)?.[1])
+        .toBe(10_000);
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const res = await pending;
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+    expect(calls).toEqual([]);
+  });
+
+  it('does not read pool markers when the bounded root listing proves a revival', async () => {
+    tag('demo', 'pool-a');
+    seedSession('claude-b-demo', 'claude-b', 'demo');
+    const reads = vi.fn(localIO.readFileMeasured.bind(localIO));
+    app = await open({ io: { ...localIO, readFileMeasured: reads } });
+
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'demo' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(reads.mock.calls.some(([p]) => p.endsWith(`${POOLS_DIR_NAME}/demo`))).toBe(false);
     expect(calls).toEqual([['enable', 'claude-b', 'demo']]);
   });
 

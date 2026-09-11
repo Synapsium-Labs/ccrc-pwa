@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
+import { performance } from 'node:perf_hooks';
 import { FLEET_PROTO, FLEET_PROTO_MIN, type Divergence } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
@@ -89,6 +90,7 @@ describe('fleet REST + WS', () => {
     if (app) await app.close();
     app = undefined;
     rmSync(home, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('GET /api/fleet returns assembled sessions', async () => {
@@ -930,6 +932,7 @@ describe('fleet REST + WS', () => {
     };
 
     it('gives the pool leg half of this watcher instance\'s cadence', async () => {
+      vi.spyOn(performance, 'now').mockReturnValue(1_000);
       tag('demo', 'pool-a');
       const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
       const io: FleetIO = {

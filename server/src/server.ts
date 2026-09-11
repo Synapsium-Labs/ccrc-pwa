@@ -11,7 +11,9 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
-import { poolFor, poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
+import {
+  poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
+} from './pools.js';
 import { poolRostered, poolVerdict } from './poolrule.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
@@ -89,6 +91,9 @@ function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
+
+/** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
+const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -1028,10 +1033,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
-    // measured answer, off its own root listing. A request uses FleetIO's
-    // ordinary per-operation timeout (`null`), not the watcher's cadence budget.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames, null);
+    // measured answer, off its own root listing. The request supplies its own
+    // aggregate ten-second budget rather than inheriting watcher policy; the
+    // race also bounds localIO, which ignores per-operation timeouts (D-2484).
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord),
       pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
@@ -1929,10 +1939,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // workdirs) and this is policy off the registry, exactly the split
     // `readiness` already draws. One root readdir feeds `readProjectPools`,
     // which needs the PARENT listing to tell an absent `pools/` from an
-    // unlistable one (`pools.ts`, spec §5.4.4). This request keeps FleetIO's
-    // ordinary per-operation timeout rather than inheriting watcher policy.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames, null);
+    // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
+    // request-lane budget rather than inheriting the watcher's cadence slice.
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     const limits = await readLimits(deps.io, deps.cfg);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
@@ -1970,14 +1984,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
-    // ONE registry listing, two questions: is this a revival, and what is this
-    // project's tag. CREATION-ONLY, mirroring `cmd_start`'s own guard placement
-    // (spec §5.5.5): the two-argument form is a revival path as well as a
-    // creation path, and on a revival THE REGISTRY WINS over the wrapper
-    // argument — so refusing here would refuse a revive of a session already
-    // running wrong-pool, which ruling 5's auto path is what moves.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const revival = await knownId(`${body.wrapper}-${body.project}`, rootNames);
+    // ONE bounded registry listing, two questions: is this a revival, and, only
+    // when it is not, what is this project's tag. The predicate keeps revivals
+    // CREATION-ONLY without starting marker I/O that their verdict never uses.
+    // `cmd_start` makes the same distinction (spec §5.5.5): on revival THE
+    // REGISTRY WINS over the wrapper argument, and ruling 5's auto path moves an
+    // already-running wrong-pool session at the next boundary.
+    const candidateId = `${body.wrapper}-${body.project}`;
+    const measured = await readProjectPoolsWithRoot(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+      (names) => names === null || !names.includes(`${candidateId}.uuid`),
+    );
+    const revival = await knownId(candidateId, measured.rootNames);
     if (!revival) {
       if (body.crossPool === true) {
         // REFUSE ON NO EVIDENCE — `capSupported`, never `verbSupported`. A flag
@@ -1990,7 +2011,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
           : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
       }
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), body.project);
+      const pool = poolFor(
+        measured.poolsRead ? measured.pools : { listed: false },
+        body.project,
+      );
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
     }
@@ -2056,8 +2080,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), project);
+    const measured = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), project);
     // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
     // hand-owned copies and can lag the fleet's, so "no account carries that
     // name" is a thing worth saying and not a thing worth blocking on.
@@ -2234,8 +2262,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         return reply.code(read.reason === 'unlistable' ? 503 : 404)
           .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
       }
-      const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames, null), read.record.project);
+      const pool = poolFor(await readProjectPools(
+        deps.io,
+        deps.cfg,
+        (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+        PROJECT_POOLS_REQUEST_BUDGET_MS,
+      ), read.record.project);
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
       argv = CCD_ARGV.swap(id, body.wrapper);

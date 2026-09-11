@@ -67,7 +67,7 @@ there would leave its own branch tip unmoved and wedge every close with `stale-t
 **This wave PRODUCES (later waves rely on these exact names):**
 
 - `server/src/poolrule.ts` (L1): `RosterVerdict`, `poolVerdict(roster, wrapper, pool)`, `poolEligible(roster, pool)`, `poolUndecidable(pool)`, `poolRostered(roster, name)`; re-export of `ProjectPlacement`.
-- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `readProjectPools(io, cfg, rootNames)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`.
+- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `ProjectPoolsWithRoot`, `readProjectPools(io, cfg, root, budgetMs)`, `readProjectPoolsWithRoot(io, cfg, readRoot, budgetMs, needsPools?)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`. The finite budget is consumer-owned: the watcher passes half its cadence and HTTP routes pass the server's ten-second request budget. Route root reads start through callbacks only after the aggregate deadline exists; session creation reuses the returned root answer for its revival decision and skips pool marker I/O for a proven revival.
 - `server/src/limits.ts`: `projectHome(roster, limits, pool)` (third argument REQUIRED), `projectPlacement(roster, limits, pool)`.
 - `server/src/registry.ts`: `SessionRecord.stranded`, `STRANDED_NO_REASON`, `STRANDED_UNREADABLE`.
 - `shared/api.ts`: `ProjectPlacement`, `FleetSession.stranded`, `reviveStranded`, `ProjectRow.pool?`, `ProjectRow.placement?`, `FleetMsg | { type: 'pools'; pools: ProjectPoolsWire }`, `FleetHealth.projectPools?`.
@@ -451,9 +451,20 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
   export type ProjectPoolsRead =
     | { listed: false }
     | { listed: true; tags: Map<string, ProjectPoolWire> };
+  export type ProjectPoolsWithRoot =
+    | { rootNames: readonly string[] | null; poolsRead: false }
+    | { rootNames: readonly string[] | null; poolsRead: true; pools: ProjectPoolsRead };
   export async function readProjectPools(
-    io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
+    io: FleetIO, cfg: CcrcConfig,
+    root: readonly string[] | null | ((timeoutMs: number, signal: AbortSignal) => Promise<readonly string[] | null>),
+    budgetMs: number,
   ): Promise<ProjectPoolsRead>;
+  export async function readProjectPoolsWithRoot(
+    io: FleetIO, cfg: CcrcConfig,
+    readRoot: (timeoutMs: number, signal: AbortSignal) => Promise<readonly string[] | null>,
+    budgetMs: number,
+    needsPools?: (rootNames: readonly string[] | null) => boolean,
+  ): Promise<ProjectPoolsWithRoot>;
   export function poolFor(read: ProjectPoolsRead, project: string): ProjectPoolWire;
   export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnforcement;
   export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement): ProjectPoolsWire;
@@ -465,7 +476,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 - Row 20 — `project-pools-read.test.ts`. Goes RED when the `rootNames.includes(POOLS_DIR_NAME)` gate is deleted (absent directory would answer `unreadable` instead of `untagged`), when the null-`readdir` arm returns an empty map instead of `{listed:false}` (unlistable would answer `untagged` — the tag silently lifted), when the dot-leading skip is removed, or when a mid-read `absent` is treated as anything but a skip.
 - Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. **The `\0` arm is NOT pinned and cannot be** — measured, and recorded as D-2017 rather than dressed up: delete `.includes('\0')` and all 14 cases stay green, because `POOL_NAME_RE` is anchored and its class excludes `\0`, so every NUL-bearing content is already `malformed` by the grammar. Four mutations measured red for this row (delete the cap, `> 64`, `>= 63`, cap below the strip); the fifth is a documented no-op with a void condition, not a row.
 
-**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:96`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
+**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:103`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -473,7 +484,7 @@ Create `server/test/project-pools-read.test.ts`:
 
 ```ts
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`server/src/io.ts:99` — the one read
+// is not there" into "the directory would not list" (`server/src/io.ts:103` — the one read
 // with no measured sibling). This reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
@@ -515,7 +526,7 @@ const tag = (project: string, bytes: string): void => {
 
 describe('readProjectPools — absent, unlistable and the four per-entry states', () => {
   it('a null ROOT listing is listed:false — the registry itself could not be read', async () => {
-    const read = await readProjectPools(localIO, cfg(), null);
+    const read = await readProjectPools(localIO, cfg(), null, 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -523,7 +534,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   it('a root listing WITHOUT pools/ is a MEASURED absence — every project untagged', async () => {
     // Ruling 3: nothing strands on rollout. Nobody has tagged anything, and
     // that is a positive answer, not a failure to look.
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: true, tags: new Map() });
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -531,10 +542,10 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   it('pools/ present at the root but unlistable is listed:false — never a fleet of untagged projects', async () => {
     // A REGULAR FILE planted where the directory belongs: `localIO.readdir`
     // answers null for it, exactly as it does for EACCES and exactly as
-    // `remote/io.ts` answers for a whitelist refusal (`remote/io.ts:104-112`).
+    // `remote/io.ts` answers for a whitelist refusal (`server/src/remote/io.ts:104`).
     // The permissive reading — an empty map — would lift every tag on the box.
     writeFileSync(pools, 'not a directory');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -556,7 +567,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b\n');
     tag('acct-a-demo', ' pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
@@ -588,7 +599,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // `POOL_NAME_RE` ever admits a NUL, or if the cap is ever applied to the
     // STRIPPED value, or if this reader ever stops holding the whole string.
     tag('acct-a-demo', 'pool-a\0pool-b');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'malformed' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo'),
@@ -599,7 +610,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool a');
     tag('quiet-basin', 'Pool-A');
     tag('acct-a-demo', '');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     for (const p of ['demo', 'quiet-basin', 'acct-a-demo']) {
       expect(poolFor(read, p), p).toEqual({ state: 'malformed' });
     }
@@ -609,7 +620,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b');
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/quiet-basin`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
   });
@@ -619,7 +630,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // which is exactly what `readFileMeasured` exists to be able to say.
     tag('demo', 'pool-a');
     const io = absentReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(read.listed && read.tags.has('demo')).toBe(false);
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -630,13 +641,13 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // skip is exact.
     tag('demo', 'pool-a');
     tag('.demo.4242.tmp', 'pool-b');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo']);
   });
 
   it('poolFor answers untagged for a project with no entry, on a listed read', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'untagged' });
   });
 });
@@ -647,7 +658,7 @@ describe('L3 may not narrow — four states in, four states out', () => {
     tag('quiet-basin', 'Pool A');     // malformed
     tag('acct-a-demo', 'pool-b');     // -> made unreadable below
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/acct-a-demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect([
       poolFor(read, 'demo').state,
       poolFor(read, 'quiet-basin').state,
@@ -675,7 +686,7 @@ describe('poolsEnforcement — the three-state shape lifecycleState uses', () =>
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolsWire(read, 'enforced')).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced',
     });
@@ -691,28 +702,86 @@ Expected: FAIL — `SyntaxError: The requested module '../src/pools.js' does not
 
 - [ ] **Step 3: Write minimal implementation**
 
-Replace the body of `server/src/pools.ts`, keeping wave 2a's `POOLS_DIR_NAME` declaration exactly as it is and adding below it:
+Use `server/src/pools.ts`'s current as-built implementation. The consumer-owned finite budget supersedes the original module-private one-second draft:
 
 ```ts
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import { CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
-// (wave 2a's `export const POOLS_DIR_NAME = 'pools';` stays exactly where it is)
+/**
+ * L3 — the server's view of the fleet box's project pool tags.
+ *
+ * Wave 2a first shipped `POOLS_DIR_NAME` so `pool-name-parity.test.ts` could
+ * compare `ccd/ccd`'s `POOLS_DIR=` against a TypeScript spelling before any
+ * server reader existed. Wave 3 completes that seam in this module:
+ * `readProjectPools`, `poolFor`, `poolsEnforcement` and `poolsWire` now carry
+ * the measured tags into watcher and route decisions. The staged history
+ * matters because waiting for the reader would have left the fleet's Bash
+ * constant unpinned during wave 2a — the state `ccd/ccrc-wrapper-shape:67`
+ * already has to disclose for another constant.
+ */
+export const POOLS_DIR_NAME = 'pools';
 
-/** One pool snapshot must finish inside the watcher's two-second cadence. */
-const PROJECT_POOLS_SWEEP_BUDGET_MS = 1_000;
+/** Do not launch a marker burst that has too little time to produce evidence. */
+const MARKER_LAUNCH_FLOOR_MS = 50;
+
+interface PoolReadDeadline {
+  budgetMs: number;
+  signal: AbortSignal;
+  expired(): boolean;
+  remaining(): number;
+  race<T>(operation: Promise<T>): Promise<T | null>;
+  close(): void;
+}
+
+/** One monotonic, aborting aggregate deadline for the complete pool read. */
+function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
+  const budget = Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 0;
+  if (budget === 0) return null;
+
+  const deadlineAt = performance.now() + budget;
+  const controller = new AbortController();
+  let deadlineExpired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort();
+      resolve(null);
+    }, budget);
+    timer.unref?.();
+  });
+
+  return {
+    budgetMs: budget,
+    signal: controller.signal,
+    expired: () => deadlineExpired,
+    remaining: () => {
+      const elapsedBudget = Math.floor(deadlineAt - performance.now());
+      return Number.isFinite(elapsedBudget) ? Math.max(0, elapsedBudget) : 0;
+    },
+    race: async <T>(operation: Promise<T>): Promise<T | null> =>
+      Promise.race([operation.catch(() => null), deadline]),
+    close: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.abort();
+    },
+  };
+}
 
 /**
  * One sweep of `$REG/pools/`, ring L3 (spec §5.4.4).
  *
- * `listed: false` is the `io.readdir` COLLAPSE itself and nothing else: the
- * registry root would not list, or `pools` is at the root but would not list
- * (a regular file planted there, an EACCES, a remote `forbidden`). It is NOT
- * "there are no tags" — that is `listed: true` with an empty map, and the
+ * `listed: false` means the marker population could not be established: the
+ * registry root would not list, `pools` is at the root but would not list (a
+ * regular file planted there, an EACCES, a remote `forbidden`), or the caller's
+ * budget expired before that listing arrived. It is NOT "there are no tags" —
+ * that is `listed: true` with an empty map, and the
  * difference is the whole reason this type exists. `poolFor` reads the first
  * as `unreadable` (nobody decides) and the second as `untagged`
  * (unconstrained); folding them would silently LIFT every constraint on the
@@ -721,6 +790,18 @@ const PROJECT_POOLS_SWEEP_BUDGET_MS = 1_000;
 export type ProjectPoolsRead =
   | { listed: false }
   | { listed: true; tags: Map<string, ProjectPoolWire> };
+
+/** A route-owned root measurement and its optional pool view. */
+export type ProjectPoolsWithRoot =
+  | { rootNames: readonly string[] | null; poolsRead: false }
+  | { rootNames: readonly string[] | null; poolsRead: true; pools: ProjectPoolsRead };
+
+type RootReader = (
+  timeoutMs: number,
+  signal: AbortSignal,
+) => Promise<readonly string[] | null>;
+
+type RootSource = readonly string[] | null | RootReader;
 
 /**
  * The verb whose PRESENCE in `ccd caps` is the evidence that the deployed ccd
@@ -737,51 +818,66 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
 /**
  * Read every project's pool tag in one pass.
  *
- * `rootNames` is the registry root listing the CALLER already took — the
- * watcher's `registryRead.names` (`watch.ts:702`'s own source), or the route's
- * own `io.readdir(cfg.registryDir)`. It is a PARAMETER rather than a read of
- * our own because it is what splits "the directory is not there" from "the
- * directory would not list": `io.readdir` cannot say (`server/src/io.ts:99` — the one
- * read in that file with no measured sibling), and the parent listing can.
+ * `root` is either the registry root listing the CALLER already took — the
+ * watcher's `registryRead.names` — or a callback that starts a route's listing
+ * only after the aggregate deadline exists. `readProjectPoolsWithRoot` is the
+ * variant for a route that also consumes that root answer.
+ * The parent listing is what splits "the directory is not there" from "the
+ * directory would not list": `io.readdir` cannot say (`server/src/io.ts:103` —
+ * the one read in that file with no measured sibling), and the parent can.
  *
- * Cost: ZERO extra root readdirs for a caller that has a listing, then one
- * `pools/` readdir and concurrent measured reads for the listed projects. A
- * shared one-second deadline bounds the whole listing-and-marker decision,
- * rather than multiplying the remote client's per-request timeout by that
- * population.
+ * `budgetMs` belongs to that caller too: a watcher supplies a slice of its poll
+ * cadence and request routes supply their request-oriented budget. One shared
+ * deadline covers a promised root listing, the pools listing and all concurrent
+ * marker reads, and its remaining time is also forwarded to remote FleetIO. The
+ * aggregate race is still necessary because local or test FleetIO implementations
+ * may ignore the forwarded timeout. An AbortSignal also stops ordinary local reads
+ * and removes losing remote requests from the client table. Node cannot interrupt
+ * every filesystem syscall after dispatch (a FIFO blocked in open is the known
+ * example), so cancellation is best-effort beneath the strict result deadline.
+ *
+ * Cost: ZERO extra root readdirs for a caller that has a listing; a route starts
+ * exactly one root readdir here, then one `pools/` readdir and concurrent measured
+ * reads for the listed projects.
  */
-export async function readProjectPools(
-  io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
+async function readProjectPoolsWithinDeadline(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  rootNames: readonly string[] | null,
+  deadline: PoolReadDeadline,
 ): Promise<ProjectPoolsRead> {
-  if (rootNames === null) return { listed: false };
+  const rootRemainingMs = deadline.remaining();
+  if (rootNames === null || rootRemainingMs === 0) return { listed: false };
   if (!rootNames.includes(POOLS_DIR_NAME)) return { listed: true, tags: new Map() };
+
   const dir = path.join(cfg.registryDir, POOLS_DIR_NAME);
-  const deadlineAt = Date.now() + PROJECT_POOLS_SWEEP_BUDGET_MS;
-  const deadline = new Promise<null>((resolve) => {
-    const timer = setTimeout(() => resolve(null), PROJECT_POOLS_SWEEP_BUDGET_MS);
-    timer.unref?.();
-  });
-  const names = await Promise.race([
-    io.readdir(dir, PROJECT_POOLS_SWEEP_BUDGET_MS)
-      .catch(() => null),
-    deadline,
-  ]);
-  if (names === null) return { listed: false };
+  const names = await deadline.race(io.readdir(dir, rootRemainingMs, deadline.signal));
+  const remainingMs = deadline.remaining();
+  if (names === null || remainingMs === 0) return { listed: false };
   const projectNames = names.filter((name) => !name.startsWith('.'));
-  // Launch the whole listed population together. One deadline covers the
-  // listing and every marker; serial per-request waits would multiply the
-  // remote timeout and stall every watcher lane after `emitPools` (D-2465).
-  const remainingMs = Math.max(0, deadlineAt - Date.now());
-  const reads = await Promise.all(projectNames.map(async (name) => ({
-    name,
-    read: await Promise.race([
-      io.readFileMeasured(path.join(dir, name), remainingMs)
-        .catch(() => null),
-      deadline,
-    ]),
-  })));
+
+  // A listing that consumed nearly all the budget proves which markers
+  // existed, but leaves no useful time for a burst of file reads. Preserve
+  // that population as unreadable without launching already-doomed requests
+  // (D-2482, D-2488).
+  const reads = remainingMs < MARKER_LAUNCH_FLOOR_MS
+    ? projectNames.map((name) => ({ name, read: null }))
+    : await Promise.all(projectNames.map(async (name) => ({
+        name,
+        read: await deadline.race(
+          io.readFileMeasured(path.join(dir, name), remainingMs, deadline.signal),
+        ),
+      })));
+  // Re-measure the monotonic deadline after the whole burst too. A blocked event
+  // loop can delay the timer callback until after late marker promises settle;
+  // callback order must not extend elapsed-time policy (D-2488).
+  const markersExpired = deadline.remaining() === 0;
   const tags = new Map<string, ProjectPoolWire>();
-  for (const { name, read } of reads) {
+  for (const { name, read: completedRead } of reads) {
+    // If the shared deadline fired or elapsed while its callback was delayed,
+    // publish one coherent degraded snapshot. Which individual request happened
+    // to settle first is transport timing, not a stable pool fact (D-2482).
+    const read = deadline.expired() || markersExpired ? null : completedRead;
     if (read === null || !read.ok) {
       // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
       // landed between the listing and this read. Anything else is the file
@@ -826,6 +922,60 @@ export async function readProjectPools(
   return { listed: true, tags };
 }
 
+export async function readProjectPools(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  root: RootSource,
+  budgetMs: number,
+): Promise<ProjectPoolsRead> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  // No production caller supplies an unusable value; this prevents future
+  // direct callers from launching I/O without a meaningful bound.
+  if (deadline === null) return { listed: false };
+
+  try {
+    const rootNames = typeof root === 'function'
+      ? await deadline.race(root(deadline.budgetMs, deadline.signal))
+      : root;
+    return await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline);
+  } finally {
+    deadline.close();
+  }
+}
+
+/**
+ * Route variant for a caller that also needs the parent listing itself.
+ * The root and pool answers share one deadline and one root measurement;
+ * `needsPools` may skip the remaining work when the caller proves it is a revival.
+ */
+export async function readProjectPoolsWithRoot(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  readRoot: RootReader,
+  budgetMs: number,
+  needsPools: (rootNames: readonly string[] | null) => boolean = () => true,
+): Promise<ProjectPoolsWithRoot> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  if (deadline === null) return { rootNames: null, poolsRead: false };
+
+  try {
+    const completedRoot = await deadline.race(readRoot(deadline.budgetMs, deadline.signal));
+    // A delayed timer callback must not let a late root answer prove revival.
+    // Normalize it to the same unmeasurable value as an ordinary timeout before
+    // either consumer sees it.
+    const rootNames = deadline.remaining() === 0 ? null : completedRoot;
+    return needsPools(rootNames)
+      ? {
+          rootNames,
+          poolsRead: true,
+          pools: await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline),
+        }
+      : { rootNames, poolsRead: false };
+  } finally {
+    deadline.close();
+  }
+}
+
 /** One project's answer. `unreadable` for a collapsed listing: nobody
  *  decides, and the caller answers 503 / `unmeasurable` rather than placing. */
 export function poolFor(read: ProjectPoolsRead, project: string): ProjectPoolWire {
@@ -853,6 +1003,8 @@ export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement)
     : { listed: false, enforcement };
 }
 ```
+
+> **AS-BUILT OVERRIDE (D-2478, D-2482, D-2484–D-2488):** the implementation excerpt above is synchronized to `server/src/pools.ts`. The current reader takes a required finite `budgetMs: number`; the watcher passes half its cadence and all five HTTP consumers pass the server-owned ten-second request budget. Route callers pass a root-reader callback so the deadline exists before the first I/O; session creation uses `readProjectPoolsWithRoot` to share that bounded root answer with its revival check and skip marker reads for a proven revival. One monotonic aggregate deadline races the root listing, pools listing and concurrent marker reads; its non-negative remainder and AbortSignal are forwarded to the adapter, and fewer than 50 ms remaining declines the whole marker burst. Expiry makes the entire listed population `unreadable`, including any tagged or proven-absent marker that completed before another marker exhausted the shared deadline; this coherent degradation deliberately discards transport-order evidence. The returned decision is strictly bounded, while cancellation beneath it is best-effort: remote pending entries and ordinary local reads are cancelled, but a kernel-blocked FIFO/stale-mount syscall can outlive the decision and repeated requests can multiply it. The timer is cleared and supported losing work is aborted in `finally`. `server/src/pools.ts` and `server/test/project-pools-read.test.ts` are the executable authority.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1397,7 +1549,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // The tag reaches the TS side through the real reader, not a literal —
       // so this case exercises `readProjectPools` against the same bytes ccd's
       // `_project_pool_state` is about to read.
-      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir));
+      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir), 1_000);
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
@@ -1577,6 +1729,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 
 **Interfaces:**
 - Consumes: `readProjectPools`, `poolFor` (Task 2); `projectPlacement` (Task 4); `readLimits` (`limits.ts:110`); `listProjects` (`lifecycle.ts:126`); `ProjectPlacement`, `ProjectPoolWire` (Task 1).
+- Produces in `server/src/server.ts`: `const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;` — one finite aggregate policy shared by all five HTTP consumers; watcher policy remains cadence-derived in Task 7.
 - Produces:
   ```ts
   export interface ProjectRow {
@@ -1594,7 +1747,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 - Row 21 — `lifecycle.test.ts`'s new pair plus its existing `listProjects itself still returns rows with NO readiness key` case, widened. Goes RED when the composition is moved into `listProjects` (the fleet read would grow a policy read) or dropped from either arm of the route.
 - Row 48 — `projects-route-placement.test.ts`. Goes RED when `unmeasurable` is collapsed into `none`, when the global `projected` is given a project, or when `pool`/`placement` are composed on only one of the route's two arms.
 
-**Cost, stated:** this route now takes one `io.readdir(cfg.registryDir)` of its own, plus `readProjectPools` (one `pools/` readdir and one read per tagged project) and one `readLimits` (one `.cc-limits` readdir, one registry readdir, one read per account). It is a screen-open read, not a 2-second tick — the tick's own pool read (Task 7) rides `registryRead.names` and costs no extra root readdir at all.
+**Cost, stated:** this route starts one registry-root readdir through `readProjectPools`, after its ten-second aggregate timer exists, plus one `pools/` readdir and one read per listed marker; `readLimits` adds one `.cc-limits` readdir, one registry readdir and one read per account. It is a screen-open read, not a 2-second tick — the tick's own pool read (Task 7) rides `registryRead.names` and costs no extra root readdir at all.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1817,7 +1970,14 @@ export interface ProjectRow {
 }
 ```
 
-`server/src/server.ts` — rewrite the `/api/projects` handler body (`:1667-1691`), keeping every existing comment above it:
+`server/src/server.ts` — first declare the HTTP-owned policy once near the other server constants:
+
+```ts
+/** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
+const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
+```
+
+Then rewrite the `/api/projects` handler body (`:1667-1691`), keeping every existing comment above it:
 
 ```ts
   app.get('/api/projects', async () => {
@@ -1828,8 +1988,12 @@ export interface ProjectRow {
     // `readiness` already draws. One root readdir feeds `readProjectPools`,
     // which needs the PARENT listing to tell an absent `pools/` from an
     // unlistable one (`pools.ts`, spec §5.4.4).
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     const limits = await readLimits(deps.io, deps.cfg);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
@@ -2024,8 +2188,12 @@ Expected: FAIL — `expected undefined to be 'unknown'` on the two health cases,
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
     // measured answer, off its own root listing.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()),
       pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
@@ -2293,7 +2461,7 @@ beside `emitCoord` (`:1063`):
    *  readdir and one read per tagged project), so it is async and awaited by
    *  the caller before the fail-shut return, for `emitCoord`'s own reason. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
-    const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
+    const read = await readProjectPools(this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)));
     const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;
@@ -2776,8 +2944,12 @@ Expected: FAIL — `project-pool-route.test.ts`: every case `expected 404 to be 
     }
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), project);
+    const measured = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), project);
     // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
     // hand-owned copies and can lag the fleet's, so "no account carries that
     // name" is a thing worth saying and not a thing worth blocking on.
@@ -2841,7 +3013,7 @@ git commit -m "feat(pools): the tag route asks the box and then reads the file, 
 **Mutation table:**
 - Row 46 — `swap-route-pool.test.ts`. Goes RED when the verdict branch is removed (a mismatch would reach ccd), when `verbSupported` is used for the capability instead of `capSupported` (a `--cross-pool` argv would go to a box with no evidence it parses the flag — the silent-success class), or when a REVIVAL is refused instead of passing through.
 
-**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one registry-root readdir, one `pools/` readdir and one read per tagged project, before the argv is built. `POST /api/sessions` takes the readdir set only. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
+**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one bounded registry-root readdir, one `pools/` readdir and one read per listed marker before the argv is built. `POST /api/sessions` takes one bounded root listing; a proven revival stops there, while a creation continues through the same deadline into the pool listing and marker burst. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
 
 **No fast path, deliberately.** A short-circuit that skipped the record read while `pools/` is empty would make the 404 ladder appear only once something is tagged — one route with two behaviours depending on unrelated state. One path, always.
 
@@ -3146,14 +3318,18 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
-    // ONE registry listing, two questions: is this a revival, and what is this
-    // project's tag. CREATION-ONLY, mirroring `cmd_start`'s own guard placement
-    // (spec §5.5.5): the two-argument form is a revival path as well as a
-    // creation path, and on a revival THE REGISTRY WINS over the wrapper
-    // argument — so refusing here would refuse a revive of a session already
-    // running wrong-pool, which ruling 5's auto path is what moves.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const revival = await knownId(`${body.wrapper}-${body.project}`, rootNames);
+    // ONE bounded registry listing, two questions: is this a revival, and, only
+    // when it is not, what is this project's tag. The predicate keeps revivals
+    // CREATION-ONLY without starting marker I/O that their verdict never uses.
+    const candidateId = `${body.wrapper}-${body.project}`;
+    const measured = await readProjectPoolsWithRoot(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+      (names) => names === null || !names.includes(`${candidateId}.uuid`),
+    );
+    const revival = await knownId(candidateId, measured.rootNames);
     if (!revival) {
       if (body.crossPool === true) {
         // REFUSE ON NO EVIDENCE — `capSupported`, never `verbSupported`. A flag
@@ -3166,7 +3342,10 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
           ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
           : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
       }
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), body.project);
+      const pool = poolFor(
+        measured.poolsRead ? measured.pools : { listed: false },
+        body.project,
+      );
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
     }
@@ -3209,8 +3388,12 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
       return reply.code(read.reason === 'unlistable' ? 503 : 404)
         .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
     }
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), read.record.project);
+    const pool = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), read.record.project);
     const refused = refusePool(reply, body.wrapper, pool);
     if (refused) return refused;
     return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
@@ -3305,7 +3488,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
   it('a pools/ planted on the SERVER box is invisible, and reads unreadable — never tagged, never untagged', async () => {
     const cfg = loadConfig({ CCRC_HOME: serverHome, CCRC_FLEET: 'remote' });
     const io = fleet!.io;
-    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir));
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), 1_000);
     // The path is outside the agent's read roots (its home is the FIXTURE's),
     // so the listing is refused -> null -> `listed:false`. UNREADABLE, not
     // untagged: a whitelist regression must refuse to decide, not silently lift
@@ -3323,7 +3506,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
     writeFileSync(path.join(dir, 'quiet-basin'), 'pool-b');
     const cfg = loadConfig({ CCRC_HOME: fixture!.home, CCRC_FLEET: 'remote' });
     const io = fleet!.io;
-    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir));
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
   });
 });
@@ -3437,7 +3620,7 @@ is never a ledger number.
   `ccd` unvalidated as `/workspaces` does, and `poolFor` is a Map lookup against names a LISTING returned,
   so no request-supplied name is ever joined into a path — recorded for alignment. (spec §12 P-16)
 - **D-1680** (Task 2) — `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling
-  (`:96`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
+  (`:100`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
   listing the caller already holds. One residual is disclosed rather than closed: a regular file or an
   EACCES directory at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` —
   the correct polarity (nobody decides, nothing crosses) but fleet-wide, and the only `pools/` failure
@@ -3847,11 +4030,11 @@ block above.
   states. That aggregate deadline also bounds how long the reader awaits a local implementation even
   though `localIO` itself ignores the optional timeout argument (corrected by D-2483). Separate deterministic
   `project-pools-read` cases prove that a never-resolving
-  listing finishes as `listed:false` and several never-resolving markers finish as `unreadable`; each
-  watchdog is longer than the production bound. The listing case first failed on the unbounded listing,
-  and removing the marker race made the marker case red without hanging the suite; exact restoration is
-  green. **A bounded member operation multiplied by an unbounded serial population is not a bounded
-  aggregate; put the deadline around the decision's whole input set.**
+  listing finishes as `listed:false` and several never-resolving markers finish as `unreadable`; fake timers
+  advance the production budget exactly, so neither case depends on a real-time watchdog. The listing case
+  first failed on the unbounded listing, and removing the marker race made the marker case red without hanging
+  the suite; exact restoration is green. **A bounded member operation multiplied by an unbounded serial
+  population is not a bounded aggregate; put the deadline around the decision's whole input set.**
 
 - **D-2466 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `be44395b`) — **Source history that describes a staged rollout in future tense becomes an
@@ -3900,10 +4083,11 @@ block above.
   `Promise.all(projectNames.map(...))` with a serial loop left all 23 reader tests green: the first stalled
   marker consumed the shared deadline, and every later race then settled immediately against the already-
   resolved promise, preserving both elapsed time and verdicts. The replacement test holds the first marker
-  unresolved and requires a later marker to start before releasing it; its 250 ms watchdog remains well below
-  the one-second reader budget without turning ordinary host load into the verdict. Measured against that exact
-  serial mutation it reds with `later marker did not start while the first was unresolved`; restored concurrency
-  is green. **Test concurrency by observing overlap, not by inferring it from a shared deadline's total time.**
+  unresolved and requires a later marker to start in the same launch turn before releasing it; a `setImmediate`
+  sentinel replaces the old 250 ms real-time watchdog, so a loaded host cannot invert the verdict. Measured
+  against that exact serial mutation it reds with `later marker did not start in the same launch turn`; restored
+  concurrency is green. **Test concurrency by observing overlap, not by inferring it from a shared deadline's
+  total time.**
 
 - **D-2477 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `4470ea21`) — **A port test proving an adapter forwards a timeout does not prove its caller supplies one.**
@@ -3914,13 +4098,15 @@ block above.
   green. **Pin each side of an optional seam: what the caller passes and what the adapter forwards.**
 
 - **D-2478 (2026-09-10)** (the #81 coordinator acceptance review of exact head
-  `4470ea21`) — **The layer that owns a cadence must own its deadline policy.** L3's hard-coded one-second
-  budget applied watcher policy to five HTTP paths, making a slow but connected fleet report every marker
-  unreadable to create, swap, projects, fleet-first-paint and post-write measurement. `readProjectPools` now
-  requires an explicit `number | null` budget: `FleetWatcher` passes half its own interval, while every HTTP
-  caller passes `null` and retains FleetIO's request-oriented timeout. A watcher test constructs an 8-second
-  cadence and observes 4-second listing and marker budgets, so replacing the expression with a fixed second
-  reds. **Make shared readers accept policy; do not let them invent one from a single consumer's clock.**
+  `4470ea21`, superseded in part by D-2484) — **The layer that owns a cadence must own its deadline policy.**
+  L3's hard-coded one-second budget applied watcher policy to five HTTP paths, making a slow but connected fleet
+  report every marker unreadable to create, swap, projects, fleet-first-paint and post-write measurement.
+  `readProjectPools` therefore accepts consumer policy: `FleetWatcher` passes half its own interval, and a watcher
+  test constructs an 8-second cadence and observes 4-second listing and marker budgets, so replacing the
+  expression with a fixed second reds. The original correction allowed HTTP callers to pass `null`; that was the
+  coordinator's erroneous “or none” remedy and removed their aggregate bound. D-2484 closes it with a required
+  finite number and a server-owned ten-second request budget. **Make shared readers accept policy, but require
+  every consumer to bound a read that can otherwise never settle.**
 
 - **D-2479 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `4470ea21`) — **Bounding one watcher leg does not restore the watcher's cadence when an earlier leg remains
@@ -3947,22 +4133,104 @@ block above.
   was added. **A test citation is a coverage claim — name the suite that actually turns red for that arm.**
 
 - **D-2482 (2026-09-10)** (the #81 coordinator acceptance review of exact head
-  `4470ea21`) — **A deadline needs lifecycle and snapshot semantics, not only a race.** The first implementation
-  retained one timer closure after every fast read, launched one already-doomed request per project after an
-  exhausted listing budget, and let whichever markers happened to win produce a different partial frame on
-  each tick. The bounded path now clears its timer in `finally`, launches no marker after zero remaining
-  budget, and degrades the entire listed population when the shared deadline fires so byte-equality sees a
-  stable fail-shut snapshot. Deterministic fake-timer tests pin all three behaviors; the real-agent topology
-  cases use `null`, so they do not acquire a one-second load-sensitive correctness threshold. **A deadline's
-  output must be coherent and its losing work must not outlive or multiply the decision it bounds.**
+  `4470ea21`, tightened by D-2484 and D-2488) — **A deadline needs lifecycle and snapshot semantics, not only
+  a race.** The first implementation retained one timer closure after every fast read, launched one already-
+  doomed request per project after an exhausted listing budget, and let whichever markers happened to win
+  produce a different partial frame on each tick. Every path now uses a finite consumer-owned bound, clears its
+  timer in `finally`, declines the marker burst below a 50 ms launch floor, and degrades the entire listed
+  population when the shared deadline fires so byte-equality sees a stable fail-shut snapshot. That means a
+  completed tagged marker and a completed proven-absent marker BOTH become `unreadable` when another marker
+  expires the shared deadline; neither transport-order result survives. Deterministic fake-timer tests pin the
+  cleanup and coherent output, while topology cases pass an explicit second solely as test policy. AbortSignal
+  cancellation now removes a losing remote request from `FleetClient`'s pending table and stops ordinary local
+  reads, but the measured FIFO counterexample proves a kernel-blocked local `open` can survive the verdict and
+  repeated callers can multiply it. **A deadline's output must be coherent and its returned decision bounded;
+  cancellation claims must stop at the adapter behavior actually measured.**
 
 - **D-2483 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `4470ea21`) — **The first deadline correction falsified its own inventories and local-behavior claim.**
-  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:99`, not
-  the now-measured `readFileB64Measured` line 96; and an aggregate race bounds local reads even though localIO
-  ignores the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
+  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:103`, not
+  the now-measured `readFileB64Measured`; and an aggregate race bounds local reads even though localIO ignores
+  the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
   made D-2465's “several never-resolving markers” literal by splitting rejection into a separate case; the
   overlap test now proves the stronger mechanism. **After inserting lines or a new outcome, re-measure every
   positional citation and every supposedly exhaustive sentence in the same round.** The final review then
   caught the timeout-comment edit shifting `FleetIO.readdir` once more (98 → 99), plus the overlap test's
   losing watchdog handle; the citations were re-measured and the watchdog is cleared in `finally`.
+
+- **D-2484 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Consumer-owned policy is not
+  permission for a consumer to remove the aggregate bound.** Five HTTP paths passed `null`, so default-local
+  `localIO` ignored the forwarded timeout and the aggregate reader constructed no deadline. A FIFO or stale
+  mount under `$REG/pools/<project>` could therefore leave projects, fleet first-paint, create, swap or
+  post-write measurement pending forever; four blocked filesystem reads could also occupy libuv's default
+  worker pool. Remote mode retained only its ordinary per-request timers, and every HTTP caller initially
+  awaited its registry-root `readdir` before the aggregate timer existed, so the legs could still consume
+  sequential waits. `readProjectPools` now requires a finite `number`; the watcher still passes half its
+  cadence, while all five HTTP consumers pass one server-owned ten-second request budget and route-owned root
+  reads start through callbacks after the timer exists. Session creation's `readProjectPoolsWithRoot` returns
+  that same bounded root answer to the revival check and skips marker reads for a proven revival. The shared
+  aggregate race remains because adapter timeout forwarding cannot bound `localIO`. **Every consumer owns its
+  deadline value, but none may opt out or do prerequisite I/O before it when that input can fail to settle.**
+
+- **D-2485 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A finite route budget needs a
+  route-level pin; reader tests cannot prove an HTTP consumer supplies it.** `GET /api/projects` now runs through
+  a `FleetIO` whose root or project-marker promise never settles; both cases assert the exact `10_000` timeout,
+  fake time advances that request budget, and the route answers 200 with projects `unreadable`. Session creation
+  separately stalls its shared revival/pool root read, asserts the same exact policy, and answers 503 without
+  calling ccd. Against the shipped `null` call the marker case first stayed pending until its real-time watchdog
+  returned `route-still-pending`; against a pre-reader root await, the new root cases stay pending too. A
+  source-level route census additionally enumerates all five HTTP consumers and requires each registration to
+  pass both the callback root and `PROJECT_POOLS_REQUEST_BUDGET_MS`; removing the budget, pre-starting the root,
+  changing the policy token, or adding an uncensused HTTP pool read makes it red. The reader's direct deadline
+  tests remain separate evidence for the aggregate mechanism. **Test policy at every consumer shape that
+  chooses it and mechanism at the reader that enforces it.**
+
+- **D-2486 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Remaining-time arithmetic must
+  be pinned beyond the exact-boundary value where clamped and unclamped expressions agree.** The reader now
+  floors the monotonic remainder, maps a non-finite result to zero, then applies `Math.max(0, elapsedBudget)`;
+  tests advance the clock one millisecond beyond the budget and inject `NaN`, proving no marker starts while
+  source-pinning the non-negative clamp. Deleting `Math.max(0, ...)` makes the overrun case red even though both
+  zero and negative budgets should decline the burst.
+  **Exercise derived bounds outside their valid interval; a boundary-only test cannot prove the clamp.**
+
+- **D-2487 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **An unreachable defense must not
+  be cited as live protection.** The marker helper's `if (deadlineExpired) return null` could not run before the
+  synchronous `Promise.all(...map())` launch and was removed; the launch floor is the actual pre-launch guard.
+  The unusable-budget arm remains deliberately defensive rather than production-reachable: every current watcher
+  and route supplies a positive finite number, but the public reader accepts any `number`. Its comment says that
+  plainly, and direct zero, negative, `NaN` and infinite cases prove fail-shut `{listed:false}` with no I/O.
+  **Name defensive reachability at the guard, and pin what it does instead of crediting it for a production path
+  it cannot receive.**
+
+- **D-2488 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A wall clock and an exact-zero
+  threshold are both unstable foundations for deadline work.** `Date.now()` let a forward adjustment falsely
+  expire healthy reads and a backward adjustment lengthen the forwarded budget. The reader now derives its
+  deadline and remainder from monotonic `performance.now()`, clamps the integer remainder non-negative, and
+  rechecks it immediately after the root listing, pools listing and completed marker burst so an event-loop-
+  delayed timer callback cannot admit an operation that settled after the monotonic deadline. It declines the whole marker burst when fewer
+  than 50 ms remain rather than launching one nearly-doomed remote frame per project. Parameterized wall-clock-
+  step tests preserve a positive budget in both directions; explicit post-deadline listing and marker settlement
+  plus a 49 ms remainder prove late evidence and marker floods are refused. Replacing the monotonic clock or restoring the zero-only knife edge
+  makes the focused suite red. **Use elapsed-time clocks for elapsed-time policy, and reserve enough remainder
+  for a population burst to produce evidence.**
+
+- **D-2489 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Correct implementation beside
+  executable stale plan text is a regression waiting for the next plan executor.** Task 2 still specified the
+  rejected module-private one-second constant and three-argument signature, while D-2478 said HTTP could opt
+  out, D-2482 reversed coherent-expiry semantics for completed tagged and absent markers, and D-2465/D-2476
+  described obsolete watchdogs. The Task 2 implementation excerpt now matches the as-built reader,
+  the interface inventory names required `budgetMs` plus both root-source forms, and the deviation entries state
+  the finite watcher/request policies, callback-started route roots, best-effort cancellation boundary,
+  `setImmediate` overlap sentinel, fake-timer deadline tests and coherent whole-population degradation.
+  Positional `FleetIO.readdir` citations were re-measured at `server/src/io.ts:103`. **When a correction rejects
+  a plan's mechanism, amend the executable task block and its historical claims in the same change.**
+
+- **D-2490 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A rollout correction must sweep
+  the shared contract imported by both ends, not only the server source that implements it.** `shared/api.ts`
+  still presented the server's wave-3 503 behavior as future work and exhaustively described `listed:false`
+  without the now-reachable listing-deadline outcome. The same contract still said `ccrc doctor` would carry
+  pool details after its wave-2a implementation had already landed. The contract now says the server answers 503
+  in wave 3, enumerates an unlistable root, a regular file at `pools/`, or expiry before listing completion, and
+  names doctor diagnosis as current behavior. A semantic sweep across `shared/` and `server/src/` found no further
+  current-tree pool rollout claim to graduate.
+  **After changing staged behavior or a state vocabulary, sweep every source ring that publishes the contract.**

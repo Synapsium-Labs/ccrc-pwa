@@ -43,9 +43,9 @@ export function createIo(client: FleetClient): FleetIO {
       return null;
     },
 
-    async readFileMeasured(path, timeoutMs) {
+    async readFileMeasured(path, timeoutMs, signal) {
       try {
-        const res = await client.request({ t: 'req', op: 'read', path }, timeoutMs);
+        const res = await client.request({ t: 'req', op: 'read', path }, timeoutMs, signal);
         const r = res as { data?: unknown; absent?: unknown };
         if (typeof r.data === 'string') return { ok: true, content: r.data };
         const reason: ReadFailure = r.absent === true ? 'absent' : 'unreadable';
@@ -101,9 +101,9 @@ export function createIo(client: FleetClient): FleetIO {
       return r.ok ? r.dataB64 : null;
     },
 
-    async readdir(path, timeoutMs) {
+    async readdir(path, timeoutMs, signal) {
       try {
-        const res = await client.request({ t: 'req', op: 'readdir', path }, timeoutMs);
+        const res = await client.request({ t: 'req', op: 'readdir', path }, timeoutMs, signal);
         const names = (res as { names?: unknown }).names;
         return Array.isArray(names) ? (names as string[]) : null;
       } catch {
