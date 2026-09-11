@@ -40,7 +40,7 @@ there would leave its own branch tip unmoved and wedge every close with `stale-t
 - No account name, account label, pool name, host name or IP that belongs to any real fleet appears in any source file, test or document. Fixture names only: pools `pool-a`, `pool-b`; projects `demo`, `quiet-basin`, `acct-a-demo`; accounts `claude`, `claude-a`, `claude-b` (label `team·b`), `gpt`, `claude-d` (`server/test/helpers.ts:60`, `DEFAULT_TEST_ROSTER`).
 - Wire discipline is ADDITIVE-ONLY: `FLEET_PROTO` stays 1 and `FLEET_PROTO_MIN` stays 1 (`shared/api.ts:2876-2877`). A new frame type, a new optional field and a new required-with-`| null` field are all additive; a bump is not.
 - No overloaded null at a seam: two conditions a caller handles differently must not collapse to one value. `unreadable` is never folded into `untagged`; `absent` is never folded into `unlistable`.
-- Every change under `ccd/` is AGENT-FIRST at deploy time. The planned implementation consumes what waves 2a/2b shipped and changes no `ccd/` behavior, but #81's merged-tree review corrected authoritative history in `ccd/ccd`; any eventual deployment is therefore AGENT-FIRST. D-2000 still forbids deploying this wave.
+- Every change under `ccd/` is AGENT-FIRST at deploy time. The planned implementation consumes what waves 2a/2b shipped and changes no `ccd/` behavior, but #81's merged-tree review corrected authoritative history in `ccd/ccd`; any eventual deployment is therefore AGENT-FIRST. D-2000 is the operator/coordinator convention that still forbids deploying this wave; no mechanism in `deploy/` or `server/src/` enforces that hold.
 - `EXEC_COMMANDS` stays `['tmux','ccd']`. No `gh` grant, ever. The server writes nothing on the fleet box.
 - L0 (`shared/*.ts`) imports nothing, not even `node:*` — the PWA bundles those files.
 - Mutation-table discipline: every guard ships WITH a test measured RED before and GREEN after. Each test step below names the exact mutation and the exact expected red.
@@ -3552,7 +3552,7 @@ git commit -m "test(pools): the reader crosses the agent, so a tag on the server
 
 **Spec:** the brief's whole-branch step; `CLAUDE.md`'s "Build / test / deploy".
 
-**No deploy step in this task:** the planned implementation touched no `ccd/` behavior, `session-hook.sh` or `ccd/coordinator-skill/`. The later #81 merged-tree review did correct authoritative history in `ccd/ccd`, so AGENT-FIRST now binds any eventual deployment; D-2000 still forbids deploying this wave.
+**No deploy step in this task:** the planned implementation touched no `ccd/` behavior, `session-hook.sh` or `ccd/coordinator-skill/`. The later #81 merged-tree review did correct authoritative history in `ccd/ccd`, so AGENT-FIRST now binds any eventual deployment; D-2000 is the operator/coordinator convention that still forbids deploying this wave, not an enforced gate in `deploy/` or `server/src/`.
 
 - [ ] **Step 1: Run the three package suites, in the foreground**
 
@@ -3920,8 +3920,9 @@ block above.
   coordinator reversed the initial C1 deferral:** `ccd/ccd` now says "earlier in this file", and the
   two residual adjacency claims found in the same pass say "earlier"/"later" rather than invent a
   distance. The generated marker was restamped and `ownership.test.ts` plus the ccd census/behaviour
-  suites passed. This is a source edit, not a deployment; D-2000 still blocks wave 3's deploy, whose
-  eventual lane remains agent-first.
+  suites passed. This is a source edit, not a deployment; D-2000 is the operator/coordinator convention
+  that still blocks wave 3's deploy, with no enforcing mechanism in `deploy/` or `server/src/`; the eventual
+  lane remains agent-first.
 
 - **D-2429 (2026-09-10)** (the #81 merge) — **This branch's `ccd/ccd` was strictly OLDER than a fix that
   is merged AND deployed on the live fleet, so a per-file merge decision could have reverted production
@@ -4429,3 +4430,21 @@ block above.
   requires `removeEventListener` once. Removing only the disposer reds the listener assertion; gutting
   `rejectAllPending` leaves the promise unsettled and times the test out rather than leaving the full suite green.
   **Test lifecycle helpers through the event that invokes them, not by trusting their call sites.**
+
+- **D-2516 (2026-09-11)** (the #81 coordinator round-eight review of exact head `b6b7fb4a`) — **A dangling pool
+  marker symlink is present but the server reports it absent, so its API-side constraint is lifted while ccd refuses
+  the marker as unreadable.** `readFile` follows the symlink and receives ENOENT for its missing target;
+  `readFileMeasured` therefore returns `reason:'absent'`, and `readProjectPools` skips that listed name as untagged.
+  ccd pairs `! -e` with `-L` and fails shut. No shipped writer creates such a link and ccd remains the placement
+  authority, so this is a non-blocking reporting/status divergence reachable only through hand-written fleet state.
+  The disclosure path is taken rather than adding an `lstat` syscall to every measured field read: `server/src/io.ts`
+  now names the unsafe pool consumer and the remaining ccd/server divergence instead of claiming absence is safe for
+  every consumer.
+  **An errno describes the followed target, not necessarily whether the directory entry itself exists.**
+
+- **D-2517 (2026-09-11)** (coordinator-owned, recorded from the #81 round-eight review of exact head
+  `b6b7fb4a`) — **D-2000 is a deployment convention, not an enforced gate.** No deploy-side guard or server-side
+  mechanism implements it; the operator and coordinator honour it procedurally. The three deployment statements in
+  this plan now say that explicitly while retaining both constraints: this wave must not be deployed, and any later
+  deployment remains AGENT-FIRST because #81 changes `ccd/ccd`.
+  **Name a procedural hold as a convention unless a mechanism can red or refuse when it is violated.**
