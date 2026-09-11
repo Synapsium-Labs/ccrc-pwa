@@ -2846,3 +2846,36 @@ The two things that remain are not mine to settle. The approving review has no l
 this fleet. And D-2517 — the discovery that D-2000 is a convention two sessions honour rather than a
 mechanism — means merging moves this code where the next routine deploy by any of nine other
 sessions would carry it. Both are the operator's, and I have stopped sending rounds.
+
+### `1e98dc16` — the class is closed, measured rather than declared
+
+D-2483's last present-tense citation is now the `FleetIO.readdir` symbol, and `pools.ts`'s broad
+no-lift contract now points at the narrower D-2516 residual, so the two source paragraphs agree
+instead of contradicting each other.
+
+That correction added `+3` lines to `pools.ts` at `@@ -78,7 +78,10 @@`, which is exactly the shape
+that has broken a citation in each of the last four rounds. It broke nothing: **no positional
+`pools.ts` citation exists anywhere in the tree.** `io.ts` was untouched, so `readdir` stays at
+`:108`, and the last citation pointing at it is now a symbol.
+
+So the class is closed in the only way that means anything — not because a sweep reported zero, but
+because there is no longer a positional citation in the blast radius for an edit to falsify.
+
+Final state at this head, all measured on an isolated export:
+
+- Full server suite identical to the no-`.git` sandbox baseline: 8004 passed, the same nine files
+  failing for the same sandbox reasons.
+- `ccd/ccd`'s provenance marker verifies `ccrc-unmodified`.
+- The five guards that carry the most weight all red when mutated: the `crossPool` predicate, the
+  deadline abort, the absent-is-a-proven-untag arm, `{ once: true }`, and `rejectAllPending`'s
+  `dispose`.
+- CI: agent, pwa and build-pwa green; server and macos still running.
+
+**This PR is done by every measure available to me.** What remains is not a gate result:
+
+1. The approving review has no lawful satisfier on this fleet — the one GitHub login authored it.
+2. D-2517: the hold keeping wave 3 off the live server is a convention two sessions honour, not a
+   mechanism. Merge moves this code onto `main`, where the next routine deploy by any of nine other
+   supervised `ccrc-pwa` sessions would carry it. That exposure begins at merge, not at deploy.
+
+Both are the operator's. I am not sending further rounds.
