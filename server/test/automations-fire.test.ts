@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'n
 import { fileURLToPath } from 'node:url';
 import {
   checkPreClaim, checkPostClaim, PRE_CLAIM_REFUSALS, POST_CLAIM_REFUSALS,
-  fireAutomation, deliverPrompt, promptAttempts, promptBackoffMs, promptLadder,
+  fireAutomation, retryPrompt, deliverPrompt, promptAttempts, promptBackoffMs, promptLadder,
   AUTOMATION_PROMPT_MAX_ATTEMPTS, AUTOMATION_PROMPT_BACKOFF_BASE_MS, AUTOMATION_PROMPT_BACKOFF_MAX_MS,
   type FireDeps, type AutomationCoordPort, type FireOutcome,
 } from '../src/auto/fire.js';
@@ -101,6 +101,7 @@ function makeCoord(spec: { inFlight?: number; paused?: boolean }): AutomationCoo
     markAutomationSpawn: () => boom('markAutomationSpawn'),
     settleAutomationRun: () => boom('settleAutomationRun'),
     appendRunEvent: () => boom('appendRunEvent'),
+    automationRunEvents: () => boom('automationRunEvents'),
   };
 }
 
@@ -564,7 +565,13 @@ function seedSession(
  *  `settleAutomationRun` with a plausible `SettledRun` — this is Task 7's own
  *  spy, distinct from `makeCoord` above (which throws on all five of these,
  *  the correct behaviour for a rung-only fixture). */
-function makeAutoCoord(opts: { paused?: boolean; inFlight?: number } = {}) {
+function makeAutoCoord(opts: {
+  paused?: boolean; inFlight?: number;
+  /** What an EARLIER act left in this run's `prompt` trail — the ladder's
+   *  whole state, so a retry fixture seeds its position here rather than
+   *  through a column that does not exist. */
+  priorEvents?: readonly { step: AutomationStep; ok: boolean; at: number }[];
+} = {}) {
   const calls = {
     markRunHomeScore: [] as Parameters<AutomationCoordPort['markRunHomeScore']>[],
     markAutomationSpawn: [] as Parameters<AutomationCoordPort['markAutomationSpawn']>[],
@@ -574,6 +581,14 @@ function makeAutoCoord(opts: { paused?: boolean; inFlight?: number } = {}) {
   const coord: AutomationCoordPort = {
     inFlightAutomationRunCount: () => opts.inFlight ?? 0,
     automationsPaused: () => ({ paused: opts.paused ?? false, updatedAt: 0 }),
+    // THE LADDER'S OWN STATE, and the events the act itself appended are part
+    // of it — `retryPrompt` reads the trail this spy is recording, so a
+    // fixture that let them diverge would be measuring a ladder nothing in
+    // production has. `opts.priorEvents` seeds what an earlier act left behind.
+    automationRunEvents: () => [
+      ...(opts.priorEvents ?? []),
+      ...calls.appendRunEvent.map(([, step, ok, , at]) => ({ step, ok, at })),
+    ],
     markRunHomeScore: (...args) => { calls.markRunHomeScore.push(args); },
     markAutomationSpawn: (...args) => { calls.markAutomationSpawn.push(args); },
     appendRunEvent: (...args) => { calls.appendRunEvent.push(args); },
@@ -826,6 +841,68 @@ describe('promptBackoffMs / promptAttempts / promptLadder — pure (task-6-decis
       (_, i) => ({ step: 'prompt' as AutomationStep, ok: false, at: i * 1_000 }),
     );
     expect(promptLadder(events, 999_999_999)).toEqual({ exhausted: true, attempts: AUTOMATION_PROMPT_MAX_ATTEMPTS });
+  });
+});
+
+describe('retryPrompt — attempts 2..N, which nothing used to call', () => {
+  const FACTS = {
+    sessionId: 'pending-one', workspace: 'ws', branch: 'main', wrapper: 'claude',
+    homeScore: 12, spawnRc: 0, adopted: false,
+  } as const;
+  const failedAt = (at: number) => ({ step: 'prompt' as AutomationStep, ok: false, at });
+
+  it('writes NOTHING while the backoff is still running', () => {
+    // The whole point of a backoff: the pane that refused is a pane that needs
+    // time. A retry that fired every sweep would be a 10 s hammer on a session
+    // the operator may be typing in.
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, panes: ['❯ half-typed thought\n'] });
+    const { coord, calls } = makeAutoCoord({ priorEvents: [failedAt(1_000)] });
+    return retryPrompt(h.buildDeps(coord), { prompt: 'go' }, 7, FACTS,
+      1_000 + promptBackoffMs(1) - 1).then((out) => {
+      expect(out).toEqual({ waiting: true, attempts: 1, nextAttemptAt: 1_000 + promptBackoffMs(1) });
+      expect(calls.appendRunEvent, 'not even a step row').toEqual([]);
+      expect(calls.settleAutomationRun).toEqual([]);
+    });
+  });
+
+  it('sends once the window opens, and an attempt that LANDS settles ok', async () => {
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, panes: ['❯ \n', '❯ go\n', '❯ \n'] });
+    const { coord, calls } = makeAutoCoord({ priorEvents: [failedAt(1_000)] });
+    const out = await retryPrompt(
+      h.buildDeps(coord), { prompt: 'go' }, 7, FACTS, 1_000 + promptBackoffMs(1),
+    );
+    expect(out).toMatchObject({ settle: 'ok' });
+    expect(calls.appendRunEvent.map((c) => c[1])).toEqual(['prompt', 'close']);
+    expect(calls.appendRunEvent[0]![2], 'the prompt step records that it landed').toBe(true);
+    expect(calls.settleAutomationRun[0]![0]).toMatchObject({ settlement: { outcome: 'ok' } });
+  });
+
+  it('a further failure stays pending — nothing terminal, and no lease written from L1', async () => {
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, panes: ['❯ half-typed thought\n'] });
+    const { coord, calls } = makeAutoCoord({ priorEvents: [failedAt(1_000)] });
+    const out = await retryPrompt(
+      h.buildDeps(coord), { prompt: 'go' }, 7, FACTS, 1_000 + promptBackoffMs(1),
+    );
+    expect(out).toMatchObject({ pending: 'prompt', attempts: 2 });
+    expect(calls.settleAutomationRun, 'nothing terminal').toEqual([]);
+    expect(Object.keys(calls), 'and no lease writer is reachable from L1')
+      .not.toContain('renewAutomationLease');
+  });
+
+  it('a trail already AT the ceiling closes the run without sending anything', async () => {
+    // The arm a restart reaches: the attempts were spent by a previous
+    // process, and the ladder's state is the durable trail, so this one reads
+    // exhaustion rather than re-deriving it from a counter it does not have.
+    // `sessionId` stays named — spec §6 would rather hand the operator a live
+    // session with no prompt in it than a lie.
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, panes: ['❯ \n', '❯ go\n', '❯ \n'] });
+    const prior = Array.from({ length: AUTOMATION_PROMPT_MAX_ATTEMPTS }, (_, i) => failedAt(i * 1_000));
+    const { coord, calls } = makeAutoCoord({ priorEvents: prior });
+    const out = await retryPrompt(h.buildDeps(coord), { prompt: 'go' }, 7, FACTS, 999_999_999);
+    expect(out).toMatchObject({ settle: 'failed', refusal: 'prompt-refused' });
+    if ('settle' in out && out.settle === 'failed') expect(out.facts.sessionId).toBe('pending-one');
+    expect(calls.appendRunEvent.map((c) => c[1]), 'a close, and no new prompt attempt')
+      .toEqual(['close']);
   });
 });
 

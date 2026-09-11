@@ -685,6 +685,233 @@ describe('FleetWatcher.sweepAutomations — the controller ruling: /run only cla
   });
 });
 
+describe('the prompt ladder is LIVE — attempts 2..N ride the sweep', () => {
+  /** A runner whose capture-pane answers a half-typed DRAFT for the first
+   *  `failures` attempts (`sendPrompt` refuses `draft-present` without
+   *  sending anything) and the ordinary empty -> echoed -> empty script after
+   *  that, so an attempt lands. One `sendPrompt` performs several captures,
+   *  so the gate counts ATTEMPTS by counting `send-keys`, not captures. */
+  function ladderRunner(home: string, failures: number, promptText = 'go'):
+  { run: Runner; calls: string[][]; sends: () => number } {
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    let failsLeft = failures;
+    let landScript = 0;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        // ONE capture per refused attempt: `sendPrompt` reads the pane, sees a
+        // draft, and returns `draft-present` without sending anything — which
+        // is why the failure count is spent HERE and not on `send-keys`.
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          return { code: 0, stdout: 'scrollback\n❯ half-typed thought\n', stderr: '' };
+        }
+        const p = ['scrollback\n❯ \n', `scrollback\n❯ ${promptText}\n`, 'scrollback\n❯ \n'][Math.min(landScript++, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { run, calls, sends: () => calls.filter((c) => c.includes('send-keys')).length };
+  }
+
+  async function ladderRig(failures: number): Promise<{
+    w: FleetWatcher; coord: CoordStore; calls: string[][]; sends: () => number; log: NotifyLog;
+  }> {
+    const home = mkTmp('ccrc-auto-ladder-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const r = ladderRunner(home, failures);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, r.run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    await w.tick();
+    return { w, coord, calls: r.calls, sends: r.sends, log };
+  }
+
+  it('waits out the backoff, then sends attempt 2 and settles ok', async () => {
+    // `promptLadder`, `promptAttempts` and `deliverPrompt`'s attempts 2..N
+    // shipped as EXPORTED policy with no production caller: a run whose first
+    // attempt failed sat `running` with its lease held until the hard bound
+    // lapsed and pass 1 settled it `lost`, after ONE try. The pane a fresh
+    // session shows is exactly the transient case the ladder was written for
+    // (C2.7) — a trust dialog, a not-yet-alive pane, a draft left in the box
+    // — so the one attempt was the least likely to succeed.
+    const { w, coord, sends, log } = await ladderRig(1);
+    const id = makeArmed(coord, NOW, NOW);
+    const seqBefore = log.seq;
+    await w.sweepAutomations();
+    const runId = await vi.waitFor(() => {
+      const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+      expect(r?.sessionId, 'the session was created').toBeDefined();
+      expect(r!.sessionId).not.toBeNull();
+      return r!.id;
+    });
+    await vi.waitFor(() => {
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+    });
+    expect(coord.automationRun(runId)!.endedAt, 'nothing terminal — the ladder is live').toBeNull();
+    const sendsAfterFirst = sends();
+
+    // BEFORE the backoff: the lane must not retry early. One whole sweep gate
+    // passes, which is less than the 30 s the ladder's first backoff is.
+    advance(10_001);
+    await w.sweepAutomations();
+    await new Promise((resolve) => { setTimeout(resolve, 300); });
+    expect(sends(), 'the backoff is the ladder, not a suggestion').toBe(sendsAfterFirst);
+    expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+
+    // PAST the backoff: attempt 2 goes, lands, and the run settles ok.
+    advance(30_001);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      expect(coord.automationRun(runId)!.outcome).toBe('ok');
+    });
+    expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(2);
+    expect(coord.automationRunEvents(runId).find((e) => e.step === 'close')!.ok).toBe(true);
+    expect(log.seq, 'and the ✓ push rides the settle, once').toBe(seqBefore + 1);
+    w.stop();
+  });
+
+  it('never ENTERS a second attempt while one is in flight for that run', async () => {
+    // The retry pass runs off a STORE read, so without an "a call is in
+    // flight" guard every 10 s tick would start another attempt against the
+    // same session while the previous one was still inside `sendPrompt` —
+    // duplicate keystrokes into a live pane, which is the one thing this lane
+    // must never do. `automationsInFlight` cannot answer this: a parked run
+    // stays in it on purpose (that is what renews its lease), so the question
+    // "is an attempt executing right now" needs its own set.
+    const home = mkTmp('ccrc-auto-overlap-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    let failsLeft = 1;
+    let held = 0;
+    let landScript = 0;
+    let openGate = (): void => { /* replaced before anything awaits it */ };
+    const gate = new Promise<void>((resolve) => { openGate = () => resolve(); });
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        if (failsLeft > 0) { failsLeft -= 1; return { code: 0, stdout: 'scrollback\n❯ draft\n', stderr: '' }; }
+        // Attempt 2 is HELD inside its FIRST pane read, the way a real capture
+        // on a busy box is, so further sweeps land while it is still running.
+        // Past the hold it is the ordinary empty -> echoed -> empty script, so
+        // the attempt can finish and the run can settle.
+        if (held === 0) { held = 1; await gate; }
+        const p = ['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n'][Math.min(landScript++, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      const runId = await vi.waitFor(() => {
+        const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+        expect(r?.sessionId).not.toBeNull();
+        return r!.id;
+      });
+      await vi.waitFor(() => {
+        expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+      });
+
+      // Attempt 2 starts and blocks inside the capture.
+      advance(30_001);
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(calls.filter((c) => c.includes('capture-pane')).length).toBeGreaterThanOrEqual(2);
+      });
+      const capturesDuring = calls.filter((c) => c.includes('capture-pane')).length;
+
+      // WHAT THE GUARD ACTUALLY DECIDES, measured where it acts. `sendPrompt`
+      // rides the process-wide `KeyedQueue`, which serialises per session — so
+      // "two attempts run at the same instant" is impossible with or without
+      // this guard, and a fixture counting pane reads measures the QUEUE, not
+      // the set (measured: it stayed green with the guard deleted). What the
+      // guard decides is whether pass 4 ENTERS another attempt at all, and
+      // every entry reads the ladder's state exactly once — so the store read
+      // is the observable. Without the guard each tick enqueues another send
+      // behind the held one, and they all fire when it finishes: a burst of
+      // duplicate prompts into one live pane, arriving late rather than at
+      // once.
+      const ladderReads = vi.spyOn(coord, 'automationRunEvents');
+      for (let i = 0; i < 2; i++) { advance(240_001); await w.sweepAutomations(); }
+      await new Promise((resolve) => { setTimeout(resolve, 300); });
+      expect(ladderReads.mock.calls.length,
+        'pass 4 must not enter a second attempt for a run whose attempt is in flight').toBe(0);
+      expect(calls.filter((c) => c.includes('capture-pane')).length,
+        'and no further pane read happened either').toBe(capturesDuring);
+      ladderReads.mockRestore();
+
+      openGate();
+      await vi.waitFor(() => {
+        expect(coord.automationRun(runId)!.outcome).not.toBe('running');
+      });
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length,
+        'the failed first attempt and the one that landed').toBe(2);
+    } finally {
+      openGate();
+      w.stop();
+    }
+  });
+
+  it('settles failed:prompt-refused at the ceiling, without sending again', async () => {
+    // The other end of the same ladder. `AUTOMATION_PROMPT_MAX_ATTEMPTS`
+    // failed `prompt` steps is exhaustion, and the run must close — spec §6's
+    // own sentence is that `sessionId` STAYS SET, because "the operator gets a
+    // live session with no prompt in it, which is strictly better than a lie".
+    const { w, coord, sends } = await ladderRig(99);
+    const id = makeArmed(coord, NOW, NOW);
+    await w.sweepAutomations();
+    const runId = await vi.waitFor(() => {
+      const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+      expect(r?.sessionId).not.toBeNull();
+      return r!.id;
+    });
+    await vi.waitFor(() => {
+      expect(coord.automationRunEvents(runId).filter((e) => e.step === 'prompt').length).toBe(1);
+    });
+    // The five further failed attempts the ladder allows, written the way the
+    // ladder itself reads them — its state is the durable step trail, not a
+    // column, so this is the same fact a real five-attempt run would leave.
+    for (let i = 2; i <= 6; i++) {
+      coord.appendRunEvent(runId, 'prompt', false, `attempt ${i} of 6: draft-present`, Date.now());
+    }
+    const sendsBefore = sends();
+
+    advance(240_001);
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      expect(coord.automationRun(runId)!.outcome).not.toBe('running');
+    });
+    const run = coord.automationRun(runId)!;
+    expect(run.outcome).toBe('failed');
+    expect(run.refusal).toBe('prompt-refused');
+    expect(run.sessionId, 'the session it DID create stays named').not.toBeNull();
+    expect(sends(), 'an exhausted ladder sends nothing more').toBe(sendsBefore);
+    expect(coord.automation(id)!.leaseRunId, 'and the lease is released').toBeNull();
+    w.stop();
+  });
+});
+
 describe('a settle the store refused is not a settle', () => {
   it('an act whose run was lapsed `lost` mid-flight closes ok:false and raises nothing', async () => {
     // `settleAutomationRun` answers a three-arm union — the port declares the

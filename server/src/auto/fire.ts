@@ -106,6 +106,14 @@ export interface AutomationCoordPort {
   /** `store.ts:3458` — one `automation_run_events` row per numbered step
    *  (spec §6's own sentence: "that trail IS the log"). */
   appendRunEvent(runId: number, step: AutomationStep, ok: boolean, detail: string, now: number): void;
+  /** THE LADDER'S OWN STATE, read back. `promptAttempts`/`promptLadder` count
+   *  the run's failed `prompt` steps rather than a column, deliberately
+   *  (task-6-decisions.md C2.7: the ladder's state survives a restart and
+   *  cannot disagree with the history the operator reads) — so the retry needs
+   *  this read, and it is declared here, by the consumer, like every other
+   *  member of this port. */
+  automationRunEvents(runId: number): readonly {
+    readonly step: AutomationStep; readonly ok: boolean; readonly at: number }[];
   /** `store.ts:3282` — moves ONLY the SOFT bound, never the hard one, and
    *  takes NO duration: the store owns the lease arithmetic, not the caller
    *  (a further correction over task-6-decisions.md C2.9's stale
@@ -671,6 +679,88 @@ export async function fireAutomation(
   // `promptLadder` over the run's own accumulated `prompt` steps. Spec §6's
   // own sentence: "The operator gets a live session with no prompt in it,
   // which is strictly better than a lie" — `sessionId` stays SET.
+  const closed = closeAutomationRun(
+    deps, runId, { outcome: 'failed', refusal: 'prompt-refused' }, nowMs,
+    false, 'settled failed:prompt-refused',
+  );
+  if ('refused' in closed) {
+    return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
+  }
+  return { settle: 'failed', refusal: 'prompt-refused', detail: attempt.detail, facts };
+}
+
+/**
+ * ATTEMPTS 2..N, for a run whose session EXISTS and whose prompt has not
+ * landed yet — the other half of task-6-decisions.md C2.7's ladder, which
+ * shipped as exported policy (`promptLadder`, `promptAttempts`,
+ * `deliverPrompt`'s `priorAttempts`) with no production caller at all. Until
+ * this existed, a first attempt that failed on the transient conditions the
+ * ladder was WRITTEN for — a trust dialog, a pane not yet alive, a draft left
+ * in the box — left the run `running` with its lease held until the hard bound
+ * lapsed and pass 1 settled it `lost`, after exactly one try.
+ *
+ * The ladder's state is the run's own `prompt` step trail, never a column, so
+ * this reads it back through the port and asks L1: `waiting` means the backoff
+ * has not elapsed and NOTHING is written (the answer carries the instant, for
+ * the caller's logs only); `exhausted` closes the run `failed:prompt-refused`
+ * with its `sessionId` KEPT, because spec §6 would rather hand the operator a
+ * live session with no prompt in it than a lie; `due` sends one attempt and
+ * lands in exactly the three arms `fireAutomation`'s own step 9 lands in.
+ *
+ * `facts` comes from the CALLER, off the run row this server already wrote —
+ * this function re-measures no identity and re-reads no registry, because the
+ * session it is prompting is the one the run names.
+ */
+export async function retryPrompt(
+  deps: FireDeps,
+  a: Pick<AutomationRow, 'prompt'>,
+  runId: number,
+  facts: RunFacts & { readonly sessionId: string },
+  nowMs: number,
+): Promise<FireOutcome | { readonly waiting: true; readonly attempts: number;
+                           readonly nextAttemptAt: number }> {
+  const state = promptLadder(deps.coord.automationRunEvents(runId), nowMs);
+  if ('waiting' in state) {
+    return { waiting: true, attempts: state.attempts, nextAttemptAt: state.nextAttemptAt };
+  }
+  if ('exhausted' in state) {
+    const closed = closeAutomationRun(
+      deps, runId, { outcome: 'failed', refusal: 'prompt-refused' }, nowMs,
+      false, 'settled failed:prompt-refused',
+    );
+    if ('refused' in closed) {
+      return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
+    }
+    return {
+      settle: 'failed', refusal: 'prompt-refused',
+      detail: `the prompt ladder is exhausted after ${state.attempts} attempts`, facts,
+    };
+  }
+
+  const attempt = await deliverPrompt(deps, facts.sessionId, a.prompt, state.attempts, nowMs);
+  deps.coord.appendRunEvent(
+    runId, 'prompt', 'landed' in attempt,
+    'landed' in attempt ? `attempt ${attempt.attempts}: landed` : attempt.detail,
+    nowMs,
+  );
+  if ('landed' in attempt) {
+    const closed = closeAutomationRun(deps, runId, { outcome: 'ok' }, nowMs, true, 'settled ok');
+    if ('refused' in closed) {
+      return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
+    }
+    return { settle: 'ok', facts };
+  }
+  if ('retry' in attempt) {
+    // Still live: nothing terminal, and no lease written from here — the
+    // sweep's own renewal loop holds it, with a fresh clock (see the `pending`
+    // arm of `fireAutomation` for why L1 may not renew).
+    return {
+      pending: 'prompt', facts, attempts: attempt.attempts,
+      nextAttemptAt: attempt.nextAttemptAt, detail: attempt.detail,
+    };
+  }
+  // `exhausted` on THIS attempt — the ceiling reached by sending, rather than
+  // by reading a trail that was already at it.
   const closed = closeAutomationRun(
     deps, runId, { outcome: 'failed', refusal: 'prompt-refused' }, nowMs,
     false, 'settled failed:prompt-refused',

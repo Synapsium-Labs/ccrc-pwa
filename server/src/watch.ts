@@ -54,7 +54,10 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 // change, and it is `sweepAutomations` below. `checkPreClaim` (rungs 1-2)
 // is the only ladder half this file calls directly; rungs 3-9
 // (`checkPostClaim`) run exclusively inside `fireAutomation` itself.
-import { checkPreClaim, fireAutomation, type FireDeps } from './auto/fire.js';
+import {
+  checkPreClaim, fireAutomation, retryPrompt,
+  type FireDeps, type FireOutcome, type RunFacts,
+} from './auto/fire.js';
 import {
   decideFire, zoneWarning, type AutomationRow as PolicyAutomationRow, type SchedulePlan,
 } from './auto/schedulepolicy.js';
@@ -645,8 +648,9 @@ export class FleetWatcher {
    * Claimed the moment a run is handed to `fireAutomation`, before any
    * `await` (`fireOne`'s own discipline). Removed ONLY on a TERMINAL settle
    * (`ok`/`refused`/`failed`) — NEVER on a `pending` prompt-ladder outcome
-   * (that ladder is not retried by this lane; the run rides out its hard
-   * lease and settles `lost`) and NEVER when the call throws (the throw may
+   * (the run stays this process's responsibility: its soft lease is renewed
+   * off this set, and pass 4 owes it attempts 2..N) and NEVER when the call
+   * throws (the throw may
    * have landed AFTER a real spawn, and calling `fireAutomation` again on
    * the same `runId` would manufacture a second session for one
    * automation — spec §6's orphan-manufacture rule). IN MEMORY BY DESIGN: a
@@ -656,6 +660,20 @@ export class FleetWatcher {
    * the controller ruling asks for.
    */
   private automationsInFlight = new Set<number>();
+  /**
+   * WHICH RUNS HAVE A CALL IN FLIGHT RIGHT NOW — a different question from
+   * `automationsInFlight` above, and the ladder is what made the difference
+   * load-bearing. That set means "this process is RESPONSIBLE for this run":
+   * it holds the run's soft lease up and keeps pass 3 off it, and a run parked
+   * between prompt attempts must stay in it for both of those reasons. This
+   * one means "a `sendPrompt`/`ws-add` is executing for this run at this
+   * instant", so the retry pass can tell a parked run (its turn may be due)
+   * from a busy one (leave it alone). Added before any `await`, removed in a
+   * `finally`, so an attempt that throws does not wedge the ladder — unlike
+   * the responsibility set, where a throw must NOT release the guard, because
+   * it may have landed after a real spawn.
+   */
+  private automationsActing = new Set<number>();
   /** Said once per process, never per tick — a repeated warning about a fact
    *  that cannot change while the process lives is noise that trains the
    *  operator to skip the log. */
@@ -2496,6 +2514,45 @@ export class FleetWatcher {
       if (this.automationsInFlight.has(row.leaseRunId)) continue;
       this.fireOne(store, row, row.leaseRunId, now);
     }
+
+    // Pass 4 — ATTEMPTS 2..N OF THE PROMPT LADDER, for every open lease whose
+    // session EXISTS and whose prompt has not landed. This is the complement
+    // of pass 3's query, and until it existed the ladder was exported policy
+    // with no caller: a first attempt that failed on the transient conditions
+    // the ladder was written for (a trust dialog, a pane not yet alive, a
+    // draft in the box) left the run `running` until its hard lease lapsed and
+    // pass 1 settled it `lost`, after exactly ONE try.
+    //
+    // DECIDES NOTHING, as ever: `retryPrompt`/`promptLadder` (L1) own whether
+    // an attempt is due, off the run's own step trail. This pass finds the
+    // rows, skips the ones an attempt is already executing for, and hands each
+    // the facts off the run row the server itself wrote.
+    let parked: readonly StoreAutomationRow[] = [];
+    try {
+      parked = store.promptPendingAutomations();
+    } catch (err) {
+      console.warn(`ccrc-server: promptPendingAutomations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of parked) {
+      const runId = row.leaseRunId;
+      if (runId === null) continue;
+      if (this.automationsActing.has(runId)) continue;
+      try {
+        const run = store.automationRun(runId);
+        // `sessionId` non-null is what the query selected on; re-read rather
+        // than assumed, because between the two reads a settle could have
+        // landed — and a prompt into a session this run does not name is the
+        // one thing this pass must never do.
+        if (run === null || run.sessionId === null || run.endedAt !== null) continue;
+        this.retryOne(store, row, runId, {
+          sessionId: run.sessionId, workspace: run.workspace, branch: run.branch,
+          wrapper: run.wrapper, homeScore: run.homeScore, spawnRc: run.spawnRc,
+          adopted: run.adopted,
+        }, now);
+      } catch (err) {
+        console.warn(`ccrc-server: automation ${row.id}'s prompt retry failed to start (${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the sweep`);
+      }
+    }
   }
 
   /**
@@ -2570,46 +2627,10 @@ export class FleetWatcher {
    */
   private fireOne(store: CoordStore, row: StoreAutomationRow, runId: number, now: number): void {
     this.automationsInFlight.add(runId);
+    this.automationsActing.add(runId);
     const policy = toPolicyAutomationRow(row);
-    const fireDeps: FireDeps = {
-      coord: store, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
-      fleetState: this.deps.fleetState, tmux: this.deps.tmux, queue: this.deps.queue,
-    };
-    void fireAutomation(fireDeps, policy, runId, now)
-      .then((outcome) => {
-        // The prompt ladder is live: nothing terminal was written, and this
-        // lane does not retry attempts 2..N (a later task's scope) — leave
-        // the guard SET so a later tick cannot re-spawn a session this run
-        // already has. It settles `lost` on its own once the hard lease
-        // lapses (pass 1, above).
-        if ('pending' in outcome) return;
-        this.automationsInFlight.delete(runId);
-        if (outcome.settle === 'superseded') {
-          // The store REFUSED this act's settle, so the record that stands is
-          // not this act's — pass 1 closed the run `lost` when its hard lease
-          // lapsed mid-act, or the ring evicted the row. The guard clears
-          // (the act is over), and nothing is claimed on the operator's
-          // behalf: a `✓ automation` push here would contradict the run's own
-          // outcome, which is what discarding the store's answer used to do.
-          console.warn(
-            `ccrc-server: automation ${row.id} run ${runId} finished but its settle was refused ` +
-            `(${outcome.refused}${outcome.standing === null ? '' : `, the record that stands is ${outcome.standing}`}) ` +
-            '— no notification raised');
-          return;
-        }
-        // Only a run that produced a session notifies (spec §10 "Notifications"
-        // — `NotifyEvent.sessionId` is non-nullable and gains no seventh kind;
-        // `refused`/`failed` carry no session id to raise one with).
-        if (outcome.settle === 'ok' && outcome.facts.sessionId !== null) {
-          this.pushOne({
-            kind: 'run', sessionId: outcome.facts.sessionId, project: row.project,
-            title: `✓ automation › ${row.name}`,
-            body: `${row.project}`,
-            tag: `automation-${row.id}-${runId}`,
-            recordAlways: true,
-          }, this.activeProjects);
-        }
-      })
+    void fireAutomation(this.fireDepsFor(store), policy, runId, now)
+      .then((outcome) => { this.afterAct(row, runId, outcome); })
       .catch((err) => {
         // The guard above is deliberately NOT cleared here — see
         // `automationsInFlight`'s own docstring: the throw may have landed
@@ -2619,7 +2640,87 @@ export class FleetWatcher {
           `ccrc-server: fireAutomation threw for automation ${row.id} run ${runId} ` +
           `(${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the tick; ` +
           'the run stays leased and settles lost once its hard lease lapses');
-      });
+      })
+      .finally(() => { this.automationsActing.delete(runId); });
+  }
+
+  /** The `FireDeps` both acts take — one place, so the retry cannot drift
+   *  from the fire in what it is given. */
+  private fireDepsFor(store: CoordStore): FireDeps {
+    return {
+      coord: store, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, tmux: this.deps.tmux, queue: this.deps.queue,
+    };
+  }
+
+  /**
+   * ONE PROMPT ATTEMPT for a run whose session already exists and whose
+   * prompt has not landed — pass 4's per-row body. `retryPrompt` (L1) decides
+   * whether an attempt is even due; this only hands it the row and the facts
+   * off the run the server already wrote, and never re-measures an identity.
+   *
+   * `automationsInFlight` is NOT added to here: a parked run is already in it
+   * (that is what keeps its soft lease renewed and pass 3 off it), and a run
+   * that somehow is not — this process restarted while the run was parked —
+   * is still safe to prompt, because prompting sends keystrokes to a session
+   * that exists rather than creating one. `automationsActing` is what stops
+   * two attempts overlapping.
+   */
+  private retryOne(
+    store: CoordStore, row: StoreAutomationRow, runId: number,
+    facts: RunFacts & { readonly sessionId: string }, now: number,
+  ): void {
+    this.automationsActing.add(runId);
+    void retryPrompt(this.fireDepsFor(store), { prompt: row.prompt }, runId, facts, now)
+      .then((outcome) => {
+        if ('waiting' in outcome) return;   // the backoff has not elapsed
+        this.afterAct(row, runId, outcome);
+      })
+      .catch((err) => {
+        console.warn(
+          `ccrc-server: the prompt retry threw for automation ${row.id} run ${runId} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill ` +
+          'the tick; the ladder picks up again next sweep, or the run settles lost at its hard lease');
+      })
+      .finally(() => { this.automationsActing.delete(runId); });
+  }
+
+  /**
+   * What BOTH acts do with their outcome — shared so the retry cannot settle
+   * differently from the fire, and so the `✓` push has exactly one call site.
+   */
+  private afterAct(row: StoreAutomationRow, runId: number, outcome: FireOutcome): void {
+    // The prompt ladder is live: nothing terminal was written. The
+    // responsibility guard stays SET — it is what renews this run's soft
+    // lease and what keeps pass 3 from re-spawning a session it already has —
+    // and pass 4 owes it the next attempt once the backoff elapses.
+    if ('pending' in outcome) return;
+    this.automationsInFlight.delete(runId);
+    if (outcome.settle === 'superseded') {
+      // The store REFUSED this act's settle, so the record that stands is not
+      // this act's — pass 1 closed the run `lost` when its hard lease lapsed
+      // mid-act, or the ring evicted the row. The guard clears (the act is
+      // over), and nothing is claimed on the operator's behalf: a `✓
+      // automation` push here would contradict the run's own outcome, which is
+      // what discarding the store's answer used to do.
+      console.warn(
+        `ccrc-server: automation ${row.id} run ${runId} finished but its settle was refused ` +
+        `(${outcome.refused}${outcome.standing === null ? '' : `, the record that stands is ${outcome.standing}`}) ` +
+        '— no notification raised');
+      return;
+    }
+    // Only a run that produced a session notifies (spec §10 "Notifications" —
+    // `NotifyEvent.sessionId` is non-nullable and gains no seventh kind;
+    // `refused`/`failed` carry no session id to raise one with).
+    if (outcome.settle === 'ok' && outcome.facts.sessionId !== null) {
+      this.pushOne({
+        kind: 'run', sessionId: outcome.facts.sessionId, project: row.project,
+        title: `✓ automation › ${row.name}`,
+        body: `${row.project}`,
+        tag: `automation-${row.id}-${runId}`,
+        recordAlways: true,
+      }, this.activeProjects);
+    }
   }
 
   /**

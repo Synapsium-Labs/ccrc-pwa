@@ -4267,6 +4267,35 @@ export class CoordStore {
     return rows.map((r) => this.hydrateAutomation(r));
   }
 
+  /** EVERY OPEN LEASE WHOSE ACT IS PARKED IN THE PROMPT LADDER — the exact
+   *  complement of `leasedAutomations()` above, and the sweep's fourth pass.
+   *
+   *  A run reaches this state by succeeding at everything except the prompt:
+   *  the session EXISTS (`sessionId IS NOT NULL`, written the moment identify
+   *  succeeded) and nothing terminal has been written (`endedAt IS NULL`), so
+   *  what is owed is attempt 2..N against a session that is already running.
+   *  `promptLadder` (L1) decides whether one is due; this read only finds the
+   *  rows to ask about.
+   *
+   *  It is keyed on the same lease as every other pass, so a run whose HARD
+   *  bound lapsed is not here: `lapseInner` has already settled it `lost` and
+   *  released the lease. That matters, because the ladder's own arithmetic
+   *  outruns the lease — six attempts with the documented backoff span 690 s
+   *  against a 600 s hard bound, so the last attempt is unreachable inside one
+   *  lease BY CONSTRUCTION. Recorded rather than silently relied on: a run
+   *  that exhausts the clock settles `lost` instead of `failed:prompt-refused`,
+   *  and both are honest, but they are different facts. */
+  promptPendingAutomations(): AutomationRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations ` +
+      'WHERE leaseRunId IS NOT NULL AND EXISTS (' +
+      '  SELECT 1 FROM automation_runs r WHERE r.id = automations.leaseRunId ' +
+      '    AND r.sessionId IS NOT NULL AND r.endedAt IS NULL' +
+      ') ORDER BY id',
+    ).all() as unknown as AutomationRowDb[];
+    return rows.map((r) => this.hydrateAutomation(r));
+  }
+
   automation(id: number): AutomationRow | null {
     const row = this.db.prepare(
       `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations WHERE id = ?`,
