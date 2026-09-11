@@ -70,18 +70,30 @@ _hook_timeout() {
 # file's standing contract (exit 0 on every path, no network, no locks, no
 # waiting) is unchanged except the declared, hookstate-first bounded compaction
 # helper wait. Every read below is a local file or a git ref.
-_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
-  local j=""
-  # THE TOTAL CLIP LIVES HERE, at the ONE site every subject passes through.
+_hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or nothing at all
+  local j="" text=""
+  # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
   # It is also what stands between an operator-controlled field and `jq`'s own
   # MAX_ARG_STRLEN (measured 131072 on this box: at 130442 bytes of card the
   # exec fails, `|| return 0` swallows it, and the hook prints NOTHING —
   # deleting the graphify card for that session too).
-  set -- "${1:0:$CARD_MAX_CHARS}"
-  j=$(jq -cn --arg c "$1" \
+  text="${1:0:$CARD_MAX_CHARS}"
+  # THE SECOND CLIP (compaction-card spec §3.3), in the SAME site: the compact
+  # subject is appended AFTER the standing clip, under its own ceiling, and the
+  # sum is pinned at CARD_TOTAL_MAX_CHARS — derived from the two ceilings, never
+  # a third budget. A pathological GM_NODES (D-1899) still loses only the
+  # standing tail; the compact card behind it is intact.
+  if [ -n "${2:-}" ]; then
+    text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"
+    text="${text:0:$CARD_TOTAL_MAX_CHARS}"
+  fi
+  # RETURNS 1 when the envelope could not be built — nothing was printed, and
+  # the SessionStart arm must not stamp `served` for a card that never went
+  # out. Every existing caller ignores the code, so nothing else changes.
+  j=$(jq -cn --arg c "$text" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
-    || return 0
+    || return 1
   printf '%s\n' "$j"
 }
 
@@ -888,6 +900,53 @@ _hook_compact_pre() {
   return 0
 }
 
+# ── SessionStart(compact) (spec §3.3): SERVE THE CARD ONCE, TO ITS SET ────
+# This arm cannot tell which context it serves (§3.0: the compactor has been
+# silent for ≥79 s by now) and NEVER resolves. It serves the card iff the card
+# is the set's own — line 1 of the card is the set's `nonce` — and consumes it.
+# An aged card belongs to no compaction that can still arrive and is REMOVED
+# (a dot-free registry file that outlives its use would hold the slug); a
+# crossed pair — another nonce, or no set — serves nothing and leaves the card
+# for the overlap check or the age bound to retire. Two bounded, fork-free
+# reads (`read -N`, the `_ct_read` idiom); one `find` for the age; one `rm`.
+_hook_compact_card() {   # sets CARD_COMPACT; silent on every path
+  CARD_COMPACT=""
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local f="$REG/$id.compactcard" set="$REG/$id.compactset" head="" nonce="" raw="" line1="" body=""
+  [[ -f "$f" && -r "$f" ]] || return 0
+  command -v find >/dev/null 2>&1 || return 0
+  [ -n "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || { rm -f "$f"; return 0; }
+  [[ -f "$set" && -r "$set" ]] || return 0
+  IFS= read -r -N 4096 head 2>/dev/null < "$set"
+  [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
+  nonce="${BASH_REMATCH[1]}"
+  IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$f"
+  line1="${raw%%$'\n'*}"
+  [[ "$line1" == "$nonce" ]] || return 0
+  body="${raw#*$'\n'}"
+  [[ "$body" != "$raw" ]] || return 0                 # a nonce with no text after it
+  rm -f "$f"
+  body="${body:0:$COMPACT_CARD_MAX_CHARS}"
+  body="${body%"${body##*[![:space:]]}"}"
+  [ -n "$body" ] || return 0
+  CARD_COMPACT="$body"
+  return 0
+}
+
+# THE FACT OF SERVING (spec §3.3 step 5). Called by the arm only after the
+# emitter has PRINTED a card: one jq rewrite of the set, temp-then-rename, so
+# PostCompact's `measure` can say whether `cited` is even interpretable — a
+# card that was mined but never reached the model reads `served: false`, not
+# as a citation miss. Silent on every failure; the set is left as it was.
+_hook_compact_served() {
+  local set="$REG/$id.compactset" doc=""
+  [[ -f "$set" && -r "$set" ]] || return 0
+  doc=$(jq -c '.served = true' "$set" 2>/dev/null) || return 0
+  [[ "$doc" == \{* ]] || return 0
+  _hook_write_atomic "$set" "$doc" || return 0
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -1254,14 +1313,23 @@ case "$event" in
     # appends it only when a prior subject already put text in `$CARD`, so a
     # lone subject carries no leading or trailing space and a third subject
     # (Task 5) joins the same way, on the same separator, without re-deriving it.
-    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD=""
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD=""
     _hook_graph_card || true
     _hook_hold_card  || true
     _hook_ccrc_card  || true
+    # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
+    # describes the compacted context and nothing else, so startup, resume
+    # and clear never read the file. It is passed to the emitter SEPARATELY —
+    # the standing three keep their clip, the card gets its own (D-1899).
+    [[ "$src" == compact ]] && { _hook_compact_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
-    [ -z "$CARD" ] || _hook_emit_context "$CARD"
+    # The stamp follows the PRINT, never the intent: only an emitter that
+    # returned 0 with a compact subject in hand records `served`.
+    if [ -n "$CARD$CARD_COMPACT" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" && [ -n "$CARD_COMPACT" ]; then _hook_compact_served || true; fi
+    fi
     [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)

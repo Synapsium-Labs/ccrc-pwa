@@ -2865,3 +2865,159 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(head).toContain('`timeout`/`gtimeout` deadline');
   });
 });
+
+describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
+  /** A card+set pair on disk exactly as Task 6 leaves them, without running
+   *  the helper: numeric `at` is measurement; `nonce` owns the first line. */
+  const plantPair = (at: number, text: string, opts: { nonce?: string; setNonce?: string } = {}): void => {
+    const nonce = opts.setNonce ?? `nonce-${at}`;
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: 'main', agent: null,
+      transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
+      steered: false, served: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), `${opts.nonce ?? nonce}\n${text}\n`);
+  };
+  const CARD_TEXT = 'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):\n- a.ts [edited]\nBlast radius: 0 files import or call something in these 1 files.\nRe-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
+
+  it('serves the card as the fourth subject on compact, strips the nonce, deletes the card, writes no hookstate (D-306)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce, text } = readCard();
+    const out = card(run(compactStart(tree, transcript)));
+    expect(out).toContain('graphify: this tree has a knowledge graph');       // the standing subject
+    expect(out).toContain('graphify card — this context');                    // the fourth
+    expect(out.endsWith(text.trimEnd())).toBe(true);
+    expect(out).not.toContain(`${nonce}\n`);
+    expect(out.includes(` ${nonce} `), 'the nonce line reached the model').toBe(false);
+    expect(fs.existsSync(cardFile()), 'consume-once').toBe(false);
+    expect(fs.existsSync(setFile()), 'the set is PostCompact\'s to consume').toBe(true);
+    expect(readSet().served, 'the fact of serving is stamped into the set').toBe(true);
+    expect(readSet().nonce, 'the stamp preserves pair ownership').toBe(nonce);
+    expect(typeof readSet().at, 'the stamp preserves numeric measurement').toBe('number');
+    expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
+    // consume-once: a second compact SessionStart has no fourth subject
+    const again = card(run(compactStart(tree, transcript)));
+    expect(again).not.toContain('graphify card');
+  });
+
+  it('never serves it on startup, resume or clear — a card describes the compacted context and nothing else', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    for (const source of ['startup', 'resume', 'clear']) {
+      const out = card(run({ hook_event_name: 'SessionStart', source, cwd: tree }));
+      expect(out, source).not.toContain('graphify card');
+      expect(fs.existsSync(cardFile()), source).toBe(true);
+    }
+  });
+
+  it('an aged card is REMOVED, not served', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    const out = card(run(compactStart(tree, '/t.jsonl')));
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(false);
+  });
+
+  it('a crossed pair is not served: another nonce, or no set at all — the card stays, served stays false', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT, { nonce: '2' });
+    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+    expect(readSet().served).toBe(false);
+    fs.rmSync(setFile());
+    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('the operator file silences the fourth subject and leaves the card on disk', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  it('TWO CLIPS: the standing subjects are clipped at CARD_MAX_CHARS exactly (D-1899\'s fixture) and the card is intact after them', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee', report: false });
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
+      `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+      + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
+    const standing = card(run(compactStart(tree, '/t.jsonl')));   // no card on disk: the standing clip alone
+    expect(standing.length).toBe(2400);
+    plantPair(1, CARD_TEXT);
+    const out = card(run(compactStart(tree, '/t.jsonl')));
+    expect(out.slice(0, 2400)).toBe(standing);
+    expect(out.charAt(2400)).toBe(' ');
+    expect(out.slice(2401)).toBe(CARD_TEXT);
+    expect(out.length).toBeLessThanOrEqual(2400 + 1 + 4000);
+  });
+
+  it('a pathological card is clipped at COMPACT_CARD_MAX_CHARS and the sum at CARD_TOTAL_MAX_CHARS', () => {
+    const tree = cardTree();
+    plantPair(1, 'x'.repeat(100_000));
+    const out = card(run(compactStart(tree, '/t.jsonl')));
+    expect(out.length).toBeLessThanOrEqual(6401);
+    expect(out.length - out.indexOf(' x')).toBeLessThanOrEqual(4001);
+  });
+
+  it('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio', () => {
+    // D-1898's method (see the startup-arm test above for why an absolute ms
+    // number is the wrong shape): the compact arm interleaved with the cheap
+    // arm in ONE run, its own array, its own p95.
+    //
+    // MEASURED 2026-09-11 on `openclaw` (the fleet box; 16 cores, load average
+    // ~34 across the runs below — this box runs the live fleet at the same
+    // time, unlike D-1898's quieter sample): 15 isolated runs of the shipped
+    // `_hook_compact_card` (two bounded, fork-free `read -N`s) gave ratios of
+    // 2.257-4.057 (mean 3.092, this test's own p95 formula over the 15 values:
+    // 3.326). A mutated band — `_hook_compact_card`'s two bounded reads replaced
+    // by two jq forks (`jq -r '.at' "$set"` for the nonce line, `jq -Rs '.' "$f"`
+    // for the card) — gave ratios of 2.292-3.740 (mean 2.953, p95 3.672) over
+    // 15 more isolated runs.
+    //
+    // R=4 stands: the shipped band's p95 (3.326) sits under the 3.5 report
+    // threshold, so nothing here forces a change. But UNLIKE D-1898's ERE
+    // mutation, these two bands are NOT clean: they overlap heavily (shipped's
+    // own worst run, 4.057, exceeds every one of the 15 mutated runs; mutated's
+    // best run, 2.292, undercuts most of the shipped runs) and not one of the 15
+    // mutated runs crossed R=4. On this box, at this load, THIS ratio test would
+    // not reliably redden for the two-extra-jq-fork mutation it was proposed to
+    // calibrate against — the fleet box's own concurrent load dominates the
+    // ~2 extra forks' cost. Reported, not silently tuned: R stays 4 because nothing
+    // in the brief asks this guard to catch that specific mutation, and the
+    // mutations Step 7 actually lists (delete the nonce compare, delete the age
+    // find, delete the consume-once `rm`, etc.) are correctness mutations this
+    // ratio test was never meant to catch — those are pinned by the other rows
+    // in this describe, not by the ratio.
+    const reg = path.join(home, '.cc-sessions');
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 200; i++) {
+      const id = `row-${i}`;
+      fs.writeFileSync(path.join(reg, `${id}.uuid`), `uuid-${id}`);
+      fs.writeFileSync(path.join(reg, `${id}.project`), i < 40 ? 'alpha' : `proj-${i}`);
+      fs.writeFileSync(path.join(reg, `${id}.supervised`), String(now - 5));
+    }
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.uuid'), 'uuid-1');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.project'), 'alpha');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.supervised'), String(now - 5));
+    const tree = cardTree();
+    const cheapTimes: number[] = [];
+    const compactTimes: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = process.hrtime.bigint();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      plantPair(i + 1, CARD_TEXT);
+      const t1 = process.hrtime.bigint();
+      run(compactStart(tree, '/t.jsonl'));
+      compactTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
+    }
+    const p95 = (xs: number[]): number => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length * 0.95) - 1]!; };
+    expect(p95(compactTimes) / p95(cheapTimes)).toBeLessThan(4);
+  });
+});
