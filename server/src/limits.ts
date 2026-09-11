@@ -3,6 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type Roster } from '../../shared/roster.js';
+import { poolEligible, poolUndecidable } from './poolrule.js';
+import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -174,10 +176,24 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
  * placeable, and inventing a target would lie.
  *
+ * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
+ * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
+ * `_pool_ok "$w" "$pps" || continue` inside the loop — the FILTER moves, the
+ * scoring does not. An undecidable tag makes `poolEligible` empty and this
+ * function `null`, which is NOT the same fact as "every lane is disabled";
+ * `projectPlacement` below is what tells those two apart for the wire.
+ *
+ * Not defaulted: a default would let a caller that forgot the pool receive the
+ * unconstrained forecast, which names an out-of-pool account — the one wrong
+ * answer this function can give. `GET /api/accounts`'s global `projected` says
+ * `{state:'untagged'}` out loud, and that is what that field now MEANS.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
-export function projectHome(roster: Roster, limits: Record<string, AccountLimits>): ProjectedHome | null {
-  const live = roster.homeAble.filter((a) => limits[a.id]?.disabled !== true);
+export function projectHome(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectedHome | null {
+  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
@@ -206,6 +222,29 @@ export function projectHome(roster: Roster, limits: Record<string, AccountLimits
     return { wrapper: base.id, score: 0 };
   }
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
+}
+
+/**
+ * The same forecast, per PROJECT, with its three answers kept apart (spec
+ * §5.6).
+ *
+ * `unmeasurable` is a VALUE, not a null and not a `none`: an unreadable or
+ * malformed tag means nobody decided, so there is no forecast to give, and
+ * `none` there would claim the measurement "nothing can take this project".
+ * `none` carries the pool it was looking in so a renderer can name it without
+ * re-deriving the tag.
+ *
+ * COMPOSES `projectHome`; decides nothing new. The pool DECISION is
+ * `poolrule.ts`'s (L1) and is reached through `poolUndecidable`/`poolEligible`
+ * rather than by testing state tokens here.
+ */
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectPlacement {
+  if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
+  const home = projectHome(roster, limits, pool);
+  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 
 export async function readLimits(

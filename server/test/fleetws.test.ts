@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
+import { performance } from 'node:perf_hooks';
 import { FLEET_PROTO, FLEET_PROTO_MIN, type Divergence } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
@@ -50,12 +51,19 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // a real client was pinned by a source-text grep and nothing else. The positive
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
-const collect = (ws: WebSocket, opts: { dropDivergence?: boolean } = {}) => {
+const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: boolean } = {}) => {
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
     const m: unknown = JSON.parse(String(d));
     if (opts.dropDivergence === true && (m as { type?: unknown }).type === 'divergence') return;
+    // DROPPED BY DEFAULT, the inverse of `dropDivergence` above and stated
+    // rather than assumed: the `pools` frame rides the cold start and every
+    // registry-listing change, so every case in this file that is about
+    // `fleet`/`runs`/`coord` ordering would otherwise have to opt out — ten
+    // edits today, and a silent break for the eleventh case somebody writes
+    // tomorrow. The one describe that is ABOUT this frame passes `keepPools`.
+    if (opts.keepPools !== true && (m as { type?: unknown }).type === 'pools') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -82,6 +90,7 @@ describe('fleet REST + WS', () => {
     if (app) await app.close();
     app = undefined;
     rmSync(home, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('GET /api/fleet returns assembled sessions', async () => {
@@ -895,6 +904,143 @@ describe('fleet REST + WS', () => {
     });
   });
 
+  // Account pools, spec §5.4.5 / §11 row 22 — the `{type:'pools'}` frame. A
+  // FLEET-LEVEL fact: a project's tag is not a property of any session, and
+  // riding it on `FleetSession` would make `reviveFleetSession` a second
+  // producer of it (the `divergence` frame's own argument).
+  describe('the `pools` frame', () => {
+    const connect = async (
+      over: Partial<Deps> = {}, opts: { tick?: boolean; intervalMs?: number } = {},
+    ) => {
+      const deps = { ...testDeps(home), ...over };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus, opts.intervalMs);
+      app = await buildServer(deps, bus, watcher);
+      if (opts.tick !== false) await watcher.tick();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: opts.tick !== false, keepPools: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      return { ws, next, watcher, bus };
+    };
+
+    const tag = (project: string, bytes: string) => {
+      mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });
+      writeFileSync(path.join(home, '.cc-sessions', 'pools', project), bytes);
+    };
+
+    it('gives the pool leg half of this watcher instance\'s cadence', async () => {
+      vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      tag('demo', 'pool-a');
+      const seen: Array<{ op: string; timeoutMs: number | undefined }> = [];
+      const io: FleetIO = {
+        ...localIO,
+        readdir: async (p, timeoutMs) => {
+          if (p === path.join(home, '.cc-sessions', 'pools')) {
+            seen.push({ op: 'readdir', timeoutMs });
+          }
+          return localIO.readdir(p);
+        },
+        readFileMeasured: async (p, timeoutMs) => {
+          if (p === path.join(home, '.cc-sessions', 'pools', 'demo')) {
+            seen.push({ op: 'readFileMeasured', timeoutMs });
+          }
+          return localIO.readFileMeasured(p);
+        },
+      };
+
+      const { ws } = await connect({ io }, { intervalMs: 8_000 });
+
+      expect(seen[0]).toEqual({ op: 'readdir', timeoutMs: 4_000 });
+      expect(seen[1]?.op).toBe('readFileMeasured');
+      expect(seen[1]?.timeoutMs).toBeGreaterThan(0);
+      expect(seen[1]?.timeoutMs).toBeLessThanOrEqual(4_000);
+      ws.close();
+    });
+
+    it('cold-starts after coord, carrying the measured tags', async () => {
+      tag('demo', 'pool-a');
+      const { ws, next } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('coord');
+      const frame = await next();
+      expect(frame.type).toBe('pools');
+      expect(frame.pools).toEqual({
+        listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+      });
+      ws.close();
+    });
+
+    it('sends NOTHING before the first tick — never a fabricated empty map', async () => {
+      // `currentPools()` is null until a tick measured. A cold start that
+      // invented `{listed:true, byProject:{}}` would tell the phone that
+      // nothing on the fleet is tagged, off a box this process never read.
+      const { ws, next, bus } = await connect({}, { tick: false });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      bus.emit('notice', { message: 'unrelated' });
+      expect(await next()).toEqual({ type: 'notice', message: 'unrelated' });
+      ws.close();
+    });
+
+    it('re-emits only on CHANGE, byte-equality guarded like coord', async () => {
+      const { ws, next, watcher, bus } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('coord');
+      expect((await next()).type).toBe('pools');
+
+      await watcher.tick();                       // nothing moved
+      bus.emit('notice', { message: 'unrelated' });
+      expect(await next()).toEqual({ type: 'notice', message: 'unrelated' });
+
+      tag('demo', 'pool-b');                      // now it moved
+      await watcher.tick();
+      const frame = await next();
+      expect(frame.type).toBe('pools');
+      expect(frame.pools.byProject.demo).toEqual({ state: 'tagged', name: 'pool-b' });
+      ws.close();
+    });
+
+    it('says listed:false when the registry root cannot be listed — the tick that fails shut still reports', async () => {
+      // The emitter sits beside `emitCoord`, above the `!listed` early return,
+      // because placed below it the chips would freeze on their last value
+      // while the box could not be read at all. Unlike synchronous `emitCoord`,
+      // its listed-arm I/O cost and ordering argument live on `emitPools`.
+      let listable = true;
+      const flaky: FleetIO = { ...localIO, readdir: async (p) => (listable ? localIO.readdir(p) : null) };
+      const { ws, next, watcher } = await connect({ io: flaky });
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('coord');
+      expect((await next()).type).toBe('pools');
+
+      listable = false;
+      await watcher.tick();
+      const coordFrame = await next();
+      expect(coordFrame.type).toBe('coord');
+      const frame = await next();
+      expect(frame.type).toBe('pools');
+      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown' });
+      ws.close();
+    });
+
+    it('an old client still shrugs, and FLEET_PROTO is untouched', async () => {
+      const { ws, next } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).type).toBe('coord');
+      const frame = await next();
+      expect(Object.keys(frame).sort()).toEqual(['pools', 'type']);
+      expect(FLEET_PROTO).toBe(1);
+      expect(FLEET_PROTO_MIN).toBe(1);
+      ws.close();
+    });
+  });
+
   // — Task 10, orchestrator-added scope: the durable feed table behind
   //   NotifyLog's in-memory ring —
   describe('GET /api/feed', () => {
@@ -1038,6 +1184,50 @@ describe('fleet REST + WS', () => {
       bus.emit('divergence', []);
       expect(await next()).toEqual({ type: 'divergence', divergences: [] });
 
+      ws.close();
+    });
+  });
+
+  describe('the ask chip on the two cold paths', () => {
+    const CHILD = 'claude-a-MekWarLive';
+    const CHIP = { state: 'held', parentId: 'coord-1', answeredBy: null };
+
+    const heldAsk = (): CoordStore => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      coord.insertAsk({
+        childId: CHILD, parentId: CHIP.parentId, runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: Date.now(),
+      });
+      return coord;
+    };
+
+    it('GET /api/fleet carries the held ask on first paint', async () => {
+      app = await buildServer({ ...testDeps(home), coord: heldAsk() });
+      const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+      const body = res.json() as { sessions: Array<{ id: string; ask: unknown }> };
+      const row = body.sessions.find((session) => session.id === CHILD);
+      expect(row, 'the seeded session must reach the first paint').toBeDefined();
+      expect(row!.ask).toEqual(CHIP);
+    });
+
+    it('/ws/fleet carries the held ask on its cold-start snapshot', async () => {
+      app = await buildServer({ ...testDeps(home), coord: heldAsk() });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws);
+      await new Promise<void>((resolve, reject) => {
+        ws.on('open', () => resolve());
+        ws.on('error', reject);
+      });
+
+      expect((await next()).type).toBe('hello');
+      const snapshot = await next();
+      expect(snapshot.type).toBe('fleet');
+      const row = snapshot.sessions.find((session: { id: string }) => session.id === CHILD);
+      expect(row, 'the seeded session must reach the cold-start snapshot').toBeDefined();
+      expect(row.ask).toEqual(CHIP);
       ws.close();
     });
   });

@@ -146,6 +146,28 @@ function scanCcdCallSites(text: string, file: string): Site[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(code)) !== null) {
     const key = m[1]!;
+    // A NAME READ IS NOT A CALL SITE. `CCD_ARGV.<name>(…)[0]` takes the VERB
+    // out of a built argv and throws the argv away; nothing is ever run, so
+    // there is no skew question to ask and no gate that could answer it. The
+    // one such site today is `pools.ts`'s `PROJECT_POOL_VERB`, which reads the
+    // verb off the builder precisely so the token is not spelled a second
+    // time (spec §5.11 — the verb's PRESENCE in `ccd caps` is the evidence
+    // that the deployed ccd honours pools).
+    //
+    // THE RULE IS DELIBERATELY NARROW: the `[0]` must follow the call's own
+    // closing paren immediately. `deps.runCcd(CCD_ARGV.foo(x))` and
+    // `const argv = CCD_ARGV.foo(x)` are untouched by it, so it cannot hide a
+    // real call site. The alternative — putting `project-pool` in
+    // `UNGATED_BY_DECISION` — is what this wave's own mutation row calls the
+    // way to SILENCE row 18, and it would exempt every future call site of
+    // that verb along with this non-call.
+    let after = m.index + m[0].length; let argDepth = 1;
+    while (after < code.length && argDepth > 0) {
+      if (code[after] === '(') argDepth++;
+      else if (code[after] === ')') argDepth--;
+      after++;
+    }
+    if (code.slice(after, after + 3) === '[0]') continue;
     const chain = chains[m.index] ?? [];
     let open: number | null = null;
     for (let k = chain.length - 1; k >= 0; k--) {
@@ -253,6 +275,19 @@ describe('every ccd call site in server/src answers the version-skew question', 
     expect(ALL_SITES.some((s) => !s.gated)).toBe(true);
   });
 
+  it('a NAME READ is not a call site, and only when the [0] is immediate', () => {
+    // Both directions, because a scanner rule that only ever excludes is a
+    // rule that can hide the thing it was written beside.
+    expect(scanCcdCallSites(
+      "const V: string = CCD_ARGV.projectPoolClear('')[0] ?? '';\n", 'f.ts'),
+    'reading the verb name off the builder is not a call').toEqual([]);
+    const real = scanCcdCallSites(
+      "import { CCD_ARGV } from './ccdargv.js';\nexport function build(deps: D) {\n"
+      + '  return deps.runCcd(CCD_ARGV.projectPoolClear(p));\n}\n', 'f.ts');
+    expect(real.length, 'but an actual call to the same verb still is one').toBe(1);
+    expect(real[0]!.gated).toBe(false);
+  });
+
   it('has no ungated call site outside UNGATED_BY_DECISION', () => {
     const offenders = ALL_SITES.filter((s) => !s.gated && !UNGATED_BY_DECISION.has(s.verb));
     expect(offenders.map(show)).toEqual([]);
@@ -270,7 +305,11 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // derived) because these six are the finding, and a derivation from
     // UNGATED_BY_DECISION would let a mistaken addition to that set silently
     // excuse one of them.
-    const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap'];
+        // `project-pool` joins the six: it is the newest skew-exposed verb, and
+    // `verbSupported`'s permit-on-no-evidence default means a route that forgets
+    // the gate sends it to a box that answers `die "usage: ..."` -> 502 "the tag
+    // failed", which reads as a broken feature rather than an old fleet host.
+const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

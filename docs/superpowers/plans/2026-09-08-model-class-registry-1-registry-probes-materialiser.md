@@ -101,10 +101,11 @@ internal to this plan and the probe.
 
 **B-3 — "is this an Anthropic lane?" is `telemetry === 'anthropic'`.** (all plans)
 `availableFor(reg, catalogue, anthropic)` takes the answer as a boolean because
-the roster on `main` has no `exec.provider` to derive it from (`shared/roster.ts:65-68`:
-`ExecSpec` is `upstream | generated | external`, with no provider field). The
-roster's own declaration of an Anthropic account is `telemetry: 'anthropic'`
-(`shared/roster.ts:84-88`, the field `limits.ts` scores on), and `gpt` carries
+the roster on `main` has no `exec.provider` to derive it from (`ExecSpec` in
+`shared/roster.ts` is `upstream | generated | external`, with no provider field). The
+roster's own declaration of an Anthropic account is `AccountDef.telemetry` in
+`shared/roster.ts` (`'anthropic' | 'none'`, the field `limits.ts` scores on), and
+`gpt` carries
 `telemetry: 'none'`. Every caller in this plan computes the boolean that way, in
 one place per program, and says so in a comment.
 

@@ -21,8 +21,11 @@ import { CCD } from './ccdWsHelpers.js';
  * mechanism: it reads the two numbers out of the sentence that states them and
  * compares each to the thing that sentence says it counted. `ccd-pool-ok.test.ts`
  * carries the identical pin for the `_pool_ok` header in the same file, and
- * that pin is why the `_pool_ok` census never went stale through the same five
- * rounds.
+ * that pin is why the `_pool_ok` census never went stale across the moves this
+ * one did. ("the same five rounds" stood here until the account-pools merge
+ * took `ccd/ccd`'s swept header, whose own count is SIX moves — the antecedent
+ * this clause leaned on was in the paragraph above, and that paragraph now
+ * delegates the history rather than enumerating it.)
  *
  * WHY TWO NUMBERS AND NOT ONE: the header's own cited commands are
  * `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l` for
@@ -125,11 +128,11 @@ describe('the `_reg_get` header states a census that stays honest', () => {
  * The SAME shape for the other census this branch keeps falsifying. `cmd_prefer`
  * carries a sentence counting the measured `.project` readers, and round 5
  * converted a third one at `cmd_start` in the very commit whose message books
- * "an enumeration falsified by the entry added directly below it" — leaving that
- * sentence one function away asserting two verbs where there are now three.
- * A comment saying "re-measure this" is how that happens; a case is how it stops.
+ * "an enumeration falsified by the entry added directly below it" — leaving the
+ * later sentence asserting two verbs where there are now three. A comment saying
+ * "re-measure this" is how that happens; a case is how it stops.
  */
-describe('the `_reg_read "$id" project` census one function over stays honest too', () => {
+describe('the `_reg_read "$id" project` census stays honest too', () => {
   it('both numbers `cmd_prefer` claims match its own cited command, filtered and bare', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const from = src.indexOf('THE CENSUS, SPELLED SO IT DOES NOT COUNT ITSELF');
