@@ -2759,3 +2759,47 @@ this time I ran a different instrument — three independent judges on the only 
 **is this ready to merge, what breaks if it does, and which of the remaining prose imperfections
 would genuinely mislead a maintainer versus merely being imperfect?** A reviewer that can never
 conclude "this is done" is not a useful reviewer, and I told them so explicitly.
+
+### The merge-readiness panel — 3/3 MERGE, zero blockers
+
+Three independent opus judges, each asked the question that was actually open and each told plainly
+that "MERGE" was an acceptable answer. All three mutated the code themselves rather than trusting the
+seven prior rounds: one deleted the `read.reason === 'absent'` arm and got 11 RED across 3 files; one
+flattened the stranded marker's `unreadable` to `null` and got RED in two suites; one measured the
+deadline race resolving at its budget (a planted FIFO with a 1200 ms budget returned at 1215 ms).
+
+**Verdict: 3/3 MERGE, no blockers.** Two of their findings I re-measured myself before believing.
+
+**D-2516 — a dangling symlink at `$REG/pools/<project>` diverges.** Server: `readFile` throws
+`ENOENT`, `failureFor` maps it to `absent`, `pools.ts`'s `continue` skips it, `poolFor` answers
+`untagged` — constraint **lifted**. ccd: `[[ ! -e "$f" && -L "$f" ]] && { echo unreadable; }` —
+refuses. The link *file* exists and only its target is absent, so `ENOENT` is genuinely ambiguous
+here, and `readFile` cannot separate the two because it follows symlinks. The narrowing is not one
+this code performs; it is one the Node API hands it already folded.
+
+Not a blocker: ccd re-measures and is the authority, so nothing runs in the wrong pool, and it is
+reachable only by hand from fleet-box shell. It earns an entry because of the company it keeps —
+`ccd/ccd:15892` says of the still-open D-2000, *"an UNREADABLE `.project` reads as 'this project is
+in no pool' and silently lifts the pool constraint for that row. Same class, different field."* This
+is that class with a server-side instance, and the server already mirrors ccd deliberately elsewhere
+(the 64-byte cap, the whitespace strip), so skipping the `-e`/`-L` pairing is an inconsistency in a
+place this program has been careful.
+
+**D-2517 — D-2000 has no mechanism.** Measured: no `deploy.sh` gate, no test, nothing in `server/src`
+or `deploy/`. Its only non-plan mention, `ccd/ccd:15892`, is about a different defect entirely. The
+plan says "D-2000 still forbids deploying this wave" in three places, and what that names is a
+convention the coordinator and worker honour — the same shape CLAUDE.md already describes for the
+HTTP chokepoint, *"a contract the coordinator skill honors, not an OS wall."*
+
+That matters at the merge boundary specifically, and nobody raised it in eight rounds of asking
+what was wrong with each round. Merging does not deploy. But it moves this code onto `main`, where
+the next routine deploy — run by any of the nine other supervised ccrc-pwa sessions, for an entirely
+unrelated reason — would carry it. The gate holding wave 3 off the live server is two sessions
+remembering, not a mechanism. **That is the operator's to weigh before the merge, not after.**
+
+### What eight rounds actually produced
+
+Rounds four and five found real code defects and a blocker. Rounds six, seven and eight found
+twenty-three findings of which **none touched the code**. The instrument that finally said something
+new was the one that asked a different question — a defect hunt returns defects for as long as you
+run it, and the thing I most needed to know was not on that list.
