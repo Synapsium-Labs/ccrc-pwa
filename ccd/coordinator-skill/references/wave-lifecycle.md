@@ -24,6 +24,8 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
 | `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
+| `error:'hold-oversize'` (413) | the complete session-card hold — programme, wave, denominator and SQLite's exact new or reused run id — exceeds the hook's 127-character display window | shorten the programme slug before retrying. A fresh open rolls both programme and run inserts back, an idempotent retry creates no duplicate, and no `ws-hold` runs |
+| `error:'hold-invalid'` (400) | the complete hold does not satisfy the hook grammar: its persisted programme is not hook-safe, or wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the persisted/input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 
 **Why `project-mismatch` exists.** A session's workspace is a git worktree in
 exactly one repository. Reusing its id for a wave in another project queues the
@@ -157,6 +159,8 @@ of them is how a workspace gets orphaned:
 | shape | meaning | what you do |
 |---|---|---|
 | `error:'oversize'` (413) | the mail this dispatch would queue — the worker kickoff prefix **plus** your brief, composed — exceeds the mail body byte cap (`MAIL_BODY_MAX_BYTES`). Checked EARLY, before the pause/kill-switch check, before caps, before anything is spawned or held (`dispatch.ts`'s own `MAIL_BODY_MAX_BYTES` check). Not a mail-routes-only code: this is the SAME field/status `POST /api/mail`'s own oversize body/subject/artifacts refusals use (SKILL.md), but this occurrence is dispatch's own | trim the brief and resend — the run is untouched, still `planned`, and nothing on the fleet was spawned |
+| `error:'hold-oversize'` (413) | the persisted run's complete session-card hold exceeds the hook's 127-character display window. Rechecked here for reconstructed or newer-database rows that bypassed current open-time validation | shorten the programme slug through an operator correction before retrying. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
+| `error:'hold-invalid'` (400) | the persisted run's programme or numeric fields cannot satisfy the hook's positive-decimal hold grammar | stop and report the stored defect. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
 | `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | **stop and report; the operator resolves it** — exactly like `ambiguous-dispatch`, never a blind retry. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet |
 | `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | stop and report — an operator/fleet-host issue, not a retryable one |
 | a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons — `ws-add` (wave 1's fresh spawn), `ensure` (wave ≥2's resume), or `ws-hold` (either wave, the claim itself) | stop and report — the SAME as the rows above, even though none of the three fields SKILL.md's own check reads is populated. `state` always stays `planned` (this shape never advances it) — but that is NOT "nothing happened yet": `sessionId` may already be WRITTEN onto the row (a wave-1 `ws-add` success writes it before `ws-hold` can go on to fail; wave ≥2 always starts with it already there, from an earlier open or dispatch), and a workspace may already exist on the fleet, freshly spawned and unheld. Confirm no partially-spawned or partially-held workspace was left behind by an earlier attempt before ANY retry — the fleet is where that evidence lives, not the run row's own `state` |
@@ -512,7 +516,13 @@ whole time, which is the only prevention this ordering rule buys.
    to re-measure or mail) and `prhistory-unreadable` (`.prhistory` could not
    be read — the route refuses to close on a ledger it cannot verify; retry
    once the file is readable again) — both of THESE two ride `refused`, the
-   third shape this one route can answer with.
+   third shape this one route can answer with. A re-hold that would exceed
+   the hook's 127-character display window instead answers
+   `error:'hold-oversize'` (413): no fleet act runs and the run remains open.
+   Shorten the programme slug through an operator correction before retrying.
+   `error:'hold-invalid'` (400) has the same no-act/no-close guarantees, but
+   means the stored programme or numeric domain cannot satisfy the hook grammar;
+   stop and report it rather than retrying unchanged.
 5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
 
 ## 6 — Final merge

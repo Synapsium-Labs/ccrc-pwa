@@ -151,7 +151,7 @@ const SITES: readonly Site[] = [
     find: /CCD_ARGV\.wsRename\(r\.id, branch, sweepDec\(this\.deps\.fleetState, ('[^']*')\)\)\)\);/,
     label: "'sweep:names'" },
   { file: 'coord/close.ts', what: 'abandon-arm hold (a surviving sibling claims the workspace)',
-    find: /CCD_ARGV\.wsHold\(run\.sessionId,\n\s+holdReason\(survivor\.program, survivor\.wave, survivor\.waveOf, survivor\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
+    find: /CCD_ARGV\.wsHold\(run\.sessionId, handoff\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
     label: '`run:${id} close`' },
   { file: 'coord/close.ts', what: 'abandon-arm release (no survivor)',
     find: /: CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
@@ -163,7 +163,7 @@ const SITES: readonly Site[] = [
     find: /const argv = CCD_ARGV\.wsRelease\(run\.sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${id} close`' },
   { file: 'coord/close.ts', what: 'ordinary close, non-final/sibling-survivor hold branch',
-    find: /const argv = CCD_ARGV\.wsHold\(run\.sessionId, nextReason, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    find: /const argv = CCD_ARGV\.wsHold\(\n\s+run\.sessionId, nextHold\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${id} close`' },
   // Fix round 2 (final whole-branch review, F5b): the two `find`s below used
   // to be the bare `sweepDec(deps.fleetState, …)` pattern, unanchored to any
@@ -189,7 +189,7 @@ const SITES: readonly Site[] = [
     find: /const dispatchDec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/,
     label: '`run:${run.id} dispatch`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
-    find: /const argv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(programSlug, wave, waveOfVal, opened\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },
 ];
 

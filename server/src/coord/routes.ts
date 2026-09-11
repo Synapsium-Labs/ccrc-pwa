@@ -24,10 +24,11 @@ import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispa
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { holdReason, queueSystemMail } from './rundefs.js';
+import { queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
+  isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
@@ -137,6 +138,10 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     // sentence itself is L1's, spelled beside the check that refuses.
     case 'oversize':
       return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'refused': {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
@@ -184,6 +189,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
@@ -1110,8 +1119,8 @@ export function registerCoordRoutes(
         typeof title !== 'string' || title.trim() === '' ||
         typeof project !== 'string' || project.trim() === '' ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
-        !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
+        !isPositiveDecimalSafeInteger(wave) ||
+        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
         // Present-and-not-a-string is a malformed body. The VALUE is shaped
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
@@ -1190,6 +1199,14 @@ export function registerCoordRoutes(
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
       ...(home !== undefined ? { homeProject: home } : {}) });
+    if ('kind' in opened) {
+      return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
+        ok: false,
+        error: opened.kind,
+        ...('limit' in opened ? { limit: opened.limit } : {}),
+        detail: opened.detail,
+      });
+    }
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
@@ -1227,9 +1244,10 @@ export function registerCoordRoutes(
     // predecessor — a live path, not a store-test-only one — and an occupant
     // change must be attributable like every other run write.
     if (typeof sessionId === 'string') {
-      const argv = CCD_ARGV.wsHold(sessionId,
-        holdReason(programSlug, wave, waveOfVal, opened.id),
-        sweepDec(deps.fleetState, `run:${opened.id} open`));
+      const argv = CCD_ARGV.wsHold(
+        sessionId, opened.holdReason,
+        sweepDec(deps.fleetState, `run:${opened.id} open`),
+      );
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }

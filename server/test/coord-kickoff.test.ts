@@ -12,7 +12,13 @@ import { readFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { queueProgramKickoff, type KickoffOutcome } from '../src/coord/kickoff.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../shared/api.js';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_KICKOFF_SUBJECT,
+  PROGRAM_SLUG_MAX_CHARS,
+  programKickoff,
+  programResumeKickoff,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_000_000_000_000;
@@ -140,7 +146,8 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
   // the ceiling through and queues a mail over it, so the two producers would
   // disagree about what 8 KiB means by exactly the length of a template.
   describe('the composed body is capped', () => {
-    const base = Buffer.byteLength(programKickoff('build9-demo', ''), 'utf8');
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const base = Buffer.byteLength(programKickoff(slug, ''), 'utf8');
 
     it('refuses a title that pushes the body over the cap, and writes NOTHING', () => {
       const s = store();
@@ -166,9 +173,9 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
     it('a body at EXACTLY the cap is queued — the refusal is > and not >=', () => {
       const s = store();
       const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
-      expect(Buffer.byteLength(programKickoff('build9-demo', title), 'utf8'))
+      expect(Buffer.byteLength(programKickoff(slug, title), 'utf8'))
         .toBe(MAIL_BODY_MAX_BYTES);
-      const out = queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title });
+      const out = queueProgramKickoff({ coord: s }, ID, { slug, title });
       expect(out.ok).toBe(true);
       expect(due(s).length).toBe(1);
     });
@@ -184,10 +191,23 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
       expect(due(s)).toEqual([]);
     });
 
-    it('the slug counts too — it is in the body twice', () => {
+    it('refuses an over-cap safe slug at the authoritative seam and writes NOTHING', () => {
       const s = store();
-      expect(queueProgramKickoff({ coord: s }, ID,
-        { slug: 'x'.repeat(MAIL_BODY_MAX_BYTES), title: 'T' }).ok).toBe(false);
+      expect(() => queueProgramKickoff({ coord: s }, ID,
+        { slug: `${slug}x`, title: 'T' }))
+        .toThrow(`program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`);
+      expect(due(s)).toEqual([]);
+    });
+
+    it.each([
+      ['a zero run id', { runId: 0, wave: 1 }],
+      ['a negative wave', { runId: 1, wave: -1 }],
+      ['an unsafe run id', { runId: Number.MAX_SAFE_INTEGER + 1, wave: 1 }],
+      ['an exponent-scale wave', { runId: 1, wave: 1e100 }],
+    ])('refuses %s at the authoritative seam and writes NOTHING', (_label, resume) => {
+      const s = store();
+      expect(() => queueProgramKickoff({ coord: s }, ID, PROGRAM, resume))
+        .toThrow(/positive safe integers/);
       expect(due(s)).toEqual([]);
     });
   });
@@ -258,7 +278,7 @@ describe('queueProgramKickoff(resume) — the wave-N re-kickoff', () => {
     const s = store();
     const opened = s.openRun({ program: PROGRAM.slug, title: PROGRAM.title, project: 'demo',
       wave: 5, waveOf: 8, claimedBy: 'demo-dead-coordinator' });
-    if ('refused' in opened) throw new Error(`fixture: openRun refused (${opened.refused})`);
+    if (!('id' in opened)) throw new Error('fixture: openRun refused');
     queueProgramKickoff({ coord: s }, ID, PROGRAM, { runId: opened.id, wave: 5 });
     expect(due(s)[0]!.envelope).not.toContain('run:');
     const row = s.db.prepare('SELECT runId FROM mail').get() as { runId: number | null };
@@ -313,12 +333,39 @@ describe('queueProgramKickoff(resume) — the wave-N re-kickoff', () => {
 
     it('a RESUME body at exactly the cap is queued — the refusal is > and not >=', () => {
       const s = store();
-      const base = Buffer.byteLength(programResumeKickoff('build9-demo', '', 7, 5), 'utf8');
+      const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+      const base = Buffer.byteLength(programResumeKickoff(slug, '', 7, 5), 'utf8');
       const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
-      expect(Buffer.byteLength(programResumeKickoff('build9-demo', title, 7, 5), 'utf8'))
+      expect(Buffer.byteLength(programResumeKickoff(slug, title, 7, 5), 'utf8'))
         .toBe(MAIL_BODY_MAX_BYTES);
-      expect(queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title }, RESUME).ok).toBe(true);
+      expect(queueProgramKickoff({ coord: s }, ID, { slug, title }, RESUME).ok).toBe(true);
       expect(due(s).length).toBe(1);
+    });
+
+    it('refuses the RESUME body one TWO-BYTE character past the cap, and says so in bytes', () => {
+      // The exact upper boundary for the resume composer, which the gross
+      // `MAIL_BODY_MAX_BYTES`-character fixture above cannot pin: that one is
+      // thousands of bytes over, so it survives an off-by-one and a
+      // character-counting cap alike. Here the body is ONE character past the
+      // accepted size and TWO bytes past it, so `bytes` is where a cap
+      // measuring `String.length` is caught — it would report 8,193.
+      const s = store();
+      const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+      const base = Buffer.byteLength(programResumeKickoff(slug, '', 7, 5), 'utf8');
+      const title = `${'x'.repeat(MAIL_BODY_MAX_BYTES - base)}\u00e9`;
+      const body = programResumeKickoff(slug, title, 7, 5);
+      expect(Buffer.byteLength(body, 'utf8')).toBe(MAIL_BODY_MAX_BYTES + 2);
+      expect(body.length).toBe(MAIL_BODY_MAX_BYTES + 1);
+
+      const out = queueProgramKickoff({ coord: s }, ID, { slug, title }, RESUME);
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable — narrowed above');
+      expect(out).toMatchObject({
+        kind: 'oversize',
+        limit: MAIL_BODY_MAX_BYTES,
+        bytes: MAIL_BODY_MAX_BYTES + 2,
+      });
+      expect(due(s)).toEqual([]);
     });
   });
 });

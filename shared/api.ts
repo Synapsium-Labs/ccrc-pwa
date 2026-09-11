@@ -3826,6 +3826,60 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** Numeric fields rendered into a run hold use this one exact domain at every
+ *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
+ *  integers can lose identity or switch to exponent punctuation the session hook
+ *  grammar refuses. Every runtime hold-writing boundary enforces it. */
+export const RUN_HOLD_NUMBER_MAX = Number.MAX_SAFE_INTEGER;
+export const isPositiveDecimalSafeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+
+/** The widest decimal the RUN ID's slot must reserve room for: SQLite's signed
+ *  INTEGER maximum, nineteen digits. Deliberately WIDER than the JavaScript
+ *  domain above, which every runtime seam still enforces — `runs.id` is an
+ *  int64 column, so budgeting its full width means a slug the cap admits can
+ *  never compose an over-long hold for any id that column can hold, not merely
+ *  for the ids this process agrees to serialize.
+ *
+ *  A STRING, never a number, and never coerced through one: `9223372036854775807`
+ *  is not representable as a JavaScript number — `Number(...)` silently yields
+ *  9223372036854775808 — so the placeholder is carried as the decimal TEXT it
+ *  stands for and rendered through the same serializer as every real hold. */
+export const RUN_ID_MAX_DECIMAL = '9223372036854775807';
+
+/** The complete hold text must fit the session hook's readable window. The
+ *  shell keeps a literal because it cannot import TypeScript; a server test
+ *  binds the values. */
+export const HOLD_REASON_MAX_CHARS = 127;
+
+/** One field rendered into a hold: a runtime JavaScript number, or the decimal
+ *  TEXT of a width the budget reserves but no JavaScript number can hold. Both
+ *  interpolate identically, which is exactly what lets the cap below be derived
+ *  THROUGH this serializer instead of through a second copy of its grammar. */
+export type HoldNumeral = number | string;
+
+/** The standing hold-reason serialization, shared with the cap derivation so a
+ *  grammar change automatically changes the slug budget it consumes. */
+export const holdReason = (
+  program: string,
+  wave: HoldNumeral,
+  waveOf: HoldNumeral | null,
+  runId: HoldNumeral | null,
+): string =>
+  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}` +
+  `${runId === null ? '' : ` run:${runId}`}`;
+
+/** Reserve room for every numeric slot at its OWN widest supported decimal —
+ *  wave and denominator at the JavaScript safe maximum they are validated
+ *  against, the run id at the SQLite width its column can actually assign.
+ *  Derived through the real serializer, so the budget follows the grammar
+ *  rather than restating it. Programme slugs are ASCII-only below, so
+ *  characters and UTF-8 bytes agree. */
+export const PROGRAM_SLUG_MAX_CHARS =
+  HOLD_REASON_MAX_CHARS - holdReason(
+    '', RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL,
+  ).length;
+
 /** A programme is a ledger filename, never a path or a display label. */
 export type ProgramSlugShape =
   | { ok: true; slug: string }
@@ -3838,6 +3892,12 @@ export const shapeProgramSlug = (raw: string): ProgramSlugShape => {
     return {
       ok: false,
       detail: 'program must contain only letters, numbers, underscores, and hyphens',
+    };
+  }
+  if (slug.length > PROGRAM_SLUG_MAX_CHARS) {
+    return {
+      ok: false,
+      detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
     };
   }
   return { ok: true, slug };
@@ -3894,6 +3954,71 @@ export const programResumeKickoff = (
   `Run the ccrc-coordinator skill. Its run is ALREADY OPEN: read \`GET /api/runs\`,\n` +
   `find run ${runId} at wave ${wave}, and pick that wave up where the ledger says it\n` +
   `stands. Do not open the run for wave ${wave} again, and do not open wave 1 again.`;
+
+export interface ProgramKickoffResume { runId: number; wave: number }
+export interface ProgramKickoffResumeInput { runId: unknown; wave: unknown }
+
+/** The complete kickoff decision shared by browser pre-create validation and
+ *  the server's authoritative queue seam. Measuring the composed body is the
+ *  only way to cover the slug twice, arbitrary UTF-8 in the title, and the
+ *  longer resume template without giving any raw field a misleading cap.
+ *
+ *  The input pair stays `unknown` until this verdict validates both members.
+ *  Its success arm carries the normalized pair so an HTTP adapter never has to
+ *  repeat the numeric decision merely to call the authoritative queue seam. */
+export type ProgramKickoffVerdict =
+  | { ok: true; slug: string; title: string; body: string; bytes: number;
+      resume?: ProgramKickoffResume }
+  | { ok: false; kind: 'bad-request'; detail: string }
+  | { ok: false; kind: 'oversize'; limit: number; bytes: number; detail: string };
+
+export const programKickoffVerdict = (
+  rawSlug: string,
+  rawTitle: string,
+  resumeInput?: ProgramKickoffResumeInput,
+): ProgramKickoffVerdict => {
+  const shaped = shapeProgramSlug(rawSlug);
+  if (!shaped.ok) return { ok: false, kind: 'bad-request', detail: shaped.detail };
+  const title = rawTitle.trim();
+  if (title === '') {
+    return { ok: false, kind: 'bad-request', detail: 'program title must not be blank' };
+  }
+  let resume: ProgramKickoffResume | undefined;
+  if (resumeInput !== undefined) {
+    if (!isPositiveDecimalSafeInteger(resumeInput.runId)
+        || !isPositiveDecimalSafeInteger(resumeInput.wave)) {
+      return {
+        ok: false,
+        kind: 'bad-request',
+        detail: 'resume runId and wave must be positive safe integers',
+      };
+    }
+    resume = { runId: resumeInput.runId, wave: resumeInput.wave };
+  }
+  const body = resume
+    ? programResumeKickoff(shaped.slug, title, resume.runId, resume.wave)
+    : programKickoff(shaped.slug, title);
+  const bytes = new TextEncoder().encode(body).byteLength;
+  if (bytes > MAIL_BODY_MAX_BYTES) {
+    return {
+      ok: false,
+      kind: 'oversize',
+      limit: MAIL_BODY_MAX_BYTES,
+      bytes,
+      detail:
+        `kickoff body ${bytes} bytes exceeds the ` +
+        `${MAIL_BODY_MAX_BYTES} byte mail body cap`,
+    };
+  }
+  return {
+    ok: true,
+    slug: shaped.slug,
+    title,
+    body,
+    bytes,
+    ...(resume === undefined ? {} : { resume }),
+  };
+};
 
 /** The kickoff's mail subject. Defined HERE, beside the body it labels, rather
  *  than in `coord/kickoff.ts`: one home for the two halves of one message, and
@@ -4288,8 +4413,14 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Fifteen codes exist below today; the next new one would be the
- * sixteenth, not the ninth.
+ * Seventeen codes exist below today; the next new one would be the
+ * eighteenth, not the ninth.
+ *
+ * `hold-oversize` is the complete session-card reason refusing before a run
+ * or fleet act can create a hold the hook cannot display. `hold-invalid` is
+ * the separate grammar/domain refusal: the serialized slug or an included
+ * wave, denominator, or run id cannot be accepted by the hook. Both differ
+ * from `oversize`, which names mail bytes and is shared with mail ingress.
  *
  * `project-mismatch` is cross-repo programmes' first guard (design
  * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
@@ -4335,14 +4466,14 @@ export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
-  'project-mismatch': true, 'home-mismatch': true,
+  'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

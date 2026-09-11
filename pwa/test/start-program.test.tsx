@@ -32,8 +32,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { programKickoff, readyVerdict } from '../../shared/api';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_SLUG_MAX_CHARS,
+  programKickoff,
+  readyVerdict,
+} from '../../shared/api';
 import type {
   CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
 } from '../../shared/api';
@@ -602,6 +609,83 @@ describe('StartProgramSheet', () => {
 
     expect(await screen.findByText(/only letters, numbers, underscores, and hyphens/i)).toBeInTheDocument();
     const go = screen.getByRole('button', { name: /^start build 9 demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the composite kickoff verdict in both the button and handler guards', () => {
+    // A disabled button never invokes `start()`, so behavior tests alone cannot
+    // kill removal of its defensive return. Pin both independent call sites in
+    // the source; each is a boundary capable of preventing `createSession`.
+    const src = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'StartProgramSheet.tsx'),
+      'utf8',
+    );
+    expect(src).toMatch(
+      /const start = async \(\): Promise<void> => \{[\s\S]{0,400}?if \(starting \|\| !kickoffVerdict\.ok \|\| project === null\) return;/,
+    );
+    expect(src).toMatch(
+      /disabled=\{\n\s+!kickoffVerdict\.ok \|\| starting/,
+    );
+  });
+
+  it('accepts a slug at exactly the shared budget and refuses budget+1 before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    const exactSlug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+
+    await fillAndPick(exactSlug, 'x');
+    expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: `${exactSlug}x` } });
+    expect(await screen.findByText(
+      new RegExp(`program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`, 'i'),
+    )).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start x+/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly 8,192 kickoff bytes and blocks one byte more before create', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const base = new TextEncoder().encode(programKickoff(slug, '')).byteLength;
+    const exactTitle = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
+
+    await fillAndPick(slug, exactTitle);
+    expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: `${exactTitle}x` } });
+    expect(await screen.findByText(
+      new RegExp(`kickoff body ${MAIL_BODY_MAX_BYTES + 1} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap`, 'i'),
+    )).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start x+/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses title-driven composite overflow before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build9-demo', '𝄞'.repeat(2_048));
+
+    expect(await screen.findByText(/kickoff body \d+ bytes exceeds the 8192 byte mail body cap/i))
+      .toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start build9-demo/i });
     expect(go).toBeDisabled();
     fireEvent.click(go);
     expect(createSession).not.toHaveBeenCalled();

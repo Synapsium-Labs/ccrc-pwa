@@ -1,7 +1,12 @@
 import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
 import type { CoordStore, OpenSibling, RunRow } from './store.js';
-import type { MailKind } from '../../../shared/api.js';
+import {
+  HOLD_REASON_MAX_CHARS,
+  holdReason as serializeHoldReason,
+  isPositiveDecimalSafeInteger,
+  type MailKind,
+} from '../../../shared/api.js';
 
 /**
  * Shared by `routes.ts` (the `POST /api/runs` open route, and
@@ -74,23 +79,60 @@ export const clearRefusedDetail = (code: string): string => `clear-refused:${cod
  */
 export const CLEAR_REFUSED_STRANDS_TEXT = clearRefusedDetail('enter-ignored');
 
-/** The standing hold-reason convention (`SessionRecord.held`, `registry.ts`; spec:120-123):
- *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
- *  `program`/`wave`/`waveOf` columns are what every route and the store
- *  actually read. Shared by the open route's immediate hold, dispatch's own
- *  hold, and close's hold-reason update to the next wave, so the three
- *  places this string is built can never drift apart from one another.
- *
- *  `run:<id>` (Wave 2) is what lets a human reading `~/.cc-sessions` answer
- *  "whose claim is this?" from the box alone — the question that had no
- *  answer during the F9 incident. STILL DISPLAY-ONLY: run-awareness comes
- *  from `coord.db` (`CoordStore.openRunsForSession`), never from parsing
- *  this string, and `run-routes.test.ts` pins that nothing does. A HAND hold
- *  has no run and passes `null`, so it gets no suffix. */
-export const holdReason = (program: string, wave: number, waveOf: number | null,
-                           runId: number | null): string =>
-  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}` +
-  `${runId === null ? '' : ` run:${runId}`}`;
+/** Re-export the L0 policy and serializer from their historical server home so
+ *  existing server consumers do not grow a second spelling. */
+export { HOLD_REASON_MAX_CHARS };
+export const holdReason = serializeHoldReason;
+
+export type HoldReasonVerdict =
+  | { ok: true; reason: string }
+  | { ok: false; kind: 'hold-oversize'; limit: number; detail: string }
+  | { ok: false; kind: 'hold-invalid'; detail: string };
+
+const HOLD_REASON_PATTERN =
+  /^program:[A-Za-z0-9._-]+ wave:[0-9]+(?:\/[0-9]+)?(?: run:[0-9]+)?$/;
+
+/** Validate exactly what the hook accepts: a complete in-cap hold whose slug
+ *  and optional positive-decimal numbers satisfy its grammar. `waveOf` and
+ *  `runId` are nullable only because the two documented display forms omit
+ *  them; whenever present they share the wave's positive-safe-integer domain. */
+export const holdReasonVerdict = (
+  program: string,
+  wave: number,
+  waveOf: number | null,
+  runId: number | null,
+): HoldReasonVerdict => {
+  const reason = holdReason(program, wave, waveOf, runId);
+  // GRAMMAR AND DOMAIN FIRST, LENGTH SECOND, and the order is the whole
+  // difference between the two codes meaning what they say. A reconstructed row
+  // can be malformed AND over-cap at once; answering `hold-oversize` for it
+  // sends the coordinator to SKILL.md's remedy for that code — shorten the slug
+  // and retry — which cannot repair a stored programme the grammar rejects, so
+  // the retry earns a second refusal under a different name. Checking the
+  // grammar first means `hold-oversize` is only ever reported for a hold that
+  // is otherwise entirely valid, which is exactly the claim its remedy rests on.
+  if (!isPositiveDecimalSafeInteger(wave)
+      || (waveOf !== null && !isPositiveDecimalSafeInteger(waveOf))
+      || (runId !== null && !isPositiveDecimalSafeInteger(runId))
+      || !HOLD_REASON_PATTERN.test(reason)) {
+    return {
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'hold reason does not satisfy the session-card grammar',
+    };
+  }
+  if (reason.length > HOLD_REASON_MAX_CHARS) {
+    return {
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+      detail:
+        `hold reason ${reason.length} characters exceeds the ` +
+        `${HOLD_REASON_MAX_CHARS} character session-card cap`,
+    };
+  }
+  return { ok: true, reason };
+};
 
 /** May this close END the claim on the workspace, or must it hand the claim
  *  to whoever else still owns it?

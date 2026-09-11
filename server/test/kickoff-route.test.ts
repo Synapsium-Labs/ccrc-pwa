@@ -19,7 +19,13 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { EXEC_WHITELIST } from '../../agent/src/whitelist.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../shared/api.js';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_KICKOFF_SUBJECT,
+  PROGRAM_SLUG_MAX_CHARS,
+  programKickoff,
+  programResumeKickoff,
+} from '../../shared/api.js';
 
 const ID = 'demo-quiet-mesa';
 const BODY = { slug: 'build9-demo', title: 'Build 9 demo' };
@@ -286,6 +292,64 @@ describe('POST /api/sessions/:id/kickoff — what it queues, and what it answers
     expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
   });
 
+  it('accepts a slug at exactly the shared budget and refuses budget+1 before measuring the target session', async () => {
+    const acceptedHome = mkTmp('ccrc-kick-');
+    seed(acceptedHome, ID);
+    const { run: acceptedRun } = makeRunner();
+    const accepted = await openApp(acceptedHome, acceptedRun); app = accepted.app;
+    const exactSlug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+
+    expect((await post(app, ID, { slug: exactSlug, title: 'x' })).statusCode).toBe(200);
+    await app.close();
+
+    const refusedHome = mkTmp('ccrc-kick-');
+    const { run: refusedRun } = makeRunner();
+    const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+    const beforeRegistry = await openApp(refusedHome, refusedRun, { io: unlistable }); app = beforeRegistry.app;
+    const refused = await post(app, 'demo-calm-ridge', { slug: `${exactSlug}x`, title: 'x' });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({
+      ok: false,
+      error: 'bad-request',
+      detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
+    });
+    expect(beforeRegistry.coord.mailForRecipient('demo-calm-ridge')).toEqual([]);
+  });
+
+  it('accepts exactly 8,192 composed bytes and refuses the next character by BYTES, not ' +
+     'characters, before registry measurement', async () => {
+    const home = mkTmp('ccrc-kick-');
+    const { run } = makeRunner();
+    const unlistable: FleetIO = { ...localIO, readdir: async () => null };
+    const w = await openApp(home, run, { io: unlistable }); app = w.app;
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const base = Buffer.byteLength(programKickoff(slug, ''), 'utf8');
+    const exactTitle = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
+    expect(Buffer.byteLength(programKickoff(slug, exactTitle), 'utf8')).toBe(MAIL_BODY_MAX_BYTES);
+
+    // Exact size reaches the registry read; that measurement is deliberately
+    // unlistable here, proving body validation accepted it.
+    expect((await post(app, ID, { slug, title: exactTitle })).statusCode).toBe(503);
+
+    // ONE character over — but a TWO-BYTE one, which is what makes this case
+    // discriminate. A cap that measured `String.length` would report 8,193 and
+    // still refuse, so the status alone proves nothing; the composed body is
+    // 8,194 BYTES, and the detail is where a character-counting implementation
+    // is caught saying otherwise.
+    const overTitle = `${exactTitle}\u00e9`;
+    const overBody = programKickoff(slug, overTitle);
+    expect(Buffer.byteLength(overBody, 'utf8')).toBe(MAIL_BODY_MAX_BYTES + 2);
+    expect(overBody.length).toBe(MAIL_BODY_MAX_BYTES + 1);
+
+    const refused = await post(app, ID, { slug, title: overTitle });
+    expect(refused.statusCode).toBe(413);
+    expect(refused.json()).toMatchObject({
+      ok: false, error: 'oversize', limit: MAIL_BODY_MAX_BYTES,
+      detail: `kickoff body ${MAIL_BODY_MAX_BYTES + 2} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap`,
+    });
+    expect(w.coord.mailForRecipient(ID)).toEqual([]);
+  });
+
   it('a 413 is not a dedupe — the session can still be kicked off with a sane title', async () => {
     // The refusal writes nothing, so it cannot occupy the outstanding-mail key
     // the dedupe reads. A cap that refused by queueing a truncated row would
@@ -319,6 +383,19 @@ describe('POST /api/sessions/:id/kickoff — the wave-N re-kickoff', () => {
     expect(due[0]!.envelope).toContain(`subject: ${PROGRAM_KICKOFF_SUBJECT}`);
   });
 
+  it('accepts maximum-safe resume numbers and preserves their exact decimal identity', async () => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const max = Number.MAX_SAFE_INTEGER;
+
+    const res = await post(app, ID, { ...BODY, runId: max, wave: max });
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope)
+      .toContain(programResumeKickoff(BODY.slug, BODY.title, max, max));
+  });
+
   it('the wave-1 path is UNCHANGED — neither field, and the wave-1 sentence is what lands', async () => {
     // Not a tautology, and not a re-run of `:206-220`: this fixture reds
     // against a handler that read a missing pair as `{runId: 0, wave: 1}` and
@@ -339,8 +416,13 @@ describe('POST /api/sessions/:id/kickoff — the wave-N re-kickoff', () => {
     ['a lone runId', { ...BODY, runId: 7 }],
     ['a lone wave', { ...BODY, wave: 5 }],
     ['a fractional wave', { ...BODY, runId: 7, wave: 1.5 }],
+    ['a fractional runId', { ...BODY, runId: 7.5, wave: 5 }],
     ['a string runId', { ...BODY, runId: '7', wave: 5 }],
     ['an explicit null wave', { ...BODY, runId: 7, wave: null }],
+    ['an unsafe runId', { ...BODY, runId: Number.MAX_SAFE_INTEGER + 1, wave: 5 }],
+    ['an exponent-scale runId', { ...BODY, runId: 1e100, wave: 5 }],
+    ['an unsafe wave', { ...BODY, runId: 7, wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an exponent-scale wave', { ...BODY, runId: 7, wave: 1e100 }],
   ])('400 bad-request for %s, and queues NOTHING', async (_label, payload) => {
     // BOTH OR NEITHER. Absence-permits is the wire rule for a field an older
     // peer may not know about; a HALF-PRESENT pair is not an older peer — no

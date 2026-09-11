@@ -4,7 +4,11 @@ import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
 import type { LedgerLog } from './ledgerlog.js';
-import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
+import {
+  CLEAR_REFUSED_STRANDS_TEXT,
+  holdReasonVerdict,
+  type HoldReasonVerdict,
+} from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
@@ -17,7 +21,9 @@ import {
   // docstring gives the second reason it lives there rather than in
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
+  isPositiveDecimalSafeInteger,
   PROGRAM_KICKOFF_SUBJECT,
+  RUN_HOLD_NUMBER_MAX,
   RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
@@ -74,9 +80,21 @@ export const toRunSummary = (row: RunRow): RunSummary => {
   return summary;
 };
 
+type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
+
 export type OpenRunResult =
-  | { id: number; program: string; state: RunState }
-  | { refused: 'claimed-by-another'; by: string };
+  | { id: number; program: string; state: RunState; holdReason: string }
+  | { refused: 'claimed-by-another'; by: string }
+  | HoldReasonRefusal;
+
+/** A fresh run's exact id is known only after its INSERT. Throwing this private
+ * sentinel makes `tx` roll that INSERT and the programme up together, while the
+ * public seam still returns the same typed refusal as the no-write duplicate arm. */
+class OpenRunHoldRefused extends Error {
+  constructor(readonly refusal: HoldReasonRefusal) {
+    super(refusal.detail);
+  }
+}
 
 export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
@@ -589,60 +607,112 @@ export class CoordStore {
      *  column then stays NULL rather than taking a guess. */
     homeProject?: string;
   }): OpenRunResult {
-    return tx(this.db, () => {
-      // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
-      // the original query read the absolute first row regardless of whether
-      // it was ever claimed): `reconstruct` inserts every rebuilt run with
-      // `claimedBy` bound to NULL — it has no way to know who will resume the
-      // program — so without this clause the lowest-id row of a reconstructed
-      // program pinned the guard at NULL forever and a second coordinator was
-      // never refused. Skipping the unclaimed rows finds the first row a real
-      // `openRun` actually claimed, which is the one the refusal must read.
-      const existing = this.db.prepare(
-        'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
-      ).get(input.program) as { claimedBy: string | null } | undefined;
-      // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
-      // coordinator is refused AT OPEN TIME, in words, rather than silently
-      // allowed to interleave dispatches with the first one's. What this refusal
-      // no longer means is "forever": `reclaimProgram` below rewrites the column
-      // this reads, for a claimant measured dead. The refusal is still the only
-      // answer to two LIVE coordinators — nothing arbitrates between them — and
-      // that is the non-goal spec:291-292 actually names.
-      if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
-        return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
-      }
-      // Idempotent retry (fix — review findings 19/32): a run already open,
-      // `planned`, and claimed by the SAME coordinator for this exact
-      // (program, wave, waveOf) is REUSED rather than duplicated. Without
-      // this, an HTTP retry after a client timeout on a successful open, or
-      // after a transient `ws-hold` 501/502 on the wave N>=2 reclaim path
-      // below (the row is already committed by the time that call runs),
-      // minted a SECOND `planned` row pointing at the same claim — two
-      // dispatchable runs for one piece of work, and (finding 32)
-      // `programOpenRunCount` counting the orphan forever, wedging
-      // `resolveCoordinator(null)`'s "exactly one active program" guard the
-      // same way D-26/D-51 were filed to prevent. Scoped to `state =
-      // 'planned'`: a run that has already dispatched, closed, or failed is
-      // never a stand-in for a fresh open call naming the same wave.
-      const dup = this.db.prepare(
-        "SELECT id, state FROM runs WHERE program = ? AND wave = ? AND (waveOf IS ?) " +
-        "AND claimedBy = ? AND state = 'planned' ORDER BY id LIMIT 1",
-      ).get(input.program, input.wave, input.waveOf, input.claimedBy) as
-        { id: number; state: string } | undefined;
-      if (dup) {
-        return { id: dup.id, program: input.program, state: isRunState(dup.state) ? dup.state : 'unknown' };
-      }
-      const now = Date.now();
-      this.db.prepare(
-        'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
-      ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
-      const res = this.db.prepare(
-        'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now);
-      return { id: Number(res.lastInsertRowid), program: input.program, state: 'planned' as const };
-    });
+    try {
+      return tx(this.db, () => {
+        // `AND claimedBy IS NOT NULL` (deviation D-12, found in Task 3 review —
+        // the original query read the absolute first row regardless of whether
+        // it was ever claimed): `reconstruct` inserts every rebuilt run with
+        // `claimedBy` bound to NULL — it has no way to know who will resume the
+        // program — so without this clause the lowest-id row of a reconstructed
+        // program pinned the guard at NULL forever and a second coordinator was
+        // never refused. Skipping the unclaimed rows finds the first row a real
+        // `openRun` actually claimed, which is the one the refusal must read.
+        const existing = this.db.prepare(
+          'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
+        ).get(input.program) as { claimedBy: string | null } | undefined;
+        // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
+        // coordinator is refused AT OPEN TIME, in words, rather than silently
+        // allowed to interleave dispatches with the first one's. What this refusal
+        // no longer means is "forever": `reclaimProgram` below rewrites the column
+        // this reads, for a claimant measured dead. The refusal is still the only
+        // answer to two LIVE coordinators — nothing arbitrates between them — and
+        // that is the non-goal spec:291-292 actually names.
+        if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
+          return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
+        }
+        // Idempotent retry (fix — review findings 19/32): a run already open,
+        // `planned`, and claimed by the SAME coordinator for this exact
+        // (program, wave, waveOf) is REUSED rather than duplicated. Without
+        // this, an HTTP retry after a client timeout on a successful open, or
+        // after a transient `ws-hold` 501/502 on the wave N>=2 reclaim path
+        // below (the row is already committed by the time that call runs),
+        // minted a SECOND `planned` row pointing at the same claim — two
+        // dispatchable runs for one piece of work, and (finding 32)
+        // `programOpenRunCount` counting the orphan forever, wedging
+        // `resolveCoordinator(null)`'s "exactly one active program" guard the
+        // same way D-26/D-51 were filed to prevent. Scoped to `state =
+        // 'planned'`: a run that has already dispatched, closed, or failed is
+        // never a stand-in for a fresh open call naming the same wave.
+        const dup = this.db.prepare(
+          "SELECT CAST(id AS TEXT) AS idText, state FROM runs " +
+          "WHERE program = ? AND wave = ? AND (waveOf IS ?) " +
+          "AND claimedBy = ? AND state = 'planned' ORDER BY id LIMIT 1",
+        ).get(input.program, input.wave, input.waveOf, input.claimedBy) as
+          { idText: string; state: string } | undefined;
+        if (dup) {
+          // Read as TEXT first: node:sqlite otherwise throws while converting an
+          // out-of-safe-range INTEGER, before this boundary can return its typed
+          // refusal. A retry reuses the exact persisted decimal only after it is
+          // proven representable in the run-id domain.
+          const id = Number(dup.idText);
+          const hold = isPositiveDecimalSafeInteger(id)
+            ? holdReasonVerdict(input.program, input.wave, input.waveOf, id)
+            : {
+                ok: false as const,
+                kind: 'hold-invalid' as const,
+                detail: 'reused run id is not a positive safe integer',
+              };
+          if (!hold.ok) return hold;
+          return {
+            id,
+            program: input.program,
+            state: isRunState(dup.state) ? dup.state : 'unknown',
+            holdReason: hold.reason,
+          };
+        }
+        const now = Date.now();
+        this.db.prepare(
+          'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
+        ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
+        const insertRun = this.db.prepare(
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        );
+        // Keep SQLite's exact INTEGER result until the safe-integer check below;
+        // converting first can round an out-of-domain id into another number.
+        insertRun.setReadBigInts(true);
+        const res = insertRun.run(
+          input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
+        );
+        const exactId = res.lastInsertRowid;
+        const id = Number(exactId);
+        // AUTOINCREMENT's exact value is part of the serialized hold. Validate
+        // only after SQLite assigns it: conversion alone does not prove the
+        // bigint stayed exact in JavaScript, and the sentinel rolls both inserts
+        // back on either an invalid number or an invalid complete hold.
+        const hold = typeof exactId === 'bigint'
+          && exactId <= BigInt(RUN_HOLD_NUMBER_MAX)
+          && exactId >= 1n
+          && isPositiveDecimalSafeInteger(id)
+          ? holdReasonVerdict(input.program, input.wave, input.waveOf, id)
+          : {
+              ok: false as const,
+              kind: 'hold-invalid' as const,
+              detail: 'generated run id is not a positive safe integer',
+            };
+        if (!hold.ok) throw new OpenRunHoldRefused(hold);
+        return {
+          id,
+          program: input.program,
+          state: 'planned' as const,
+          holdReason: hold.reason,
+        };
+      });
+    } catch (err) {
+      if (err instanceof OpenRunHoldRefused) return err.refusal;
+      throw err;
+    }
   }
 
   /**

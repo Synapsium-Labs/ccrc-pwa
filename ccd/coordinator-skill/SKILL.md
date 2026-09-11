@@ -168,7 +168,7 @@ client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
-`project-mismatch`, `home-mismatch`,
+`project-mismatch`, `home-mismatch`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
 `unknown-item`, `item-terminal`. Their meanings are in
@@ -191,6 +191,17 @@ effective ceiling on a brief and the recovery rule (trim the brief and resend;
 the run is untouched) are in the dispatch table, `references/wave-lifecycle.md`
 §2 — not repeated here, so there is exactly one place this code's dispatch-side
 meaning lives.
+
+**`hold-oversize` is different:** `POST /api/runs`, `/dispatch`, and `/:id/close`
+answer `error:'hold-oversize'` (413) when the complete session-card reason —
+programme, wave, optional denominator, and exact run id — cannot fit the hook's
+127-character display window. Stop and shorten the programme slug; the refusing
+boundary performs no fleet act, and a fresh open also rolls back its run and
+programme inserts. The route-specific tables in `references/wave-lifecycle.md`
+name exactly what remains untouched. `hold-invalid` (400) is its grammar/domain
+sibling: a persisted programme or an included wave, denominator, or run id cannot
+be represented as the session hook's positive-decimal hold grammar. Stop and
+report it; changing a title cannot repair that stored run.
 
 **Not every non-2xx body carries a code at all.** `error:'bad-request'` (400,
 a malformed request body — including the fingerprint SHAPE `POST
