@@ -2803,3 +2803,46 @@ Rounds four and five found real code defects and a blocker. Rounds six, seven an
 twenty-three findings of which **none touched the code**. The instrument that finally said something
 new was the one that asked a different question — a defect hunt returns defects for as long as you
 run it, and the thing I most needed to know was not on that list.
+
+### `18041996` — the disclosure landed, and the class recurred one last time
+
+The `io.ts` disclosure is accurate: it names the divergence, the API-side lift, ccd's fail-shut
+authority, and why no `lstat` ladder was built. All three D-2000 statements now identify a convention
+rather than a gate, D-2517 is recorded at `plan:4446`, focused suites 128/128.
+
+And the `+3` comment lines that carried that disclosure sit at `@@ -11,17 +11,20 @@` — above the
+`FleetIO` member list. `readdir` moved `:105` → `:108`. **Fourth consecutive round in which an
+`io.ts` edit falsified a positional citation.**
+
+I checked every positional `io.ts` citation in the tree and then filtered to the ones *this* commit
+invalidated, holding to D-2511's own instruction not to sweep the repo's other ~85:
+
+- **`plan:4159` — broken.** Present tense, *"`readdir` is at `server/src/io.ts:105`"*. One line.
+- `plan:546`, `project-pools-read.test.ts:68` — cite `remote/io.ts`, a different file. Unaffected.
+- `plan:4233 / :4307 / :4333` — cite `:103`/`:105` as the *history* of past commits. Still true.
+- `mirrorplan.test.ts:33` — cites `io.ts:101-102` for `readFileFrom`'s clamp, but those lines were
+  already the `readFileB64Measured` docstring at `b6b7fb4a`. Stale before this PR touched it; out of
+  scope by my own ruling, and left alone.
+
+Six broken last time, one now, and the survivor is **inside D-2483 — the entry that first named this
+class.** The symbol conversions D-2511 asked for all held; the only casualty is the one citation
+nobody converted. That is the ruling proving itself rather than failing.
+
+### Closing position on this PR
+
+| round | findings | touched code |
+|---|---|---|
+| four, five | defects incl. a blocker | yes |
+| six | 7 | no |
+| seven | 7 | no |
+| eight | 2, neither blocking | no |
+| nine | 1, one line | no |
+
+Three independent judges, each mutating the code themselves, returned **3/3 MERGE with zero
+blockers**. The code has been correct and fully pinned for four heads. What kept iterating was
+documentation discipline, and it has now converged: one line outstanding, not blocking.
+
+The two things that remain are not mine to settle. The approving review has no lawful satisfier on
+this fleet. And D-2517 — the discovery that D-2000 is a convention two sessions honour rather than a
+mechanism — means merging moves this code where the next routine deploy by any of nine other
+sessions would carry it. Both are the operator's, and I have stopped sending rounds.
