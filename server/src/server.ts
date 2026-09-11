@@ -1197,6 +1197,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         wrapper, five: l.five, seven: l.seven, ts: l.ts,
         fiveResetAt: l.fiveResetAt, sevenResetAt: l.sevenResetAt,
         fiveRolledOver: l.fiveRolledOver, sevenRolledOver: l.sevenRolledOver,
+        // Spread, not a plain key: a row whose producer said nothing must reach
+        // the wire with the shape it has always had.
+        ...(typeof l.fiveWindowMinutes === 'number'
+              ? { fiveWindowMinutes: l.fiveWindowMinutes } : {}),
         disabled: l.disabled, authDead: l.authDead,
       }))
       .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));

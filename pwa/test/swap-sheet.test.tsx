@@ -11,7 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
 import { api } from '../src/lib/api';
-import { SwapSheet } from '../src/fleet/SwapSheet';
+import { SwapSheet, leastLoaded } from '../src/fleet/SwapSheet';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
@@ -258,6 +258,47 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveResetAt: null, sevenResetAt: null,
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
+
+// ── SINGLE-WINDOW LANES ───────────────────────────────────────────────────
+// The third copy of the decision again: a ChatGPT/Codex lane HAS NO 5h window
+// (`fiveWindowMinutes: 0`), so `five: null` there means NOT APPLICABLE, not
+// unmeasured, and the weekly figure alone is a real score. Before this, such a
+// lane could never be ranked at all — and because ccd tied every unrankable
+// lane at the same score and broke the tie on roster order, a weekly-CAPPED
+// Codex lane could be preferred over a healthy sibling. Measured on the live
+// fleet 2026-09-11: gpt at 100% beat gpt2 at 55%.
+describe('leastLoaded — a lane with no 5h window', () => {
+  it('ranks a weekly-only lane on its weekly figure', () => {
+    const rows = [
+      acct({ wrapper: 'gpt', five: null, seven: 80, fiveWindowMinutes: 0 }),
+      acct({ wrapper: 'gpt2', five: null, seven: 30, fiveWindowMinutes: 0 }),
+    ];
+    expect(leastLoaded(rows, ['gpt', 'gpt2'])).toBe('gpt2');
+  });
+
+  it('does not rank one whose only applicable window is unknown', () => {
+    const rows = [acct({ wrapper: 'gpt', five: null, seven: null, fiveWindowMinutes: 0 })];
+    expect(leastLoaded(rows, ['gpt'])).toBe(null);
+  });
+
+  it('still refuses a half-measured row that never claimed a window shape', () => {
+    // The guard this rule narrows, NOT loosens: absent marker = both windows
+    // apply, so one known half is still only a lower bound. ccd's own 429
+    // exclusion row depends on this staying true.
+    const rows = [acct({ wrapper: 'gpt', five: null, seven: 30 })];
+    expect(leastLoaded(rows, ['gpt'])).toBe(null);
+  });
+
+  it('treats a NON-ZERO width as an ordinary two-window row', () => {
+    // The marker is a WIDTH, not a lane flag.
+    const rows = [
+      acct({ wrapper: 'claude', five: 90, seven: 10, fiveWindowMinutes: 300 }),
+      acct({ wrapper: 'claude2', five: 20, seven: 20, fiveWindowMinutes: 300 }),
+    ];
+    expect(leastLoaded(rows, ['claude', 'claude2'])).toBe('claude2');
+  });
+});
+
 
 const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({

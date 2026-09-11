@@ -201,6 +201,15 @@ export function generateAccountsSh(roster) {
   const ids = roster.accounts.map((a) => a.id);
   const homeAbleIds = roster.homeAble.map((a) => a.id);
   const measuredIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
+  // WHAT BACKEND IS THIS, as opposed to WHERE MAY WORK BE PLACED. Those are two
+  // questions and `homeAble` used to answer both, because until now every
+  // home-able account happened to be an Anthropic one. Four things in ccd ask
+  // `_is_home_able` when they mean "does this lane speak Claude Code's own
+  // protocol" — the `--remote-control` flag, the spawn-time effort injection,
+  // the cross-backend transcript sanitiser, and the 429 exclusion writer — and
+  // the moment a Codex lane becomes placeable those four start lying. Emit the
+  // backend answer separately so each site can ask the question it means.
+  const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -255,6 +264,7 @@ export function generateAccountsSh(roster) {
 CCRC_ACCOUNTS=${idArray(ids)}
 CCRC_HOME_ABLE=${idArray(homeAbleIds)}
 CCRC_MEASURED=${idArray(measuredIds)}
+CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in

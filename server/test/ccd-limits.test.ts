@@ -90,6 +90,18 @@ describe('_limit_field rollover', () => {
     }
   });
 
+  it('_limit_score agrees with measured() on every shared fixture', () => {
+    // The rollover rule got a parity harness after it drifted. The SINGLE-WINDOW
+    // rule gets one before it can: a lane with no 5h window ranks on its weekly
+    // figure in both languages, or this goes red.
+    for (const c of rolloverCases(now())) {
+      const wrapper = c.file.slice(0, -'.json'.length);
+      writeLimits(c.file, c.content);
+      expect(sh(`_limit_score ${wrapper}`), `${c.file}: ${c.why}`)
+        .toBe(c.score === null ? '' : String(c.score));
+    }
+  });
+
   it('still answers "unknown" when the caller demanded fresh telemetry', () => {
     // The maxage gate must win: a caller asking for fresh data gets nothing,
     // not an inferred 0 it did not ask for.
