@@ -3329,3 +3329,90 @@ What wave 5 should carry is now two sentences, not one: the disclosure at `pools
 D-2008 **and** say the residual is a transfer bound, with the 1009 link-death class as its worst arm —
 not merely "the cap bounds the verdict".
 
+
+## CORRECTION — "ten of twelve agree" was wrong, and the strip is why
+
+A design reviewer challenged the agreement table above. They were right, and I have measured it. **My
+table enumerated the STRUCTURAL states and then asserted agreement inside the `named`/`malformed`
+boundary without testing the strip that runs in front of the grammar.** Same error shape as the rest of
+today: I measured the states I had enumerated, not the states the two readers actually distinguish.
+
+Both strips run BEFORE `POOL_NAME_RE`, and they use different whitespace vocabularies:
+
+- `ccd/ccd`: `v=${v%"${v##*[![:space:]]}"}` — glibc `[[:space:]]`, in the ambient locale.
+- `server/src/pools.ts:217`: `read.content.replace(/\s+$/, '')` — JS `\s`, which is Unicode Zs + BOM.
+
+Measured here (bash 5.2.21, glibc, `LANG=en_US.UTF-8`), tag content `pool-a` + one trailing character.
+The probes build every character from its codepoint and never invoke `ccd` or touch any registry
+(`scratchpad/striptest.sh`, `striptest.js`):
+
+| trailing char | ccd (authority) | server | |
+|---|---|---|---|
+| U+0020 SPACE | `named pool-a` | `tagged pool-a` | agree |
+| U+0085 NEL | `malformed` | `malformed` | agree |
+| U+3000 IDEOGRAPHIC SPACE | `named pool-a` | `tagged pool-a` | agree *(UTF-8 locale only)* |
+| U+205F MED MATH SPACE | `named pool-a` | `tagged pool-a` | agree *(UTF-8 locale only)* |
+| **U+00A0 NBSP** | **`malformed`** | **`tagged pool-a`** | **DIVERGE** |
+| **U+2007 FIGURE SPACE** | **`malformed`** | **`tagged pool-a`** | **DIVERGE** |
+| **U+FEFF BOM** | **`malformed`** | **`tagged pool-a`** | **DIVERGE** |
+| **U+202F NARROW NBSP** | **`malformed`** | **`tagged pool-a`** | **DIVERGE** |
+
+Four divergences, not the three the reviewer named — U+202F is a fourth they missed. **In every one the
+SERVER is more permissive than the AUTHORITY**: it forecasts `tagged pool-a` on a tag `ccd` refuses.
+
+### D-2519 (2026-09-11) — the strip vocabularies differ, and `pools.ts`'s sufficiency argument is false
+
+`server/src/pools.ts`'s own comment says the bytes-vs-UTF-16-units mismatch is safe because "anything
+non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both sides regardless of which side's cap it
+trips". **That reasons about the regex as though it were the last gate. The strip is in front of it**,
+so a non-ASCII character JS `\s` removes never reaches the regex at all: `pool-a` + U+00A0 strips to
+`pool-a`, which PASSES. Not "malformed on both sides regardless" — `tagged` on the server, `malformed`
+on `ccd`.
+
+**Consequence, bounded:** `ccd` stays fail-shut, so **no wrong placement happens** — the server 200s a
+placement the fleet then refuses with `nothing was touched`. It is a wrong FORECAST, which is the exact
+class `shared/poolrule.ts` exists to prevent ("never a 409 offering a crossing over a constraint that
+was never read"). **Reachability:** `cmd_project_pool` validates through `_pool_name_valid` before
+writing, so the verb cannot emit these; it needs a hand-written tag — which the tree explicitly blesses
+("a shell `echo pool-a > pools/demo` is a legal writer, ruling 2"). A pasted U+00A0 or a BOM is an
+ordinary accident, not an attack.
+
+**Fix direction:** narrow BOTH sides to an explicit ASCII class — `/[ \t\n\r\f\v]+$/` and a literal
+bracket class in `ccd` — which is deterministic, locale-free, and refuses nothing any legal writer
+(`echo`, `printf`, the verb) emits.
+
+### D-2520 (2026-09-11) — `ccd`'s strip is LOCALE-DEPENDENT, so the authority is non-deterministic
+
+Same probe, same bytes, only `LC_ALL` changed:
+
+| trailing char | `LC_ALL=C` | `LC_ALL=en_US.UTF-8` |
+|---|---|---|
+| U+3000 | `malformed` | `named pool-a` |
+| U+205F | `malformed` | `named pool-a` |
+
+`ccd` sets no global locale (`ccd:9` is `set -uo pipefail` and nothing else), and it KNOWS the
+distinction elsewhere — `_lc_dec_ok` shadows `local LC_ALL=C` precisely because the default is not
+bytes. So the same tag file is decided differently by two `ccd` invocations on one box under different
+environments (a systemd unit's minimal env versus an interactive shell). **This is worse than D-2519 in
+kind**: D-2519 is two readers disagreeing, D-2520 is the AUTHORITY disagreeing with itself, and nothing
+in either reader can report which answer you got. The same ASCII-class fix closes it.
+
+### D-2521 (2026-09-11) — the cap's own test says "bytes"; the cap counts CHARACTERS
+
+`server/test/ccd-project-pool.test.ts:278`, inside the test whose title calls itself "the `-n 64` cap's
+only evidence at any plausible bound", opens: "`read -r -d '' -n 64 v` **bounds the read at 64 bytes**."
+It does not — `read -n` counts characters in the ambient locale, which is what D-2520 is about.
+`pools.ts` gets this right ("`read -n` counts characters in the shell's locale"); its mirror test does
+not. **This is the comment that makes a byte-cap look like an exact mirror of `-n 64`**, and it is
+directly upstream of the trap measured earlier today, where a 64-BYTE cap answers `tagged pool-a` on an
+input both readers call `malformed`.
+
+### What this does and does not change
+
+- **The deploy hold's ground is still gone.** D-2519/D-2520 are forecast divergences with `ccd`
+  fail-shut at placement; they do not reinstate D-2000's fail-open premise.
+- **The agreement claim in the table above is withdrawn** for the `named`/`malformed` boundary. The
+  structural states still agree as measured; the grammar boundary does not.
+- **These are NEW**, checked rather than assumed after this morning's D-2008 mistake: no deviation,
+  spec or plan in `origin/main` records the strip-vocabulary or locale question for the pool tag.
+
