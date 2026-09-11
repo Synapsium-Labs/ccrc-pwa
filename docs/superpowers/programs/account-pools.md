@@ -3261,3 +3261,71 @@ related §5.4.4 spec drift. No separate PR, no new agent surface, no new D-numbe
 think it's significant enough"): **no.** It is not significant enough, and my earlier judgment that it
 was rested on not having read the entry that already owned it.
 
+
+### The panel's two findings — severity revised UP, and the naive fix was wrong
+
+A protocol/skew reviewer contradicted the refuter on severity and found a defect in the fix I would
+have specified. Both halves measured by hand before recording.
+
+**1. The 100 MiB close is not a self-healing flap — I passed that on too cheaply.** `maxPayload` is set
+nowhere in `server/src`, `agent/src`, `shared/` or `pwa/`, so `ws`'s 100 MiB default governs both ends
+and an over-size frame closes the socket with 1009. What I repeated was "a connection flap the
+transport is already built for". Measured, that understates it twice over:
+
+- `remote/client.ts:onClose` (`:358`) calls `rejectAllPending(new Error('disconnected'))` (`:363`),
+  then pushes a synthetic exit to **every** registered pty listener (`:369`) and clears them (`:372`).
+  A pool marker thus fails every in-flight request on the one fleet socket and tears down every pty and
+  tail — fleet-wide, not pool-scoped.
+- `watch.ts` ticks `setInterval(…, intervalMs = 2000)` (`:673`, `:680`) → `emitPools` (`:802`) →
+  `readProjectPools` (`:1209`). **The read is re-issued every 2 seconds**, so the close re-arms on
+  cadence. The transport is built for *a* flap, not for one every tick indefinitely.
+
+The reachability stays non-adversarial, which is what makes this matter: `ln -s ~/.cc-sessions/swap.log
+pools/<p>` is a tag that grows on its own, and swap.log on a ~20-session fleet doing rescue swaps can
+reach 100 MB without anyone attacking anything. **Inert today** (no tag exists, and wave 3's server is
+not deployed), but if armed the failure is a wedged fleet link, not a slow read.
+
+**2. A 64-BYTE cap would have introduced a new wrong answer. Measured, not argued.** Three units, one
+number: `ccd` caps in locale CHARACTERS (`read -n 64`), `pools.ts` tests UTF-16 CODE UNITS
+(`content.length >= 64`), a wire cap would count BYTES. `pools.ts` argues the mismatch is harmless
+because non-ASCII fails `POOL_NAME_RE` — but **non-ASCII whitespace is stripped before the regex runs**
+(`content.replace(/\s+$/, '')`, and JS `\s` includes U+3000).
+
+Construct `"pool-a"` + 19×U+3000 + `" "` = exactly 64 bytes, then 10 MB of `z`:
+
+| reader | verdict |
+|---|---|
+| `ccd` (`-n 64`, chars, stops short of EOF → rc 0) | `malformed` |
+| server today (uncapped) | `malformed` |
+| **server with a 64-byte cap** | **`tagged: pool-a`** |
+
+Run under node against the real `POOL_NAME_RE`: capped content is 26 UTF-16 units, strips to `pool-a`,
+matches. The cap flips the verdict at exactly the seam D-2010 and `pool-name-parity.test.ts` exist to
+hold. **The correct fix therefore needs a response-side `truncated` marker** (spread only when true,
+`readB64Payload`'s shape) so the server can answer `malformed` on "the cap was reached" — which is
+precisely what `ccd`'s rc 0 already means. Without it the cap is also *invisible* at the pools verdict,
+so a test written at `readProjectPools` stays green when the cap is mutated away: a comment, not a
+mechanism. The pin has to live at the io/agent seam.
+
+**3. Option A is not "server-only".** `FleetIO.statMeasured(path)` carries **no** `timeoutMs` and no
+`signal` — only `readFileMeasured` and `readdir` do, and `pools.ts` forwards the deadline to both. So A
+either leaves the stat leg outside the pool deadline (N entries pending up to the 15 s default per
+tick, on a watcher cadence) or widens an **L2 port** plus both adapters plus every `FleetIO` double.
+And `stat().size` lies for the node types that matter — `/proc` reports 0, a FIFO reports 0 — so A
+gives an unbounded read a false "small, safe" signal. `ccd` closed that with a TYPE gate
+(`[[ -f "$f" && -r "$f" ]]`) which neither option ports.
+
+### Conclusion — unchanged, and now for a better reason
+
+Still **no separate PR**, and the panel strengthened that rather than weakening it: the fix I would
+have shipped was wrong, and the correct one needs a `truncated` response marker *and* — for the 1009
+class — a cancel op the protocol does not have. That is more agent surface than wave 3's Global
+Constraint refused, so closing D-2008 is a **ruling to reverse deliberately in a wave**, not a
+follow-up PR to slip in. One design note for whoever takes it: a `cancel` op degrades *perfectly* on an
+older agent (`bad-request` → ignored → today's behaviour), whereas a new `readCapped` op degrades
+*badly* — an older agent's `bad-request` maps to `unreadable` for **every** project.
+
+What wave 5 should carry is now two sentences, not one: the disclosure at `pools.ts`'s cap must name
+D-2008 **and** say the residual is a transfer bound, with the 1009 link-death class as its worst arm —
+not merely "the cap bounds the verdict".
+
