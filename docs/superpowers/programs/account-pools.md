@@ -2879,3 +2879,57 @@ Final state at this head, all measured on an isolated export:
    supervised `ccrc-pwa` sessions would carry it. That exposure begins at merge, not at deploy.
 
 Both are the operator's. I am not sending further rounds.
+
+## `5e6b683b` — the merge, gated as a tree nobody ran
+
+Main advanced by three PRs (#84 deploy slice policy, #75 crossrepo wave 1, #85 limit recovery) and
+PR #81 went DIRTY. The worker merged `origin/main` in, resolving one conflict — `ccd/ccd`'s generated
+marker — by keeping the combined body and restamping. A merge produces a tree neither author ever
+ran, so the whole gate was re-run against it rather than inherited.
+
+**Integration, verified rather than assumed.** Both sides of `ccd/ccd` are present. Main's work is
+all there: `runId: null` on the ask event at `server.ts:1827`, `STALE_PRESS_COOLDOWN` in `ccd/ccd`,
+`deploy/assert-slice-policy.sh`, crossrepo wave 1's `coord/`. This branch's pool work survived the
+auto-merge intact — the `crossPool` predicate at `server.ts:2000`, six `PROJECT_POOLS_REQUEST_BUDGET_MS`
+call sites.
+
+**The comment-only claim, re-tested on the merged tree.** Stripping comments and blanks from
+`ccd/ccd` on both `origin/main` and the merge gives **identical files** — this branch adds no
+executable `ccd/ccd` byte on top of main, and the provenance marker verifies `ccrc-unmodified`. That
+claim had only ever been measured on a parent; a merge is exactly where it could have stopped being
+true.
+
+**Full suite: 8153 passed, 295 files, and the only failures are the same nine no-`.git` sandbox
+files. Zero new.** All seven weight-bearing guards re-mutated on the merged tree and all seven RED:
+the `crossPool` predicate, the deadline abort, the late-root normalization, `{ once: true }`,
+`rejectAllPending`'s `dispose`, local signal forwarding, and the refusal scan's reverse direction.
+
+**The merge hazard, checked where it actually lives.** The rule is that a merge falsifies whichever
+side claimed something about the *other* side's absence — so every consumer census this PR wrote was
+re-tested against the merged tree, not against the parent that produced it. All survive:
+`pwa/src/lib/offline.ts:10` is still `HUES`'s only importer; `refreshcaps.ts` and its test still
+import `FleetState` from `remote/client.js`; `CCRC_MEASURED`'s consumers are unchanged;
+`_inst_accounts_sh` still exists; and main added no refusal token, so the scan stays green in both
+directions.
+
+### The `ccd/ccd` citation measurement, and why it is NOT a finding against this PR
+
+Main's `+223` lines and this branch's net-negative comment hunks together shift `ccd/ccd` line
+numbers, so I measured all **303** distinct `ccd/ccd:N` citations in the tree: **31 point at
+different content on the merged tree than on `origin/main`**, and pre-merge the figure was 35 of 303
+against the merge base.
+
+That looks like the recurring class at its largest — and it is not. Sampling shows they were already
+stale **on main**: `server/src/remote/runner.ts:90` cites `ccd/ccd:13722` for *"`cmd_swap` stops the
+supervisor unit"*, and on `origin/main` that line reads `# That lane has two answers here (idle /
+not)…`. `ccd/ccd` is a 16,000-line file that every program edits; positional citations into it are
+stale everywhere, on main as much as here. This PR did not break them and fixing 303 of them is not
+this PR's work — D-2511 already ruled the remedy (cite symbols) and already ruled the scope (do not
+sweep the repo).
+
+Worth recording as a number rather than an impression: **303 positional `ccd/ccd` citations live in
+this repo, and they are unreliable by construction.** That is a repo-level finding for whoever owns
+`ccd/`, not a wave-3 correction.
+
+CI at this head: server, agent, pwa and build-pwa green; macOS running. Nothing changed about the
+two open questions — the approver, and D-2517.
