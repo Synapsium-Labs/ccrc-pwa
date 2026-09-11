@@ -3465,3 +3465,52 @@ by a script (`patch1.py`) rather than by hand — which is the argument for scri
 it is six replacements. The rule I already had and did not follow: a mutation runner needs a tree it
 may destroy, and the thing under test must be committed before it runs.
 
+
+### PR #88 raised — `fix/pool-tag-locale-parity`
+
+https://github.com/Synapsium-Labs/ccrc-pwa/pull/88 — 8 files, 792 insertions, 11 deletions, rebased
+onto `eff13d1f` (#87, which also edits `ccd/ccd`; the only conflicts were the provenance marker line,
+twice, resolved to main's value and re-stamped once at the end so the digest covers the combined body).
+
+Carries **D-2519, D-2520, D-2521, D-2522** (the parity defects) and **D-2542** (the same collation
+range on `_ws_project_valid`, found by the review). **D-2543** is filed REPORTED-NOT-TAKEN: `_rc_enabled`
+squeezes whitespace with the same locale-dependent class and decides whether sessions spawn with
+`--remote-control`, but it is a different subsystem and a change scoped "one tag, one answer" should
+not quietly grow a remote-control fix.
+
+**It does not carry D-2008.** That stays parked on the argument recorded above.
+
+### What the adversarial round changed, and what it says about the first draft
+
+Four lenses raised 29; 24 survived refutation, ~a dozen distinct. **Nearly every finding with teeth was
+in the tests I had just written**, which is the honest result — the source fix was four one-line shadows
+and a character class, and the risk was never there. The ones that mattered:
+
+- The corpus never exercised **VT or FF**, so two of the six characters my own spelled-out class names
+  could be deleted with every row still green. My guard had a hole the size of a third of its class.
+- Every legal row was `pool-a`, so **a reader returning that constant passed them all**.
+- The two `guards the guard` cases turned a HOST property into a hard failure — a box whose only UTF-8
+  locale is `C.utf8` would go red for a tree with nothing wrong with it, and this repo is bound for
+  public release with a documented-hermetic suite. They guard the PROBE now, the rows skip visibly, and
+  a **source-level pin** asserts all four shadows exist, which runs everywhere. That is
+  [[a-derived-guard-is-only-testable-where-it-runs]] arriving as a review finding rather than as
+  foresight.
+- The doctor check folded `pools-unreadable`, an unknown verdict and a dead interpreter into "not
+  malformed", so six rows asserted almost nothing.
+- The fixture's byte-boundary guards counted **UTF-16 units while their messages said bytes** —
+  D-2521's own confusion, in the file shipping D-2521's correction.
+- `poolTag.ts` claimed `source-bytes.test.ts` "keeps this file ASCII". It bans C0 and DEL and permits
+  every byte above 0x7F. **A false mechanism claim, in the PR whose subject is false mechanism claims.**
+
+Then the affected-suite run caught two more of mine that the review had not: a SECOND spelling of the
+path to the ccd script (`single-definition.test.ts` reds on exactly that), and `skipIf` gating
+EXECUTION but not the TYPE, so tsc refused the env assignment. Both real, both mine.
+
+### Two process mistakes worth keeping
+
+1. **The mutation driver opened with `git checkout --` while the fix was uncommitted, and reverted it.**
+   Nothing was lost only because the edits came from a script. The rule already existed —
+   [[mutation-agents-need-an-isolated-tree]] — and I applied it to subagents and not to myself.
+2. **`node --check` passed a workflow script the workflow parser then rejected** for an unterminated
+   string. A syntax check that does not use the same parser is not evidence about that parser.
+
