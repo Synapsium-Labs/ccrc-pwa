@@ -46,15 +46,9 @@ export interface RemoteFleetConfig {
 
 type ResolvedConfig = Required<RemoteFleetConfig>;
 
-// Re-exported so every importer of `FleetState` from `remote/client.js` keeps
-// working unchanged now that this module no longer declares its own copy.
-// Disclosed rather than pinned: as of this change nothing in this tree
-// imports `FleetState` from here yet (every current call site — server.ts,
-// fleet-health.test.ts — reaches it via `fleetstate.js` directly), so no test
-// or tsc error currently distinguishes this line from its own deletion. It
-// exists for the callers this split was done for: `ccdargv.ts`'s
-// `Pick<FleetState, 'ccdVerbs'>` and the `verbSupported(deps.fleetState, …)`
-// call sites landing in later tasks.
+// Re-exported so callers can obtain the connected client and its state type
+// from one remote boundary. `refreshcaps.ts` and its test import `FleetState`
+// here; deleting this export is therefore a TypeScript error.
 export type { FleetState };
 
 interface Pending {

@@ -5898,11 +5898,10 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
  * `in-progress` and the rest of the 54 — keep their single home over there.
  *
- * THE CONTRACT WAVE 3 HONOURS, AND WHAT ENFORCES IT: every token wave 3 hands
- * `_lc_refuse` / `_lc_fail` is a member of this union OR already a SENTENCES
- * key, and wave 3's own cross-language scan over `ccd/ccd` asserts it in both
- * directions with a coverage floor. It cannot live here — it would be red
- * until wave 3 lands. Adding a tenth token is a two-line edit;
+ * THE CONTRACT THE LIFECYCLE JOURNAL HONOURS, AND WHAT ENFORCES IT: every token
+ * handed to `_lc_refuse` / `_lc_fail` is a member of this union OR already a
+ * SENTENCES key, and the cross-language scan over `ccd/ccd` asserts it in both
+ * directions with a coverage floor. Adding a tenth token is a two-line edit;
  * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
  */
 export type LcRefusalToken =

@@ -14,6 +14,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import {
   POOLS_DIR_NAME, poolFor, poolsEnforcement, poolsWire, readProjectPools,
+  readProjectPoolsWithRoot,
 } from '../src/pools.js';
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { seedRoster } from './helpers.js';
@@ -228,6 +229,25 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     expect(read).toEqual({ listed: false });
   });
 
+  it('normalizes a late shared root before revival and pool consumers inspect it', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10_000)
+      .mockReturnValueOnce(11_001);
+    const needsPools = vi.fn(() => false);
+
+    const read = await readProjectPoolsWithRoot(
+      localIO,
+      cfg(),
+      async () => ['claude-demo.uuid'],
+      1_000,
+      needsPools,
+    );
+
+    expect(needsPools).toHaveBeenCalledWith(null);
+    expect(read).toEqual({ rootNames: null, poolsRead: false });
+  });
+
   it('does no I/O when the measured root listing has no pools directory', async () => {
     const names = await rootNames();
     const { io, ops } = countingIO();
@@ -325,7 +345,9 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
     vi.useFakeTimers();
     mkdirSync(pools, { recursive: true });
     const names = await rootNames();
-    let losingSignal: AbortSignal | undefined;
+    let abortedAtExpiry = false;
+    let noteLosingStarted!: () => void;
+    const losingStarted = new Promise<void>((resolve) => { noteLosingStarted = resolve; });
     const io: FleetIO = {
       ...localIO,
       readdir: async (p) => p === pools ? ['demo', 'quiet-basin', 'acct-a-demo'] : localIO.readdir(p),
@@ -333,20 +355,22 @@ describe('readProjectPools — the I/O cost awaited by FleetWatcher.tick', () =>
         const name = path.basename(p);
         if (name === 'demo') return { ok: true, content: 'pool-a' };
         if (name === 'quiet-basin') return { ok: false, reason: 'absent' };
-        losingSignal = signal;
+        signal?.addEventListener('abort', () => { abortedAtExpiry = true; }, { once: true });
+        noteLosingStarted();
         return new Promise(() => {});
       },
     };
 
     const pending = readProjectPools(io, cfg(), names, 1_000);
-    await vi.advanceTimersByTimeAsync(1_000);
+    await losingStarted;
+    vi.advanceTimersByTime(1_000);
+    expect(abortedAtExpiry, 'the deadline callback aborts losing adapter work').toBe(true);
     const read = await pending;
 
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'unreadable' });
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo', 'quiet-basin', 'acct-a-demo']);
-    expect(losingSignal?.aborted).toBe(true);
   });
 
   it('passes the caller budget to the listing and the remaining budget to every marker', async () => {

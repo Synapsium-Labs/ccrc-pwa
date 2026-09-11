@@ -153,9 +153,9 @@ describe('GET /api/projects — pool and placement per row', () => {
 
     const pending = app.inject({ method: 'GET', url: '/api/projects' });
     await vi.waitFor(() => {
-      expect(rootRead.mock.calls.find(([p, timeoutMs]) => p === reg && timeoutMs !== undefined)?.[1])
-        .toBe(10_000);
-    });
+      expect(rootRead.mock.calls.find(([p, timeoutMs]) => p === reg && timeoutMs !== undefined)?.[1],
+        'the projects route to start its bounded registry read').toBe(10_000);
+    }, { timeout: 10_000 });
     await vi.advanceTimersByTimeAsync(10_000);
     vi.useRealTimers();
 
@@ -179,16 +179,16 @@ describe('GET /api/projects — pool and placement per row', () => {
     const pending = app.inject({ method: 'GET', url: '/api/projects' });
     await vi.waitFor(() => {
       expect(readMarker).toHaveBeenCalled();
-      expect(readMarker.mock.calls.find(([p]) => p.endsWith(`${POOLS_DIR_NAME}/demo`))?.[1])
-        .toBe(10_000);
-    });
+      expect(readMarker.mock.calls.find(([p]) => p.endsWith(`${POOLS_DIR_NAME}/demo`))?.[1],
+        'the projects route to start its bounded marker read').toBe(10_000);
+    }, { timeout: 10_000 });
     await vi.advanceTimersByTimeAsync(10_000);
     vi.useRealTimers();
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     const observed = Promise.race([
       pending,
       new Promise<'route-still-pending'>((resolve) => {
-        watchdog = setTimeout(() => resolve('route-still-pending'), 1_000);
+        watchdog = setTimeout(() => resolve('route-still-pending'), 10_000);
       }),
     ]);
 

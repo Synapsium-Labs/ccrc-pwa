@@ -4,9 +4,9 @@
 //
 // Pure and import-free, like every other file in `shared/`: this bundles
 // into the PWA, so it imports nothing — not even `node:*`. `parseRoster`
-// therefore takes already-parsed JSON (`unknown`), never a path; whoever
-// reads `~/.ccrc/accounts.json` off disk (a later task) does the `readFile`
-// and hands the parsed value in here.
+// therefore takes already-parsed JSON (`unknown`), never a path. The server's
+// `loadConfig` reads and parses `~/.ccrc/accounts.json`, then hands the value
+// here; deploy-side bare-Node tooling uses the parity-pinned `.mjs` parser.
 //
 // Written in Task 2 of the stage-2a plan; live since Task 5, when `loadConfig`
 // began reading `~/.ccrc/accounts.json` into `CcrcConfig.roster`, and sole
@@ -23,9 +23,8 @@
  * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
- * auto-assignment walk below needs an actual sequence to walk — and because
- * a later doctor/adopt tool needs the identical order, not a second copy of
- * it, to report a collision the same way this parser resolves one.
+ * auto-assignment walk below needs an actual sequence to walk; exported so
+ * parser and generator tests can pin that sequence without re-deriving it.
  */
 export const HUES = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as const;
 export type Hue = (typeof HUES)[number];
@@ -238,9 +237,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * The pool-name charset — deliberately `ID_RE`'s exact shape, and for `ID_RE`'s
  * exact reason. That sentence is an ASSERTION, not a claim on trust:
  * `server/test/gen-accounts.test.ts` requires `ID_RE`'s literal, extracted from
- * this file's text, to equal this object's `.source` and `.flags`. A later wave
- * with a reason to diverge the two changes that sentence and that assertion in
- * one act — the pin exists to make a divergence deliberate, not to forbid one.
+ * this file's text, to equal this object's `.source` and `.flags`. Any future
+ * change with a reason to diverge the two changes that sentence and assertion
+ * in one act — the pin exists to make a divergence deliberate, not to forbid one.
  *
  * A pool name is embedded UNQUOTED in a generated bash `case` arm
  * (`_ccrc_pool`, `shared/generate.mjs`) and printed with `echo`: a leading
@@ -591,10 +590,10 @@ function parseAccount(raw: unknown, index: number): Draft {
  * choice, so this at least still spreads collisions round-robin rather than
  * concentrating them.
  *
- * A resulting collision is not reported here — design spec §3 puts that on
- * a later `doctor` task, which sees the finished roster and can name both
- * colliding accounts; this function's only job is to never leave a `hue`
- * unset.
+ * A resulting collision is not reported here: this parser's job is to return
+ * a complete roster or a validation error, and repeated hues are valid once
+ * the finite palette cycles. Any operator-facing collision diagnosis belongs
+ * to tooling that sees the finished roster, not this assignment helper.
  */
 function assignHues(accounts: Draft[]): void {
   const explicit = new Set<Hue>();

@@ -148,6 +148,8 @@ describe('FleetClient.request — cancellation owns its pending entry', () => {
   let fleet: ConnectedFleet | undefined;
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await fleet?.close();
     fleet = undefined;
     if (wss) {
@@ -157,21 +159,20 @@ describe('FleetClient.request — cancellation owns its pending entry', () => {
     wss = undefined;
   });
 
-  it('aborts the request, removes it from pending, and ignores a late response', async () => {
+  it('aborts the request, clears its timer, detaches its listener, and ignores a late response', async () => {
     let replyLate!: () => void;
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     wss = server;
-    const requestSeen = new Promise<void>((resolve) => {
-      server.on('connection', (ws) => {
-        ws.on('message', (raw) => {
-          const msg = JSON.parse(raw.toString()) as { t?: unknown; id?: unknown };
-          if (msg.t === 'hello') {
-            ws.send(JSON.stringify({ t: 'ready', v: 1 }));
-          } else if (msg.t === 'req' && typeof msg.id === 'number') {
-            replyLate = () => ws.send(JSON.stringify({ t: 'res', id: msg.id, ok: true, entries: [] }));
-            resolve();
-          }
-        });
+    let requestSeen = false;
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString()) as { t?: unknown; id?: unknown };
+        if (msg.t === 'hello') {
+          ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+        } else if (msg.t === 'req' && typeof msg.id === 'number') {
+          replyLate = () => ws.send(JSON.stringify({ t: 'res', id: msg.id, ok: true, entries: [] }));
+          requestSeen = true;
+        }
       });
     });
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
@@ -181,22 +182,69 @@ describe('FleetClient.request — cancellation owns its pending entry', () => {
     await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
 
     const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    vi.useFakeTimers();
     const request = fleet.client.request(
       { t: 'req', op: 'readdir', path: '/fleet/.cc-sessions/pools' },
       60_000,
       controller.signal,
     );
-    await requestSeen;
     const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
     expect(reachable.pending.size).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
 
     controller.abort();
     await expect(request).rejects.toThrow('aborted');
     expect(reachable.pending.size).toBe(0);
+    expect(vi.getTimerCount(), 'the aborted request must not retain its timeout').toBe(0);
+    expect(remove, 'the aborted request must detach its abort listener').toHaveBeenCalledTimes(1);
 
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(requestSeen).toBe(true), { timeout: 3000 });
     replyLate();
     await new Promise((resolve) => setImmediate(resolve));
     expect(reachable.pending.size).toBe(0);
+  });
+
+  it('rejects a pre-aborted signal before registering a request, timer, or listener', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    wss = server;
+    const requestFrames: unknown[] = [];
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString()) as { t?: unknown };
+        if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+        else if (msg.t === 'req') requestFrames.push(msg);
+      });
+    });
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const controller = new AbortController();
+    controller.abort();
+    const add = vi.spyOn(controller.signal, 'addEventListener');
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    vi.useFakeTimers();
+    const timersBefore = vi.getTimerCount();
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+
+    const request = fleet.client.request(
+      { t: 'req', op: 'readdir', path: '/fleet/.cc-sessions/pools' },
+      60_000,
+      controller.signal,
+    );
+    void request.catch(() => {});
+
+    expect(reachable.pending.size).toBe(0);
+    expect(requestFrames).toEqual([]);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    expect(add).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    await expect(request).rejects.toThrow('aborted');
+    vi.useRealTimers();
   });
 });
 

@@ -41,6 +41,18 @@ describe('localIO.readFileMeasured', () => {
     expect(await localIO.readFileMeasured(sub)).toEqual({ ok: false, reason: 'unreadable' });
   });
 
+  it('forwards an AbortSignal into the real local read and fails shut on ABORT_ERR', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'readable');
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(await localIO.readFileMeasured(file, 1_000, controller.signal)).toEqual({
+      ok: false,
+      reason: 'unreadable',
+    });
+  });
+
   it.skipIf(process.getuid?.() === 0)(
     'a chmod 000 file (EACCES, not ENOENT) reads as {ok:false, reason:"unreadable"}',
     async () => {

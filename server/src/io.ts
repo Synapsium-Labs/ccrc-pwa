@@ -86,9 +86,11 @@ export interface FleetIO {
    *  `timeoutMs` overrides the remote client's ordinary request timeout; it can
    *  shorten or lengthen that adapter-level timer. `localIO` ignores the
    *  argument itself, so a consumer needing a strict aggregate bound must also
-   *  race its own deadline around local and remote reads. `signal` provides
-   *  best-effort cancellation beneath that deadline: ordinary local reads and
-   *  remote request-table entries stop, but Node cannot interrupt every local
+   *  race its own deadline around local and remote reads. `signal` is forwarded
+   *  by local `readFileMeasured` and by remote request-table entries. The derived
+   *  `readFile` member has no cancellation parameter. Local `readdir` ignores
+   *  both optional arguments because the Node API used by this adapter accepts
+   *  neither; Node also cannot interrupt every local
    *  filesystem syscall after dispatch. */
   readFileMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart

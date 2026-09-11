@@ -247,9 +247,9 @@ describe('POST /api/sessions — creation-only, revival passes through', () => {
       method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'quiet-basin' },
     });
     await vi.waitFor(() => {
-      expect(rootRead.mock.calls.find(([p, timeoutMs]) => p === reg && timeoutMs !== undefined)?.[1])
-        .toBe(10_000);
-    });
+      expect(rootRead.mock.calls.find(([p, timeoutMs]) => p === reg && timeoutMs !== undefined)?.[1],
+        'the create route to start its bounded registry read').toBe(10_000);
+    }, { timeout: 10_000 });
     await vi.advanceTimersByTimeAsync(10_000);
 
     const res = await pending;
@@ -275,13 +275,16 @@ describe('POST /api/sessions — creation-only, revival passes through', () => {
 
   it('501s a crossPool creation on a box with no pools-v1, and builds enableCross/startCross with it', async () => {
     tag('quiet-basin', 'pool-a');
-    app = await open({ ccdVerbs: ['enable'] });
+    const reads = vi.fn(localIO.readFileMeasured.bind(localIO));
+    const listings = vi.fn(localIO.readdir.bind(localIO));
+    const io: FleetIO = { ...localIO, readdir: listings, readFileMeasured: reads };
+    app = await open({ ccdVerbs: ['enable'], io });
     expect((await app.inject({
       method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'quiet-basin', crossPool: true },
     })).statusCode).toBe(501);
     await app.close();
 
-    app = await open({ ccdVerbs: ['enable', 'start', POOLS_CAP] });
+    app = await open({ ccdVerbs: ['enable', 'start', POOLS_CAP], io });
     await app.inject({
       method: 'POST', url: '/api/sessions', payload: { wrapper: 'claude-b', project: 'quiet-basin', crossPool: true },
     });
@@ -289,6 +292,9 @@ describe('POST /api/sessions — creation-only, revival passes through', () => {
       method: 'POST', url: '/api/sessions',
       payload: { wrapper: 'claude-b', project: 'quiet-basin', crossPool: true, enable: false, workdir: '/w' },
     });
+    expect(listings.mock.calls.some(([p]) => p === path.join(home, '.cc-sessions'))).toBe(true);
+    expect(listings.mock.calls.some(([p]) => p.endsWith(POOLS_DIR_NAME))).toBe(false);
+    expect(reads.mock.calls.some(([p]) => p.endsWith(`${POOLS_DIR_NAME}/quiet-basin`))).toBe(false);
     expect(calls).toEqual([
       ['enable', '--cross-pool', 'claude-b', 'quiet-basin'],
       ['start', '--cross-pool', 'claude-b', 'quiet-basin', '/w'],

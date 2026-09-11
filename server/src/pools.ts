@@ -124,10 +124,14 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * deadline covers a promised root listing, the pools listing and all concurrent
  * marker reads, and its remaining time is also forwarded to remote FleetIO. The
  * aggregate race is still necessary because local or test FleetIO implementations
- * may ignore the forwarded timeout. An AbortSignal also stops ordinary local reads
- * and removes losing remote requests from the client table. Node cannot interrupt
- * every filesystem syscall after dispatch (a FIFO blocked in open is the known
- * example), so cancellation is best-effort beneath the strict result deadline.
+ * may ignore the forwarded timeout. An AbortSignal reaches local
+ * `readFileMeasured` operations and removes losing remote requests from the client
+ * table. The derived local `readFile` has no cancellation parameter, and the
+ * local `readdir` adapter ignores both timeout and signal — the Node API used
+ * there accepts neither — so only the aggregate race strictly
+ * bounds when its caller receives a decision. Node cannot interrupt every local
+ * filesystem syscall after dispatch (a FIFO blocked in open is the known example),
+ * so cancellation is best-effort beneath that strict result deadline.
  *
  * Cost: ZERO extra root readdirs for a caller that has a listing; a route starts
  * exactly one root readdir here, then one `pools/` readdir and concurrent measured
@@ -239,7 +243,8 @@ export async function readProjectPools(
 /**
  * Route variant for a caller that also needs the parent listing itself.
  * The root and pool answers share one deadline and one root measurement;
- * `needsPools` may skip the remaining work when the caller proves it is a revival.
+ * `needsPools` may skip remaining work for any verdict that does not consume pool
+ * evidence, including a proven revival or a declared crossing.
  */
 export async function readProjectPoolsWithRoot(
   io: FleetIO,

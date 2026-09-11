@@ -62,12 +62,12 @@ there would leave its own branch tip unmoved and wedge every close with `stale-t
 - From wave 1 — `shared/roster.ts`: `POOL_NAME_RE` (`/^[a-z][a-z0-9-]{0,31}$/`), `AccountDef.pool: string | null` (required on the type, `null` = untagged), `'pool'` in `ACCOUNT_KEYS`. `shared/api.ts`: `PoolsEnforcement`, `ProjectPoolWire`, `ProjectPoolsWire`, `RosterWire.pool` (and its emission at `server/src/server.ts:1186`, which wave 1 must have landed or `tsc` is already red). `shared/poolrule.ts`: `poolRule(accountPool: string | null, projectPool: ProjectPoolWire): PoolVerdict` and the `PoolVerdict` union. `server/test/fixtures/poolRule.ts`: `PoolRuleCase`, `POOL_RULE_CASES`, `POOLED_TEST_ROSTER`.
 - From wave 2a — `server/src/pools.ts` existing with ONLY `export const POOLS_DIR_NAME = 'pools';` (this wave fills the module), `CCD_ARGV.projectPoolSet` / `CCD_ARGV.projectPoolClear`, `export const POOLS_CAP = 'pools-v1'` beside `ACTOR_FLAGS_CAP` (`server/src/ccdargv.ts:346`), the `project-pool` verb in `ccd caps`, and the agent grant `['project-pool','--project']`.
 - From wave 2a (the OTHER half of that wave, in `ccd/ccd`) — `_project_pool_state`, `_pool_ok`, `_acct_pool`, `POOLS_DIR`, and `_ws_least_loaded [project]` (optional positional; zero-arg unchanged). **Task 4 is a BUILD dependency on these**: it drives the bash side of `server/test/fixtures/leastLoaded.ts` through the real `ccd`, and is red without them.
-- From wave 2b — `_strand_mark`/`_strand_clear` and `$REG/<id>.stranded` on the fleet box. A RUNTIME dependency only: Task 3 reads that file's shape and seeds it by hand in fixtures, so this wave builds and passes without wave 2b — but the field stays permanently null on a real fleet until 2b ships.
+- From wave 2b — `_strand_mark`/`_strand_clear` and `$REG/<id>.stranded` on the fleet box. A RUNTIME dependency only: Task 3 reads that file's shape and seeds it by hand in fixtures, so this wave could build and pass before wave 2b; now that wave 2b is live, a real strand marker populates the field.
 
 **This wave PRODUCES (later waves rely on these exact names):**
 
 - `server/src/poolrule.ts` (L1): `RosterVerdict`, `poolVerdict(roster, wrapper, pool)`, `poolEligible(roster, pool)`, `poolUndecidable(pool)`, `poolRostered(roster, name)`; re-export of `ProjectPlacement`.
-- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `ProjectPoolsWithRoot`, `readProjectPools(io, cfg, root, budgetMs)`, `readProjectPoolsWithRoot(io, cfg, readRoot, budgetMs, needsPools?)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`. The finite budget is consumer-owned: the watcher passes half its cadence and HTTP routes pass the server's ten-second request budget. Route root reads start through callbacks only after the aggregate deadline exists; session creation reuses the returned root answer for its revival decision and skips pool marker I/O for a proven revival.
+- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `ProjectPoolsWithRoot`, `readProjectPools(io, cfg, root, budgetMs)`, `readProjectPoolsWithRoot(io, cfg, readRoot, budgetMs, needsPools?)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`. The finite budget is consumer-owned: the watcher passes half its cadence and HTTP routes pass the server's ten-second request budget. Route root reads start through callbacks only after the aggregate deadline exists; session creation reuses the returned root answer for its revival decision and skips pool marker I/O for a proven revival or declared crossing.
 - `server/src/limits.ts`: `projectHome(roster, limits, pool)` (third argument REQUIRED), `projectPlacement(roster, limits, pool)`.
 - `server/src/registry.ts`: `SessionRecord.stranded`, `STRANDED_NO_REASON`, `STRANDED_UNREADABLE`.
 - `shared/api.ts`: `ProjectPlacement`, `FleetSession.stranded`, `reviveStranded`, `ProjectRow.pool?`, `ProjectRow.placement?`, `FleetMsg | { type: 'pools'; pools: ProjectPoolsWire }`, `FleetHealth.projectPools?`.
@@ -831,10 +831,14 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * deadline covers a promised root listing, the pools listing and all concurrent
  * marker reads, and its remaining time is also forwarded to remote FleetIO. The
  * aggregate race is still necessary because local or test FleetIO implementations
- * may ignore the forwarded timeout. An AbortSignal also stops ordinary local reads
- * and removes losing remote requests from the client table. Node cannot interrupt
- * every filesystem syscall after dispatch (a FIFO blocked in open is the known
- * example), so cancellation is best-effort beneath the strict result deadline.
+ * may ignore the forwarded timeout. An AbortSignal reaches local
+ * `readFileMeasured` operations and removes losing remote requests from the client
+ * table. The derived local `readFile` has no cancellation parameter, and the
+ * local `readdir` adapter ignores both timeout and signal — the Node API used
+ * there accepts neither — so only the aggregate race strictly
+ * bounds when its caller receives a decision. Node cannot interrupt every local
+ * filesystem syscall after dispatch (a FIFO blocked in open is the known example),
+ * so cancellation is best-effort beneath that strict result deadline.
  *
  * Cost: ZERO extra root readdirs for a caller that has a listing; a route starts
  * exactly one root readdir here, then one `pools/` readdir and concurrent measured
@@ -946,7 +950,8 @@ export async function readProjectPools(
 /**
  * Route variant for a caller that also needs the parent listing itself.
  * The root and pool answers share one deadline and one root measurement;
- * `needsPools` may skip the remaining work when the caller proves it is a revival.
+ * `needsPools` may skip remaining work for any verdict that does not consume pool
+ * evidence, including a proven revival or a declared crossing.
  */
 export async function readProjectPoolsWithRoot(
   io: FleetIO,
@@ -1004,7 +1009,7 @@ export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement)
 }
 ```
 
-> **AS-BUILT OVERRIDE (D-2478, D-2482, D-2484–D-2488):** the implementation excerpt above is synchronized to `server/src/pools.ts`. The current reader takes a required finite `budgetMs: number`; the watcher passes half its cadence and all five HTTP consumers pass the server-owned ten-second request budget. Route callers pass a root-reader callback so the deadline exists before the first I/O; session creation uses `readProjectPoolsWithRoot` to share that bounded root answer with its revival check and skip marker reads for a proven revival. One monotonic aggregate deadline races the root listing, pools listing and concurrent marker reads; its non-negative remainder and AbortSignal are forwarded to the adapter, and fewer than 50 ms remaining declines the whole marker burst. Expiry makes the entire listed population `unreadable`, including any tagged or proven-absent marker that completed before another marker exhausted the shared deadline; this coherent degradation deliberately discards transport-order evidence. The returned decision is strictly bounded, while cancellation beneath it is best-effort: remote pending entries and ordinary local reads are cancelled, but a kernel-blocked FIFO/stale-mount syscall can outlive the decision and repeated requests can multiply it. The timer is cleared and supported losing work is aborted in `finally`. `server/src/pools.ts` and `server/test/project-pools-read.test.ts` are the executable authority.
+> **AS-BUILT OVERRIDE (D-2478, D-2482, D-2484–D-2488):** the implementation excerpt above is synchronized to `server/src/pools.ts`. The current reader takes a required finite `budgetMs: number`; the watcher passes half its cadence and all five HTTP consumers pass the server-owned ten-second request budget. Route callers pass a root-reader callback so the deadline exists before the first I/O; session creation uses `readProjectPoolsWithRoot` to share that bounded root answer with its revival check and skip marker reads for a proven revival. One monotonic aggregate deadline races the root listing, pools listing and concurrent marker reads; its non-negative remainder and AbortSignal are forwarded to the adapter, and fewer than 50 ms remaining declines the whole marker burst. Expiry makes the entire listed population `unreadable`, including any tagged or proven-absent marker that completed before another marker exhausted the shared deadline; this coherent degradation deliberately discards transport-order evidence. The returned decision is strictly bounded, while cancellation beneath it is best-effort: remote pending entries and signalled local measured file reads are cancelled, but derived local `readFile`, local `readdir`, or a kernel-blocked FIFO/stale-mount syscall can outlive the decision and repeated requests can multiply it. The timer is cleared and supported losing work is aborted in `finally`. `server/src/pools.ts` and `server/test/project-pools-read.test.ts` are the executable authority. Local `readFileMeasured` forwards the signal; local `readdir` cannot honor either optional argument, so only the aggregate race bounds its returned decision. Session creation skips marker work for both a proven revival and a declared crossing, whose authoritative check stays on the fleet box.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -3013,7 +3018,7 @@ git commit -m "feat(pools): the tag route asks the box and then reads the file, 
 **Mutation table:**
 - Row 46 — `swap-route-pool.test.ts`. Goes RED when the verdict branch is removed (a mismatch would reach ccd), when `verbSupported` is used for the capability instead of `capSupported` (a `--cross-pool` argv would go to a box with no evidence it parses the flag — the silent-success class), or when a REVIVAL is refused instead of passing through.
 
-**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one bounded registry-root readdir, one `pools/` readdir and one read per listed marker before the argv is built. `POST /api/sessions` takes one bounded root listing; a proven revival stops there, while a creation continues through the same deadline into the pool listing and marker burst. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
+**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one bounded registry-root readdir, one `pools/` readdir and one read per listed marker before the argv is built. `POST /api/sessions` takes one bounded root listing; a proven revival or declared crossing stops there, while an ordinary creation continues through the same deadline into the pool listing and marker burst. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
 
 **No fast path, deliberately.** A short-circuit that skipped the record read while `pools/` is empty would make the 404 ladder appear only once something is tagged — one route with two behaviours depending on unrelated state. One path, always.
 
@@ -3620,7 +3625,7 @@ is never a ledger number.
   `ccd` unvalidated as `/workspaces` does, and `poolFor` is a Map lookup against names a LISTING returned,
   so no request-supplied name is ever joined into a path — recorded for alignment. (spec §12 P-16)
 - **D-1680** (Task 2) — `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling
-  (`:100`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
+  (`:103`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
   listing the caller already holds. One residual is disclosed rather than closed: a regular file or an
   EACCES directory at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` —
   the correct polarity (nobody decides, nothing crosses) but fleet-wide, and the only `pools/` failure
@@ -4231,6 +4236,80 @@ block above.
   without the now-reachable listing-deadline outcome. The same contract still said `ccrc doctor` would carry
   pool details after its wave-2a implementation had already landed. The contract now says the server answers 503
   in wave 3, enumerates an unlistable root, a regular file at `pools/`, or expiry before listing completion, and
-  names doctor diagnosis as current behavior. A semantic sweep across `shared/` and `server/src/` found no further
-  current-tree pool rollout claim to graduate.
+  names doctor diagnosis as current behavior. That round's claim that the source sweep found no further staged
+  pool prose was false: `shared/generate.mjs` still described the live supervisor consumer as something a new
+  `ccd` "will call". D-2497 corrects the remaining instance and records the reproducible class-wide search.
   **After changing staged behavior or a state vocabulary, sweep every source ring that publishes the contract.**
+
+- **D-2491 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **An override that
+  intentionally bypasses a verdict must also bypass the I/O used only by that verdict.** Session creation shared
+  one bounded registry-root listing between revival detection and pool measurement, but its `needsPools`
+  predicate skipped markers only for a proven revival. `crossPool: true` later discarded the completed pool
+  result and delegated the authoritative check to `ccd`, so it still listed `pools/` and read every marker for
+  evidence no server branch consumed. The predicate now excludes declared crossings while preserving the parent
+  registry listing needed to detect a revival. The crossing test observes that root listing but zero `pools/`
+  listings and zero marker reads; removing the `body.crossPool !== true` guard reds on both extra operations.
+  **Skipping a decision without skipping its private inputs leaves the cost and failure surface behind.**
+
+- **D-2492 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Observing an aborted signal
+  after a sweep settles cannot distinguish deadline cancellation from `finally` cleanup.** The old test awaited
+  the result before checking `signal.aborted`, so deleting `controller.abort()` from the deadline timer stayed
+  green because `deadline.close()` performed the same abort on exit. The replacement waits until a losing marker
+  has registered its listener, advances fake time synchronously, and asserts the abort from inside that timer
+  turn before promise continuations can reach `finally`; the exact deletion now reds with
+  `the deadline callback aborts losing adapter work`. **Test a lifecycle event at the boundary that owns it, not
+  after another boundary can manufacture the same state.**
+
+- **D-2493 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **A fake-time route test can
+  still carry an accidental one-second real-time policy through its wait helper or watchdog.** Both projects-route
+  stalls and the session-create root stall used `vi.waitFor`'s default one-second cap; the marker case then raced
+  its completed route against another one-second real timer. All three waits now declare a 10-second diagnostic
+  cap and name the awaited root or marker launch, and the post-deadline route watchdog uses the same generous
+  cap. Fake timers still advance the production budget exactly; these bounds diagnose a broken setup without
+  turning a loaded host into a product verdict. **Every test wait has policy too; state it where the wait runs.**
+
+- **D-2494 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Testing late root rejection
+  through `readProjectPools` does not cover the shared-root variant whose answer also drives revival.** A direct
+  `readProjectPoolsWithRoot` case makes the root callback return `claude-demo.uuid` after mocked monotonic time
+  has crossed the deadline, requires `needsPools` to receive `null`, and requires the returned `rootNames` to be
+  `null`. Replacing the post-root normalization with the raw `completedRoot` reds on the callback argument before
+  a caller can treat stale bytes as proof of revival. **When one measurement feeds two decisions, pin the
+  normalized value at their shared seam.**
+
+- **D-2495 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Removing a pending-table row
+  is not complete request cancellation if its timer or AbortSignal listener survives.** The real-WebSocket abort
+  test now freezes timers only around request registration, observes one request timer, aborts, and requires zero
+  timers plus one `removeEventListener` call before accepting a late response. A separate already-aborted case
+  asserts synchronously that no pending entry, timer, listener, or request frame is registered before checking
+  the rejection. Deleting abort-path `clearTimeout`, deleting `entry.dispose`, or deleting the pre-aborted guard
+  each makes its corresponding assertion red. **Cancellation owns every resource registered for the request,
+  including the resources that do not appear in the pending map.**
+
+- **D-2496 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **An aggregate deadline's strict
+  decision bound must not be described as universal syscall cancellation.** `FleetIO` and the pool reader now
+  say precisely that the signal reaches local `readFileMeasured` and remote pending requests, while derived local
+  `readFile` has no signal parameter and this local adapter's `readdir` ignores timeout and signal because the
+  Node API used there accepts neither; the aggregate race is what still bounds the returned pool decision. A
+  real-adapter test passes an already-aborted signal to a readable file and requires fail-shut `unreadable`; removing the signal from
+  `fs.promises.readFile` makes it return the bytes and reds. **Name strict decision timing and best-effort work
+  cancellation as separate guarantees.**
+
+- **D-2497 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **A semantic sweep is evidence
+  only when its corpus, query class, and classifications are reproducible.** D-1680's positional citation is
+  re-measured at `server/src/io.ts:103`; D-2490 now admits its false exhaustive conclusion; the wave input no
+  longer says a live wave-2b strand producer has not shipped; and `shared/generate.mjs` now says the supervisor's
+  live five-second loop calls `_ccrc_pool`, rather than that a new `ccd` will call it later. The class search was
+  case-insensitive over every `shared/**/*.{ts,mjs,mts}`, every `server/src/**/*.ts`, and this complete plan,
+  pairing `pool|pools` with `later|future|will|not yet|until|once|when`, then separately searching rollout phrases
+  (`later task|wave`, `next task|wave`, `will call|read|use|consume|carry|expose|ship|land|add`, `has no caller`,
+  `until/once/when ... ships|lands`). Each surviving hit was read in context and its named consumers were checked
+  by symbol/import search. The sweep found three more live contradictions outside the pool-specific hits:
+  `shared/mark.mjs` said its already-used marker functions had not acquired callers, `shared/roster.ts` called
+  the already-live config reader and tooling future, and `server/src/remote/client.ts` said nothing imported its
+  `FleetState` re-export although `refreshcaps.ts` does. Those comments now name current ownership and consumers.
+  The remaining staged statements are accurate: `shared/poolrule.ts`'s phone rule and `shared/api.ts`'s warning
+  renderer remain wave-4 PWA work (no current PWA pool consumer), and `shared/roster.ts`'s possible future grammar
+  divergence is conditional. The unrelated `shared/api.ts` lifecycle paragraph was another stale rollout claim,
+  so it now describes the live journal contract; other `when`/`once` hits state runtime conditions, not rollout
+  status. **A negative search proves only its query; publish the query, follow named symbols to current consumers,
+  and classify every surviving semantic match before calling the class closed.**

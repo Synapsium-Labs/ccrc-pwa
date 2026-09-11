@@ -1985,8 +1985,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     // ONE bounded registry listing, two questions: is this a revival, and, only
-    // when it is not, what is this project's tag. The predicate keeps revivals
-    // CREATION-ONLY without starting marker I/O that their verdict never uses.
+    // for an ordinary creation, what is this project's tag. The predicate keeps
+    // revivals CREATION-ONLY and declared crossings authoritative on the fleet
+    // box without starting marker I/O that either verdict never uses.
     // `cmd_start` makes the same distinction (spec §5.5.5): on revival THE
     // REGISTRY WINS over the wrapper argument, and ruling 5's auto path moves an
     // already-running wrong-pool session at the next boundary.
@@ -1996,7 +1997,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       deps.cfg,
       (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
       PROJECT_POOLS_REQUEST_BUDGET_MS,
-      (names) => names === null || !names.includes(`${candidateId}.uuid`),
+      (names) => body.crossPool !== true
+        && (names === null || !names.includes(`${candidateId}.uuid`)),
     );
     const revival = await knownId(candidateId, measured.rootNames);
     if (!revival) {
