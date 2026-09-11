@@ -724,6 +724,15 @@ if [ "$TARGET" = "agent" ]; then
   # NO `&&` INSIDE THE HELPER BODY, and that is not style: deploy-verify reads
   # this block by splitting it on `&&`, so a body spelled with `&&` would be
   # torn across the links it scans. `|| return 1` says the same thing.
+  #
+  # 2026-09-10: a SECOND slice drop-in (`zz-no-memoryhigh.conf`) sorts LAST
+  # among the slice's drop-ins (systemd applies them in filename order, last
+  # wins), overriding MemoryHigh from limits.conf and from runtime
+  # set-property drop-ins (50-MemoryHigh.conf). An aggregate MemoryHigh froze
+  # the fleet three times today — stale-branch deploys kept reinstalling
+  # MemoryHigh=20G. The last-sorting file is the one old copies of deploy.sh
+  # never overwrite. After daemon-reload, AGENT_CMD runs assert-slice-policy.sh
+  # to read the enforced value and fail the deploy unless it is `infinity`.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
@@ -732,6 +741,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
     && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
+    && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/zz-no-memoryhigh.conf" \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
@@ -824,7 +834,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
+    && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user enable --now ccd-account-health.timer \
