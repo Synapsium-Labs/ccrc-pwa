@@ -107,7 +107,11 @@ export function readWindow(path, cap = WINDOW_CAP, chunkSize = CHUNK) {
       carry = chunk.subarray(0, Math.min(NEEDLE.length - 1, chunk.length));
     }
     let buf = Buffer.concat(chunks);
-    if (pos > 0 || buf.length > cap) {
+    // `total` (== buf.length here) can never exceed `cap`: each iteration's
+    // `len` is bounded by `cap - total`, so the loop invariant total <= cap
+    // holds from the first iteration on — `buf.length > cap` was therefore
+    // unreachable and is swept (Task 3 deferred, Task 8's sweep list).
+    if (pos > 0) {
       buf = buf.subarray(Math.max(0, buf.length - cap));
       const nl = buf.indexOf(0x0a);
       buf = nl >= 0 ? buf.subarray(nl + 1) : Buffer.alloc(0);
@@ -591,6 +595,93 @@ export function cardCommand(o) {
     throw error;
   }
   return EXIT.OK;
+}
+
+// ── MEASURE (spec §3.4) ──────────────────────────────────────────────────
+/** Mirrors what the harness does to `compact_summary` before injecting it
+ *  (2.1.266, measured): drop the FIRST <analysis> block (non-greedy, no
+ *  global flag); REPLACE <summary>X</summary> with a `Summary:` line and
+ *  X.trim() — replace, not unwrap, because the session sees that line and
+ *  `chars` must count what the session sees; collapse runs of blank lines to
+ *  one; trim. */
+export function normalizeSummary(raw) {
+  let t = String(raw);
+  t = t.replace(/<analysis>[\s\S]*?<\/analysis>/, '');
+  t = t.replace(/<summary>([\s\S]*?)<\/summary>/, (_m, inner) => `Summary:\n${inner.trim()}`);
+  t = t.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n');
+  return t.trim();
+}
+
+/** A numbered heading as the corpus spells them: optional `#`s, optional
+ *  `**`, `<n>.`, a title, an optional colon, optional closing `**`. */
+const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
+
+/** Chars from the "Files and Code Sections" heading to the next numbered
+ *  heading (or EOF); null when the summary has no such heading — 19% of the
+ *  corpus is not in the nine-section format, and null is what keeps this
+ *  field honest. */
+export function filesSectionChars(text) {
+  let start = -1;
+  for (const m of text.matchAll(HEADING_RE)) {
+    if (start < 0) { if (/^files and code sections$/i.test(m[1])) start = m.index; }
+    else return m.index - start;
+  }
+  return start < 0 ? null : text.length - start;
+}
+
+/** Working-set files the summary names: the repo-relative path, or a
+ *  path-segment-aligned suffix of it of at least two segments that is unique
+ *  WITHIN THE SET. Computed from the set alone; no graph needed. */
+export function citedCount(text, paths) {
+  let n = 0;
+  for (const p of paths) {
+    if (text.includes(p)) { n++; continue; }
+    const segs = p.split('/');
+    let hit = false;
+    for (let k = 2; k < segs.length && !hit; k++) {
+      const suffix = segs.slice(-k).join('/');
+      const unique = paths.filter((q) => q === suffix || q.endsWith('/' + suffix)).length === 1;
+      if (unique && text.includes(suffix)) hit = true;
+    }
+    if (hit) n++;
+  }
+  return n;
+}
+
+const SCOPES = new Set(['main', 'subagent', 'ambiguous']);
+
+/** The measurement object the hook merges into hookstate (after adding `n`)
+ *  and appends to the journal. null — never 0, never "main" — wherever the
+ *  set could not say: no set, or a set with `files: null`. */
+export function measureCommand(raw, set, trigger) {
+  const text = normalizeSummary(raw);
+  const paths = set && Array.isArray(set.files) ? set.files.map((f) => f.path) : null;
+  return {
+    at: Date.now(),
+    trigger,
+    scope: set && SCOPES.has(set.scope) ? set.scope : null,
+    chars: text.length,
+    filesChars: filesSectionChars(text),
+    // three backticks, hex-escaped so this source never carries a fence
+    fences: Math.floor((text.match(/\x60\x60\x60/g) ?? []).length / 2),
+    cited: paths ? citedCount(text, paths) : null,
+    setSize: paths ? paths.length : null,
+    steered: set ? set.steered === true : false,
+    served: set ? set.served === true : false,
+  };
+}
+
+/** The set for `measure`: absent, unreadable or malformed all read as NO SET
+ *  (spec §3.4 — a bad set must never cost the whole measurement, and the
+ *  hook consumes it either way). */
+export function readSetForMeasure(setPath) {
+  if (!setPath) return null;
+  try {
+    const o = JSON.parse(readFileSync(setPath, 'utf8'));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────

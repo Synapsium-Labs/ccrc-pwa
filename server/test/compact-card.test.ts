@@ -13,6 +13,7 @@ import {
   EXIT, WINDOW_CAP, CHUNK, isBoundaryLine, readWindow, parseArgs,
   extensionsOf, tokenRegex, mineTokens, fileIndex, resolveToken, workingSet, WORKSET_CAP,
   GRAPH_MAX_BYTES, readBoundedDescriptor, loadGraph, loadLabels, fileFacts, renderCard, slotIsMine, cardCommand,
+  normalizeSummary, filesSectionChars, citedCount, measureCommand,
 } from '../../ccd/compact-card.mjs';
 
 const HELPER = path.resolve(__dirname, '../../ccd/compact-card.mjs');
@@ -819,5 +820,59 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(s.files).toEqual([]);
     expect(s.stats).toMatchObject({ tokens: 1, resolved: 0, ambiguous: 1, outside: 0, nomatch: 0 });
     expect(fs.existsSync(out)).toBe(false);
+  });
+});
+
+describe('measure — the summary the session will see (spec §3.4)', () => {
+  it('normalises as the harness does: the FIRST <analysis> dropped, <summary> REPLACED by a Summary: line, blank runs collapsed, trimmed', () => {
+    const raw = '\n<analysis>scratch\nwork</analysis>\n\n\n<summary>\n  Hello world\n\n\n\nmore\n</summary>\n<analysis>kept: only the first goes</analysis>\n\n';
+    expect(normalizeSummary(raw)).toBe('Summary:\nHello world\n\nmore\n<analysis>kept: only the first goes</analysis>');
+    expect(normalizeSummary('plain text')).toBe('plain text');
+  });
+
+  it('filesChars spans the "Files and Code Sections" heading to the next numbered heading, tolerating # ** case and a colon; null when absent', () => {
+    const a = '1. Primary Request:\nx\n3. Files and Code Sections:\n- a.ts\n- b.ts\n4. Errors and fixes:\nnone\n';
+    expect(filesSectionChars(a)).toBe('3. Files and Code Sections:\n- a.ts\n- b.ts\n'.length);
+    const b = '**1. Primary Request**\nx\n## **3. files and code sections**\n- a.ts\n**4. Errors and Fixes:**\nnone';
+    expect(filesSectionChars(b)).toBe('## **3. files and code sections**\n- a.ts\n'.length);
+    expect(filesSectionChars('3. Files and Code Sections:\n- only section, to EOF')).toBe('3. Files and Code Sections:\n- only section, to EOF'.length);
+    expect(filesSectionChars('no headings here\n\x60\x60\x60ts\ncode\n\x60\x60\x60')).toBeNull();
+  });
+
+  it('cited counts a set file when its path appears, or a UNIQUE suffix of at least two segments does — never a bare basename', () => {
+    const paths = ['server/src/pane/statusline.ts', 'server/src/watch.ts', 'pwa/src/watch.ts'];
+    expect(citedCount('touched server/src/pane/statusline.ts', paths)).toBe(1);
+    expect(citedCount('see pane/statusline.ts', paths)).toBe(1);            // unique 2-segment suffix
+    expect(citedCount('see statusline.ts', paths)).toBe(0);                 // a bare basename is not a citation
+    expect(citedCount('see src/watch.ts', paths)).toBe(0);                  // ambiguous within the set
+    expect(citedCount('see server/src/watch.ts and pwa/src/watch.ts', paths)).toBe(2);
+  });
+
+  it('measureCommand: the fields, and null — never 0 or main — without a set or without files', () => {
+    const F = '\x60\x60\x60';                                       // a fence, never literal in a test file
+    const text = `3. Files and Code Sections:\n- server/src/watch.ts\n${F}ts\nx\n${F}\n4. Next:\n${F}\ny\n${F}\n${F}`;
+    const set = { v: 1, at: 1, nonce: 'nonce-1', scope: 'subagent', agent: 'a1', transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: true,
+      files: [{ path: 'server/src/watch.ts', tag: 'edited', count: 1 }, { path: 'pwa/src/lib/models.ts', tag: 'touched', count: 1 }], stats: null };
+    const m = measureCommand(text, set as any, 'auto');
+    expect(m).toMatchObject({ trigger: 'auto', scope: 'subagent', chars: text.length, fences: 2, cited: 1, setSize: 2, steered: true, served: false });
+    expect(measureCommand(text, { ...set, served: true } as any, 'auto').served).toBe(true);
+    expect(m.filesChars).toBe(`3. Files and Code Sections:\n- server/src/watch.ts\n${F}ts\nx\n${F}\n`.length);
+    expect(Number.isInteger(m.at)).toBe(true);
+    expect(measureCommand(text, null, 'manual')).toMatchObject({ scope: null, cited: null, setSize: null, steered: false, served: false, trigger: 'manual' });
+    expect(measureCommand(text, { ...set, scope: 'ambiguous', files: null } as any, 'auto')).toMatchObject({ scope: 'ambiguous', cited: null, setSize: null });
+    expect(measureCommand(text, { ...set, scope: 'parent' } as any, 'auto').scope).toBeNull();
+  });
+
+  it('as the hook runs it: stdin in, one JSON line out, the trailing newline jq -r adds is not counted; exit 2 on a bad trigger; a bad set is NO set', () => {
+    const set = write('s.compactset', JSON.stringify({ v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: null, built: null, fresh: null, steered: false, served: false, files: [], stats: null }) + '\n');
+    const r = helper(['measure', '--set', set, '--trigger', 'manual'], 'hello world\n');
+    expect(r.status).toBe(EXIT.OK);
+    expect(r.stdout.split('\n').filter(Boolean)).toHaveLength(1);
+    expect(JSON.parse(r.stdout)).toMatchObject({ chars: 11, scope: 'main', cited: 0, setSize: 0, trigger: 'manual', served: false });
+    expect(helper(['measure', '--trigger', 'weird'], 'x').status).toBe(EXIT.USAGE);
+    const bad = helper(['measure', '--set', write('bad.compactset', '{nope'), '--trigger', 'auto'], 'x');
+    expect(bad.status).toBe(EXIT.OK);
+    expect(JSON.parse(bad.stdout)).toMatchObject({ chars: 1, scope: null, cited: null, setSize: null });
+    expect(helper(['measure', '--set', path.join(dir, 'absent'), '--trigger', 'auto'], 'x').status).toBe(EXIT.OK);
   });
 });

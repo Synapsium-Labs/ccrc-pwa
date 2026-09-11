@@ -49,3 +49,12 @@ export function cardCommand(o: {
   writeAtomic?: (target: string, text: string) => void;
   rollbackHook?: (phase: 'setBeforeClaim' | 'setClaimed' | 'setRestored' | 'cardBeforeClaim' | 'cardClaimed' | 'cardRestored', claim: string) => void;
 }): number;
+export function normalizeSummary(raw: string): string;
+export function filesSectionChars(text: string): number | null;
+export function citedCount(text: string, paths: string[]): number;
+export interface Measurement {
+  at: number; trigger: 'auto' | 'manual'; scope: 'main' | 'subagent' | 'ambiguous' | null;
+  chars: number; filesChars: number | null; fences: number; cited: number | null; setSize: number | null; steered: boolean; served: boolean;
+}
+export function measureCommand(raw: string, set: CompactSet | null, trigger: 'auto' | 'manual'): Measurement;
+export function readSetForMeasure(setPath: string | undefined): CompactSet | null;
