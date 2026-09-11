@@ -290,16 +290,25 @@ describe('lifecycle routes', () => {
     await app.close();
   });
 
-  // D-2177: `cmd_swap` is the one live-pane-destroying operation that was NOT
-  // serialized against `answerAsk`'s capture-then-send window — every other
-  // write route (`sendPrompt`, `answerDialog`, `answerAsk` itself) already
-  // shares ONE per-session `KeyedQueue` (`sendDeps`/`askDeps`, built once in
-  // server.ts). Modelled directly rather than by inspecting source: hold the
-  // queue slot for this session with a pending function (standing in for an
-  // in-flight `answerAsk` between its pane capture and its keystroke) and
-  // prove the swap route's own `ccd swap` call does not run until that
-  // function resolves — the pre-fix shape, where swap bypassed the queue
-  // entirely, would run its ccd call immediately instead.
+  // D-2177: `cmd_swap` was NOT serialized against `answerAsk`'s
+  // capture-then-send window — every other write route (`sendPrompt`,
+  // `answerDialog`, `answerAsk` itself) already shares ONE per-session
+  // `KeyedQueue` (`sendDeps`/`askDeps`, built once in server.ts). Modelled
+  // directly rather than by inspecting source: hold the queue slot for this
+  // session with a pending function (standing in for an in-flight `answerAsk`
+  // between its pane capture and its keystroke) and prove the swap route's own
+  // `ccd swap` call does not run until that function resolves — the pre-fix
+  // shape, where swap bypassed the queue entirely, would run its ccd call
+  // immediately instead.
+  //
+  // CORRECTED: this entry originally called `cmd_swap` "the one
+  // live-pane-destroying operation" outside the queue, and it is not the one.
+  // `POST /api/sessions/:id/stop` and `POST /api/sessions/:id/archive` both
+  // reach ccd verbs that end in the same `_ws_unsupervise` + `tmux
+  // kill-session` pair (`grep -n '^cmd_stop()\|^cmd_ws_archive()' ccd/ccd`)
+  // and both still go straight through `runCcdOr502`. What is narrower and
+  // true is that a swap is the pane-destroying write that is supposed to
+  // PRESERVE the conversation it interrupts.
   it('POST /api/sessions/:id/swap serializes through the SAME per-session KeyedQueue as answerAsk (D-2177)', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -307,7 +316,14 @@ describe('lifecycle routes', () => {
     const order: string[] = [];
     const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
-    const queue = new KeyedQueue();
+    // Recording, so the enqueue itself is observable — see the wait below.
+    const enqueued: string[] = [];
+    const queue = new (class extends KeyedQueue {
+      override run<T>(key: string, fn: () => Promise<T>): Promise<T> {
+        enqueued.push(key);
+        return super.run(key, fn);
+      }
+    })();
     const app = await buildServer({
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue,
     });
@@ -322,10 +338,23 @@ describe('lifecycle routes', () => {
       payload: { wrapper: 'claude' },
     });
 
-    // Give the swap request a real tick to reach the route handler. An
-    // unserialized swap has nothing async blocking it before its ccd call,
-    // so this is ample time for it to have run if it bypassed the queue.
-    await new Promise((r) => setTimeout(r, 20));
+    // WAIT FOR THE ENQUEUE, NOT FOR A CLOCK. This used to sleep 20 ms and
+    // argue that "an unserialized swap has nothing async blocking it before
+    // its ccd call, so this is ample time for it to have run if it bypassed
+    // the queue". That premise was true when this case was written and is
+    // FALSE since account-pools wave 3 landed: the route now awaits
+    // `readSessionRecord`, a registry `readdir` and `readProjectPools` before
+    // it reaches the queue, so on a loaded box a bypassing mutant could still
+    // be inside those reads at the 20 ms mark and this case would pass
+    // vacuously. Waiting until the route has ENQUEUED under this session's key
+    // is the same observation with no clock in it.
+    const capMs = 5_000;
+    const started = Date.now();
+    while (enqueued.length < 2) {
+      if (Date.now() - started > capMs) throw new Error('the swap route never enqueued');
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(enqueued).toEqual([ID, ID]);
     expect(order).toEqual(['held-start']);   // swap has NOT touched ccd yet
 
     release();
@@ -528,13 +557,27 @@ describe('listProjects', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
-    // The route serves `listProjects`'s rows plus F3's readiness join. This
-    // app has no watcher, so every row carries `readiness: null` — "this build
-    // measures readiness and has not swept", which is deliberately NOT the
-    // same as the key being absent (a build too old to carry it at all).
+    // The route serves `listProjects`'s rows plus F3's readiness join AND the
+    // pool join (account pools, wave 3). This app has no watcher, so every row
+    // carries `readiness: null` — "this build measures readiness and has not
+    // swept", which is deliberately NOT the same as the key being absent (a
+    // build too old to carry it at all).
+    //
+    // `pool` and `placement` are asserted here rather than loosened away,
+    // because the ROUTE gaining them while `listProjects` does not is the
+    // split this case exists to hold: the `direct` half above still compares
+    // BARE rows, and it would go on passing if the composition slid down into
+    // the fleet read. No project is tagged in this fixture, so every row is
+    // `{state:'untagged'}` and the forecast is the unconstrained one — which is
+    // exactly what a box on the day this ships looks like.
     expect(res.json().roots).toEqual(direct.roots);
     expect(res.json().projects).toEqual(
-      direct.projects.map((p) => ({ ...p, readiness: null })));
+      direct.projects.map((p) => ({
+        ...p,
+        readiness: null,
+        pool: { state: 'untagged' },
+        placement: { kind: 'projected', wrapper: 'claude', score: 0 },
+      })));
     await app.close();
   });
 
@@ -880,6 +923,38 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const out = await listProjects(localIO, cfg);
     expect(out.projects.length).toBeGreaterThan(0);
     expect(out.projects.every((p) => !('readiness' in p))).toBe(true);
+    await app.close();
+  });
+
+  it('composes pool and placement on the UNSWEPT arm too — both arms, or the chip flickers', async () => {
+    // The route has two returns (`fleet === undefined` and the composed one)
+    // and they are the same row. A composition on one arm only would make the
+    // chip appear the moment the first readiness sweep landed and not before.
+    const { app } = await makeApp({ unswept: true });
+    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
+    expect(row.readiness).toBeNull();
+    expect(row.pool).toEqual({ state: 'untagged' });
+    expect(row.placement.kind).toBe('projected');
+    await app.close();
+  });
+
+  it('listProjects itself still returns rows with NO pool and NO placement key — the route composes them', async () => {
+    // Same split as `readiness` above it: `listProjects` is the fleet read and
+    // the pool is policy. Keeping them apart is what lets the fleet read stay
+    // testable with no registry policy on disk at all.
+    // BOTH ROW SOURCES, because `listProjects` builds rows in two places — the
+    // projects-root walk and the registry-workdir union — and a bare
+    // `makeApp()` points at a root that does not exist, so only the second one
+    // runs. Measured: with just that arm, a `pool` key added to the FIRST
+    // `byWorkdir.set` leaves this case green and only the merge case above
+    // catches it. A case that names the whole function has to reach both.
+    const root = mkTmp('ccrc-projects-nopool-');
+    mkdirSync(path.join(root, 'alpha'));
+    const { cfg, app } = await makeApp({ projectsRoot: root });
+    const out = await listProjects(localIO, cfg);
+    expect(out.projects.map((p) => p.name), 'both row sources are represented')
+      .toEqual(expect.arrayContaining(['alpha', 'MekWarLive']));
+    expect(out.projects.every((p) => !('pool' in p) && !('placement' in p))).toBe(true);
     await app.close();
   });
 });

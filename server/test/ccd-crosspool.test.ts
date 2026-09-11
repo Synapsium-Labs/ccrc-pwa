@@ -1602,9 +1602,11 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
   it('every non-regular field type answers instead of blocking, through BOTH readers', () => {
     // C1 closed the hang for `_reg_read` and then added a new unguarded read to
     // the supervise loop through `_reg_get` — so the class was half closed, and
-    // the half left open is the one with every call site — the census
-    // `ccd-reg-get-census.test.ts` holds honest. `timeout` in a child shell is
-    // the assertion: a test for a hang must not be able to hang.
+    // the half left open is `_reg_get`, whose call sites are the ones the
+    // census in `ccd-reg-get-census.test.ts` holds honest — not "every call
+    // site in the file", which would be false: the closed half `_reg_read`
+    // has its own. `timeout` in a child shell is the assertion: a test for a
+    // hang must not be able to hang.
     seedRow();
     const cases: Array<[string, () => void]> = [
       ['fifo', () => execFileSync('mkfifo', [reg(`${ID}.project`)])],
@@ -2286,11 +2288,15 @@ describe('R4 — the strand marker is a CURRENT-STATE claim and follows the trut
     // a HEALTHY pane — and when the unreadable field recovers while the pane
     // stays blocked, `_strand_mark`'s `-e` debounce swallows the genuine strand
     // that follows, so the operator reads a registry fault that lasted one tick
-    // for the rest of a five-hour window. The marker is what account-pools
-    // wave 3's reader will carry to every surface as
-    // `SessionRecord.stranded.reason`;
-    // `git grep -c stranded server/src/registry.ts` is 0 on this tree, so the
-    // banner is what carries it until that reader lands.
+    // for the rest of a five-hour window. THIS MERGE LANDS THE READER that
+    // sentence was waiting on — account-pools wave 3 makes
+    // `SessionRecord.stranded` a real fail-shut field
+    // (`grep -n 'stranded' server/src/registry.ts`) and `fleet.ts` carries its
+    // `reason` unchanged onto `FleetSession.stranded`. So the banner is no
+    // longer the only CARRIER of a frozen cause. It is still the only thing a
+    // human sees: nothing under `pwa/src` reads `FleetSession.stranded` — every
+    // `stranded` hit there is `strandedAccount`, the transcript axis, a
+    // different field — which is why this banner is still what is under test.
     seedRow(); tagPool('demo', 'pool-a'); plantNotify();
     // EVERY account at the ceiling, because the finding is about a row with
     // NOWHERE TO GO: leave one free and a destination exists, the tick clears
@@ -2391,9 +2397,11 @@ describe('B6 — the round-4 guards nothing could red, and the sentences nothing
     // at `cmd_prefer` left the whole ccd+pools set green, and dropping the
     // byte-identical text at `cmd_swap` redded `but an UNTAGGABLE box still
     // swaps` immediately. Same guard, same line, one verb measured and one
-    // not — and the case that DOES name `cmd_prefer` two describes up tags
-    // the pool, so `_pool_untaggable` is false there and the gate cannot
-    // change its verdict.
+    // not — and the case that DOES name `cmd_prefer` (`` `cmd_prefer` carries
+    // it too — it rewrites `.home` ``, named rather than located: it is in a
+    // different describe entirely, and "two describes up" was already false
+    // when it was written) tags the pool, so `_pool_untaggable` is false
+    // there and the gate cannot change its verdict.
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
     expect(fs.existsSync(reg('pools')), 'this case is about a box with no pools').toBe(false);
     const p = reg(`${ID}.project`);

@@ -16,7 +16,7 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
   started: true, spawnState: null, ask: null,
 });
 
@@ -557,15 +557,58 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     }
   });
 
+  it('revives `stranded` — absent degrades to null, and the CACHE STILL REVIVES', async () => {
+    // Every state-cache.json on disk the day this ships lacks the key, and a
+    // rejection here would empty degraded mode at exactly the moment it is the
+    // only data there is.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const snap = await loadSnapshot(cachePath);
+    expect(snap, 'an older cache must still revive').not.toBeNull();
+    const s = snap?.sessions[0];
+    expect(s?.stranded).toBeNull();
+    // Present as a KEY, not merely undefined — `undefined !== null`.
+    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['stranded']));
+  });
+
+  it('round-trips a populated stranded axis', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      stranded: { at: 1785299000000, reason: 'claude:pool=pool-b claude-a:limit' },
+    };
+    await saveSnapshot([populated], cachePath);
+    expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
+  it('rejects a malformed stranded rather than laundering it into null', async () => {
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
+    // so there is no vocabulary to degrade onto — and null would read "no
+    // strand recorded" over a row a supervisor flagged.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    for (const bad of [
+      { stranded: 'nowhere' },
+      { stranded: { at: 1785299000000 } },                  // no `reason`
+      { stranded: { at: 1785299000000, reason: 7 } },
+      { stranded: { reason: 'nowhere' } },                  // no `at`
+    ]) {
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+      expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
   // Fix round 1, item 1 (coordinator review) — `reviveAsk` had NO test at all;
   // `const reviveAsk = () => null` kept the full server/pwa suites green.
   // This block is the mutation-table guard: every branch below must fail
   // under that mutant (a session that should carry a live `ask` reads null
   // instead) or under a naive `return v as any` passthrough (a malformed
   // shape would survive uncaught). Deliberately the OPPOSITE stance from
-  // `stoppedBy`/`swapBlocked` just above: this field degrades a malformed
-  // value to `null`, it never rejects the session — `reviveAsk`'s own
-  // docstring (`shared/api.ts`) has the full argument (D-2311).
+  // `stoppedBy`/`swapBlocked` — and, since the account-pools wave-3 merge
+  // landed its three cases directly above this block, from `stranded` too:
+  // this field degrades a malformed value to `null`, it never rejects the
+  // session — `reviveAsk`'s own docstring (`shared/api.ts`) has the full
+  // argument (D-2311). ("just above" named only the first pair until that
+  // merge moved a third fail-shut sibling in between.)
   describe('ask (Task 19, corrected by fix round 1 / D-2311)', () => {
     it('round-trips a populated HELD ask — the present half, not just absent→null', async () => {
       const cachePath = path.join(tmpDir(), 'state-cache.json');

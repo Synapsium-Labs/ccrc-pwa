@@ -2,6 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -20,8 +21,8 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent, PrState,
-  RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent,
+  ProjectPoolsWire, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -626,6 +627,12 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
+  /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
+   *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
+   *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
+   *  would claim this process had looked at the fleet host's registry. */
+  private lastPoolsJson: string | null = null;
+  private pools: ProjectPoolsWire | null = null;
   /** Watermark: the highest `mail_deliveries.id` this lane has already
    *  raised a `mail` NotifyEvent for. Seeded to the CURRENT max id on the
    *  priming tick (`tick()`'s own `!this.primed` arm) rather than left at 0,
@@ -731,6 +738,12 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The last measured project-pool sweep, or null if none has been taken yet
+   *  — same reasoning as `currentCoord()`'s null. */
+  currentPools(): ProjectPoolsWire | null {
+    return this.pools;
+  }
+
   /** The last swept program-readiness (F3), for `GET /api/projects`.
    *  `undefined` means THIS PROCESS HAS NEVER SWEPT — the same shape, and the
    *  same reasoning, as `currentCoord()`'s `null` just above: inventing a
@@ -780,6 +793,13 @@ export class FleetWatcher {
       // every dispatch, which is the precise lie spec §4.2 mints
       // `unmeasurable` to prevent.
       this.emitCoord(registryRead.listed ? registryRead.names : null);
+      // BEFORE the fail-shut return: an unlistable registry is exactly the
+      // state in which nobody may decide a pool, so `listed:false` must reach
+      // the wire now rather than leave the last pool snapshot frozen. That arm
+      // is free: `readProjectPools` returns before touching io when names is
+      // null. The listed arm's bounded cost and why it stays awaited are stated
+      // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
+      await this.emitPools(registryRead.listed ? registryRead.names : null);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -874,8 +894,10 @@ export class FleetWatcher {
       // `records` PASSED IN, never re-read here: `assembleFleet` would
       // otherwise take its OWN read (`records ?? await readRegistry(...)`),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
-      // in remote mode, ~21 field reads per session, ~505 round trips on a
-      // 24-session fleet, doubled for no reason. Sharing the read also keeps
+      // in remote mode, 23 [registry-read-census:fields] field reads per
+      // session, so a 24-session fleet's baseline is 553 agent-WS operations
+      // [registry-read-census:fleet] per sweep before conditional
+      // reconfirmation, doubled for no reason. Sharing the read also keeps
       // `sweepHookStates`/`detectDialogs` (which already consumed `records`
       // above) and this assembly looking at the identical snapshot, which is
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
@@ -1154,6 +1176,45 @@ export class FleetWatcher {
     this.lastCoordJson = json;
     this.coord = status;
     this.bus.emit('coord', status);
+  }
+
+  /** The `{type:'pools'}` frame (account pools, spec §5.4.5). Derived from the
+   *  SAME registry listing this tick already performed — carried out of
+   *  `readRegistryMeasured` on `RegistryRead.names` rather than taken again,
+   *  exactly as `emitCoord` above does, so the two cannot disagree on the ticks
+   *  that matter and the tick costs no extra root readdir.
+   *
+   *  `null` names is an UNLISTABLE registry, and rides the wire as
+   *  `listed: false` — every project `unreadable`, nobody decides.
+   *
+   *  Byte-equality guarded like `emitCoord`, but awaited for its own reason:
+   *  `lastPoolsJson` is written after the reads, so overlapping detached
+   *  sweeps could finish out of order and latch an older snapshot until the
+   *  tags changed again. `tick()`'s re-entrancy guard provides that ordering.
+   *
+   *  This POOL LEG has one caller-owned budget: half this watcher instance's
+   *  interval, shared by one `pools/` readdir and concurrent measured reads for
+   *  every non-dot entry. It prevents pool-marker cost from multiplying the
+   *  remote client's 15-second default by project population (D-2465/D-2478).
+   *  It does NOT restore a two-second whole-tick cadence: the serial
+   *  `readRegistryMeasured` above runs first and can still cost roughly one
+   *  default timeout per session (D-2479). Closing that older reader is outside
+   *  this wave.
+   *
+   *  Both FleetIO implementations fold read failures into measured return
+   *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
+   *  overlap and deadline behavior; `fleetws.test.ts` pins this cadence-derived
+   *  budget at the consumer. */
+  private async emitPools(names: readonly string[] | null): Promise<void> {
+    const read = await readProjectPools(
+      this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)),
+    );
+    const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
+    const json = JSON.stringify(wire);
+    if (json === this.lastPoolsJson) return;
+    this.lastPoolsJson = json;
+    this.pools = wire;
+    this.bus.emit('pools', wire);
   }
 
   /**
@@ -1850,8 +1911,9 @@ export class FleetWatcher {
     //
     // Cost is ONE readdir per sweep interval (60 s), not per tick — the lane
     // clock above has already returned on every other call by the time this
-    // line runs. D-283 was about the per-tick whole-fleet read, ~21 field
-    // reads per session in remote mode; this is one round trip a minute.
+    // line runs. D-283 was about the per-tick whole-fleet read, 23 field
+    // reads [registry-read-census:fields] per session in remote mode; this is
+    // one round trip a minute.
     const registryNames = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (registryNames === null) {
       // FAIL SHUT, and this is the one read in this method where the direction

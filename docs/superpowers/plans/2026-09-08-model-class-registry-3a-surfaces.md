@@ -68,7 +68,7 @@ table in both directions.
 Round 2 item 1 keeps `exec.provider` off this branch (it is the account-connections
 spec's, not on `main`), and item 2 makes `availableFor(reg, catalogue, anthropic)`'s third
 argument the CALLER's rule. On `origin/main` the roster's own declared signal is
-`telemetry: 'anthropic' | 'none'` (`shared/roster.ts:84-88`) — required by `parseRoster`,
+`AccountDef.telemetry` in `shared/roster.ts` (`'anthropic' | 'none'`) — required by `parseRoster`,
 and false exactly for the lanes that do not bill through Anthropic. The server, which holds
 the whole `AccountDef`, reads that. `RosterWire` carries no `telemetry` and this plan may add
 only ONE field to it (round 2 item 9), so the browser reads `homeAble` instead — "ccd's

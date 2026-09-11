@@ -293,6 +293,25 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+
+  /** The supervisor's standing "nowhere to move this" record —
+   *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
+   *  hard-blocked and no account in the project's pool can take it (spec §5.8,
+   *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
+   *  like `swapBlocked`) and the reason carried VERBATIM through REST/WebSocket
+   *  for wave 4's renderer, never parsed. Null when no strand stands.
+   *
+   *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
+   *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
+   *  the "marker listed but unreadable" degrade from the registry read; a
+   *  renderer must show the text without fabricating a 1970 timestamp.
+   *
+   *  `reviveFleetSession` below: absent → null (an older snapshot predates the
+   *  axis), present-but-malformed → reject the WHOLE session — the
+   *  `swapBlocked` contract, because free text has no vocabulary to degrade
+   *  onto and "no strand recorded" over a flagged row is the direction that
+   *  makes the loud cell silent. */
+  readonly stranded: { readonly at: number; readonly reason: string } | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -1716,11 +1735,21 @@ export interface ProjectReadiness extends ReadinessFacts {
  *   - an object: measured.
  * A reader that folds the first two together has thrown away the difference
  * between "upgrade the server" and "wait two seconds".
+ *
+ * `pool` and `placement` follow the same absence rule with one fewer rung: the
+ * key ABSENT means an older server that does not read project pools, and a
+ * reader must render NOTHING for it — never `{state:'untagged'}`, which would
+ * flag every project on the box as un-tagged worklist the day before the
+ * feature ships (account pools, spec §5.4.5, §5.9). There is no `null` rung:
+ * this build measures on every request, and its four states already contain
+ * "we could not read it".
  */
 export interface ProjectRow {
   name: string;
   workdir: string;
   readiness?: ProjectReadiness | null;
+  pool?: ProjectPoolWire;
+  placement?: ProjectPlacement;
 }
 
 /**
@@ -1732,16 +1761,16 @@ export interface ProjectRow {
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
  * two ways NOBODY DECIDES: creation refuses, naming the file (wave 2a landed
  * it — `ccd/ccd`'s `cmd_ws_add` refusal names `$POOLS_DIR/$project`), the
- * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
+ * auto-swapper holds (wave 2b), and the server answers 503 (wave 3).
  * Folding either into `untagged` would silently LIFT the constraint — the
  * overloaded-null defect this tree refuses at a seam, in its most expensive
  * form, because the direction of the mistake is always "run the work somewhere
  * it was not allowed to run".
  *
- * No detail string beside the state, deliberately: the detail belongs in
- * exactly two places once they land — `ccrc doctor` will carry the bytes
- * (wave 2a) and the PWA's warning chip will carry the full path (wave 4) — so
- * a third rendering of the same fact would be a third thing to keep true.
+ * No detail string beside the state, deliberately: operator-facing diagnosis
+ * and remedies already live in `ccrc doctor` (wave 2a), while the PWA's warning
+ * chip will carry the full path (wave 4). A third rendering of the same fact
+ * would be a third thing to keep true.
  *
  * Declared ahead of its consumers so both ends of the wire import ONE spelling
  * rather than each inventing its own.
@@ -1768,8 +1797,9 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
  * The fleet-level pool census, as one frame carries it.
  *
  * `listed: false` is not "no projects are tagged" — it is "this server could not
- * enumerate the tags", which is the registry root being unlistable or a regular
- * file planted where `pools/` belongs. The distinction survives to the phone
+ * enumerate the tags": the registry root was unlistable, a regular file was
+ * planted where `pools/` belongs, or the caller's deadline expired before the
+ * listing completed. The distinction survives to the phone
  * because a fleet of silently untagged projects and a fleet whose tags cannot be
  * read look identical otherwise, and only one of them is a reason to stop
  * trusting the chips.
@@ -2299,14 +2329,28 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
   return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
 };
 
+/** `reviveSwapBlocked`'s contract exactly: the reason is free prose the
+ *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
+ *  Absent → null (an older snapshot predates the axis); present-but-malformed
+ *  rejects the session. */
+const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
+};
+
 /** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
  *  round 1 / D-2311). Absent → null: an older snapshot predates the ask
  *  pre-emption lane entirely. Present but malformed — not an object, or
  *  `parentId` missing/not a non-empty string — ALSO → null, and this is a
  *  DELIBERATE departure from the `reviveSwapBlocked`/`reviveSubstrate`
- *  stance this docstring used to (wrongly) claim it followed.
+ *  stance this docstring used to (wrongly) claim it followed — and from
+ *  `reviveStranded` directly above, which the account-pools wave-3 merge
+ *  landed as a THIRD member of that family after this paragraph was
+ *  written, on `reviveSwapBlocked`'s contract exactly.
  *
- *  Those two fields reject the whole session on a malformed value because
+ *  Those three fields reject the whole session on a malformed value because
  *  each flags a FAULT an operator must not have silently laundered into
  *  "nothing wrong" — their own docstrings' "fails open toward" language,
  *  i.e. there is a direction (flagged vs. clean) that a wrong degrade would
@@ -2572,6 +2616,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      stranded: reviveStranded(o, 'stranded'),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
@@ -2817,6 +2862,22 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
+  /**
+   * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
+   * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
+   * One `ccd` inode ships the verb and every reader, so the verb's presence IS
+   * the evidence that placement, the auto-swapper and the manual verbs apply
+   * the rule.
+   *
+   * Same three-state rule as `roster` and `build`, with its own remedy:
+   * `'unavailable'` means tags will DISPLAY and nothing on the fleet will
+   * enforce them — redeploy the agent lane; `'unknown'` means nobody could
+   * tell, and a reader must stay SILENT on it (the banner arms on
+   * `'unavailable'` only).
+   *
+   * Optional for the same absence-permits reason the two above are.
+   */
+  projectPools?: PoolsEnforcement;
   /**
    * The lifecycle journal mirror (build 9). Optional for the same
    * absence-permits reason `roster` and `build` are — an older server's
@@ -3066,6 +3127,22 @@ export interface ProjectedHome {
 }
 
 /**
+ * Where a new workspace for ONE PROJECT would land, once that project's pool
+ * tag is applied (`GET /api/projects`'s `placement`). `ProjectedHome` above is
+ * the same forecast for an UNTAGGED project and stays exactly what it was.
+ *
+ * THREE MEMBERS, and `unmeasurable` is a VALUE, not a null (spec §5.6): a
+ * project whose tag could not be read has no forecast, and saying `none` there
+ * would claim a measurement — "nothing can take this project" — that nobody
+ * made. `none` carries the pool it was looking in (`null` for an untagged
+ * project) so a renderer can say WHICH pool is empty without re-deriving it.
+ */
+export type ProjectPlacement =
+  | { kind: 'projected'; wrapper: string; score: number }
+  | { kind: 'none'; pool: string | null }
+  | { kind: 'unmeasurable' };
+
+/**
  * One roster entry as the wire carries it — the PWA's entire view of an
  * account's identity, and deliberately NOT the parsed `AccountDef`
  * (`shared/roster.ts`). `configDirSuffix`, `exec` and `telemetry` describe how
@@ -3165,7 +3242,15 @@ export type FleetMsg =
    *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
    *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
    *  becoming a second producer. */
-  | { type: 'divergence'; divergences: Divergence[] };
+  | { type: 'divergence'; divergences: Divergence[] }
+  /** Account pools, spec §5.4.5. Additive on the same terms as
+   *  `runs`/`coord`/`divergence` above — an already-deployed PWA drops an
+   *  unknown frame type silently, so NO `FLEET_PROTO` bump. FLEET-LEVEL, not
+   *  row-level: a project's tag is a fact about a PROJECT, so it cannot ride on
+   *  a `FleetSession` — and keeping it off `FleetSession` is what keeps
+   *  `reviveFleetSession` from becoming a second producer of it. The PWA
+   *  derives a session's project pool from this frame by `s.project`. */
+  | { type: 'pools'; pools: ProjectPoolsWire };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
@@ -5916,12 +6001,17 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
  * `in-progress` and the rest of the 54 — keep their single home over there.
  *
- * THE CONTRACT WAVE 3 HONOURS, AND WHAT ENFORCES IT: every token wave 3 hands
- * `_lc_refuse` / `_lc_fail` is a member of this union OR already a SENTENCES
- * key, and wave 3's own cross-language scan over `ccd/ccd` asserts it in both
- * directions with a coverage floor. It cannot live here — it would be red
- * until wave 3 lands. Adding a tenth token is a two-line edit;
- * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
+ * THE CONTRACT THE LIFECYCLE JOURNAL HONOURS, AND WHAT ENFORCES IT: every token
+ * handed to `_lc_refuse` / `_lc_fail` is a member of this union OR already a
+ * SENTENCES key. The cross-language scan over `ccd/ccd` asserts that every
+ * literal token in its three journal-refusal argument positions is known and
+ * that every member of this journal-only union appears in one of those literal
+ * positions, with a coverage floor; `wsaudit.test.ts` separately holds the
+ * SENTENCES vocabulary set-equal to its stdout producers. A new union member may
+ * not precede its literal `ccd` emission in the tested tree, and adding one is a
+ * coordinated edit to that emission, this union, `LC_REFUSAL_WORD`, and the
+ * exhaustive test inventory. `Record<LcRefusalToken, string>` makes forgetting
+ * its word a TS2739.
  */
 export type LcRefusalToken =
   | 'scratch-unwritable'       // ws-rm could not make the scratch file it reads $workdir with
