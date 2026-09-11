@@ -3135,3 +3135,76 @@ the root listing and the reader does no I/O at all. It arms with the first tag w
 
 That is worth a mechanism eventually — a `statMeasured` rung before the read, or a capped read op —
 but it is wave-3's recorded D-2008, not something to bolt on now.
+
+## The state-by-state re-measurement — ccd's verdicts against wave 3's server enforcement
+
+Run 2026-09-11, coordinator, on `origin/main` (wave 3 merged as PR #81). This is the measurement I
+recommended to the operator rather than raising a PR on the refuted D-2000/D-2009 premise. It answers
+one question: **do the two readers of `$REG/pools/<project>` decide the same way, state by state?**
+
+Both sides enumerated from source, not from prose:
+
+- `ccd/ccd` `_project_pool_state` → `named <n>` | `untagged` | `unreadable` | `malformed`, always rc 0,
+  consumed through `_pool_ok` (0 serve / 1 mismatch / 2 undecidable) at **11** call sites.
+- `server/src/pools.ts` `readProjectPoolsAt` → `tagged` | `untagged` | `unreadable` | `malformed`,
+  decided by L0's `poolRule` (`shared/poolrule.ts`) through `poolVerdict`, enforced by `refusePool`
+  (409 `pool-mismatch`, overridable with `crossPool`; 503 `pool-unreadable`, not overridable).
+
+| disk state | ccd | server | agree |
+|---|---|---|---|
+| no project argument | `untagged` → serve | `untagged` → proceed | ✅ |
+| `pools/` proven absent | `untagged` → serve | not in root listing → `untagged` | ✅ |
+| marker proven absent | `untagged` → serve | `reason==='absent'` → no entry → `untagged` | ✅ |
+| `$REG` missing / unsearchable | `unreadable` → undecidable | `listed:false` → `unreadable` → 503 | ✅ |
+| `pools/` not a dir, or not `-x` | `unreadable` | `listed:false` → 503 | ✅ |
+| marker not a regular file, or `-r` fails | `unreadable` | read `!ok` → `unreadable` → 503 | ✅ |
+| marker contains NUL | `malformed` | `content.includes('\0')` → 503 | ✅ |
+| marker ≥ 64 bytes | `malformed` | `content.length >= 64` → 503 | ✅ |
+| marker fails the name grammar | `malformed` | `POOL_NAME_RE` fails → 503 | ✅ |
+| marker is a valid name | `named <n>` → compare | `tagged` → `same-pool` / `pool-mismatch` | ✅ |
+| **`pools/` a dangling symlink** | `unreadable` → undecidable | follows to ENOENT → **`untagged`** | ❌ |
+| **marker a dangling symlink** | `unreadable` → undecidable | follows to ENOENT → **`untagged`** | ❌ |
+
+**Ten of twelve agree. The two that diverge are D-2516, already disclosed in-tree** — `pools.ts`'s
+`ProjectPoolsRead` docstring names it exactly: "`FleetIO.readFileMeasured` follows the listed symlink
+to ENOENT, so that single marker still reads untagged here while ccd detects the link and remains the
+fail-shut authority." The divergence runs in the permissive direction on the FORECASTING side only, and
+`ccd` re-takes every decision at placement (spec §5.1; `poolrule.ts`: "The server REFUSES and
+FORECASTS; it never places"). So it degrades a forecast, and cannot produce a wrong placement.
+
+**Consequence for the deploy hold.** D-2000/D-2009's premise — a live fail-open — was already refuted
+(`e6a3d1a5`). This is the positive half: the server's enforcement does not diverge from ccd's authority
+in any direction that permits work ccd would refuse. **The hold has no surviving technical ground.**
+Lifting it is the operator's call, not mine; what I can say is that the reason recorded for it is gone.
+
+### What the measurement DID find — and it is not a verdict divergence
+
+The two readers apply the same 64 with different mechanisms, and only one of them is bounded:
+
+- `ccd/ccd`: `IFS= read -r -d '' -n 64 v` — **64 is a READ CAP** (D-1850). Never reads past 64 bytes.
+- `server/src/pools.ts:209`: `read.content.length >= 64` — **64 is a POST-READ TEST**, applied after
+  the whole file is in memory and, in remote fleet mode, after it has crossed the wire.
+
+Same verdict on every input. Unbounded cost on one side. This is D-2008, and the measurement sharpens
+it past what that entry says:
+
+1. **It is concurrent, not per-tick.** `pools.ts` reads markers in `Promise.all` over the entire
+   `pools/` listing — every marker at once, all resident together. The loop's cost is the whole
+   directory, not one file.
+2. **The deadline does not bound it.** `remote/client.ts`'s abort does `this.pending.delete(id)` and
+   nothing else, and **there is no cancel op in the agent protocol** — `agent/src/server.ts`'s op list
+   has none. So an expired budget abandons the *promise* while the agent still reads the whole file and
+   still sends the frame. The deadline guards latency; it does not guard memory or the link.
+3. **The remote read is uncapped end to end.** agent `case 'read'` → `readWhole` → `readFile(p,'utf8')`,
+   returned in one JSON WS frame. `MAX_READ_B64_BYTES` (12 MB) guards the *B64* op only — a different op.
+4. **ccd already judged this worth fixing at this exact file**, and its own comment supplies both the
+   cost curve (10 MB → 0.20 s / 32 MB RSS; 100 MB → 39 s / 979 MB RSS — "linear and unbounded") and the
+   reachability: `ln -s ~/.cc-sessions/swap.log pools/<p>`, a tag that grows on its own. `-f` follows
+   symlinks, so the type gate passes on both sides.
+
+Bounded honestly, as the earlier over-claims this program has already cost require: planting a marker
+needs write access to `$REG`, which is **an already-trusted position** — CLAUDE.md's own "identity on
+the fleet is attribution, not authentication". So this is a robustness gap, not a privilege escalation.
+And it is **inert today**: with no tag written, `pools/` is absent from the root listing and
+`readProjectPools` returns before any marker I/O. It arms with the first tag.
+
