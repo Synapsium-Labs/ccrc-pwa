@@ -3092,6 +3092,12 @@ export interface AccountUsage {
   fiveResetAt: number | null;   // epoch seconds the 5h window resets
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
   fiveRolledOver: boolean;      // the 5h window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
+  /** Width of the 5h window in minutes, from the producer. `0` means the plan
+   *  HAS NO 5h window — a different fact from "unmeasured", though both read as
+   *  `five: null`. ADDITIVE and OPTIONAL: only a producer that knows the width
+   *  states it, so every Anthropic row keeps exactly the shape it has today, and
+   *  an older client that has never heard of the key is unaffected. */
+  fiveWindowMinutes?: number;
   sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on
   /** The fleet host's account-health probe measured this account's credential

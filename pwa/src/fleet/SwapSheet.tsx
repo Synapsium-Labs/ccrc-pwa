@@ -228,11 +228,19 @@ export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string):
  *  window saying so out loud), and it remains tappable. What is gone is ccrc
  *  telling the reader it is the emptiest pool. That is the WHOLE cost a
  *  measurement is allowed to charge — preference, never eligibility. */
-const load = (l: AccountFacts): number | null =>
-  condemned(l) || l === null || l.five === null || l.seven === null
-  || l.fiveRolledOver === true || l.sevenRolledOver === true
+const load = (l: AccountFacts): number | null => {
+  if (condemned(l) || l === null) return null;
+  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. `measured()`
+  // and ccd's `_limit_score` carry the same clause; an absent marker falls
+  // through to the pair rule on all three sides.
+  if (l.fiveWindowMinutes === 0) {
+    return l.seven === null || l.sevenRolledOver === true ? null : l.seven;
+  }
+  return l.five === null || l.seven === null
+      || l.fiveRolledOver === true || l.sevenRolledOver === true
     ? null
     : Math.max(l.five, l.seven);
+};
 
 /** The least-loaded wrapper among those whose BOTH limit windows were actually
  *  MEASURED — read, and not inferred from an elapsed window; null if none was.
