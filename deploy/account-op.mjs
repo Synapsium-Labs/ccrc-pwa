@@ -35,7 +35,8 @@
 // gate), and `base-url.mjs` imports nothing at all. So the closure is three
 // files and stays three.
 
-import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
@@ -591,6 +592,10 @@ const OPS = {
   refuse: { keys: ['code', 'detail'], repeat: [] },
   providers: { keys: [], repeat: [] },
   roster: { keys: ['file'], repeat: [] },
+  // TSV on stdout rather than JSON, and `lane`'s reason: the caller is bash,
+  // which reads it with `IFS=$'\t' read`. Findings are not an error — exit 0
+  // carries them; exit 1 is a roster this reader could not read at all.
+  doctor: { keys: ['file', 'home'], repeat: [] },
   // `name` and `bytes` arrive as PARALLEL ARRAYS, one pair per candidate, from
   // a bash loop that already ran doctor's candidate rule. They are repeatable
   // because the alternative — one JSON blob on argv — would put a value bash
@@ -997,6 +1002,112 @@ function readPairs(argv, spec) {
   return got;
 }
 
+/** THE TWO FINDINGS THIS CHECK EMITS, drawn from the vocabulary
+ *  `shared/providers.ts` defines — `ACCOUNT_FINDINGS`, three members, with
+ *  `type AccountFinding` over it. This module cannot import that: bare `node`,
+ *  no build step, `.ts` unreachable. The copy is kept honest the way every
+ *  other mirror in this file is — by COMPARISON in a test — because
+ *  `single-definition.test.ts` cannot see `deploy/` at all (four TypeScript
+ *  roots, `/\.tsx?$/`, D-1860).
+ *
+ *  IT IS NAMED `DOCTOR_FINDINGS` AND NOT `ACCOUNT_FINDINGS`, deliberately: it
+ *  is a SUBSET, and one identifier standing for two different sets in two files
+ *  is the drift a scan exists to catch rather than to cause. `launcher-absent`
+ *  is the member left out — `_check_wrappers` already reports it, and one fact
+ *  gets one verdict line. */
+const DOCTOR_FINDINGS = ['credential-declared-absent', 'settings-env-drift'];
+
+/** THE ENDPOINT A LANE SHOULD BE TALKING TO: the roster's own `baseUrl` when it
+ *  names one, else the provider's default, else `null`. `null` means "Claude
+ *  Code's own endpoint", and there is then nothing in `settings.json` for this
+ *  check to compare against — which is why the upstream account on a healthy
+ *  box produces no env-block measurement at all rather than a finding about a
+ *  file that does not exist. */
+function effectiveBaseUrl(exec) {
+  if (typeof exec.baseUrl === 'string' && exec.baseUrl !== '') return exec.baseUrl;
+  // §4.1's absence-permitting rule, the same one `lane` reads: an account that
+  // names no provider is anthropic, EXCEPT an external one, whose provider is
+  // genuinely undeclared.
+  const p = exec.provider ?? (exec.kind === 'external' ? null : 'anthropic');
+  if (p === null) return null;
+  return PROVIDER_DEPLOY[p]?.defaultBaseUrl ?? null;
+}
+
+/** IT DOES NOT VALIDATE THE ROSTER, and that is a measurement rather than a
+ *  taste. `rosterFromJson` requires `label`, `homeAble` and `telemetry`;
+ *  `ccrc-doctor.test.ts`'s own `writeRoster` writes NONE of them and `healthy()`
+ *  builds its roster with it — so a check that validated through the parser
+ *  would WARN on every fixture in that file, including the one whose whole
+ *  claim is zero warnings. Nor SHOULD it: the roster's own health is
+ *  `_check_wrappers`' FAIL one entry up, and that check reads the same file
+ *  with its own deliberately lax reader for exactly this reason. Two facts are
+ *  measured here; nothing is re-judged.
+ *
+ *  EXISTENCE ONLY FOR THE CREDENTIAL HALF. The files are 0600 under a 0700
+ *  `~/.cc-secrets` and CLAUDE.md's rule is absolute — existence checks by `ls`
+ *  only. This reports a PATH and a boolean; nothing here opens one.
+ *  `settings.json` is a different class: a 0644 config file whose key field
+ *  this design deliberately leaves EMPTY, so it is read, and reported by key
+ *  name and endpoint. */
+function opDoctor(a) {
+  let json;
+  try {
+    json = JSON.parse(readFileSync(a['file'], 'utf8'));
+  } catch (e) {
+    process.stderr.write(`${SELF}: ${a['file']} could not be read as JSON: ${e.message}\n`);
+    return 1;
+  }
+  if (json === null || typeof json !== 'object' || !Array.isArray(json.accounts)
+      || json.accounts.length === 0) {
+    process.stderr.write(`${SELF}: ${a['file']} declares no accounts array\n`);
+    return 1;
+  }
+  const home = a['home'];
+  const lines = [];
+  let creds = 0;
+  let envs = 0;
+  for (const acct of json.accounts) {
+    if (acct === null || typeof acct !== 'object') continue;
+    const e = (acct.exec !== null && typeof acct.exec === 'object') ? acct.exec : {};
+    if (typeof e.secretsFile === 'string' && e.secretsFile !== '') {
+      creds += 1;
+      if (!existsSync(join(home, e.secretsFile))) {
+        lines.push([DOCTOR_FINDINGS[0], acct.id,
+          `the roster declares ~/${e.secretsFile} and it is not on disk`].join('\t'));
+      }
+    }
+    const wants = effectiveBaseUrl(e);
+    if (wants === null || typeof acct.configDirSuffix !== 'string') continue;
+    const settings = join(home, acct.configDirSuffix, 'settings.json');
+    if (!existsSync(settings)) continue;
+    envs += 1;
+    let env = null;
+    try {
+      const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+      env = (parsed !== null && typeof parsed === 'object') ? (parsed.env ?? null) : null;
+    } catch { env = null; }
+    if (env === null || typeof env !== 'object') {
+      lines.push([DOCTOR_FINDINGS[1], acct.id,
+        `${acct.configDirSuffix}/settings.json carries no env block, so the lane uses Claude Code's `
+        + `default endpoint rather than ${wants}`].join('\t'));
+      continue;
+    }
+    const has = typeof env.ANTHROPIC_BASE_URL === 'string' ? env.ANTHROPIC_BASE_URL : null;
+    if (has !== wants) {
+      lines.push([DOCTOR_FINDINGS[1], acct.id,
+        `the roster says ${wants} and ${acct.configDirSuffix}/settings.json says ${has ?? 'nothing'}`]
+        .join('\t'));
+    }
+  }
+  // THE COUNTS RIDE THE SAME RUN as the findings — one measurement, one answer.
+  // A second invocation could disagree with the first about a box that changed
+  // underneath it, and the PASS line would then describe a box nobody measured.
+  process.stdout.write(
+    `${['COUNTS', json.accounts.length, creds, envs].join('\t')}\n`
+    + (lines.length > 0 ? `${lines.join('\n')}\n` : ''));
+  return 0;
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -1010,6 +1121,13 @@ function main(argv) {
   if (op === 'providers') {
     out({ ok: true, providers: PROVIDER_DEPLOY });
     return 0;
+  }
+
+  if (op === 'doctor') {
+    for (const k of ['file', 'home']) {
+      if (a[k] === undefined) { refuse('bad-argv', `doctor needs --${k}`); return 2; }
+    }
+    return opDoctor(a);
   }
 
   if (op === 'roster') {

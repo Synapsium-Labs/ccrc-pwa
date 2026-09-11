@@ -98,6 +98,25 @@ function installCcrc(home: string): void {
   // developer's tree — instead of the fixture's own.
   plantAuthHelper(join(home, 'ccrc'));
   plantAuthModule(join(home, 'ccrc'));
+  // ── the `accounts` check's helper (Task 33) ────────────────────────────
+  // COPIED, not symlinked, for `plantAuthHelper`'s reason above: node resolves
+  // a module's own imports from its REAL path, so a symlinked helper would
+  // import THIS CHECKOUT's `shared/`.
+  //
+  // THE TRANSITIVE SET IS THREE FILES, counted against the module as it stands
+  // NOW rather than as its header first described it: `account-op.mjs` imports
+  // `../shared/roster-json.mjs` and `../shared/base-url.mjs`, and the first
+  // imports the second. `base-url.mjs` imports nothing, so these three close
+  // it. A missing one is not a degraded check — `node "$gen" doctor …` exits
+  // non-zero with ERR_MODULE_NOT_FOUND, `_check_accounts` takes its
+  // roster-unreadable WARN arm on every fixture in this file, and the summary
+  // case's `expect(warn).toBe(0)` reds along with the accounts cases.
+  copyFileSync(join(REPO, 'deploy', 'account-op.mjs'),
+    join(home, 'ccrc', 'deploy', 'account-op.mjs'));
+  mkdirSync(join(home, 'ccrc', 'shared'), { recursive: true });
+  for (const f of ['roster-json.mjs', 'base-url.mjs']) {
+    copyFileSync(join(REPO, 'shared', f), join(home, 'ccrc', 'shared', f));
+  }
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
@@ -259,7 +278,16 @@ function stubLoginctl(home: string): void {
 interface RosterEntry {
   id: string;
   configDirSuffix?: string;
-  exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+  exec: {
+    kind: 'upstream' | 'generated' | 'external';
+    secretsFile?: string;
+    // The two provider fields the roster model carries. `writeRoster` spreads
+    // the entry, so nothing else in this file changes — but a fixture writing a
+    // field the interface does not declare is a `typecheck-tests` failure
+    // rather than a runtime one, which is why it lands in this commit.
+    provider?: string;
+    baseUrl?: string;
+  };
 }
 
 /** The upstream account every real roster has exactly one of — `parseRoster`
@@ -5460,5 +5488,193 @@ describeLinux('ccrc doctor: scopes', () => {
     const home = healthy('ccrc-doctor-scopes-none-');
     rmSync(join(home, 'fixture-scopes'), { force: true });
     expect(runDoctor(home).stdout).toMatch(/^SKIP scopes: no tmux pane scopes/m);
+  });
+});
+
+describe('ccrc doctor: accounts', () => {
+  /** A lane whose config dir carries a settings.json env block — the shape an
+   *  api-key lane is provisioned with, API key field deliberately empty. */
+  function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
+    const d = join(home, suffix);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
+  }
+
+  const COMPATIBLE: RosterEntry = {
+    id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
+    exec: {
+      kind: 'generated', provider: 'compatible',
+      baseUrl: 'https://orchard-api/api/v1',
+      secretsFile: '.cc-secrets/orchard-api-compatible.env',
+    },
+  };
+
+  const plantSecret = (home: string, rel: string): void => {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, rel), 'export X=y\n', { mode: 0o600 });
+  };
+
+  it('is in the table and has a function — both directions', () => {
+    expect(tableNames()).toContain('accounts');
+  });
+
+  it('PASSES on a healthy box, naming the axes it measured — not the bare word ok', () => {
+    // `healthy()`'s contract is that every check passes, and the summary case
+    // asserts "0 warned" on exactly this fixture.
+    const home = healthy('ccrc-doctor-accounts-ok-');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 account');
+    expect(line).toContain('0 declared credential file');
+    expect(line, 'the bare word ok is not a measurement').not.toMatch(/: ok$/);
+  });
+
+  it('WARNS on a declared credential file that is not there, naming the PATH and no byte of it', () => {
+    const home = healthy('ccrc-doctor-accounts-cred-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('credential-declared-absent');
+    expect(lines[i]).toContain('.cc-secrets/alt-max-oauth.env');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('says nothing about a credential file that IS there, and never opens it', () => {
+    const home = healthy('ccrc-doctor-accounts-cred-ok-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    // A canary INSIDE the 0600 file: nothing doctor prints may contain it.
+    // This is CLAUDE.md's "existence checks by ls only" as a mechanism.
+    writeFileSync(join(home, '.cc-secrets', 'alt-max-oauth.env'),
+      'export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-CANARY-0000\n', { mode: 0o600 });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.stdout + r.stderr, 'doctor opened a 0600 credential file').not.toContain('sk-ant-CANARY-0000');
+  });
+
+  it('WARNS when a lane\'s settings.json env block names a different endpoint', () => {
+    const home = healthy('ccrc-doctor-accounts-drift-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      COMPATIBLE,
+    ]);
+    writeWrapper(home, 'orchard-api', { cfgDir: '.claude-orchard-api' });
+    plantSecret(home, '.cc-secrets/orchard-api-compatible.env');
+    writeSettingsEnv(home, '.claude-orchard-api',
+      { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8642', ANTHROPIC_API_KEY: '' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^WARN accounts: /);
+    expect(line).toContain('settings-env-drift');
+    expect(line).toContain('orchard-api');
+    // The endpoint is ROSTER DATA and is shown. The key's value never is, and
+    // there is none here — the block this design writes leaves it empty.
+    expect(line).toContain('127.0.0.1:8642');
+  });
+
+  it('says nothing when the env block agrees with the roster', () => {
+    const home = healthy('ccrc-doctor-accounts-agree-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      COMPATIBLE,
+    ]);
+    writeWrapper(home, 'orchard-api', { cfgDir: '.claude-orchard-api' });
+    plantSecret(home, '.cc-secrets/orchard-api-compatible.env');
+    writeSettingsEnv(home, '.claude-orchard-api',
+      { ANTHROPIC_BASE_URL: 'https://orchard-api/api/v1', ANTHROPIC_API_KEY: '' });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'accounts'), out).toMatch(/^PASS accounts: /);
+  });
+
+  it('does not report launcher-absent — the wrappers check owns that fact', () => {
+    // ONE FACT, ONE VERDICT LINE. `_check_wrappers`' external arm already
+    // reports a missing launcher, and this file's own `_check_tmux_skew` is the
+    // standing ruling against a second verdict for one finding.
+    const home = healthy('ccrc-doctor-accounts-nolauncher-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'gpt', configDirSuffix: '.claude-gpt', exec: { kind: 'external' } },
+    ]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'wrappers'), out).toMatch(/^FAIL wrappers: /);
+    expect(lineFor(out, 'accounts'), out).toMatch(/^PASS accounts: /);
+    expect(out, 'one finding got two verdict lines').not.toContain('launcher-absent');
+  });
+
+  it('WARNS — never SKIPS — on a box with no roster at all', () => {
+    // THE POINTER LIVES ON THE REMEDY LINE. `_dr_warn` prints its third
+    // argument on the line AFTER the verdict, and `lineFor` matches the verdict
+    // line alone — so asserting the pointer on the verdict would be red against
+    // a check that is behaving correctly.
+    const home = broken('ccrc-doctor-accounts-noroster-');
+    const out = runDoctor(home).stdout;
+    expect(out, 'a box with no accounts surface is where a SKIP helps least')
+      .not.toMatch(/^SKIP accounts:/m);
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, out).toBeGreaterThan(-1);
+    // The verdict names the file it could not read and what went unmeasured…
+    expect(lines[i]).toContain('.ccrc/accounts.json');
+    expect(lines[i]).toContain('credential');
+    // …and the remedy, one line down, names the check that DOES judge a roster.
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(lines[i + 1]).toContain('wrappers');
+  });
+
+  it('measures a roster this check is not the judge of — validation is the wrappers check\'s job', () => {
+    // `writeRoster` writes id/configDirSuffix/exec and nothing else: no label,
+    // no homeAble, no telemetry. `rosterFromJson` REFUSES that shape, and
+    // `healthy()` builds its roster with it — so a check that validated through
+    // the parser would WARN on every fixture in this file, including the one
+    // the summary case asserts zero warnings on. `_check_wrappers` reads the
+    // same file with its own lax reader for exactly this reason.
+    const home = healthy('ccrc-doctor-accounts-lax-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    plantSecret(home, '.cc-secrets/alt-max-oauth.env');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^PASS accounts: /);
+    expect(line).toContain('2 account');
+    expect(line).toContain('1 declared credential file');
+  });
+
+  it('spells the vocabulary that shared/providers.ts defines, and no other code', () => {
+    // The three codes are ONE definition — `ACCOUNT_FINDINGS` in
+    // `shared/providers.ts` — and `deploy/account-op.mjs` is a bare-node module
+    // that cannot import the TypeScript one. The copy is kept honest by
+    // comparison rather than by promise, and this is the only scan that can see
+    // `deploy/` at all: `single-definition.test.ts` filters `/\.tsx?$/`. The
+    // scrape is over the CODES rather than over either identifier, so it stays
+    // true whatever the two constants are named.
+    const ts = readFileSync(join(REPO, 'shared', 'providers.ts'), 'utf8');
+    const mjs = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    const codes = (src: string): string[] =>
+      [...src.matchAll(/'(credential-declared-absent|settings-env-drift|launcher-absent)'/g)]
+        .map((m) => m[1]!).filter((v, i, a) => a.indexOf(v) === i).sort();
+    expect(codes(ts)).toEqual(['credential-declared-absent', 'launcher-absent',
+      'settings-env-drift']);
+    expect(codes(mjs), 'the helper emits a code the wrappers check already owns')
+      .toEqual(['credential-declared-absent', 'settings-env-drift']);
   });
 });

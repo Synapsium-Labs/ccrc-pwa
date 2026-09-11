@@ -18672,3 +18672,26 @@ old path.
 The end-to-end half now asserts the stronger property — not one byte of launcher text reaches the note — and
 the cap is pinned where it lives, at `_acct_note_cap`, both sides. The cap is not dead code: its second caller
 is the `classify-failed` refusal, which caps `$ACCT_HEALTH`.
+
+### D-2544 — the plan named ONE fixture that had to ship the helper, and there were two
+
+Task 33 reasons at length about `ccrc-doctor.test.ts`'s `installCcrc`: ship `deploy/account-op.mjs`
+and its two `shared/` imports into the fixture box, or `_check_accounts` takes its
+"the account helper did not ship" WARN arm on `healthy()` and the summary case's
+`expect(warn).toBe(0)` reds. That reasoning is correct and the fixture edit landed with the check.
+
+It is also true of a SECOND fixture the plan never mentions. `ccrc-install.test.ts` builds its own
+placed tree from an explicit `TREE_FILES` list, and `cmd_install` now ENDS with `cmd_doctor` — so
+*ends with doctor, and a box that passes every check exits 0* measures the new check against that
+tree. Measured: `WARN accounts: the account helper did not ship (…/checkout/ccd/../deploy/account-op.mjs)`
+and `summary: 29 checks … 20 passed, 1 warned, 0 failed`.
+
+**The check's path resolution is not at fault, and that had to be established before touching
+anything.** `_inst_tree`'s rsync copies `$src/server`, `$src/agent`, `$src/shared`, `$src/deploy` and
+`$src/ccd` whole, so a real box has `$HOME/ccrc/deploy/account-op.mjs` and `$HOME/ccrc/shared/` —
+the absence was a property of a hand-picked fixture list, not of an installed box. That list already
+carried `shared/roster-json.mjs` and `shared/base-url.mjs`; it was short by exactly one line.
+
+The lesson is the general one about a fixture that ENUMERATES what a real install copies wholesale:
+the two go out of agreement silently, and only a check that reads a newly-required file finds out.
+Pinned by mutation — removing the line reds that case alone.

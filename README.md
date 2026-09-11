@@ -73,7 +73,7 @@ account home it finds. The server comes up on `127.0.0.1:7788`.
 Then:
 
 ```bash
-ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc doctor      # every check in the table: binaries, units, roster, accounts, hooks, auth posture
 ccrc status      # what is running, where
 ```
 

@@ -108,6 +108,15 @@ const TREE_FILES = [
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
   'deploy/gen-accounts.mjs',
   'deploy/gen-wrappers.mjs',
+  // The third module reached that way, and it is here because the install now
+  // ENDS with doctor: `_check_accounts` runs `node
+  // "$CCRC_HERE/../deploy/account-op.mjs" doctor …`, and a placed tree without
+  // it makes that check WARN on a box this file asserts has zero warnings. A
+  // real box has it — `_inst_tree`'s rsync copies `$src/deploy` and
+  // `$src/shared` whole — so its absence here was a property of this list
+  // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
+  // and `shared/base-url.mjs`, are already below.
+  'deploy/account-op.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
