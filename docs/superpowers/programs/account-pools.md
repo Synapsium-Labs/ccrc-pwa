@@ -3514,3 +3514,36 @@ EXECUTION but not the TYPE, so tsc refused the env assignment. Both real, both m
 2. **`node --check` passed a workflow script the workflow parser then rejected** for an unterminated
    string. A syntax check that does not use the same parser is not evidence about that parser.
 
+
+### PR #88 MERGED — `79d6d045`, 2026-09-11 16:19:57Z
+
+Operator merged. All four gating legs green (`test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`);
+`test-macos` was still IN PROGRESS at merge and **does not gate** — the same shape that once let me
+report a green PR whose macOS leg was red ([[local-suites-are-not-ci]]), so it is being watched rather
+than assumed. Verified on `origin/main` after the merge: all four locale shadows present in
+`_project_pool_state`, `_pool_name_valid`, `_ws_project_valid` and the doctor's `_check_pools`.
+
+Landed: **D-2519, D-2520, D-2521, D-2522, D-2542**. Filed but not taken: **D-2543** (`_rc_enabled`).
+
+**AGENT-FIRST lane, and not urgent.** The change is inert until a first tag exists, so it ships on the
+next agent deploy rather than needing one of its own. Deploying at all remains the operator's call.
+
+### A defect I shipped, found by testing a path I had never run
+
+After the merge I forced both locale probes to return null — the macOS/minimal-container shape — and ran
+the suite. **29 tests skipped correctly, and one FAILED: my own replacement guard.**
+
+Review had told me the two `guards the guard` cases turned a HOST property into a hard failure. I
+converted them to `it.skipIf(...)` plus a source-level pin, which is the right shape — but the guard I
+wrote in their place asserts a *different* host property, "some UTF-8 locale exists", and reds on a box
+that has none. **I moved the failure surface instead of removing it**, in the fix for that exact defect
+class, and could not have noticed because my box has the locale the branch is designed for.
+
+The distinction I got wrong: "this box has no UTF-8 locale at all" is not "the probe is broken" — it is
+one more thing I cannot measure here, so it belongs in the skip. Only a box that LISTS UTF-8 locales and
+still fails a trivial `echo yes` probe indicates broken machinery.
+
+**Latent, not live:** GitHub's ubuntu and macOS runners both carry `en_US.UTF-8`, so no CI leg reaches
+it. It matters because this repo is bound for public release and the failure would land on an outside
+contributor running a stock container, for a tree with nothing wrong with it.
+
