@@ -846,38 +846,51 @@ the `runsEvicted` gap row and the `adopted` chip.
 
 ### Task 12: suites, ledger, PR, deploy
 
-- [ ] Add the small-ICU boot assertion: a server-suite test that `icuHasZones()` is `true` on
+- [x] Add the small-ICU boot assertion: a server-suite test that `icuHasZones()` is `true` on
       the running Node (measurement 2's asymmetry — a small-ICU build does not throw, it
       silently answers UTC). This must fail CI, not the operator's morning.
-- [ ] Three suites, FOREGROUND, timeout ≥600000 ms: `cd server && npm run test`,
+- [x] Three suites, FOREGROUND, timeout ≥600000 ms: `cd server && npm run test`,
       `cd agent && npm run test`, `cd pwa && npm run test`. Re-run any known load flake
       (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`) **in
       isolation** before calling it a break.
-- [ ] Confirm by measurement, not belief: `grep -c 'setInterval(' server/src/watch.ts` is `1`;
+- [x] Confirm by measurement, not belief: `grep -c 'setInterval(' server/src/watch.ts` is `1`;
       `git diff origin/main -- server/src/coord/schema.ts` touches only the appended entry;
       **`git diff origin/main -- agent/` is empty**; `git diff origin/main -- ccd/` is empty;
       `FLEET_PROTO` is still `1`; the only `CCD_ARGV.` reference under `server/src/auto/` is
       `wsAddAuto`.
-- [ ] Measure the CI delta. SIX new server test files land against a `timeout-minutes: 30` ubuntu
+- [x] Measure the CI delta. SIX new server test files land against a `timeout-minutes: 30` ubuntu
       ceiling whose comment records the server leg at ~9 minutes. All six are cheap by
       construction (pure arithmetic, one `mkTmp` database, `Date`-only fakes); the real-ccd
       probe joins an **existing** fixture-HOME probe rather than adding one. If the ubuntu leg
       crosses ~12 minutes, raise the ceiling deliberately with the measurement in the commit
       body — never by trimming a suite.
-- [ ] Mint the deviation block from the allocator — `POST /api/ledger/deviations` with
+
+      MEASURED 2026-09-11, on the branch as it stands (six new server suites plus four waves of
+      review fixes): ubuntu server leg **8.9 min against the 30-minute ceiling**, macOS **25.5
+      against 55**, pwa 2.2, agent 0.5, build-pwa 0.4. No ceiling raise — the worry this step
+      was written against is inverted, and the headroom is recorded here so the next author
+      raises a ceiling on a number rather than on a feeling.
+
+      THE OTHER MEASUREMENTS, all taken against the MERGE BASE (`git diff origin/main...HEAD`,
+      three-dot — two-dot reports main's own later commits as reversed deltas and makes three of
+      these read false): `setInterval(` in `watch.ts` is **1**; the `agent/` and `ccd/` diffs are
+      **empty**; `schema.ts` is **166 insertions, 0 deletions**, the appended entry alone;
+      `FLEET_PROTO` is still **1**; the only `CCD_ARGV.` reference under `server/src/auto/` is
+      **`wsAddAuto`**.
+- [x] Mint the deviation block from the allocator — `POST /api/ledger/deviations` with
       `{"project":"<slug>","count":<n>,"title":"program automations D-block"}` and the
       `x-ccrc-mail-token` header. **Never invent a number**: the seeded floor is already
       `max(D-N in this project's docs) + LEDGER_SEED_GAP(50)`, so a hand-picked
       next-after-grep sits below the floor and collides. On `409 not-seeded` or an unreachable
       server, write `D-TBD-<slug>` and STOP — a mechanical blocker to report.
-- [ ] Write the `## Deviations found` bullets, one per allocated number, in the scanner's entry
+- [x] Write the `## Deviations found` bullets, one per allocated number, in the scanner's entry
       form `- **D-<n>** — <subject>` with a real em-dash, so `deviation-refs.test.ts`'s
       collision scan can see them. **Then check BY HAND that every `D-<n>` the spec cites is
       also defined here — nothing pins it.** That suite scans DEFINITIONS only (its own comment
       says prose refs "match neither"), and its coverage floor is `entries().length >= 100`,
       which one new plan cannot move. An earlier draft of this plan claimed a red suite would
       catch an undefined cited number; it will not.
-- [ ] Token-scan (`topology-clean.test.ts`), push, open the PR.
+- [x] Token-scan (`topology-clean.test.ts`), push, open the PR.
 - [ ] Deploy: **server lane only** — `bash deploy/deploy.sh`. Deliberately **not** agent-first:
       nothing under `ccd/`, `session-hook.sh` or `ccd/coordinator-skill/` is touched, and
       `agent/` is byte-identical. The final gate is `/health` reporting the shipped sha. Then
