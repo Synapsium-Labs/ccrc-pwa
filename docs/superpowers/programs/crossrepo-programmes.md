@@ -45,17 +45,21 @@ UNRECOVERABLE census; D-2353 the dispatch `project-mismatch` row says abandon fi
 bytes derivations, test-only pins and prose fixes carry no number. **D-2410** (minted 2026-09-10 12:2x UTC):
 main took migration 9 mid-wave (PR #74, the ask pre-emption lane), so this wave's one migration ships as
 migration 10 and `COORD_SCHEMA_VERSION` derives to 10; the wave-1 plan's seventeen "migration 9" mentions stay as
-anchored snapshots, and the wave-2 and wave-3 plans, the spec and this ledger cite no number (measured zero). An
-execution-time deviation gets its own
-allocator
-call: the worker writes `D-TBD-<slug>` with a full entry and mails a `deviation-request` naming the count;
-the coordinator mints exactly that many, defines them in the same act, and mails the numbers back.
+anchored snapshots, and the wave-2 and wave-3 plans, the spec and this ledger cite no number (measured zero).
+Acceptance after PR #75 had already merged added **D-2505–D-2508**, allocated by the coordinator in one call and
+fully defined in the wave-1 plan: D-2505 makes the successful post-hold worker bind, mail transfer/park and rebound
+event one SQLite transaction; D-2506 makes programme-home backfill and its audit event one transaction; D-2507
+makes the armed feed read exempt-but-authenticated for either a PWA session or the cookieless box-token client; and
+D-2508 shapes programme slugs before either HTTP ingress can turn one into a ledger path. An execution-time
+deviation gets its own allocator call: the worker writes `D-TBD-<slug>` with a full entry and mails a
+`deviation-request` naming the count; the coordinator mints exactly that many, defines them in the same act, and
+mails the numbers back.
 
 ## Waves
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75 | **in review** — wave-done 2026-09-10 01:10 UTC at `312cea5d` (26 commits, 39 files), advance accepted, 9/9 items settled, CI green ×5; review round 1 (5 Opus lenses in own worktrees, every finding refuted by Sonnet skeptics): 24 raised, 23 survived, 10 important — sent back to working 01:5x UTC for the fix round |
+| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75, #86 | **correction in progress** — PR #75 was merged externally as main `ec11030d` before acceptance closed. Four defects measured on that merged tree became D-2505–D-2508; run 36 returned to `working`. Correction PR #86 opened at `41daae5f`, with its first full local gates and five CI legs green. The coordinator then required integration of main `43c86c00` (#85); before that head could push, main advanced again to `b879510f` through #81, with real conflicts in `server/src/server.ts` and `server/test/auth-gate.test.ts`. Awaiting semantic integration, full combined-tree rerun, fresh CI and a new exact fingerprint. No correction deploy or merge. |
 | 2 | Skills + PWA: the coordinator skill's boundary sentences, the worker skill's foreign-plan sentence, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, the mail screen's programme grouping and chip. AGENT-FIRST. | — | not opened |
 | 3 | Docs + the legacy flip: README sections, the Aug 11 spec's status line, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | not opened |
 
@@ -110,9 +114,10 @@ acceptance list, verbatim.
   field measured at the decision point). The fuller remedy — `project` inside `readRegistryMeasured`, the
   `unmeasured` shape carrying it, every consumer in fleet.ts, watch.ts, lifecycle.ts, divergence.ts,
   routes.ts and store.ts re-read — is its own task under its own ruling, not a later wave of this programme.
-- **account-pools wave 3 is in `server/src/coord/{routes,store}.ts` now** (run 35, dispatched
-  2026-09-08). Wave 1's worker rebases over it before opening its PR; a conflict in `openRun` or the
-  route's body validation is expected, not a defect.
+- **account-pools wave 3 merged as `b879510f` (#81) on 2026-09-11 while correction PR #86 was being
+  revalidated.** It overlaps the correction in auth, server composition, shared API and tests; `merge-tree`
+  measured content conflicts in `server/src/server.ts` and `server/test/auth-gate.test.ts`. Wave 1's worker
+  must integrate that exact main semantically and rerun every full gate before a fingerprint can be accepted.
 - **The coordinator skill's ten clauses and the worker skill's twelve stay VERBATIM** — every addition is
   an additive paragraph with its own harvest pin (`coordinator-skill.test.ts:92-118`,
   `worker-skill.test.ts:34-71`).
