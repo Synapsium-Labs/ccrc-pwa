@@ -40,6 +40,8 @@ import {
   automationStateChip, automationOutcomeChip,
   refusalSentence, routeRefusalSentence, scheduleErrorSentence,
 } from '../src/auto/autoWords';
+import { automationErrorSentence } from '../src/auto/autoWords';
+import { ApiError } from '../src/lib/api';
 import { useFleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -287,6 +289,44 @@ describe('the filter chips say what they are and whether they are on', () => {
     fireEvent.click(armed);
     expect(screen.getByRole('button', { name: 'state: armed' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'state: all' })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('a box with no coordination database is not a failed read', () => {
+  it('says there is no store, and makes no claim about hidden automations', async () => {
+    // Every automations route answers `501 {error:'not-configured'}` when the
+    // box runs no coord.db (`local` dev, or a server box without one), and
+    // `loadCold`'s catch discarded the error, so that landed in the same
+    // bucket as an unreachable server. The screen then printed "Could not
+    // reach the server — automations may exist that are not shown." — both
+    // halves false: the server answered, and there is no store for an
+    // automation to be in. It is also permanent on such a box, because
+    // `emitAutomations` returns early with no store, so no frame ever flips
+    // `automationsFrameSeen`. An empty-state sentence is a positive claim
+    // (this file's first rule), and so is that one.
+    seedStore({ automations: [], automationsFrameSeen: false });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => { throw new ApiError(501, { ok: false, error: 'not-configured' }); }}
+      />,
+    );
+    const p = await screen.findByText(/no coordination database/i);
+    expect(p).toHaveAttribute('data-state', 'not-configured');
+    expect(screen.queryByText(/automations may exist that are not shown/),
+      'the read did not fail — the server answered').toBeNull();
+  });
+
+  it('names `not-configured` in a sentence, never as a raw slug', async () => {
+    // The same body through the action path rendered `? not-configured` — the
+    // unnameable degrade, which is the honest answer for a token this build
+    // does not know and the wrong one for a token the server sends on
+    // purpose. `bad-request` already had a sentence for exactly this reason.
+    expect(automationErrorSentence({ ok: false, error: 'not-configured' }))
+      .not.toMatch(/^\?/);
+    expect(automationErrorSentence({ ok: false, error: 'not-configured' }))
+      .toMatch(/coordination database/i);
+    // And the run-detail 404's own code, which no table named either.
+    expect(automationErrorSentence({ ok: false, error: 'unknown-run' })).not.toMatch(/^\?/);
   });
 });
 

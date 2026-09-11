@@ -333,7 +333,15 @@ export function AutomationsScreen({
   const automationsFrameSeen = store((s) => s.automationsFrameSeen);
   const conn = store((s) => s.conn);
   const [cold, setCold] = useState<AutomationSummary[] | null>(null);
-  const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // FOUR STATES, because the box with no coordination database is its own
+  // fact. Every automations route answers `501 not-configured` there, and
+  // folding that into `'error'` made the screen say "Could not reach the
+  // server — automations may exist that are not shown": the server answered,
+  // and there is no store for an automation to be in. It is permanent on such
+  // a box, too — `emitAutomations` returns early with no store, so no frame
+  // ever flips `automationsFrameSeen` and the sentence never goes away.
+  const [coldState, setColdState] =
+    useState<'loading' | 'ok' | 'error' | 'not-configured'>('loading');
   // THE GLOBAL KILL SWITCH, and which way it points. `POST /api/automations/
   // pause` shipped with no reader at all — not on the frame, not on any GET —
   // so the only door a phone could offer was a button that could not say
@@ -404,7 +412,10 @@ export function AutomationsScreen({
         setColdState('ok');
         if (r.paused !== undefined) setGlobalPause(r.paused);
       })
-      .catch(() => { if (aliveRef.current) setColdState('error'); });
+      .catch((err: unknown) => {
+        if (!aliveRef.current) return;
+        setColdState(err instanceof ApiError && err.status === 501 ? 'not-configured' : 'error');
+      });
 
   useEffect(() => {
     void loadCold();
@@ -434,6 +445,7 @@ export function AutomationsScreen({
   const readFailed = showsRetired
     ? retiredState === 'error'
     : !automationsFrameSeen && coldState === 'error';
+  const noStore = !automationsFrameSeen && coldState === 'not-configured';
   const list = source ?? [];
 
   const projects = Array.from(new Set(list.map((a) => a.project))).sort();
@@ -627,6 +639,10 @@ export function AutomationsScreen({
 
       {noSignalYet ? (
         <p className="auto-empty" data-state="loading">Loading…</p>
+      ) : noStore ? (
+        <p className="auto-empty" data-state="not-configured">
+          This box runs no coordination database, so it keeps no automations.
+        </p>
       ) : readFailed ? (
         <p className="auto-empty" data-state="error">
           Could not reach the server — automations may exist that are not shown.

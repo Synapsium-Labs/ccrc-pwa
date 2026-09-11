@@ -212,6 +212,14 @@ export function scheduleErrorSentence(raw: unknown): string {
  *  — technically not blank, but a worse sentence than this build can do. */
 const GENERIC_ERROR_TEXT: Record<string, string> = {
   'bad-request': 'that request was not well formed',
+  // Two more the routes send on purpose and no refusal union holds. Both were
+  // rendering as `? <token>`, which is the honest degrade for a token this
+  // build does not KNOW and the wrong answer for one the server means: a 501
+  // says this box runs no coordination database at all, and the run-detail
+  // 404 says that run is no longer kept (the per-automation ring evicts, and
+  // `runsEvicted` is reported for exactly that reason).
+  'not-configured': 'this box runs no coordination database, so it keeps no automations',
+  'unknown-run': 'that run is no longer kept — the history ring has evicted it',
 };
 
 /**
