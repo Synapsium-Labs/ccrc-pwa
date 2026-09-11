@@ -16,10 +16,37 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
    header and the wave-1 row, and **commit it**. The commit is the artefact; an
    uncommitted ledger is not a handoff.
 2. `POST /api/runs`
-   `{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
-   → `{"ok":true,"id":<run id>,…}`, or
-   `{"ok":false,"refused":"claimed-by-another","by":"<other coordinator id>"}`
-   if another coordinator holds this program (clause 8 — stop).
+   `{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
+   → `{"ok":true,"id":<run id>,"ledgerPath":…,"ledgerRepo":…,"ledgerAbsPath":…}`, or one of the refusals below.
+
+| refused | what it means | what you do |
+|---|---|---|
+| `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
+| `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
+
+**Why `project-mismatch` exists.** A session's workspace is a git worktree in
+exactly one repository. Reusing its id for a wave in another project queues the
+brief onto a workspace bound to the wrong repo, and the mismatch used to surface
+one advance later as a `tip-unmeasurable` naming a branch you did not expect.
+The server measures it two ways — here, from the run history, and again at
+dispatch from the live registry row (§2) — and refuses both times. A session no
+run has ever named refuses nothing: absence permits, which is exactly the
+wave-1 open that adopts a workspace the operator made by hand.
+
+**`homeProject`, and the two paths it names.** `ledgerRepo` echoes the home the
+programme now stores, and `ledgerAbsPath` is that home's ledger by ABSOLUTE
+path — the file a wave running in another repository reads without guessing
+where it lives. Both are `null` while the programme stores no home. The server
+tolerates an absent `homeProject` for one deploy generation and records that it
+did; send it on every open anyway. A programme that stores no home takes the
+FIRST home any open sends — first writer wins, recorded as
+`home-project-backfilled` on that run — and nothing in the API can change it
+afterwards: a later open sending a different value is refused `home-mismatch`
+against it. Send the programme's home, the repo holding its ledger, spec and
+plan — never the repo you happen to be running in. The server trims the value
+and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
+`400 bad-request` whose `detail` names `homeProject`.
 
    For wave ≥ 2, reclaiming the workspace wave 1 held, add
    `"sessionId":"<the held session id>"` to the same call — it tells the open
@@ -52,6 +79,7 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
+| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo. Expect the programme to hold two live workspaces from then on, which costs two concurrency slots and two of the daily budget |
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's

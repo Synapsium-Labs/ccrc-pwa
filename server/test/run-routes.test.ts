@@ -4,13 +4,13 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -136,6 +136,17 @@ const tokenHeaders = (token: string | null): Record<string, string> =>
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
+
+/** A `to:'worker'` brief queued to `to` on `runId`, the shape a wave brief
+ *  takes in the store — the mail row keeps the ROLE, the delivery the
+ *  session, exactly as `POST /api/mail` writes them. Returns the delivery id. */
+const queueWorkerBrief = (coord: CoordStore, runId: number, to: string): number => tx(coord.db, () => {
+  const m = coord.insertMail({ fromId: CLAIMED_BY, fromUuid: 'a'.repeat(36), toId: 'worker', runId,
+    kind: 'status', subject: 'the wave brief', body: 'b', artifacts: [] });
+  const d = coord.queueDelivery(m.id, to, '');
+  coord.setDeliveryEnvelope(d.id, `to: ${to}\nack: ccrc-api mail ack ${d.id}\n`);
+  return d.id;
+});
 const postDispatch = (
   app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
 ) =>
@@ -190,6 +201,149 @@ describe('POST /api/runs', () => {
     expect(res.json()).toMatchObject({ ok: false, refused: 'claimed-by-another', by: CLAIMED_BY });
   });
 
+  it('refuses a reused sessionId bound to another project — before anything is opened', async () => {
+    // F1. The coordinator's own idiom ("same sessionId, same workspace") caught
+    // by the coordinator's own history: wave 1 in `demo` is the only record that
+    // this workspace lives in `demo`, and until this check nothing read it.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Another repo',
+      project: 'other-project', wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: PROJECT });
+    // BEFORE `coord.openRun`, so a refusal leaves no `planned` orphan…
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    // …and no hold was placed on a workspace this run was never going to get.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
+    // F2. The body guard used to test `.trim()` and then store the RAW value;
+    // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was
+    // permanent and every clean re-send was refused `home-mismatch` against a
+    // value that rendered the same.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo\n' });
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(first.json()).toMatchObject({
+      ledgerRepo: 'demo', ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+  });
+
+  it('refuses a home that is not a single path segment — 400 with a detail, and nothing is opened or homed', async () => {
+    // F4. `ledgerAbsPath` is `path.join(projectsRoot, home, …)`, and a `..`
+    // segment escapes the root; the skill tells its reader that path is the
+    // file a wave in another repository READS. Refused at the door, where an
+    // empty home is already refused, so a home is a name and never a path.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    for (const bad of ['../x', 'a/b']) {
+      const res = await postOpen(app, { ...OPEN_BODY, homeProject: bad });
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringContaining('homeProject') });
+    }
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it('a second open of the same planned wave naming a DIFFERENT sessionId re-binds the run, hands the heir the brief, parks the predecessor, and records `session-rebound` naming both occupants', async () => {
+    // store-2 / MUT-3. `openRun`'s dup arm keys on (program, wave, waveOf,
+    // claimedBy, planned) and NOT on sessionId, so this retry finds the same
+    // row; `setSession` funnels into `bindSession`, whose re-bind branch is
+    // therefore a LIVE path — and an occupant change is now attributable on
+    // the run's own trail like every other run write.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(200);
+    expect((second.json() as { id: number }).id).toBe(id);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    // The heir holds a freshly rendered copy; the predecessor's row is parked.
+    const heir = w.coord.outstandingMailFor('demo-second');
+    expect(heir.map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.outstandingMailFor('demo-existing')).toHaveLength(0);
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    // RECORDED, naming predecessor and heir and what moved.
+    expect(w.coord.runEvents(id).map((e) => e.detail))
+      .toContain('session-rebound: demo-existing -> demo-second, 1 re-issued');
+  });
+
+  it('a refused ws-hold leaves the occupant unchanged — no re-bind, no re-issue, no park, no event', async () => {
+    // store-1. The bind used to run BEFORE the hold, in autocommit, so a 502
+    // told the coordinator the open FAILED while `runs.sessionId` had already
+    // moved, the predecessor's brief was parked and the heir held a queued
+    // delivery `sweepMail` would inject into a session nobody had held.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    let holds = 0;
+    // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
+    const failSecondHold: Runner = async (cmd, argv) => {
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      return run(cmd, argv);
+    };
+    const w = await openApp(home, failSecondHold); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(502);
+    expect(second.json()).toEqual({ ok: false, stderr: 'ws-hold failed' });
+    expect(holds, 'the initial and refused re-bind holds were not both attempted').toBe(2);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toHaveLength(0);
+    expect(w.coord.runEvents(id).map((e) => e.detail).filter((d) => d?.startsWith('session-rebound'))).toEqual([]);
+  });
+
+  it('permits a reused sessionId that stays in the same project', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses nothing for a session no run has ever named — absence permits', async () => {
+    // The wave-1 open that adopts an operator-made workspace. `sessionProject`
+    // answers null, and a null answer is not evidence of a crossing; the
+    // registry backstop at dispatch (Task 2) is the other rung.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, project: 'other-project',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('places the hold immediately when sessionId names an existing workspace, and persists it onto the row', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
@@ -209,6 +363,87 @@ describe('POST /api/runs', () => {
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, wave: 'one' });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts homeProject, stores it, and answers with the ledger repo and its absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true, program: 'build4', state: 'planned',
+      // UNCHANGED, deliberately: the coordinator keeps the relative path it has
+      // always had, and the two new fields sit beside it.
+      ledgerPath: 'docs/superpowers/programs/build4.md',
+      ledgerRepo: 'demo',
+      ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    expect(w.coord.programHome('build4')).toBe('demo');
+  });
+
+  it('backfills a NULL stored home from a later open, and records the event', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app);                       // legacy: no homeProject
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    const id = (second.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('home-project-backfilled');
+  });
+
+  it('refuses a home that differs from the stored one, naming the stored value', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'other-project' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'home-mismatch', by: 'demo' });
+    // A SECOND code, not `project-mismatch`: the two conditions are handled
+    // differently by the caller, and a seam may not collapse them.
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+  });
+
+  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app);
+    expect(res.statusCode).toBe(200);
+    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
+    // possible instead of a collision.
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
+    const id = (res.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
+  });
+
+  it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: '   ' });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it('refuses a non-string homeProject as a malformed body, before anything is opened or homed', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 7 });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
 
   it('answers 501 not-configured without a coordination store', async () => {
@@ -640,6 +875,132 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.branch).toBeNull();
   });
 
+  it('refuses a resume whose registry record names another project — before the hold, the /clear and markDispatched', async () => {
+    // F1's second rung. The open route's `sessionProject` cannot see this case:
+    // no run has ever named this session, so it answers null and permits. The
+    // registry row is the other measurement, and it disagrees with the run.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: 'other-project' });
+    // THE POSITION IS THE GUARD, not just the comparison: no second hold, no
+    // `/clear` typed into a pane bound to the wrong repo, and the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold'),
+      'the crossing was refused only AFTER the hold was placed').toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys'),
+      'a /clear was typed into a session this dispatch had no business clearing').toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+    expect(w.coord.run(id)?.dispatchedAt).toBeNull();
+  });
+
+  it("answers registry-unmeasurable — not project-mismatch — when the session's .project cannot be read", async () => {
+    // The rung measures the ONE field it decides on. `record.project` would
+    // have arrived here as the session id (`registry.ts`'s `project ?? id`
+    // over a collapsing read) and refused a crossing nobody measured, with a
+    // "do not retry" remedy that spends a second workspace. Unreadable is the
+    // registry not being measurable for THIS row — the retryable answer this
+    // arm already gives for an unmeasured identity.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io: unreadableField('demo-existing', 'project') }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // Nothing spent: no second hold, no /clear, the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+  });
+
+  it('permits a session whose registry row carries no .project at all — absence is not a crossing', async () => {
+    // A row from before the field existed (ccd writes `.project` at ws-add;
+    // older rows have none). Nothing was measured, so nothing is refused: the
+    // dispatch proceeds exactly as it did before this wave, and
+    // `record.project`'s `?? id` default never reaches the decision.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    rmSync(path.join(home, '.cc-sessions', 'demo-existing.project'));
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('permits a session whose .project reads back whitespace-only — trimmed empty is not a crossing', async () => {
+    // Review finding, fix round (task-2-fix-brief.md): the guard's
+    // `projectRead.content !== ''` clause had no test writing an empty or
+    // whitespace-only `.project`, so deleting it reds nothing even though
+    // `fieldMeasured` trims INSIDE its `ok` arm (`registry.ts`) — a
+    // whitespace-only file reads back as `content: ''`, the same "field with
+    // no name in it" case absence already permits. Without the clause this
+    // would compare `''` against the run's real project and refuse
+    // `project-mismatch` with `by: ''`, the exact empty-`by` collapse the
+    // `DispatchOutcome` docstring and this wave's design forbid.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: '   \n' });
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
+    // `record === undefined` on a LISTABLE registry is the tolerated case
+    // (`DoneRun`'s own docstring): the run falls back to its own workspace and
+    // branch, as it always has. Refusing on a fact not measured would be the
+    // same error in the other direction.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-ghost' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run } = makeRunner(home);
+    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
+    // readdir, before anything is counted) and answers `paused`, never
+    // reaching this arm at all — so this scopes the failure to the SECOND
+    // read, the resumed session's own registry listing, the same idiom the
+    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+  });
+
   it('runs ensure — never start — for wave 2 into the same workspace (D-1)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
@@ -745,7 +1106,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2' }))
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
@@ -864,7 +1228,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
@@ -881,7 +1248,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // inflate the exact `runEvents().length` assertion below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
     const callsAfterFirst = calls.length;
@@ -2099,7 +2469,10 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` === [] assertion below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
     w.coord.addWorkItem = (runId, title, blockedBy) => {
@@ -2173,5 +2546,102 @@ describe('the hold reason', () => {
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+  });
+});
+
+describe('the programme filters on the two GET routes', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** Two programmes, one mail and one event each, plus one mail and one event
+   *  that belong to no run at all. Written against `w.coord` directly: this
+   *  suite has no fixture for mail rows, and the four statements are the whole
+   *  population every assertion below turns on. */
+  const seedTwoProgrammes = (coord: CoordStore): void => {
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = coord.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if ('refused' in r) throw new Error('open refused');
+      coord.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(coord.db, () => {
+        const m = coord.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = coord.queueDelivery(m.id, 'demo-coordinator', '');
+        coord.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');
+    coord.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    coord.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    coord.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+  };
+
+  it('GET /api/mail?program= answers that programme, and `to` is no longer required', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await app.inject({ method: 'GET', url: '/api/mail?program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('GET /api/mail?to= is unchanged, and still sees the programless mail', async () => {
+    // The anti-vacuity half: a filter that answered nothing would pass the case
+    // above only if this one caught it. `peer chatter` has no run and is
+    // therefore in NO programme's list and in every mailbox it was sent to.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await getMail(app, 'demo-coordinator');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject).sort())
+      .toEqual(['ours', 'peer chatter', 'theirs']);
+  });
+
+  it('GET /api/mail with neither `to` nor `program` is still a bad request', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail', headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/mail with BOTH `to` and `program` is also a bad request (D-2057)', async () => {
+    // The other half of "exactly one": the `(to === null) === (program ===
+    // null)` guard is symmetric, and the "neither" case above cannot prove
+    // the "both" arm — a guard degraded to `to === null && program === null`
+    // passes "neither" and silently accepts "both".
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail?to=demo-coordinator&program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/feed?program= answers that programme, and the unfiltered read is unchanged', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const filtered = await app.inject({ method: 'GET', url: '/api/feed?program=build4' });
+    expect((filtered.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
+    const all = await app.inject({ method: 'GET', url: '/api/feed' });
+    expect((all.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours', 'theirs', 'a question']);
   });
 });

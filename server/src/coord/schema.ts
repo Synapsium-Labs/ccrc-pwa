@@ -832,17 +832,53 @@ export const MIGRATIONS: readonly string[] = [
     CREATE INDEX asks_by_child ON asks(childId);
     CREATE INDEX asks_by_parent ON asks(parentId, state);
   `,
-  // ── 10: user_version 9 -> 10 ─────────────────────────────────────────────
-  // APPENDED, NOT MERGED, AND RENUMBERED TWICE. This entry was written when
-  // `MIGRATIONS[6]` was the free slot. By its first merge `main` had taken 7
-  // (the dispatch-decision columns) and 8 (the ledger data repair), so it
-  // landed at 9; by this second merge `main` had also taken 9 (the ask
-  // pre-emption lane), so it lands at 10. Renumbering THIS one is the only
-  // correct resolution every time — the others are already on `main`, so a box
-  // may have applied them, and `db.ts` runs
-  // `for (v = current; v < COORD_SCHEMA_VERSION; v++)`: an entry that changes
-  // index changes which boxes have already run it.
-  // MIGRATIONS[0..8] ARE FROZEN.
+
+  // ── 10: user_version 9 -> 10 ──────────────────────────────────────────────
+  // D-2410: main took migration 9 for the ask lane while this wave was in
+  // flight, so the cross-repo columns move intact to the next additive entry.
+  // Cross-repo programmes: the ONE migration that build has (design 2026-09-08
+  // §8). MIGRATIONS[0..8] ARE FROZEN, for the reason every entry above states:
+  // db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so an
+  // amendment to an applied entry never runs again.
+  //
+  // `programs.homeProject` (§3 F2) — the project whose repository holds this
+  // programme's ledger, spec and plan. A programme is initiated in ONE project
+  // and its waves may dispatch runs into any; before this column "the
+  // programme's own repo" was true by accident, whenever every wave happened to
+  // share one project.
+  //
+  // `feed_events.runId` (§4) — which run a feed row is about, so
+  // `GET /api/feed?program=` can join through `runs` to a programme. The
+  // recorders that KNOW a run (the mail lane and the run-transition lane)
+  // populate it; every other kind is programless.
+  //
+  // NULLABLE, NO DEFAULT, BOTH, and each null means one thing:
+  //   `homeProject` NULL = no home was ever stored (an older row, or a
+  //     coordinator that omitted it during the legacy generation). NOT "the
+  //     home is the run's own project" — nothing is guessed into this column,
+  //     precisely so a later explicit home can BACKFILL it rather than collide
+  //     with a default nobody chose.
+  //   `runId` NULL = this event is about no run. An `ask`/`done`/`merged` is
+  //     about a SESSION; it is programless and appears unfiltered only. NOT
+  //     "the run could not be read" — nothing here reads a run.
+  // A `DEFAULT` on either would be the overloaded null the entries above each
+  // argued through.
+  `
+  ALTER TABLE programs ADD COLUMN homeProject TEXT;
+  ALTER TABLE feed_events ADD COLUMN runId INTEGER;
+  `,
+  // ── 11: user_version 10 -> 11 ────────────────────────────────────────────
+  // APPENDED, NOT MERGED, AND RENUMBERED THREE TIMES — which is the pattern,
+  // not an accident. This entry was written when `MIGRATIONS[6]` was the free
+  // slot; each merge with `main` found the slot taken and moved it down: 7 and
+  // 8 (dispatch-decision columns, ledger repair) took it to 9, the ask
+  // pre-emption lane took it to 10, and cross-repo programmes take it to 11.
+  // Renumbering THIS one is the only correct resolution every time — the
+  // others are already on `main`, so a box may have applied them, and `db.ts`
+  // runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`: an entry that
+  // changes index changes which boxes have already run it. The rule that makes
+  // this safe is the one every entry states — MIGRATIONS[0..9] ARE FROZEN, and
+  // the unmerged branch is always the one that moves.
   // Automations: a Runner that spawns a session at a time the operator
   // chooses, plus its full run history (design spec §5,
   // docs/superpowers/specs/2026-08-31-automations-design.md:305-419). FOUR

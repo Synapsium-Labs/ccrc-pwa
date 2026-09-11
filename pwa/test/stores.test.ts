@@ -1049,7 +1049,7 @@ describe('fleet store', () => {
     it('asks GET /api/feed once on the first successful connect, and merges it into `feed`', async () => {
       const fetchFeed = vi.fn(async () => ({
         events: [
-          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1' },
+          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1', runId: null },
         ],
       }));
       const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
@@ -1081,7 +1081,7 @@ describe('fleet store', () => {
       const fetchFeed = vi.fn(async () => {
         calls += 1;
         if (calls === 1) throw new Error('offline');
-        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1' }] };
+        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1', runId: null }] };
       });
       const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
       store.getState().connect();

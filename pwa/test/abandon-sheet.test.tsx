@@ -30,7 +30,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 // actually shipped it (shared/api.ts), not the plan's illustrative one.
 const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
-  wave: 3, waveOf: 4, project: 'ccrc-pwa',
+  wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
   state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,

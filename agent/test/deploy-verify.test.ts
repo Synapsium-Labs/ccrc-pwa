@@ -523,6 +523,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const f of [
       'systemd/claude-session@.service.d/limits.conf',
       'systemd/app-claude-session.slice.d/limits.conf',
+      'systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf',
       'systemd/ccrc-agent.service.d/protect.conf',
       'systemd/ccd-cap-scopes.service',
       'systemd/ccd-cap-scopes.timer',
@@ -592,6 +593,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       '_unit_atomic ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/claude-session@.service',
       'claude-session@.service.d',
       'app-claude\\x2dsession.slice.d',
+      '_unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf"',
       'ccrc-agent.service.d',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer',
@@ -656,6 +658,89 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
+  });
+
+  it('the slice carries a last-sorting MemoryHigh=infinity drop-in, and the deploy asserts the enforced value after daemon-reload', () => {
+    // 2026-09-10: the fleet host froze three times because stale-branch deploys
+    // kept reinstalling MemoryHigh=20G on the aggregate slice. An aggregate
+    // MemoryHigh throttles EVERY allocation in the slice (99% sys, load 177,
+    // memory.events oom_kill 0) — the whole fleet frozen with nothing killed.
+    // The guard is two halves: a drop-in that sorts LAST so it overrides
+    // whatever limits.conf or a runtime set-property says, and a gate script
+    // that reads the value systemd ENFORCES after daemon-reload (never a file,
+    // never an exit status).
+    //
+    // (a) THE FILE overrides one key only — it must not carry MemoryMax, which
+    // lives in limits.conf and must stay the one place that sets it.
+    const zz = readFileSync(
+      path.join(deployDir, 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf'), 'utf8');
+    expect(zz).toMatch(/^\[Slice\]$/m);
+    expect(zz).toMatch(/^MemoryHigh=infinity$/m);
+    expect(zz, 'the zz drop-in must override MemoryHigh only, not MemoryMax')
+      .not.toMatch(/^MemoryMax=/m);
+
+    // (b) THE ORDERING RULE the file relies on: systemd applies drop-ins in
+    // filename order, last one wins. `zz-` must sort after both `limits.conf`
+    // and a runtime `50-MemoryHigh.conf`.
+    expect(
+      ['50-MemoryHigh.conf', 'limits.conf', 'zz-no-memoryhigh.conf'].sort(),
+      'zz-no-memoryhigh.conf must sort LAST among the slice drop-ins'
+    ).toStrictEqual(['50-MemoryHigh.conf', 'limits.conf', 'zz-no-memoryhigh.conf']);
+
+    // (c) AGENT_CMD wires the gate after daemon-reload and before
+    // enable --now — it must read the value the reload just made effective.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    const links = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const reloadAt = links.findIndex((l) => l.includes('daemon-reload'));
+    const assertAt = links.findIndex((l) => l.includes('assert-slice-policy.sh'));
+    const enableAt = links.findIndex((l) => l.includes('enable --now ccrc-agent.service'));
+    expect(assertAt, 'assert-slice-policy.sh is not wired into AGENT_CMD').toBeGreaterThan(-1);
+    expect(reloadAt, 'AGENT_CMD no longer reloads the daemon').toBeGreaterThan(-1);
+    expect(enableAt, 'AGENT_CMD no longer enables the agent unit').toBeGreaterThan(-1);
+    expect(assertAt, 'the slice-policy gate must run after daemon-reload').toBeGreaterThan(reloadAt);
+    expect(assertAt, 'the slice-policy gate must run before enable --now ccrc-agent.service')
+      .toBeLessThan(enableAt);
+
+    // (d) BEHAVIOUR: the script reads `systemctl --user show … -p MemoryHigh
+    // --value` and fails unless the answer is `infinity`. A stub `systemctl`
+    // prints $STUB_VALUE for that exact argv and exits 3 for anything else,
+    // so the test proves the script checks the enforced value, not a file.
+    const script = path.join(deployDir, 'assert-slice-policy.sh');
+    for (const [label, stubValue, wantExit0] of [
+      ['infinity', 'infinity', true],
+      ['21474836480', '21474836480', false],
+      ['empty', '', false],
+    ] as const) {
+      const dir = mkTmp('ccrc-agent-slicepolicy-');
+      writeFileSync(path.join(dir, 'systemctl'),
+        '#!/bin/sh\n'
+        + 'case "$*" in\n'
+        + '  "--user show app-claude\\x2dsession.slice -p MemoryHigh --value")\n'
+        + '    printf "%s\\n" "$STUB_VALUE"; exit 0 ;;\n'
+        + 'esac\n'
+        + 'exit 3\n',
+        { mode: 0o755 });
+      const PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
+      const resolved = spawnSync('sh', ['-c', 'command -v systemctl'], {
+        encoding: 'utf8', env: { ...process.env, PATH },
+      }).stdout.trim();
+      expect(resolved.startsWith(`${dir}${path.sep}`),
+        `systemctl must resolve inside the stub dir; got "${resolved}" — REFUSING to run the gate`).toBe(true);
+
+      const r = spawnSync('bash', [script], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH, STUB_VALUE: stubValue },
+      });
+      if (wantExit0) {
+        expect(r.status, `STUB_VALUE=${label}: expected exit 0, got ${r.status}\nstderr:\n${r.stderr}`).toBe(0);
+        expect(r.stdout).toContain('MemoryHigh=infinity (enforced value verified)');
+      } else {
+        expect(r.status, `STUB_VALUE=${label}: expected non-zero, got 0`).not.toBe(0);
+        expect(r.stderr, `STUB_VALUE=${label}: stderr must mention "must be infinity"`)
+          .toContain('must be infinity');
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('the unit files install ATOMICALLY — a copy that dies mid-write cannot leave a truncated unit live (D-1982)', () => {
@@ -753,6 +838,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       ['claude-session@.service', join(src, 'ccd', 'claude-session@.service')],
       ['claude-session@.service.d/limits.conf', join(src, 'deploy', 'systemd', 'claude-session@.service.d', 'limits.conf')],
       ['app-claude\\x2dsession.slice.d/limits.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'limits.conf')],
+      ['app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf')],
       ['ccrc-agent.service.d/protect.conf', join(src, 'deploy', 'systemd', 'ccrc-agent.service.d', 'protect.conf')],
       ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']
         .flatMap((n) => ['service', 'timer'].map((ext) =>

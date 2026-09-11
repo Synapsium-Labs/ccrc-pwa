@@ -657,16 +657,15 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
-    // TEN since the automations migration landed. Both parents of that merge
-    // said NINE and both were right about their own tree: `main` had taken 9
-    // for the ask pre-emption lane while this branch had taken 9 for
-    // automations, so the merge renumbered the automations entry to 10 (its
-    // own banner records both renumbers). The literal here is the point of
-    // the test — it is the one place the derivation is checked against a
-    // number a human read off the array.
-    expect(COORD_SCHEMA_VERSION).toBe(10);
-    expect(MIGRATIONS.length).toBe(10);
+  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
+    // ELEVEN, and the number moves on every merge with `main`: an unmerged
+    // branch's migration is the one that renumbers, because the entries
+    // already on `main` may have been applied on a box. The automations entry
+    // has been 7, 9, 10 and now 11 — taken past by the dispatch-decision
+    // columns, the ledger repair, the ask pre-emption lane and cross-repo
+    // programmes in turn.
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(MIGRATIONS.length).toBe(11);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -762,13 +761,104 @@ describe('coord.db: migration 8 — un-landing the two rows a CITATION stamped',
   });
 });
 
-
-describe('coord.db: migration 9 — automations, their runs and their steps', () => {
+// D-2410: main's ask lane owns migration 9; this wave must prove its columns
+// arrive from the next entry against a file on which that lane already ran.
+describe('coord.db: migration 10 — the programme knows its home, the feed row names its run', () => {
   interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
-  const tableInfo = (db: DatabaseSync, table: string): ColumnInfo[] =>
-    db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[];
-  const col = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
-    tableInfo(db, table).find((c) => c.name === name);
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 9 — it cannot amend the ask migration it rebased over', () => {
+    // Migrations 2..9 are already frozen. A file left by the ask-lane server is
+    // at 9; db.ts's loop starts at `current`, so anything amended INTO entries
+    // 0..8 can never run against it again. The two columns must therefore arrive
+    // as their own entry, and this proves they do without weakening the ask lane.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 8; i++) raw.exec(MIGRATIONS[i]!);
+      raw.prepare(
+        'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+        "VALUES (1, 'child', 'parent', NULL, 'key', 1, 'dialog', 'question', '[\"answer\"]', 'held')",
+      ).run();
+      raw.exec('PRAGMA user_version = 9');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(columnOf(db, 'programs', 'homeProject'), 'programs.homeProject is absent').toBeDefined();
+    expect(columnOf(db, 'feed_events', 'runId'), 'feed_events.runId is absent').toBeDefined();
+    expect((db.prepare('SELECT count(*) AS n FROM asks').get() as { n: number }).n).toBe(1);
+    // READABLE, not merely present: a v-9 row written before the columns existed
+    // reads back NULL rather than throwing.
+    db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')").run();
+    expect((db.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as
+      { homeProject: string | null }).homeProject).toBeNull();
+    db.close();
+  });
+
+  it('gives both columns the nullability the design depends on', () => {
+    // NULLABLE, NO DEFAULT, both — and both halves are load-bearing. A NULL
+    // `homeProject` means "no home was ever stored", which a later explicit
+    // home BACKFILLS; a default would guess a home nothing could then correct
+    // without colliding with it. A NULL `feed_events.runId` means "this event
+    // is about no run" — an ask/done/merged about a session — which is
+    // programless, not unmeasured.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const home = columnOf(db, 'programs', 'homeProject');
+    const rid = columnOf(db, 'feed_events', 'runId');
+    expect(home!.type).toBe('TEXT');
+    expect(rid!.type).toBe('INTEGER');
+    for (const c of [home, rid]) {
+      expect(c!.notnull, `${c!.name} must be nullable`).toBe(0);
+      expect(c!.dflt_value, `${c!.name} must carry no default`).toBeNull();
+    }
+    db.close();
+  });
+
+  it('is ADDITIVE: every column migration 1 wrote on programs is still there', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const names = (db.prepare('PRAGMA table_info(programs)').all() as unknown as ColumnInfo[])
+      .map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(['slug', 'title', 'createdAt', 'state', 'homeProject']));
+    db.close();
+  });
+
+  it('a database from a NEWER build still READS both columns — rollback is real', () => {
+    // spec:78-81 and `db.ts:105`: an older build meeting a higher user_version
+    // may refuse to MIGRATE, never to READ. This is that promise for THESE two
+    // columns specifically — `programs.homeProject` and `feed_events.runId` —
+    // since a rollback across this migration is the exact window the design's
+    // §8 rollback paragraph is about, and both are read back below.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.prepare("INSERT INTO programs (slug,title,createdAt,state,homeProject) VALUES ('p','P',1,'active','demo')").run();
+    a.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'run', 's', 't', 'b', 7)").run();
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    expect((b.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as
+      { homeProject: string | null }).homeProject).toBe('demo');
+    expect((b.prepare('SELECT runId FROM feed_events WHERE seq = 1').get() as
+      { runId: number | null }).runId).toBe(7);
+    expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION + 3);
+    warnSpy.mockRestore();
+    b.close();
+  });
+});
+
+describe('coord.db: migration 11 — the automations tables, on a file the four entries before it already ran', () => {
+  // Structured the way `main` structures every other per-migration block in
+  // this file, rather than grown inside the version test the way this branch
+  // first wrote it: the merge that brought cross-repo programmes in made the
+  // difference visible, because two branches growing ONE test is a conflict
+  // every time while two describes are not.
   const nowSeconds = 1_700_000_000;
 
   // A minimally-valid armed row, satisfying the invariant this migration must
@@ -798,115 +888,15 @@ describe('coord.db: migration 9 — automations, their runs and their steps', ()
     ).run(row);
   };
 
-  it('reaches the head user_version and creates all four tables plus their indexes', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-      .toBe(COORD_SCHEMA_VERSION);
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
-      { name: string }[]).map((r) => r.name);
-    expect(tables).toEqual(expect.arrayContaining([
-      'automations', 'automation_runs', 'automation_run_events', 'automations_state',
-    ]));
-    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as
-      { name: string }[]).map((r) => r.name);
-    expect(indexes).toEqual(expect.arrayContaining([
-      'automations_due', 'automations_by_project', 'automation_runs_by_automation',
-      'automation_run_events_by_run',
-    ]));
-    db.close();
-  });
-
-  it('gives `automations` exactly the columns spec:320-370 names, in order', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const names = tableInfo(db, 'automations').map((c) => c.name);
-    // `leaseRunId` (Task 4, task-4-decisions.md C1.6): the third lease column,
-    // appended after `leaseHardUntil` — additive to this same migration, not a
-    // new one. Without it, a settle racing a superseding claim (the soft-bound
-    // lease lapsing while the loser is still mid-spawn) could release the
-    // SUCCESSOR's lease instead of its own — `claims.heldBy`'s identical shape.
-    expect(names).toEqual([
-      'id', 'name', 'state', 'project', 'prompt', 'cadenceKind', 'cadenceDays',
-      'cadenceMinute', 'cadenceEvery', 'tz', 'graceMs', 'createdAt', 'updatedAt',
-      'provedAt', 'nextRunAt', 'scheduleError', 'lastFireAt', 'lastOutcome',
-      'lastRefusal', 'leaseUntil', 'leaseHardUntil', 'leaseRunId',
-      'consecutiveFailures', 'runsEvicted',
-    ]);
-    db.close();
-  });
-
-  it('gives `automation_runs` exactly the columns spec:377-398 names, in order', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const names = tableInfo(db, 'automation_runs').map((c) => c.name);
-    expect(names).toEqual([
-      'id', 'automationId', 'scheduledFor', 'startedAt', 'endedAt', 'lateMs', 'outcome',
-      'refusal', 'trigger', 'dstShifted', 'adopted', 'sessionId', 'workspace', 'branch',
-      'wrapper', 'homeScore', 'spawnRc',
-    ]);
-    db.close();
-  });
-
-  it('gives `automation_run_events` exactly the columns spec:401-411 names, in order', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const names = tableInfo(db, 'automation_run_events').map((c) => c.name);
-    expect(names).toEqual(['id', 'runId', 'at', 'step', 'ok', 'detail', 'truncatedBytes']);
-    db.close();
-  });
-
-  it('gives `automations_state` exactly the columns spec:413-417 names, in order', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const names = tableInfo(db, 'automations_state').map((c) => c.name);
-    expect(names).toEqual(['id', 'paused', 'updatedAt']);
-    db.close();
-  });
-
-  it('keeps `nextRunAt`, `scheduleError`, `tz`, `provedAt`, `lastFireAt` nullable with no default — collapsing any one is the overloaded-null defect §5 names', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    for (const n of ['nextRunAt', 'scheduleError', 'tz', 'provedAt', 'lastFireAt']) {
-      const c = col(db, 'automations', n);
-      expect(c, `automations.${n} must exist`).toBeDefined();
-      expect(c!.notnull, `automations.${n} must be nullable`).toBe(0);
-      expect(c!.dflt_value, `automations.${n} must carry no default`).toBeNull();
-    }
-    db.close();
-  });
-
-  it('keeps `spawnRc` and `homeScore` nullable with no default — NULL is UNMEASURED, not zero (limits.ts:40-47)', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    for (const n of ['spawnRc', 'homeScore']) {
-      const c = col(db, 'automation_runs', n);
-      expect(c, `automation_runs.${n} must exist`).toBeDefined();
-      expect(c!.notnull, `automation_runs.${n} must be nullable`).toBe(0);
-      expect(c!.dflt_value, `automation_runs.${n} must carry no default`).toBeNull();
-    }
-    db.close();
-  });
-
-  it('gives `truncatedBytes` NOT NULL DEFAULT 0, so it is always emitted', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const c = col(db, 'automation_run_events', 'truncatedBytes');
-    expect(c!.notnull).toBe(1);
-    expect(c!.dflt_value).toBe('0');
-    db.close();
-  });
-
-  it('seeds `automations_state` with exactly one row, paused = 0', () => {
-    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    const rows = db.prepare('SELECT id, paused, updatedAt FROM automations_state').all() as
-      { id: number; paused: number; updatedAt: number }[];
-    expect(rows).toEqual([{ id: 1, paused: 0, updatedAt: 0 }]);
-    db.close();
-  });
-
-  it('reaches a database ALREADY at user_version 6 — it cannot be an amendment to any earlier migration, and existing `runs` rows survive it', () => {
+  it('reaches a database ALREADY at user_version 10 — every entry below this one is frozen', () => {
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
     tx(raw, () => {
-      // Seeds every entry BELOW this one and stamps the version it left, so the
-      // loop has exactly this migration to run. The range moved from 0..5 to 0..7
-      // when `main` took 7 and 8 and this entry was renumbered to 9.
-      for (let i = 0; i <= 7; i++) raw.exec(MIGRATIONS[i]!);
-      raw.exec('PRAGMA user_version = 8');
+      // Seeds every entry BELOW this one and stamps the version it left, so
+      // the loop has exactly this migration to run.
+      for (let i = 0; i <= 9; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 10');
     });
     raw.prepare(
       "INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')",
@@ -925,6 +915,8 @@ describe('coord.db: migration 9 — automations, their runs and their steps', ()
     expect(tables).toEqual(expect.arrayContaining([
       'automations', 'automation_runs', 'automation_run_events', 'automations_state',
     ]));
+    // The rows written before the migration ran are still there — additive
+    // means additive.
     expect((db.prepare('SELECT count(*) AS c FROM runs').get() as { c: number }).c).toBe(1);
     db.close();
   });

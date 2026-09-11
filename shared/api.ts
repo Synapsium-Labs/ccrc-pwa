@@ -3450,6 +3450,23 @@ export interface NotifyEvent {
    *  degradation this union was given `unknown` for. */
   kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
+  /**
+   * WHICH RUN this notification is about, or `null` when it is about none.
+   *
+   * ADDITIVE (design 2026-09-08 §4); `FLEET_PROTO` is deliberately not bumped.
+   * The ONE tolerant reader is `reviveNotifyEvent` below — an older server's
+   * frame carries no `runId` at all, and that absence becomes `null` there and
+   * nowhere else.
+   *
+   * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
+   * `coord` are about a SESSION or about the config; they belong to no
+   * programme and appear only in the unfiltered feed. The two lanes that DO
+   * know a run — the mail lane and the run-transition lane — populate it, which
+   * is what makes `GET /api/feed?program=` a join rather than a guess. Nothing
+   * reads a run to compute this, so there is no read that could fail and no
+   * third condition to fold in here.
+   */
+  runId: number | null;
 }
 
 /** `resync: true` means "I cannot prove you saw everything" — the epoch moved,
@@ -3514,6 +3531,14 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
       sessionId: reqStr(o, 'sessionId'),
       title: reqStr(o, 'title'),
       body: reqStr(o, 'body'),
+      // TOLERANT, and deliberately not `reqNum`: an older server's frame omits
+      // this field entirely, and rejecting the whole event over an additive
+      // field would drop a real notification for a build difference. Anything
+      // that is not a number — absent, null, a string — becomes `null`, which
+      // is this field's own documented "about no run". The `kind` degradation
+      // eight lines up is the same policy for the same reason.
+      runId: typeof (o as { runId?: unknown }).runId === 'number'
+        ? (o as { runId: number }).runId : null,
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
@@ -4162,8 +4187,30 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Thirteen codes exist below today; the next new one would be the
- * fourteenth, not the ninth.
+ * Fifteen codes exist below today; the next new one would be the
+ * sixteenth, not the ninth.
+ *
+ * `project-mismatch` is cross-repo programmes' first guard (design
+ * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
+ * SESSION's workspace is a git worktree in exactly one repository, and until
+ * this code existed the "same `sessionId`, same workspace" idiom crossed
+ * repos with nothing to stop it — the mismatch surfaced one advance later as
+ * a `tip-unmeasurable` naming a branch and a project the coordinator did not
+ * expect. It is emitted at TWO sites for the same fact measured two ways:
+ * `POST /api/runs` reads this store's own history (`sessionProject`), and
+ * `POST /api/runs/:id/dispatch`'s resume arm reads the live registry record.
+ * Its body carries `by`, the project the session actually belongs to, so the
+ * coordinator's report names the repo rather than the surprise.
+ *
+ * `home-mismatch` is its sibling and NOT a flavour of it (design §3 F2). A
+ * programme has ONE home — the project whose repository holds its ledger,
+ * spec and plan — and a later open naming a different one is refused rather
+ * than allowed to move it. The two are separate codes because the caller acts
+ * on them completely differently: `project-mismatch` says "open this wave
+ * without a `sessionId` and spawn fresh in the target repo", while
+ * `home-mismatch` says "you are addressing the wrong programme, or you typed
+ * the wrong home" — the wave does not move, the programme does not move, and
+ * `by` names the home this programme has carried since its first open.
  *
  * `hookstate-unmeasurable` is `worker-busy`'s twin at the same gate and the
  * distinction between them is the whole of D-115: `worker-busy` asserts a
@@ -4186,13 +4233,15 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
-  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal';
+  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
+  | 'project-mismatch' | 'home-mismatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
+  'project-mismatch': true, 'home-mismatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -4353,9 +4402,12 @@ export interface RunHealth {
   /** Deliveries of this run's mail still `queued` or `delivered`. */
   readonly mailOutstanding: number;
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
-   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
-   *  working as designed and is excluded, because reporting it would announce a
-   *  chair that has already changed hands. */
+   *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
+   *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  `recipient rebound` park (a worker was re-bound to a new session,
+   *  cross-repo §4) are all the machinery working as designed, and reporting
+   *  any of them would announce a change that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -4401,6 +4453,25 @@ export interface RunSummary {
   wave: number;
   waveOf: number | null;
   project: string;
+  /**
+   * The project whose repository holds this run's PROGRAMME — its ledger, its
+   * spec and its plan — or `null` when the programme row stores none.
+   *
+   * `project` above is where THIS RUN works; this is where the programme
+   * lives, and the two differ exactly when the run is a crossing. That is the
+   * whole reason the board needs it (design §5, F4): a runs-screen row can
+   * only mark a crossing by comparing them.
+   *
+   * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. REQUIRED here because
+   * `hydrateRun` returns a literal and must therefore compute it — the same
+   * mechanism `health` relies on — and `null` is a first-class answer rather
+   * than a missing one: it is what every programme opened before this column
+   * had a writer says, and what one opened during the legacy generation says.
+   * A renderer marks NOTHING while it is null; absence permits. It is never
+   * derived from the registry or from the claimant — a fact the programme
+   * carries forever must not depend on a live read that can degrade.
+   */
+  homeProject: string | null;
   sessionId: string | null;
   workspace: string | null;
   branch: string | null;
@@ -4608,11 +4679,14 @@ export interface MailSummary {
   /**
    * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
    *
-   * FREE TEXT, and it has to be treated as such: four writers put four
-   * different kinds of thing here — a typed `sendPrompt` error code,
-   * `'recipient not in registry'`, `'run closed'`, and a whole English
-   * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
-   * target, not a vocabulary, and it has never been validated on the way in.
+   * FREE TEXT, and it has to be treated as such (PR #75 review round 1,
+   * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
+   * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
+   * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
+   * Three direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
+   * examples of the column's contents, not a closed census or vocabulary: it
+   * is a maintainer's grep target and has never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a
