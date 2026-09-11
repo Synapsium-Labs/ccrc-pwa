@@ -3547,3 +3547,52 @@ still fails a trivial `echo yes` probe indicates broken machinery.
 it. It matters because this repo is bound for public release and the failure would land on an outside
 contributor running a stock container, for a tree with nothing wrong with it.
 
+
+## DEPLOYED — both lanes at `79d6d045`, 2026-09-11
+
+Operator lifted the hold and authorised the deploy at 16:28Z.
+
+### The hold was already moot, and nobody knew
+
+**Before-state, measured rather than assumed:** both boxes were already at `eff13d1f` — PR #87's merge,
+deployed 15:17Z (fleet) / 15:23Z (server) by another session. And `b879510f` (wave 3, PR #81) is an
+ANCESTOR of `eff13d1f`. So **wave 3's server arm had been live since 15:23Z**, carried in by an unrelated
+PR's deploy. The hold was not lifted today; it was broken this afternoon by a merge train, silently.
+That is the shape [[ancestry-is-not-content]] warns about running in reverse: nobody checked what a
+deploy CONTAINED, only what it was for.
+
+### Order, decided rather than defaulted
+
+`ccrc-deploy-topology` says the order is about who READS whom. Answered for this wave: the new `ccd`
+EMITS nothing new, and wave 3's server arm journals nothing (no reader-widening of the 2b kind), so
+neither lane needs the other. Default **agent-first** held, with no measured reason to invert.
+
+### Agent lane — 16:30:44Z
+
+`ccd 79d6d045`, and **all 26 `claude-session@*` units verified active with stable MainPIDs across 5 s**.
+The `KillMode=process` preflight passed and the sanctioned sweep restarted every supervisor onto the new
+inode without losing a session — including this one's.
+
+**Verified by content and by behaviour, not by the version string:**
+- installed `~/.local/bin/ccd` sha256 == the repo's, byte for byte (`ef0ae8a9…`)
+- installed `~/ccrc/ccd/ccrc-doctor-checks` == the repo's (`f215a412…`). Its mtime is OLDER than the
+  deploy because `install_atomic` preserves the source's — the reason this program's own memory says to
+  compare the stamp, never mtimes.
+- **live on the deployed binary, fixture HOME:** a U+3000-padded tag reads `malformed` under BOTH
+  `LC_ALL=C` and `en_US.UTF-8` (D-2520 closed on the real fleet — those two disagreed before), and
+  `_pool_name_valid` rejects `pool-<U+00E9>` under both (D-2522 closed).
+
+### Server lane — 16:36:59Z
+
+`ccrc.service` active, MainPID stable, `/health` reports the shipped sha, `dirty:false`. The shipped
+bundle carries `replace(/[ \t\n\v\f\r]+$/, '')` and no `\s` strip remains anywhere in `dist`.
+
+### One wart, deliberately not chased
+
+The build stamp reads `"ref":"fix/pool-tag-locale-parity"` where the previous deploy read `"HEAD"`,
+because `deploy.sh` takes it from `git rev-parse --abbrev-ref HEAD` and I deployed from a worktree on a
+named branch sitting at `origin/main`. **Measured before deciding:** `shared/buildinfo.ts` only requires
+`ref` to be a non-empty string and nothing gates on it, so the label is informational. Correcting it
+would cost a second supervisor sweep across 26 live sessions for a cosmetic field — not a trade worth
+making. **Deploy from a DETACHED HEAD at `origin/main` next time** and the label reads `HEAD` again.
+
