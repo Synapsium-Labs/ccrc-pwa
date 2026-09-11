@@ -128,7 +128,13 @@ export const AUTOMATION_ROUTE_REFUSAL_SENTENCE: Record<AutomationRouteRefusal, s
 
 export const SCHEDULE_ERROR_SENTENCE: Record<ScheduleError, string> = {
   'unknown-timezone': "this build's ICU does not recognise that timezone",
-  'bad-cadence': 'the stored cadence is not well formed',
+  // "that cadence", not "the stored cadence": this table is read from BOTH
+  // sides of the same fact — the list row, where the cadence is stored, and
+  // the editor's live preview, where it is being typed. The sheet used to
+  // carry its own copy of these three sentences for exactly that reason, and
+  // the copies had drifted; one wording that is true in both places is what
+  // lets there be one table.
+  'bad-cadence': 'that cadence is not well formed',
   'no-future-occurrence': 'that cadence names no day it can ever fire on',
   'failure-ceiling': 'this automation failed too many times in a row and was paused',
   unknown: 'this cadence cannot be scheduled, for a reason this build does not recognise',
@@ -230,6 +236,15 @@ export function automationErrorSentence(body: unknown): string {
   if (typeof o.refused === 'string') return refusalSentence(o.refused);
   if (typeof o.refusal === 'string') return refusalSentence(o.refusal);
   if (typeof o.error === 'string') {
+    // `bad-schedule` is the one route refusal whose body carries a SECOND
+    // field, and it is the field that says what to do: three conditions with
+    // three different fixes (a zone this build cannot resolve, a malformed
+    // time or interval, a mask that names no day) all render as one sentence
+    // without it. The generic half stays, because it names which door
+    // refused; the specific half is what the operator acts on.
+    if (o.error === 'bad-schedule' && typeof o.scheduleError === 'string') {
+      return `${routeRefusalSentence('bad-schedule')} — ${scheduleErrorSentence(o.scheduleError)}`;
+    }
     const generic = GENERIC_ERROR_TEXT[o.error];
     if (generic !== undefined) return generic;
     return routeRefusalSentence(o.error);

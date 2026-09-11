@@ -242,6 +242,43 @@ describe('POST /api/automations — create', () => {
   });
 });
 
+describe('an edit changes what it was asked to change', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { await app?.close(); app = undefined; });
+
+  it('an omitted graceMs keeps the stored one — absence is not the default', async () => {
+    // The editor sheet does not expose `graceMs` at all, so every edit it
+    // sends omits the field — and the parser filled the CREATE default in,
+    // which the store then wrote. An operator who had set a two-hour grace
+    // and later renamed the automation silently got thirty minutes back, and
+    // grace is what decides whether a late occurrence fires as a catch-up or
+    // is recorded `missed`. Absence and a value are two different facts at
+    // this seam: on create absence means "start me at the default", on edit
+    // it means "do not touch it".
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const id = (await create(app, validBody({ graceMs: 7_200_000 }))).json().automation.id as number;
+    expect(w.coord.automation(id)!.graceMs).toBe(7_200_000);
+
+    const renamed = await app.inject({
+      method: 'POST', url: `/api/automations/${id}`, payload: validBody({ name: 'nightly-2' }),
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    expect(w.coord.automation(id)!.name).toBe('nightly-2');
+    expect(w.coord.automation(id)!.graceMs, 'the grace the operator set survives an unrelated edit')
+      .toBe(7_200_000);
+
+    // And a body that DOES name it still sets it — absence is the only thing
+    // that means "unchanged".
+    const regraced = await app.inject({
+      method: 'POST', url: `/api/automations/${id}`, payload: validBody({ graceMs: 60_000 }),
+    });
+    expect(regraced.statusCode).toBe(200);
+    expect(w.coord.automation(id)!.graceMs).toBe(60_000);
+  });
+});
+
 describe('the global kill switch is READABLE, not only settable', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { await app?.close(); app = undefined; });

@@ -60,7 +60,7 @@
 .auto-detail { display: grid; gap: var(--sp-2); padding: 0 var(--sp-2) var(--sp-3); }
 .auto-detail-note { color: var(--status-attention-text); font-size: var(--text-xs); }
 .auto-detail-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-.auto-detail-arm, .auto-detail-run, .auto-detail-pause, .auto-detail-retire {
+.auto-detail-arm, .auto-detail-run, .auto-detail-pause, .auto-detail-retire, .auto-detail-edit {
   min-height: var(--tap-min); padding: 0 var(--sp-3);
   background: var(--bg-raised); color: var(--ink-primary);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);

@@ -27,7 +27,7 @@
 //    should be. `? <token>` is the honest degrade.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AutomationRunSummary, AutomationSummary } from '../../shared/api';
+import type { AutomationRunSummary, AutomationState, AutomationSummary } from '../../shared/api';
 import {
   AUTOMATION_REFUSALS, AUTOMATION_ROUTE_REFUSALS, AUTOMATION_STATES,
   AUTOMATION_OUTCOMES, SCHEDULE_ERRORS,
@@ -287,6 +287,57 @@ describe('the filter chips say what they are and whether they are on', () => {
     fireEvent.click(armed);
     expect(screen.getByRole('button', { name: 'state: armed' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'state: all' })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('the edit door', () => {
+  it('opens the sheet ON that row and sends the edit', async () => {
+    // `editing`, `editAutomation` and `POST /api/automations/:id` all shipped
+    // and NOTHING on the phone ever passed `editing`, so an automation could
+    // be created and never changed — a prompt typo meant retire-and-recreate,
+    // which throws away the run history the §7 arm gate is read from. The
+    // sheet was also mounted once for the life of this screen, so without a
+    // fresh mount per open it would have shown the create form's leftovers
+    // under the "Edit automation" title.
+    const row = auto({ id: 4, name: 'weekly-audit', prompt: 'audit the fleet' });
+    const edits: number[] = [];
+    seedStore({ automations: [row], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [row] })}
+        getAutomation={async () => ({ automation: row, runs: [] })}
+        editAutomation={async (id) => { edits.push(id); return { automation: row }; }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /weekly-audit/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    expect(await screen.findByText('Edit automation'), 'the sheet opens in EDIT mode').toBeInTheDocument();
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value,
+      "and on the row that was tapped, not on the create form's leftovers").toBe('weekly-audit');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => { expect(edits).toEqual([4]); });
+  });
+
+  it('the New automation door still opens a BLANK create form after an edit', async () => {
+    // The other half of the same key: having opened the sheet on a row, the
+    // create door must not inherit that row's values.
+    const row = auto({ id: 4, name: 'weekly-audit' });
+    seedStore({ automations: [row], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [row] })}
+        getAutomation={async () => ({ automation: row, runs: [] })}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /weekly-audit/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('weekly-audit');
+    // Close it the way the sheet's own scrim does, then take the create door.
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    fireEvent.click(screen.getByRole('button', { name: 'New automation' }));
+    expect((await screen.findAllByLabelText('Name')).length).toBe(1);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('');
   });
 });
 

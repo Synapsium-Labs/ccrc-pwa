@@ -13,7 +13,7 @@
 // and the note below the Save button says so, in the same words the arm
 // door's own refusal uses (`AUTOMATION_ROUTE_REFUSAL_SENTENCE['never-run-by-hand']`)
 // — one sentence, read from both places, never two spellings of the same fact.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AutomationSummary } from '../../../shared/api';
 import {
@@ -21,7 +21,9 @@ import {
 } from '../../../shared/schedule';
 import { Sheet } from '../components/Sheet';
 import { ApiError, api } from '../lib/api';
-import { AUTOMATION_ROUTE_REFUSAL_SENTENCE, automationErrorSentence } from './autoWords';
+import {
+  AUTOMATION_ROUTE_REFUSAL_SENTENCE, automationErrorSentence, scheduleErrorSentence,
+} from './autoWords';
 import './auto.css';
 
 type ChipKind = 'hourly' | 'daily' | 'weekdays' | 'weekly';
@@ -85,34 +87,28 @@ function timeToMinuteOfDay(s: string): number {
 function previewFor(cadence: Cadence, tz: string, nowMs: number): string {
   const occ = nextOccurrence(cadence, nowMs, null);
   if ('unschedulable' in occ) {
-    return `cannot schedule — ${scheduleErrorSentenceLocal(occ.unschedulable)}`;
+    return `cannot schedule — ${scheduleErrorSentence(occ.unschedulable)}`;
   }
   try {
     const tup = localTupleAt(tz, occ.at);
     return `next fire: ${tup.y}-${pad2(tup.mo)}-${pad2(tup.d)} ${pad2(tup.h)}:${pad2(tup.mi)} ${tz}`;
   } catch {
-    return scheduleErrorSentenceLocal('unknown-timezone');
+    return scheduleErrorSentence('unknown-timezone');
   }
 }
 
-// A tiny local mirror rather than importing `autoWords.ts`'s
-// `scheduleErrorSentence`: that function is entered through the
-// `isScheduleError` door, which is the WIDER `shared/api.ts` union
-// (`ScheduleError`, 5 members) — `shared/schedule.ts`'s own
-// `CadenceUnschedulable` (3 members) is a strict subset by STRING VALUE
-// (spec §10's own note), so every value this function receives is already a
-// valid `ScheduleError` and the guard would always accept it. Importing the
-// L0-only module's own sentence would still be correct; this file already
-// depends on `autoWords.ts` for the route-refusal table, so the two-line
-// local switch avoids a second import purely for three string literals this
-// module never needs the FULL union's `unknown`/`failure-ceiling` arms for.
-function scheduleErrorSentenceLocal(u: 'unknown-timezone' | 'bad-cadence' | 'no-future-occurrence'): string {
-  switch (u) {
-    case 'unknown-timezone': return "this build's ICU does not recognise that timezone";
-    case 'bad-cadence': return 'the time or interval is not well formed';
-    case 'no-future-occurrence': return 'that cadence names no day it can ever fire on';
-  }
-}
+// NO LOCAL SENTENCE TABLE. One stood here — a "tiny local mirror" of
+// `autoWords.ts`'s `scheduleErrorSentence`, argued on the grounds that
+// `shared/schedule.ts`'s `CadenceUnschedulable` (3 members) is a strict
+// subset by string value of `shared/api.ts`'s `ScheduleError` (5), so the
+// `isScheduleError` guard would always accept. The subset argument was true
+// and the conclusion was wrong: two copies of one sentence is what this tree
+// forbids for the reason that had ALREADY happened here — the copies drifted
+// (`bad-cadence` read "the time or interval is not well formed" locally
+// against "the stored cadence is not well formed" shared), so the same
+// refusal said two different things depending on which surface the operator
+// was looking at. The shared table's wording is now true of both surfaces,
+// and this file reads it.
 
 export interface AutomationSheetProps {
   open: boolean;
@@ -135,8 +131,42 @@ export interface AutomationSheetProps {
   defaultTz?: string;
 }
 
-export function AutomationSheet({
-  open,
+/**
+ * FRESH ON EVERY OPEN, AND ON EVERY TARGET. The form's `useState`
+ * initialisers run once per MOUNT, and this component is mounted for the life
+ * of the screen that owns it — so with the state held out here, a second open
+ * re-showed the first open's half-typed form, and once the edit door existed
+ * it would have shown one row's values under another row's title.
+ *
+ * TWO mechanisms, because there are two ways to reach a stale form, and each
+ * is measured separately:
+ *   * the state lives in the FORM, which the drawer unmounts when it closes —
+ *     so a close and reopen is a fresh mount with the initialisers re-run,
+ *     with ONE copy of the initial-state policy rather than eight assignments;
+ *   * the `key` covers a target that changes while the sheet stays OPEN,
+ *     which no unmount would catch.
+ *
+ * The generation is bumped in a RENDER-PHASE adjust (React's documented
+ * "adjusting state when props change") rather than in an effect, so the fresh
+ * form is what commits — an effect would paint the stale one for a frame
+ * first, and the stale frame IS the defect.
+ */
+export function AutomationSheet(props: AutomationSheetProps): ReactNode {
+  const { open, onClose, editing = null } = props;
+  const [gen, setGen] = useState(0);
+  const wasOpen = useRef(open);
+  if (wasOpen.current !== open) {
+    wasOpen.current = open;
+    if (open) setGen((g) => g + 1);
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title={editing === null ? 'New automation' : 'Edit automation'}>
+      <AutomationSheetForm key={`${gen}:${editing === null ? 'new' : String(editing.id)}`} {...props} />
+    </Sheet>
+  );
+}
+
+function AutomationSheetForm({
   onClose,
   onSaved,
   editing = null,
@@ -191,7 +221,6 @@ export function AutomationSheet({
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title={editing === null ? 'New automation' : 'Edit automation'}>
       <div className="auto-sheet">
         <label className="auto-sheet-field">
           <span>Name</span>
@@ -271,7 +300,6 @@ export function AutomationSheet({
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
-    </Sheet>
   );
 }
 

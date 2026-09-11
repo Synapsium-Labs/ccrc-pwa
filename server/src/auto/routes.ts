@@ -85,7 +85,15 @@ function parseCadence(v: unknown): Cadence | null {
 
 interface ParsedAutomationBody {
   readonly name: string; readonly project: string; readonly prompt: string;
-  readonly cadence: Cadence; readonly graceMs: number;
+  readonly cadence: Cadence;
+  /** `null` = THE BODY SAID NOTHING, which is not the same fact as a value
+   *  and must not be collapsed into one here (GC 9). On create, absence means
+   *  "start at the default"; on edit it means "do not touch it" — the editor
+   *  sheet exposes no grace field at all, so every edit it sends omits this,
+   *  and filling the create default in was silently resetting an operator's
+   *  own grace on an unrelated rename. Grace decides whether a late
+   *  occurrence fires as a catch-up or is recorded `missed`. */
+  readonly graceMs: number | null;
 }
 
 /** create/edit share every field. `'invalid'` is its own return arm rather
@@ -112,7 +120,7 @@ function parseAutomationBody(body: unknown): ParsedAutomationBody | 'invalid' {
   if (typeof o.prompt !== 'string' || o.prompt.trim() === '') return 'invalid';
   const cadence = parseCadence(o.cadence);
   if (cadence === null) return 'invalid';
-  let graceMs = AUTOMATION_GRACE_MS_DEFAULT;
+  let graceMs: number | null = null;
   if (o.graceMs !== undefined) {
     const g = storableInt(o.graceMs);
     if (g === null || g <= 0) return 'invalid';
@@ -204,7 +212,7 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
     }
     const input: NewAutomation = {
       name: parsed.name, project: parsed.project, prompt: parsed.prompt,
-      cadence: parsed.cadence, graceMs: parsed.graceMs,
+      cadence: parsed.cadence, graceMs: parsed.graceMs ?? AUTOMATION_GRACE_MS_DEFAULT,
     };
     const { id } = coord.insertAutomation(input, now);
     return reply.code(201).send({ ok: true, automation: toAutomationSummary(coord.automation(id)!) });
@@ -235,6 +243,11 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
     if (bytes > AUTOMATION_PROMPT_MAX_BYTES) {
       return reply.code(413).send({ ok: false, error: 'oversize', limit: AUTOMATION_PROMPT_MAX_BYTES, bytes });
     }
+    // The row FIRST, for the grace: an omitted `graceMs` means "unchanged"
+    // here, so this route needs the stored value, and a 404 answered from
+    // the read is the same answer `updateAutomation` would have given.
+    const stored = coord.automation(id);
+    if (!stored) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
     const now = Date.now();
     const plan = planSchedule(parsed.cadence, now, null);
     if (plan.scheduleError !== null) {
@@ -242,7 +255,7 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
     }
     const edit: AutomationEdit = {
       name: parsed.name, project: parsed.project, prompt: parsed.prompt,
-      cadence: parsed.cadence, graceMs: parsed.graceMs, nextRunAt: plan.nextRunAt,
+      cadence: parsed.cadence, graceMs: parsed.graceMs ?? stored.graceMs, nextRunAt: plan.nextRunAt,
     };
     return sendEditOutcome(reply, coord.updateAutomation(id, edit, now));
   });

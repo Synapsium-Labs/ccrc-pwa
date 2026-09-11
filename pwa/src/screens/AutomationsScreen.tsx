@@ -151,6 +151,7 @@ function AutomationDetail({
   onRun,
   onPause,
   onRetire,
+  onEdit,
   busy,
   actionError,
   actionNote,
@@ -164,6 +165,7 @@ function AutomationDetail({
   onRun: () => void;
   onPause: () => void;
   onRetire: () => void;
+  onEdit: () => void;
   busy: 'arm' | 'run' | 'pause' | 'retire' | null;
   actionError: string | null;
   actionNote: string | null;
@@ -186,6 +188,12 @@ function AutomationDetail({
           <button type="button" className="auto-detail-run" disabled={busy !== null} onClick={onRun}>
             {busy === 'run' ? 'Starting…' : 'Run now'}
           </button>
+        )}
+        {/* Not shown for a retired row: `updateAutomation` refuses `retired`
+            (terminal), so a door that opened onto a guaranteed 409 would be
+            worse than no door. */}
+        {automation.state !== 'retired' && (
+          <button type="button" className="auto-detail-edit" onClick={onEdit}>Edit</button>
         )}
         {automation.state === 'armed' && (
           <button type="button" className="auto-detail-pause" disabled={busy !== null} onClick={onPause}>
@@ -242,6 +250,7 @@ function AutomationRow({
   onRun: () => void;
   onPause: () => void;
   onRetire: () => void;
+  onEdit: () => void;
   busy: 'arm' | 'run' | 'pause' | 'retire' | null;
   actionError: string | null;
   actionNote: string | null;
@@ -301,6 +310,8 @@ export interface AutomationsScreenProps {
   getAutomation?: typeof api.automation;
   getRun?: typeof api.automationRun;
   pauseAutomations?: typeof api.automationsPause;
+  createAutomation?: typeof api.createAutomation;
+  editAutomation?: typeof api.editAutomation;
   armAutomation?: typeof api.armAutomation;
   runAutomation?: typeof api.runAutomation;
   setAutomationState?: typeof api.setAutomationState;
@@ -312,6 +323,8 @@ export function AutomationsScreen({
   getAutomation = api.automation,
   getRun = api.automationRun,
   pauseAutomations = api.automationsPause,
+  createAutomation = api.createAutomation,
+  editAutomation = api.editAutomation,
   armAutomation = api.armAutomation,
   runAutomation = api.runAutomation,
   setAutomationState = api.setAutomationState,
@@ -364,6 +377,12 @@ export function AutomationsScreen({
   const [actionNote, setActionNote] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
+  // WHICH ROW THE SHEET IS FOR. `null` = the create door. The sheet's edit
+  // branch, `api.editAutomation` and `POST /api/automations/:id` all shipped
+  // with no caller at all, so an automation could be created and never
+  // changed: a prompt typo meant retire-and-recreate, which throws away the
+  // run history the §7 arm gate is read from.
+  const [sheetFor, setSheetFor] = useState<AutomationSummary | null>(null);
 
   // Held in a ref, not the effect's own dependency array — `RunsScreen`'s
   // and `MailScreen`'s own fix: "once per mount" has to hold regardless of
@@ -632,6 +651,7 @@ export function AutomationsScreen({
               onRun={() => runAction('run', a.id, () => runAutomation(a.id))}
               onPause={() => runAction('pause', a.id, () => setAutomationState(a.id, 'paused'))}
               onRetire={() => runAction('retire', a.id, () => setAutomationState(a.id, 'retired'))}
+              onEdit={() => { setSheetFor(a); setSheetOpen(true); }}
               busy={expandedId === a.id ? busy : null}
               actionError={expandedId === a.id ? actionError : null}
               actionNote={expandedId === a.id ? actionNote : null}
@@ -640,14 +660,27 @@ export function AutomationsScreen({
         </ul>
       )}
 
-      <button type="button" className="auto-door" onClick={() => setSheetOpen(true)}>
+      <button
+        type="button"
+        className="auto-door"
+        onClick={() => { setSheetFor(null); setSheetOpen(true); }}
+      >
         New automation
       </button>
 
       <AutomationSheet
         open={sheetOpen}
+        editing={sheetFor}
+        createAutomation={createAutomation}
+        editAutomation={editAutomation}
         onClose={() => setSheetOpen(false)}
-        onSaved={() => { void loadCold(); }}
+        onSaved={() => {
+          void loadCold();
+          // An edit changes the row the panel is showing, so the panel must
+          // re-read: its `detail` is a one-shot cold read taken at open, and
+          // leaving it would put the OLD prompt under the new header.
+          if (expandedId !== null) refreshDetail(expandedId);
+        }}
       />
     </div>
   );
