@@ -3416,3 +3416,52 @@ input both readers call `malformed`.
 - **These are NEW**, checked rather than assumed after this morning's D-2008 mistake: no deviation,
   spec or plan in `origin/main` records the strip-vocabulary or locale question for the pool tag.
 
+
+## The follow-up PR — operator ruling, and what it became
+
+**Operator, 2026-09-11: "if the PR isn't merged yet, fold it in, otherwise its own PR."** Measured:
+PR #81 merged at 11:58 UTC as `b879510f`, and no open PR touches the pool tag (#87 is the codex lane,
+#86 crossrepo, #60 governance). So: **its own PR**, on `fix/pool-tag-locale-parity` off `b879510f`.
+
+**What it carries is NOT the D-2008 exposure** — that stays parked, for the reasons recorded above. It
+carries D-2519..D-2522, the parity defects found while measuring, all four of them live in merged code.
+
+### The fix turned out to be one idiom, not the two-option fork
+
+The earlier design panel argued a stat-then-read against a capped read op. Both were answering the
+wrong question. The actual defect was never the cap's *size* — it was that three of `ccd`'s decisions
+follow the **ambient locale**, and `ccd` sets none. `local LC_ALL=C`, the idiom `_lc_dec_ok` already
+uses and documents, fixes the strip, the cap's unit and the grammar in one line, at two functions:
+
+| site | what the shadow fixes |
+|---|---|
+| `_project_pool_state` | the `[[:space:]]` strip, the `-n 64` cap's UNIT, and its call to the grammar |
+| `_pool_name_valid` | the grammar at BOTH call sites — reader and, crucially, **writer** |
+| `_check_pools` (doctor) | the third reader, which repeats all three |
+| `pools.ts` | the strip class spelled out as C's `[[:space:]]`, not JS `\s` |
+
+And it makes `pools.ts`'s existing sufficiency argument TRUE rather than needing it rewritten: an
+ASCII-only strip cannot remove a non-ASCII byte, so one is always left for the grammar to reject.
+UTF-8 never spends fewer bytes than UTF-16 spends units, so the two caps agree in the only direction
+that matters. **Parity is now provable rather than sampled.**
+
+### Measured, not asserted
+
+- **Red-first:** the new suite against `b879510f` — **15 failed / 54 passed**.
+- **Green:** with the fix — **91 passed**.
+- **Mutation matrix**, each guard removed ALONE: reader shadow RED(6), grammar shadow RED(4), server
+  strip RED(7), doctor shadow RED(5), control `>=64`→`>64` RED(1).
+- **The matrix found two holes in my own suite**, which is the entire reason for running it rather
+  than trusting a green. Choosing the UTF-8 locale BY NAME picked `C.utf8`, whose collation is
+  codepoint order — so the D-2522 block contrasted two locales that AGREE and stayed green with its
+  guard deleted. And nothing drove the doctor at all. Both fixed; both blocks now select a locale by
+  MEASURING the property and fail loudly if the box has none.
+
+### One mistake worth recording, because it nearly cost the work
+
+My mutation driver opened with `git checkout --` to restore the tree between mutations, while the fix
+was still **uncommitted**. It reverted everything. Nothing was lost only because the edits were applied
+by a script (`patch1.py`) rather than by hand — which is the argument for scripting an edit even when
+it is six replacements. The rule I already had and did not follow: a mutation runner needs a tree it
+may destroy, and the thing under test must be committed before it runs.
+
