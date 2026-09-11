@@ -3208,3 +3208,56 @@ the fleet is attribution, not authentication". So this is a robustness gap, not 
 And it is **inert today**: with no tag written, `pools/` is absent from the root listing and
 `readProjectPools` returns before any marker I/O. It arms with the first tag.
 
+
+### CORRECTION — D-2008 already said all of it, and my one new fact argues the other way
+
+Same session, one hour later, after an adversarial pass. **The section above oversells itself and the
+error is mine, for the third time today and from the same root cause: I worked from a summary of a
+document instead of the document.**
+
+What D-2008 actually says, read verbatim at
+`docs/superpowers/plans/2026-09-05-account-pools-wave3-server.md:3692`, is every measurement I
+presented as "sharpening it past what that entry says":
+
+- "the cap is applied to `read.content` — i.e. AFTER the whole file has been read"
+- "that read is the agent's `readWhole` … which is uncapped, so the bytes still cross the fleet
+  WebSocket in full; on `local` it is `localIO.readFileMeasured`, a bare `readFile(p,'utf8')`, equally
+  uncapped"
+- "Task 7 then puts that read on the WATCHER TICK — one whole-file read per tagged project per tick"
+- "This is D-1850's own hazard restated in TypeScript on a faster loop"
+- the same `ln -s ~/.cc-sessions/swap.log pools/<p>` constructor, and the same 100 MB figure
+
+So there was nothing to sharpen. Strike the word from the section above; the measurements stand, the
+claim to novelty does not.
+
+**The one fact that WAS new — no cancel op in the agent protocol — supports the park, not the fix.**
+D-2008's stated reason for not closing is that "a bounded read is a NEW agent op … and this wave's
+Global Constraint is that the server adds no agent surface." Closing it properly now needs a bounded
+read op *and* a cancel op: twice the surface that ruling refused. I found evidence for the other side
+and read it as evidence for mine.
+
+**Severity is bounded further than the section above says.** `maxPayload` is set nowhere in
+`server/src`, `agent/src` or `shared/` — so `ws`'s 100 MiB default governs both ends. A frame past it
+errors the socket and closes it, and the existing reconnect-with-backoff runs; in-flight requests
+reject. The failure mode is a connection flap the transport is already built for, not a server OOM,
+and the RSS that does grow is the *agent's*, on the fleet box the actor already controls.
+
+### What survives, and it is small
+
+**D-2008's own closing sentence is false as merged.** It ends: "It is stated in the source at the read,
+not only here." Measured: `git grep -n D-2008 origin/main` returns **exactly one hit** — the plan file
+itself. `server/src/pools.ts` contains no occurrence of `transfer`, `whole file`, `uncapped`,
+`unbounded`, `RSS`, `memory` or `D-2008`. The comment at the `read.content.length >= 64` site argues
+the `>=` boundary (D-2010) and the ccd mirror, and nothing else. **A disclosed-not-closed deviation
+lost its disclosure at the one site where it does any work** — which is the same defect class this
+program has been catching since wave 1: a claim that is true in the plan and absent from the tree.
+
+**Remedy, and it is not a PR:** one sentence in the existing comment block at `pools.ts`'s cap naming
+D-2008 and saying the cap bounds the VERDICT and not the TRANSFER, plus its prose anchor. It belongs in
+**wave 5**, which already edits and pins source comments and to which D-2008 itself already hands the
+related §5.4.4 spec drift. No separate PR, no new agent surface, no new D-number.
+
+**Answer to the operator's conditional authorization** ("raise another PR to close the exposure if you
+think it's significant enough"): **no.** It is not significant enough, and my earlier judgment that it
+was rested on not having read the entry that already owned it.
+
