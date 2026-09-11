@@ -20,14 +20,16 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
-  chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync,
-  realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
+  appendFileSync, chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync,
+  readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
+import { markGenerated } from '../../shared/mark.mjs';
+import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -5014,6 +5016,12 @@ function plantTmux(home: string, sessions: string[]): void {
   ].join('\n') + '\n', { mode: 0o755 });
 }
 
+/** A real ccrc-generated wrapper: both the emitter and ownership marker are production code. */
+function markedWrapper(id: string, cfgDir: string, secretsFile?: string): string {
+  return markGenerated(generateWrapperBody(
+    { id, configDirSuffix: cfgDir, execKind: 'generated', secretsFile }, 'claude'));
+}
+
 const TOKEN_LANE = {
   id: 'alt-max', label: 'alt·max', hue: 'violet', configDirSuffix: '.claude-alt-max',
   homeAble: true, telemetry: 'anthropic',
@@ -5028,6 +5036,1038 @@ const TOKEN_LANE = {
     // which is its own case below.
     secretsFile: '.cc-secrets/alt-max-oauth.env' },
 };
+
+describe('ccrc account remove', () => {
+  /** A lane with every ccrc-owned artifact plus operator history and settings. */
+  const seedFull = (home: string): void => {
+    seedRosterJson(home, [UPSTREAM,
+      { ...HOMEABLE('alt-max', 'violet'), exec: { kind: 'generated', provider: 'anthropic',
+        secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+      HOMEABLE('team-shared', 'blue')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'team-shared');
+    writeFileSync(join(home, '.local', 'bin', 'alt-max'),
+      markedWrapper('alt-max', '.claude-alt-max', '.cc-secrets/alt-max-oauth.env'),
+      { mode: 0o755 });
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.cc-secrets', 'alt-max-oauth.env'), 'export X=y\n', { mode: 0o600 });
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'alt-max.json'), '{"five":0,"seven":0,"ts":1}');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(home, 'alt-max'), '');
+    writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}');
+    const cfg = join(home, '.claude-alt-max');
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+      mkdirSync(join(cfg, 'skills', skill), { recursive: true });
+    }
+    mkdirSync(join(cfg, 'projects'), { recursive: true });
+    writeFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'the operator history\n');
+    writeFileSync(join(cfg, 'settings.json'), `${JSON.stringify({
+      statusLine: { type: 'command' },
+      env: { ANTHROPIC_BASE_URL: 'https://orchard-api/api/v1', ANTHROPIC_API_KEY: '' },
+    })}\n`);
+  };
+
+  it('removes owned artifacts, sweeps the home first, and never deletes history', () => {
+    const home = box('ccrc-account-remove-full-');
+    seedFull(home);
+    plantTmux(home, []);
+    const rosterPath = join(home, '.ccrc', 'accounts.json');
+    chmodSync(rosterPath, 0o600);
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    const roster = j['roster'] as { accounts: { id: string }[] };
+    expect(roster.accounts.map((a) => a.id)).toEqual(['claude', 'team-shared']);
+    expect(lstatSync(rosterPath).mode & 0o777).toBe(0o600);
+    for (const f of [
+      join(home, '.local', 'bin', 'alt-max'),
+      join(home, '.cc-secrets', 'alt-max-oauth.env'),
+      join(home, '.cc-limits', 'alt-max.json'),
+      offMarker(home, 'alt-max'),
+      join(home, '.cc-sessions', 'alt-max.hookstate.json'),
+    ]) expect(existsSync(f), f).toBe(false);
+
+    const cfg = join(home, '.claude-alt-max');
+    expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
+      .toBe('the operator history\n');
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+      expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
+    }
+    const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));
+    expect(settings.env).toBeUndefined();
+    expect(settings.statusLine).toEqual({ type: 'command' });
+    expect(j['kept']).toContain(cfg);
+    expect(j['removed']).toEqual(expect.arrayContaining([
+      join(home, '.local', 'bin', 'alt-max'),
+      join(home, '.cc-secrets', 'alt-max-oauth.env'),
+      join(home, '.cc-limits', 'alt-max.json'),
+    ]));
+    expect(Array.isArray(j['rehomed'])).toBe(true);
+  });
+
+  it('refuses a home whose skills directory is shared, before anything moves', () => {
+    const home = box('ccrc-account-remove-shared-skills-');
+    seedFull(home);
+    plantTmux(home, []);
+    const target = join(home, '.claude-alt-max', 'skills');
+    rmSync(target, { recursive: true });
+    mkdirSync(join(home, '.claude-team-shared', 'skills', 'ccrc-worker'), { recursive: true });
+    symlinkSync(join(home, '.claude-team-shared', 'skills'), target);
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('shared-skills');
+    expect(existsSync(join(home, '.claude-team-shared', 'skills', 'ccrc-worker'))).toBe(true);
+    const roster = oneObject(run(home, ['account', 'roster']))['roster'] as { accounts: unknown[] };
+    expect(roster.accounts).toHaveLength(3);
+    expect(existsSync(join(home, '.local', 'bin', 'alt-max'))).toBe(true);
+  });
+
+  it('rehomes every registry field that names the lane', () => {
+    const home = box('ccrc-account-remove-rehome-');
+    seedFull(home);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max', home: 'alt-max' });
+    plantRow(home, 'lab-dev0', { wrapper: 'claude', home: 'alt-max' });
+    plantTmux(home, []);
+
+    const j = oneObject(run(home, ['account', 'remove', '--id', 'alt-max']));
+    expect((j['rehomed'] as string[]).slice().sort()).toEqual(['lab-dev0', 'orchard-api']);
+    const field = (sid: string, name: string) =>
+      readFileSync(join(home, '.cc-sessions', `${sid}.${name}`), 'utf8');
+    expect(field('orchard-api', 'wrapper')).toBe('claude');
+    expect(field('orchard-api', 'home')).toBe('claude');
+    expect(field('lab-dev0', 'wrapper')).toBe('claude');
+    expect(field('lab-dev0', 'home')).toBe('claude');
+  });
+
+  it('refuses live and unmeasurable rows, but never asks tmux when there are none', () => {
+    const live = box('ccrc-account-remove-live-');
+    seedFull(live);
+    plantRow(live, 'orchard-api', { wrapper: 'alt-max' });
+    plantTmux(live, ['cc-orchard-api']);
+    const lr = run(live, ['account', 'remove', '--id', 'alt-max']);
+    expect(lr.code).toBe(1);
+    expect(oneObject(lr)).toMatchObject({ error: 'live-sessions', live: ['orchard-api'] });
+    expect(existsSync(join(live, '.local', 'bin', 'alt-max'))).toBe(true);
+
+    const blind = box('ccrc-account-remove-blind-');
+    seedFull(blind);
+    plantRow(blind, 'orchard-api', { wrapper: 'alt-max' });
+    const br = run(blind, ['account', 'remove', '--id', 'alt-max']);
+    expect(br.code).toBe(1);
+    expect(oneObject(br)['error']).toBe('live-unmeasured');
+    expect(existsSync(join(blind, '.local', 'bin', 'alt-max'))).toBe(true);
+
+    const empty = box('ccrc-account-remove-empty-');
+    seedFull(empty);
+    const er = run(empty, ['account', 'remove', '--id', 'alt-max']);
+    expect(er.code, er.stderr).toBe(0);
+    expect(existsSync(join(empty, 'tmux-poison'))).toBe(false);
+  });
+
+  it('an idle box with no tmux server is a MEASURED zero, not an unmeasurable answer', () => {
+    // `tmux list-sessions` exits 1 when no server is running — measured, and it
+    // is the ordinary state of a box whose sessions have all been stopped, not
+    // a failure. `ccd` itself already reads that non-zero as the ANSWER "no
+    // server" at two call sites. Reading it as "tmux could not be asked" made
+    // `remove` refuse `live-unmeasured` on exactly the box where the true
+    // answer — zero live panes — is the one that should let the removal
+    // proceed, and there was no way past it but to start a tmux session.
+    const home = box('ccrc-account-remove-no-server-');
+    seedFull(home);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    // tmux's OWN WORDS, and it does not translate them — the match is on the
+    // one message the binary prints for this condition.
+    writeFileSync(join(home, '.local', 'bin', 'tmux'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$*" >> "$HOME/tmux-calls"',
+      'echo "no server running on /tmp/tmux-1000/default" >&2',
+      'exit 1',
+    ].join('\n') + '\n', { mode: 0o755 });
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    expect((oneObject(r)['roster'] as { accounts: { id: string }[] }).accounts.map((a) => a.id))
+      .toEqual(['claude', 'team-shared']);
+    // …and the row that named the departing account was rehomed, which is the
+    // work the refusal used to prevent.
+    expect(readFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'utf8')).toBe('claude');
+
+    // THE FAIL-CLOSED HALF, so the line above is a discrimination and not a
+    // blanket "non-zero means empty": a tmux that fails saying something else
+    // is still unmeasured, and the removal still refuses.
+    const broken = box('ccrc-account-remove-tmux-broken-');
+    seedFull(broken);
+    plantRow(broken, 'orchard-api', { wrapper: 'alt-max' });
+    writeFileSync(join(broken, '.local', 'bin', 'tmux'), [
+      '#!/bin/sh',
+      'echo "lost server: protocol version mismatch" >&2',
+      'exit 1',
+    ].join('\n') + '\n', { mode: 0o755 });
+    const br = run(broken, ['account', 'remove', '--id', 'alt-max']);
+    expect(br.code).toBe(1);
+    expect(oneObject(br)['error']).toBe('live-unmeasured');
+    expect(existsSync(join(broken, '.local', 'bin', 'alt-max'))).toBe(true);
+  });
+
+  it('says WHICH question went unanswered — the three are not one sentence', () => {
+    // `ACCT_LIVE_MEASURED` goes false for three unrelated conditions: the
+    // registry could not be listed, a `.wrapper` exists and cannot be read, and
+    // tmux could not be asked. One refusal asserting the tmux arm sends an
+    // operator whose registry field is a dangling symlink to go and look at
+    // tmux. Driven at `_acct_live` itself, because two of the three are
+    // refused earlier on removal's own path and so are unreachable from the
+    // verb — which is exactly why nothing measured them.
+    const home = box('ccrc-account-live-why-');
+    seedFull(home);
+    const why = (script: string): string => {
+      const r = sourceRun(home, `${script}\n_acct_live alt-max\nprintf '%s|%s' "$ACCT_LIVE_MEASURED" "$ACCT_LIVE_WHY"`);
+      expect(r.code, r.stderr).toBe(0);
+      return r.stdout;
+    };
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'orchard-api.uuid'), 'u');
+    writeFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'alt-max', { mode: 0o000 });
+    const blind = why(':');
+    chmodSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 0o600);
+    const noTmux = why('tmux() { return 3; }');
+    const unreadable = why('_SVC_REG="$HOME/.cc-sessions-not-a-dir"; : > "$_SVC_REG"');
+
+    expect(blind.startsWith('false|'), `a blind field measured: ${blind}`).toBe(true);
+    expect(noTmux.startsWith('false|'), `a failing tmux measured: ${noTmux}`).toBe(true);
+    expect(unreadable.startsWith('false|'), `an unlistable registry measured: ${unreadable}`).toBe(true);
+    expect(new Set([blind, noTmux, unreadable]).size,
+      `three conditions, one answer: ${[blind, noTmux, unreadable].join(' ')}`).toBe(3);
+    // …and the one an operator sees from `remove` names tmux, because that is
+    // the only one of the three removal can still reach: `_acct_row_fields_on`
+    // refuses the other two before liveness is asked at all.
+    expect(noTmux).toContain('tmux');
+
+    // AND THE REFUSAL CARRIES THE MEASUREMENT RATHER THAN A LITERAL — pinned at
+    // the SOURCE, which is the only mechanism available. Putting the old
+    // hard-coded tmux sentence back into `_acct_remove` is an EQUIVALENT MUTANT
+    // through the verb (measured: green), and it has to be: the only cause
+    // removal can reach IS the tmux one, so the two spellings are
+    // indistinguishable from outside. What that costs is a future arm — a new
+    // way for liveness to go unmeasured, or a reordering that lets one of the
+    // other two through — shipping the tmux sentence about it, which is the
+    // defect this deviation is. A source pin reds on the re-hard-coding itself.
+    expect(readFileSync(CCRC_SRC, 'utf8'),
+      'the live-unmeasured refusal hard-codes a cause again instead of reporting the measured one')
+      .toContain('live-unmeasured "$ACCT_LIVE_WHY, and the registry');
+  });
+
+  it('refuses upstream and only protects a target that is presently placeable', () => {
+    const last = box('ccrc-account-remove-floor-');
+    seedRosterJson(last, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(last, 'claude');
+    plantLauncher(last, 'alt-max');
+    plantTmux(last, []);
+    expect(oneObject(run(last, ['account', 'remove', '--id', 'claude']))['error']).toBe('upstream');
+    mkdirSync(join(last, '.cc-sessions'), { recursive: true });
+    writeFileSync(offMarker(last, 'claude'), '');
+    expect(oneObject(run(last, ['account', 'remove', '--id', 'alt-max']))['error'])
+      .toBe('last-home-able');
+
+    const outside = box('ccrc-account-remove-outside-floor-');
+    seedRosterJson(outside, [UPSTREAM,
+      { id: 'gpt', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
+    plantLauncher(outside, 'gpt');
+    plantTmux(outside, []);
+    const ok = run(outside, ['account', 'remove', '--id', 'gpt']);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect((oneObject(ok)['roster'] as { accounts: { id: string }[] }).accounts.map((a) => a.id))
+      .toEqual(['claude']);
+  });
+
+  it('preserves credentials on request and distinguishes login and external lanes', () => {
+    const token = box('ccrc-account-remove-token-keep-');
+    seedFull(token);
+    plantTmux(token, []);
+    const tj = oneObject(run(token,
+      ['account', 'remove', '--id', 'alt-max', '--keep-credential']));
+    const secret = join(token, '.cc-secrets', 'alt-max-oauth.env');
+    expect(existsSync(secret)).toBe(true);
+    expect(tj['kept']).toContain(secret);
+
+    const login = box('ccrc-account-remove-login-');
+    seedRosterJson(login, [UPSTREAM, HOMEABLE('alt-max', 'violet'), HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'alt-max', 'team-shared']) plantLauncher(login, id);
+    plantTmux(login, []);
+    const cfg = join(login, '.claude-alt-max');
+    mkdirSync(join(cfg, 'projects'), { recursive: true });
+    writeFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'the operator history\n');
+    writeFileSync(join(cfg, '.credentials.json'), '{}');
+    const lj = oneObject(run(login, ['account', 'remove', '--id', 'alt-max']));
+    expect(existsSync(join(cfg, '.credentials.json'))).toBe(false);
+    expect(lj['removed']).toContain(join(cfg, '.credentials.json'));
+    expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
+      .toBe('the operator history\n');
+
+    const external = box('ccrc-account-remove-external-');
+    const externalSecret = '.operator-secrets/gpt.env';
+    seedRosterJson(external, [UPSTREAM,
+      { id: 'gpt', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai',
+          secretsFile: externalSecret } }]);
+    plantLauncher(external, 'gpt', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    mkdirSync(join(external, '.operator-secrets'), { recursive: true });
+    writeFileSync(join(external, externalSecret), 'owned by the external launcher\n');
+    plantTmux(external, []);
+    const ej = oneObject(run(external, ['account', 'remove', '--id', 'gpt']));
+    expect(readFileSync(join(external, '.local', 'bin', 'gpt'), 'utf8'))
+      .toContain('somebody else wrote this');
+    expect(ej['kept']).toContain(join(external, '.local', 'bin', 'gpt'));
+    expect(readFileSync(join(external, externalSecret), 'utf8'))
+      .toBe('owned by the external launcher\n');
+    expect(ej['kept']).toContain(join(external, externalSecret));
+  });
+
+  it('keeps a generated lane credential whose path ccrc cannot prove it derived', () => {
+    const home = box('ccrc-account-remove-unowned-secret-');
+    const secret = '.cc-secrets/operator-owned.env';
+    seedRosterJson(home, [UPSTREAM,
+      { ...HOMEABLE('alt-max', 'violet'), exec: { kind: 'generated', provider: 'anthropic',
+        secretsFile: secret } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'alt-max', 'team-shared']) plantLauncher(home, id);
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+    writeFileSync(join(home, secret), 'operator-owned\n');
+    plantTmux(home, []);
+
+    const j = oneObject(run(home, ['account', 'remove', '--id', 'alt-max']));
+    expect(readFileSync(join(home, secret), 'utf8')).toBe('operator-owned\n');
+    expect(j['kept']).toContain(join(home, secret));
+  });
+
+  it('does not treat another provider with no secretsFile as an Anthropic login', () => {
+    const home = box('ccrc-account-remove-non-anthropic-login-');
+    seedRosterJson(home, [UPSTREAM,
+      { ...HOMEABLE('alt-max', 'violet', 'none'),
+        exec: { kind: 'generated', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    plantLauncher(home, 'claude', '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/logout-calls"\nexit 0\n');
+    for (const id of ['alt-max', 'team-shared']) plantLauncher(home, id);
+    const cred = join(home, '.claude-alt-max', '.credentials.json');
+    mkdirSync(path.dirname(cred), { recursive: true });
+    writeFileSync(cred, '{}\n');
+    plantTmux(home, []);
+
+    const j = oneObject(run(home, ['account', 'remove', '--id', 'alt-max']));
+    expect(readFileSync(cred, 'utf8')).toBe('{}\n');
+    expect(j['kept']).toContain(cred);
+    expect(existsSync(join(home, 'logout-calls'))).toBe(false);
+  });
+
+  it('keeps an edited generated wrapper and refuses duplicate singular flags before mutation', () => {
+    const edited = box('ccrc-account-remove-edited-');
+    seedFull(edited);
+    plantTmux(edited, []);
+    const wrapper = join(edited, '.local', 'bin', 'alt-max');
+    appendFileSync(wrapper, '# operator note\n');
+    const ej = oneObject(run(edited, ['account', 'remove', '--id', 'alt-max']));
+    expect(existsSync(wrapper)).toBe(true);
+    expect(ej['kept']).toContain(wrapper);
+
+    const duplicate = box('ccrc-account-remove-duplicate-');
+    seedFull(duplicate);
+    const rosterBefore = readFileSync(join(duplicate, '.ccrc', 'accounts.json'), 'utf8');
+    const dr = run(duplicate,
+      ['account', 'remove', '--id', 'alt-max', '--id=team-shared']);
+    expect(dr.code).toBe(2);
+    expect(oneObject(dr)['error']).toBe('duplicate-argument');
+    expect(readFileSync(join(duplicate, '.ccrc', 'accounts.json'), 'utf8')).toBe(rosterBefore);
+    const kr = run(duplicate, ['account', 'remove', '--id', 'alt-max',
+      '--keep-credential', '--keep-credential']);
+    expect(kr.code).toBe(2);
+    expect(oneObject(kr)['error']).toBe('duplicate-argument');
+  });
+
+  it('uses projection-specific errors and never reads source output as an id or path', () => {
+    const absent = box('ccrc-account-remove-projection-absent-');
+    seedFull(absent);
+    rmSync(join(absent, '.ccrc', 'accounts.sh'));
+    const ar = run(absent, ['account', 'remove', '--id', 'alt-max']);
+    expect(ar.code).toBe(1);
+    expect(oneObject(ar)['error']).toBe('projection-absent');
+
+    const invalid = box('ccrc-account-remove-projection-invalid-');
+    seedFull(invalid);
+    writeFileSync(join(invalid, '.ccrc', 'accounts.sh'),
+      'CCRC_ACCOUNTS=(claude alt-max team-shared)\nCCRC_HOME_ABLE=(claude alt-max team-shared)\n');
+    const ir = run(invalid, ['account', 'remove', '--id', 'alt-max']);
+    expect(ir.code).toBe(1);
+    expect(oneObject(ir)['error']).toBe('projection-invalid');
+
+    const noisy = box('ccrc-account-remove-projection-noisy-');
+    seedFull(noisy);
+    const sh = join(noisy, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, `printf '%s\\n' '$HOME/phantom'\n${readFileSync(sh, 'utf8')}`);
+    plantTmux(noisy, []);
+    const nr = run(noisy, ['account', 'remove', '--id', 'alt-max']);
+    expect(nr.code, nr.stderr).toBe(0);
+    expect((oneObject(nr)['roster'] as { accounts: { id: string }[] }).accounts.map((a) => a.id))
+      .toEqual(['claude', 'team-shared']);
+  });
+
+  it('refuses a stale projected config path before touching either home', () => {
+    const home = box('ccrc-account-remove-stale-config-');
+    seedFull(home);
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, readFileSync(sh, 'utf8').replace(
+      'alt-max) echo "$HOME/.claude-alt-max" ;;',
+      'alt-max) echo "$HOME/.claude-wrong" ;;'));
+    const wanted = join(home, '.claude-alt-max', 'skills', 'ccrc-worker');
+    const wrong = join(home, '.claude-wrong', 'skills', 'ccrc-worker');
+    mkdirSync(wrong, { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'orchard-api.uuid'), 'uuid');
+    writeFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'alt-max');
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('projection-stale');
+    expect(existsSync(wanted)).toBe(true);
+    expect(existsSync(wrong)).toBe(true);
+    expect(readFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'utf8')).toBe('alt-max');
+  });
+
+  it('refuses a stale projected upstream before rehoming a registry row', () => {
+    const home = box('ccrc-account-remove-stale-upstream-');
+    seedFull(home);
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, readFileSync(sh, 'utf8').replace(
+      'CCRC_UPSTREAM=claude', 'CCRC_UPSTREAM=team-shared'));
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max', home: 'alt-max' });
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('projection-stale');
+    expect(readFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'utf8')).toBe('alt-max');
+    expect(readFileSync(join(home, '.cc-sessions', 'orchard-api.home'), 'utf8')).toBe('alt-max');
+  });
+
+  it('refuses registry symlinks and directories, and never blocks on a FIFO field', () => {
+    const make = (prefix: string): string => {
+      const home = box(prefix);
+      seedFull(home);
+      mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(join(home, '.cc-sessions', 'orchard-api.uuid'), 'uuid');
+      plantTmux(home, []);
+      return home;
+    };
+    const field = (home: string): string => join(home, '.cc-sessions', 'orchard-api.wrapper');
+
+    const linked = make('ccrc-account-remove-registry-symlink-');
+    writeFileSync(join(linked, 'elsewhere'), 'alt-max');
+    symlinkSync(join(linked, 'elsewhere'), field(linked));
+    const sr = run(linked, ['account', 'remove', '--id', 'alt-max']);
+    expect(sr.code).toBe(1);
+    expect(oneObject(sr)['error']).toBe('registry-unreadable');
+
+    const dangling = make('ccrc-account-remove-registry-dangling-');
+    symlinkSync(join(dangling, 'absent'), field(dangling));
+    const lr = run(dangling, ['account', 'remove', '--id', 'alt-max']);
+    expect(lr.code).toBe(1);
+    expect(oneObject(lr)['error']).toBe('registry-unreadable');
+
+    const directory = make('ccrc-account-remove-registry-directory-');
+    mkdirSync(field(directory));
+    const dr = run(directory, ['account', 'remove', '--id', 'alt-max']);
+    expect(dr.code).toBe(1);
+    expect(oneObject(dr)['error']).toBe('registry-unreadable');
+
+    const fifo = make('ccrc-account-remove-registry-fifo-');
+    const made = spawnSync('mkfifo', [field(fifo)], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+    const fr = spawnSync(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
+      { env: env(fifo), encoding: 'utf8', timeout: 2_000 });
+    expect(fr.error, 'remove blocked while reading a FIFO registry field').toBeUndefined();
+    expect(fr.status).toBe(1);
+    expect(oneObject({ code: fr.status ?? -1, stdout: fr.stdout ?? '', stderr: fr.stderr ?? '' })['error'])
+      .toBe('registry-unreadable');
+  });
+
+  it('refuses an unreadable regular home field instead of omitting it from the census', () => {
+    const home = box('ccrc-account-remove-registry-home-unreadable-');
+    seedFull(home);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'orchard-api.uuid'), 'uuid');
+    const field = join(home, '.cc-sessions', 'orchard-api.home');
+    writeFileSync(field, 'alt-max', { mode: 0o000 });
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('registry-unreadable');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toContain('alt-max');
+  });
+
+  it('keeps unowned model metadata and names a cleanup that actually exists', () => {
+    const home = box('ccrc-account-remove-model-registry-');
+    seedFull(home);
+    plantTmux(home, []);
+    const model = join(home, '.ccrc', 'models', 'alt-max.classes.json');
+    mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+    writeFileSync(model, '{}\n');
+
+    const j = oneObject(run(home, ['account', 'remove', '--id', 'alt-max']));
+    expect(existsSync(model)).toBe(true);
+    expect(j['kept']).toContain(model);
+    const steps = j['operator-steps'] as string[];
+    expect(steps).toContain(`Review ${model} and remove it by hand if it is no longer needed; `
+      + 'ccrc kept it because this build has no owning cleanup verb.');
+    expect(steps.join('\n')).not.toContain('ccrc models');
+  });
+
+  // ── WHAT A REFUSAL AFTER THE FIRST IRREVERSIBLE EFFECT MUST SAY ───────────
+  // Removal is an ORDERED WRITE — rehome the registry, sweep the home, drop the
+  // roster entry, regenerate the projection, remove the owned artifacts — and
+  // nothing rolls back. So every refusal from the second step on is a report
+  // about a half-moved box, and the operator's next act depends entirely on
+  // which half. The three below are the three places a refusal can land after
+  // something has already happened, and each is driven by breaking exactly one
+  // of them.
+  it('a drop that cannot write says which registry rows it has ALREADY rehomed', () => {
+    const home = box('ccrc-account-remove-drop-fails-');
+    seedFull(home);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max', home: 'alt-max' });
+    plantTmux(home, []);
+    try {
+      // `drop` writes a tmp beside the roster and renames it, so an unwritable
+      // `~/.ccrc` refuses THERE and nowhere earlier: the rehome and the home
+      // sweep have both already happened.
+      chmodSync(join(home, '.ccrc'), 0o500);
+      const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('roster-write');
+      const d = String(j['detail']);
+      // THE EFFECT THAT ALREADY LANDED, BY NAME. node owns this sentence and
+      // cannot know it — the rehome happened in bash, two steps earlier — so
+      // the clause travels down as `--stands` rather than being appended to
+      // node's envelope by a caller that is forbidden to reword it.
+      expect(d, 'the refusal does not say the registry was already rehomed')
+        .toContain('orchard-api.wrapper');
+      expect(d).toContain('orchard-api.home');
+      expect(d, 'it does not say who the rows were moved to').toContain('claude');
+      // …and the two claims it makes are both true on disk.
+      expect(readFileSync(join(home, '.cc-sessions', 'orchard-api.wrapper'), 'utf8'))
+        .toBe('claude');
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+        .toContain('alt-max');
+    } finally {
+      // RESTORED BEFORE `afterAll`: `tmpHelpers`' `rmSync` cannot unlink a child
+      // of a 0500 directory, so a case that leaves one fails the file's cleanup
+      // rather than its own assertion.
+      chmodSync(join(home, '.ccrc'), 0o700);
+    }
+  });
+
+  it('a projection that cannot be regenerated says the roster entry is already gone', () => {
+    const home = box('ccrc-account-remove-projection-fails-');
+    seedFull(home);
+    plantTmux(home, []);
+    // The generator replaced by one that refuses, so the roster drop SUCCEEDS
+    // and the step after it does not — the one window in which the roster and
+    // the projection disagree, which is exactly what the operator has to be
+    // told to go and fix.
+    const deploy = join(home, 'ccrc', 'deploy');
+    rmSync(deploy);
+    mkdirSync(deploy);
+    for (const name of readdirSync(join(REPO, 'deploy'))) {
+      if (name === 'gen-accounts.mjs') continue;
+      symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+    }
+    writeFileSync(join(deploy, 'gen-accounts.mjs'),
+      "process.stderr.write('gen-accounts: remedy: this generator was replaced by a fixture\\n');\n"
+      + 'process.exit(1);\n');
+
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('projection-failed');
+    const d = String(j['detail']);
+    expect(d, 'the refusal does not say the roster entry is already gone')
+      .toContain('The roster no longer contains alt-max');
+    expect(d, 'it does not say the projection is the half that is stale')
+      .toContain('accounts.sh');
+    expect(d, 'it does not name the command that finishes the job').toContain('ccrc install');
+    // Both halves of that sentence, measured: the entry is gone from the JSON
+    // and the launcher — an artifact the run never reached — is still there.
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+      .not.toContain('alt-max');
+    expect(existsSync(join(home, '.local', 'bin', 'alt-max'))).toBe(true);
+  });
+
+  it('an artifact it cannot remove says the roster and projection have already moved', () => {
+    const home = box('ccrc-account-remove-artifact-fails-');
+    seedFull(home);
+    plantTmux(home, []);
+    try {
+      // `rm` on a child of a 0500 directory fails, and `~/.cc-limits/<id>.json`
+      // is the first artifact the sweep reaches — by which point the roster
+      // entry is gone and `accounts.sh` has been regenerated without it.
+      chmodSync(join(home, '.cc-limits'), 0o500);
+      const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('artifact-remove');
+      const d = String(j['detail']);
+      expect(d).toContain('alt-max.json');
+      expect(d, 'the refusal does not say the roster and projection have already moved')
+        .toContain('The roster and projection no longer name alt-max');
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+        .not.toContain('alt-max');
+    } finally {
+      chmodSync(join(home, '.cc-limits'), 0o700);
+    }
+  });
+
+  it('takes the registry census only after acquiring the placement lock', () => {
+    const home = box('ccrc-account-remove-census-lock-');
+    seedFull(home);
+    plantTmux(home, ['cc-orchard-api']);
+
+    // Hold the shared lock before removal starts. While remove is queued, add a
+    // live registry row on the target. A pre-lock census misses it and removal
+    // succeeds; a census under the lock observes it and refuses without mutation.
+    const script = 'exec 9>>"$HOME/.cc-sessions/.account-placement.lock"\n'
+      + 'flock 9\n'
+      + `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p=$!\n`
+      + 'sleep 0.2\n'
+      + ': > "$HOME/.cc-sessions/orchard-api.uuid"\n'
+      + 'printf %s alt-max > "$HOME/.cc-sessions/orchard-api.wrapper"\n'
+      + 'flock -u 9\n'
+      + 'wait "$p"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
+    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+      { env: env(home), encoding: 'utf8', timeout: 10_000 });
+    expect(pair.error, pair.stderr).toBeUndefined();
+    expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('1');
+    expect(JSON.parse(readFileSync(join(home, 'remove.out'), 'utf8')))
+      .toMatchObject({ ok: false, error: 'live-sessions', live: ['orchard-api'] });
+    const roster = oneObject(run(home, ['account', 'roster']))['roster'] as { accounts: { id: string }[] };
+    expect(roster.accounts.map((a) => a.id)).toContain('alt-max');
+  });
+
+  it('revalidates same-target marker changes queued behind removal', () => {
+    for (const verb of ['enable', 'disable']) {
+      const home = box(`ccrc-account-remove-${verb}-queued-`);
+      seedFull(home);
+      plantTmux(home, []);
+
+      // Stop removal inside its locked drop. The marker verb validates once,
+      // queues on the same lock, then must validate the regenerated projection
+      // again before touching the removed account's marker.
+      const deploy = join(home, 'ccrc', 'deploy');
+      rmSync(deploy);
+      mkdirSync(deploy);
+      for (const name of readdirSync(join(REPO, 'deploy'))) {
+        if (name === 'account-op.mjs') continue;
+        symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+      }
+      const realOp = join(REPO, 'deploy', 'account-op.mjs');
+      writeFileSync(join(deploy, 'account-op.mjs'), [
+        "import { existsSync, writeFileSync } from 'node:fs';",
+        "import { spawnSync } from 'node:child_process';",
+        `const real = ${JSON.stringify(realOp)};`,
+        "if (process.argv[2] === 'drop') {",
+        "  writeFileSync(`${process.env.HOME}/drop-ready`, '');",
+        "  const wait = new Int32Array(new SharedArrayBuffer(4));",
+        "  while (!existsSync(`${process.env.HOME}/drop-release`)) Atomics.wait(wait, 0, 0, 10);",
+        '}',
+        'const p = spawnSync(process.execPath, [real, ...process.argv.slice(2)],',
+        "  { env: process.env, stdio: 'inherit' });",
+        'process.exit(p.status ?? 1);',
+      ].join('\n') + '\n');
+
+      const realFlock = spawnSync(BASH, ['-c', 'command -v flock'],
+        { encoding: 'utf8' }).stdout.trim();
+      writeFileSync(join(home, '.local', 'bin', 'flock'), [
+        '#!/bin/sh',
+        'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+        `exec ${JSON.stringify(realFlock)} "$@"`,
+      ].join('\n') + '\n', { mode: 0o755 });
+
+      const script = `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p1=$!\n`
+        + 'while [ ! -e "$HOME/drop-ready" ]; do sleep 0.01; done\n'
+        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err" & p2=$!\n`
+        + 'while [ ! -e "$HOME/flock-second" ]; do sleep 0.01; done\n'
+        + ': > "$HOME/drop-release"\n'
+        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
+        + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/marker.status"\n';
+      const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+        { env: env(home), encoding: 'utf8', timeout: 10_000 });
+      expect(pair.error, pair.stderr).toBeUndefined();
+      expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
+      expect(readFileSync(join(home, 'marker.status'), 'utf8')).toBe('1');
+      expect(JSON.parse(readFileSync(join(home, 'marker.out'), 'utf8')))
+        .toMatchObject({ ok: false, error: 'unknown-id' });
+      expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
+    }
+  });
+
+  it('keeps the placement lock through the roster transition', () => {
+    const home = box('ccrc-account-remove-lock-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet')]);
+    plantLauncher(home, 'claude');
+    plantLauncher(home, 'alt-max');
+    plantTmux(home, []);
+
+    // Block only the roster drop. By then remove holds the placement lock; a
+    // concurrent disable must queue on that same lock and re-measure the roster
+    // after drop, rather than switching off the sole survivor beforehand.
+    const deploy = join(home, 'ccrc', 'deploy');
+    rmSync(deploy);
+    mkdirSync(deploy);
+    for (const name of readdirSync(join(REPO, 'deploy'))) {
+      if (name === 'account-op.mjs') continue;
+      symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+    }
+    const realOp = join(REPO, 'deploy', 'account-op.mjs');
+    writeFileSync(join(deploy, 'account-op.mjs'), [
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      `const real = ${JSON.stringify(realOp)};`,
+      "if (process.argv[2] === 'drop') {",
+      "  writeFileSync(`${process.env.HOME}/drop-ready`, '');",
+      "  const wait = new Int32Array(new SharedArrayBuffer(4));",
+      "  while (!existsSync(`${process.env.HOME}/drop-release`)) Atomics.wait(wait, 0, 0, 10);",
+      '}',
+      'const p = spawnSync(process.execPath, [real, ...process.argv.slice(2)],',
+      "  { env: process.env, stdio: 'inherit' });",
+      'process.exit(p.status ?? 1);',
+    ].join('\n') + '\n');
+
+    const realFlock = spawnSync(BASH, ['-c', 'command -v flock'],
+      { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(join(home, '.local', 'bin', 'flock'), [
+      '#!/bin/sh',
+      'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+      `exec ${JSON.stringify(realFlock)} "$@"`,
+    ].join('\n') + '\n', { mode: 0o755 });
+
+    const script = `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p1=$!\n`
+      + 'while [ ! -e "$HOME/drop-ready" ]; do sleep 0.01; done\n'
+      + `"$1" account disable --id claude >"$HOME/disable.out" 2>"$HOME/disable.err" & p2=$!\n`
+      + 'while [ ! -e "$HOME/flock-second" ]; do sleep 0.01; done\n'
+      + ': > "$HOME/drop-release"\n'
+      + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
+      + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/disable.status"\n';
+    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+      { env: env(home), encoding: 'utf8', timeout: 10_000 });
+    expect(pair.error, pair.stderr).toBeUndefined();
+    expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
+    expect(readFileSync(join(home, 'disable.status'), 'utf8')).toBe('1');
+    expect(JSON.parse(readFileSync(join(home, 'remove.out'), 'utf8'))).toMatchObject({ ok: true });
+    expect(JSON.parse(readFileSync(join(home, 'disable.out'), 'utf8')))
+      .toMatchObject({ ok: false, error: 'last-enabled-home' });
+    const roster = oneObject(run(home, ['account', 'roster']))['roster'] as { accounts: { id: string }[] };
+    expect(roster.accounts.map((a) => a.id)).toEqual(['claude']);
+    expect(existsSync(offMarker(home, 'claude'))).toBe(false);
+  });
+
+  it('names registry destinations exactly the way ccd does', () => {
+    const ccd = readFileSync(CCD, 'utf8');
+    const ccrc = readFileSync(CCRC_SRC, 'utf8');
+    expect(ccd).toContain('_plat_mv_notdir "$tmp" "$REG/$1.$2"');
+    expect(ccrc).toContain('_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"');
+  });
+});
+
+describe('ccrc account: the roster transitions share one placement lock', () => {
+  // A ROSTER WRITE AND THE PROJECTION REGENERATED FROM IT ARE ONE TRANSITION.
+  // `remove` already holds `$REG/.account-placement.lock` across its own — the
+  // census case above measures that — and `add` and `declare` held nothing:
+  // each read the roster, wrote it whole and then regenerated `accounts.sh`
+  // from its own copy. A removal landing between any two of those steps is
+  // simply overwritten, and the projection written LAST is the one ccd reads,
+  // which is how a removed account comes back as a lane ccd will place a
+  // session on.
+  //
+  // PINNED BY BLOCKING, NOT BY TIMING. The lock is held by the case, the verb
+  // is given three seconds, and the claim is that it does NOT finish — exit
+  // 124 from `timeout(1)`, with the roster still saying what it said. A
+  // sleep-then-look case would answer identically for a verb that was merely
+  // slow on a loaded box, which is the shape that reads as coverage and is not.
+  const behindHeldLock = (home: string, args: string[], stdin = ''): {
+    status: string; during: string;
+  } => {
+    const quoted = args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+    const script = [
+      'mkdir -p "$HOME/.cc-sessions"',
+      'exec 9>>"$HOME/.cc-sessions/.account-placement.lock"',
+      'flock 9',
+      `timeout 3 "$2" "$1" account ${quoted} >"$HOME/verb.out" 2>"$HOME/verb.err"`,
+      'printf \'%s\' "$?" > "$HOME/verb.status"',
+      'cp "$HOME/.ccrc/accounts.json" "$HOME/roster-during.json"',
+      'flock -u 9',
+    ].join('\n');
+    const r = spawnSync(BASH, ['-c', script, '_', ccrcIn(home), BASH],
+      { env: env(home), encoding: 'utf8', input: stdin, timeout: 20_000 });
+    expect(r.error, r.stderr).toBeUndefined();
+    return {
+      status: readFileSync(join(home, 'verb.status'), 'utf8'),
+      during: readFileSync(join(home, 'roster-during.json'), 'utf8'),
+    };
+  };
+
+  it('add waits for the lock rather than writing a roster a removal is mid-way through', () => {
+    const home = box('ccrc-account-add-lock-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+
+    const held = behindHeldLock(home, addArgs().slice(1), `${CANARY}\n`);
+    expect(held.status, 'add finished while another writer held the placement lock').toBe('124');
+    expect(held.during, 'add wrote the roster while the lock was held')
+      .not.toContain('lab-dev0');
+
+    // …AND IT IS A WAIT, NOT A REFUSAL: with nothing holding the lock the same
+    // request completes. Without this half the case above is satisfied by an
+    // `add` that simply stopped working.
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+      .accounts.map((x: { id: string }) => x.id)).toContain('lab-dev0');
+  });
+
+  it('declare waits for the lock too, and writes no marker while it waits', () => {
+    const home = box('ccrc-account-declare-lock-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    plantLauncher(home, 'lab-dev0');
+
+    const args = ['declare', '--id', 'lab-dev0', '--label', 'lab·dev0', '--hue', 'violet'];
+    const held = behindHeldLock(home, args);
+    expect(held.status, 'declare finished while another writer held the placement lock')
+      .toBe('124');
+    expect(held.during, 'declare wrote the roster while the lock was held')
+      .not.toContain('lab-dev0');
+    // THE MARKER IS DELIBERATELY OUTSIDE THE LOCK, and this row is what keeps
+    // that boundary measured rather than assumed. It is written FIRST
+    // (D-2134/D-2140) and it names an id NO OTHER VERB CAN BE TOUCHING:
+    // `enable`, `disable` and `remove` each refuse an id the projection does not
+    // name, and `_acct_placeable` draws its candidates from that same
+    // projection. So the kill-switch file lands while the lock is still held by
+    // somebody else, and nothing reads it.
+    expect(existsSync(offMarker(home, 'lab-dev0')),
+      'the marker moved inside the lock — see the boundary note at _acct_declare')
+      .toBe(true);
+
+    const r = run(home, ['account', ...args]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+      .accounts.map((x: { id: string }) => x.id)).toContain('lab-dev0');
+  });
+
+  it('the roster has ONE writer in node, and its temporary name is neither guessable nor reused', () => {
+    // THREE HAND COPIES OF ONE WRITE. `add-entry`, `declare-entry` and `drop`
+    // each spelled their own tmp+rename — same four lines, same mode carry,
+    // same catch — so `drop` inherited D-2052's mode rule only because someone
+    // remembered to copy it, and the next writer inherits nothing. This is
+    // `single-definition`'s rule at an address that scan cannot reach: it
+    // filters `/\.tsx?$/` (D-1860), so a `.mjs` file carrying a fourth copy is
+    // structurally invisible to it.
+    //
+    // AND THE NAME WAS `${file}.tmp.${process.pid}` AND NOTHING ELSE — derivable
+    // by anyone who can read `/proc`, created with a plain `writeFileSync` that
+    // FOLLOWS a symlink and TRUNCATES whatever it finds. The pid stays in the
+    // name (a leaked tmp should say who left it); what it gained is bytes no
+    // reader can derive. `~/.ccrc` is the operator's own
+    // directory, so this is a hardening rather than a live hole; what makes it
+    // worth the line is that the same two properties are what stop two writers
+    // of one roster colliding on one name.
+    const src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    const renames = [...src.matchAll(/\brenameSync\(/g)].length;
+    expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
+    expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')
+      .toMatch(/randomBytes\(\d+\)/);
+    // EXCLUSIVE CREATION, so the write refuses a name something else already
+    // holds instead of following it and truncating it.
+    expect(src, 'the temporary roster file is not created exclusively')
+      .toMatch(/flag:\s*'wx'/);
+  });
+
+  it('acquires the shared lock ONCE per process, so a second call cannot wait on itself', () => {
+    // flock(2) attaches to the OPEN FILE DESCRIPTION, not to the process, so a
+    // second `exec {FD}>>` of the same path in the same shell is a stranger to
+    // the first: `flock` on it waits for a lock this very process holds and
+    // never releases before returning. With `add` and `declare` now joining
+    // `enable`, `disable` and `remove` at this helper, one verb reaching it
+    // twice is an ordinary edit away — and the symptom is a wedged box, not a
+    // refusal. Measured: without the guard this case never returns.
+    const home = box('ccrc-account-lock-reentrant-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    const r = spawnSync(BASH, ['-c',
+      `. ${JSON.stringify(ccrcIn(home))}\n`
+      + '_acct_marker_lock "Nothing was written."\n'
+      + 'first="$ACCT_MARKER_LOCK_FD"\n'
+      + '_acct_marker_lock "Nothing was written."\n'
+      + 'printf \'%s %s\' "$first" "$ACCT_MARKER_LOCK_FD"'],
+    { env: env(home), encoding: 'utf8', timeout: 5_000 });
+    expect(r.error, 'the second acquisition waited on the descriptor this process holds')
+      .toBeUndefined();
+    expect(r.status, r.stderr).toBe(0);
+    const [first, second] = (r.stdout ?? '').trim().split(' ');
+    expect(first, 'no descriptor was opened at all').toBeTruthy();
+    expect(second, 'the second call opened a second descriptor').toBe(first);
+  });
+
+  it('every caller of the shared lock names what still stands', () => {
+    // `_acct_mark_off`'s rule (D-2135) at the lock's address: this helper's
+    // refusals say what the box is left holding, and the honest sentence
+    // differs per caller — `add` reaches it with the 0600 credential already
+    // written, while `declare` and the three marker verbs reach it with
+    // nothing on disk. Binding `$1` positionally is the mechanism: under
+    // `set -u` a caller that forgot the clause dies instead of shipping
+    // `add`'s refusal wearing `enable`'s sentence.
+    const home = box('ccrc-account-lock-clause-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    const bad = sourceCall(home, '_acct_marker_lock');
+    expect(bad.code, 'a caller with no clause was served').not.toBe(0);
+    expect(bad.stderr).toMatch(/\$1: unbound variable/);
+  });
+});
+
+describe('deploy/account-op.mjs: removal\'s four ops, driven by hand', () => {
+  // EVERY ONE OF THESE IS REACHABLE WITHOUT bash, and three of the four have
+  // refusals bash can no longer reach at all — `_acct_lane` refuses an unknown
+  // id before `removal-facts` or `drop` ever runs, and `removed`'s
+  // `internal-entry-remains` is by construction a bug in ccrc. A refusal no
+  // caller can reach is a refusal nothing measures, which is what this block is
+  // for: the ops are documented as hand-callable, and that is the contract.
+  const OP = join(REPO, 'deploy', 'account-op.mjs');
+  const op = (args: string[], stdin = ''): Result => {
+    const r = spawnSync('node', [OP, ...args], { encoding: 'utf8', input: stdin });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const rosterOf = (home: string): string => join(home, '.ccrc', 'accounts.json');
+  const ids = (home: string): string[] =>
+    (JSON.parse(readFileSync(rosterOf(home), 'utf8')).accounts as { id: string }[])
+      .map((a) => a.id);
+
+  const seeded = (prefix: string): string => {
+    const home = box(prefix);
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet'), HOMEABLE('team-shared', 'blue')]);
+    return home;
+  };
+
+  it('removal-facts answers THREE lines, the last of them a sentinel', () => {
+    // The reader's shape, and its reason is `lane`'s one screen up: `$( )`
+    // strips trailing newlines, so a trailing EMPTY field would vanish and the
+    // count check could not tell a short answer from a truncated one.
+    const home = seeded('ccrc-account-op-facts-');
+    const r = op(['removal-facts', '--file', rosterOf(home), '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('.claude-alt-max\nclaude\nEND\n');
+    // The upstream is the ROSTER'S, not the target's — it is where the rehome
+    // sends every registry row that named the departing account.
+    expect(op(['removal-facts', '--file', rosterOf(home), '--id', 'team-shared']).stdout)
+      .toBe('.claude-team-shared\nclaude\nEND\n');
+  });
+
+  it('removal-facts refuses an id the roster does not have, at class 1', () => {
+    const home = seeded('ccrc-account-op-facts-unknown-');
+    const r = op(['removal-facts', '--file', rosterOf(home), '--id', 'nobody']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('unknown-id');
+    expect(op(['removal-facts', '--file', rosterOf(home)]).code,
+      'a missing --id is an argv fault, not a fact about the box').toBe(2);
+  });
+
+  it('drop removes exactly one entry and keeps the operator\'s mode', () => {
+    const home = seeded('ccrc-account-op-drop-');
+    chmodSync(rosterOf(home), 0o600);
+    const r = op(['drop', '--file', rosterOf(home), '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'a write op printed on a path whose contract is silence').toBe('');
+    expect(ids(home)).toEqual(['claude', 'team-shared']);
+    // D-2052 at the third writer's address: `renameSync` replaces the inode, so
+    // a literal mode here would silently widen a roster its operator restricted.
+    expect(lstatSync(rosterOf(home)).mode & 0o777).toBe(0o600);
+    // …and nothing is left beside it.
+    expect(readdirSync(join(home, '.ccrc')).filter((f) => f.includes('.tmp.')))
+      .toEqual([]);
+  });
+
+  it('drop carries the caller\'s clause into BOTH its refusals, and stands alone without one', () => {
+    const home = seeded('ccrc-account-op-drop-stands-');
+    const STANDS = 'Registry fields already rehomed to claude: orchard-api.wrapper.';
+    const unknown = op(['drop', '--file', rosterOf(home), '--id', 'nobody',
+      '--stands', STANDS]);
+    expect(unknown.code).toBe(1);
+    expect(String(oneObject(unknown)['detail'])).toContain(STANDS);
+    // THE ABSENCE-PERMITTING HALF: a hand caller that has written nothing
+    // passes no clause and gets the sentence this op always had.
+    const bare = op(['drop', '--file', rosterOf(home), '--id', 'nobody']);
+    expect(String(oneObject(bare)['detail'])).toContain('the roster was unchanged');
+    expect(String(oneObject(bare)['detail'])).not.toContain('rehomed');
+  });
+
+  it('removed refuses to report an account the roster still carries', () => {
+    // A BUG IN ccrc AND NOT A FACT ABOUT THE BOX: `_acct_remove` calls this op
+    // immediately after `drop` landed, so an id still present means the two
+    // disagree — and reporting it removed would be the one lie this verb's
+    // whole answer is built on.
+    const home = seeded('ccrc-account-op-removed-');
+    const still = op(['removed', '--file', rosterOf(home), '--id', 'alt-max']);
+    expect(still.code).toBe(1);
+    expect(oneObject(still)['error']).toBe('internal-entry-remains');
+
+    expect(op(['drop', '--file', rosterOf(home), '--id', 'alt-max']).code).toBe(0);
+    const r = op(['removed', '--file', rosterOf(home), '--id', 'alt-max',
+      '--rehomed', 'orchard-api', '--rehomed', 'lab-dev0',
+      '--kept', '/a/kept/path', '--removed', '/a/removed/path',
+      '--operator-step', 'do this by hand', '--operator-step', 'and this']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    // THE FOUR REPEATABLE KEYS ARRIVE AS LISTS AND KEEP THEIR ORDER — one JSON
+    // blob on argv would put a value bash built with `printf` back into the
+    // JSON-shaped position this file owns.
+    expect(j['rehomed']).toEqual(['orchard-api', 'lab-dev0']);
+    expect(j['kept']).toEqual(['/a/kept/path']);
+    expect(j['removed']).toEqual(['/a/removed/path']);
+    expect(j['operator-steps']).toEqual(['do this by hand', 'and this']);
+    expect((j['roster'] as { accounts: { id: string }[] }).accounts.map((a) => a.id))
+      .toEqual(['claude', 'team-shared']);
+    // AN EMPTY LIST IS A LIST, not an absent key: the caller renders four
+    // sections and a missing one would read as "this run did not look".
+    const none = op(['removed', '--file', rosterOf(home), '--id', 'alt-max']);
+    expect(oneObject(none)).toMatchObject({
+      rehomed: [], kept: [], removed: [], 'operator-steps': [],
+    });
+  });
+
+  it('refuse-live EXITS 0 while answering ok:false — bash owns that class', () => {
+    // THE ONE OP IN THE FAMILY WHOSE EXIT CODE IS NOT ITS VERDICT, and the
+    // reason is this file's own ownership rule: bash MEASURED the live panes
+    // and reached the verdict, and is asking this file only to write the
+    // envelope. An op that also chose the class would give one refusal two
+    // owners — `refuse`'s argument, at a second address.
+    const r = op(['refuse-live', '--id', 'alt-max', '--live', 'orchard-api',
+      '--live', 'lab-dev0']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(false);
+    expect(j['error']).toBe('live-sessions');
+    expect(j['live']).toEqual(['orchard-api', 'lab-dev0']);
+    expect(String(j['detail'])).toContain('2 live session(s)');
+    // The human sentence goes to stderr under this tool's own name, as every
+    // other refusal in this file does.
+    expect(r.stderr).toBe(`account-op: ${String(j['detail'])} (live-sessions)\n`);
+    // …and with no `--live` at all it still answers a LIST, so a caller cannot
+    // read "none reported" as "none exist".
+    expect(oneObject(op(['refuse-live', '--id', 'alt-max']))['live']).toEqual([]);
+  });
+});
 
 describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
   const OP = join(REPO, 'deploy', 'account-op.mjs');
@@ -5354,6 +6394,22 @@ describe('ccrc account credential', () => {
     } finally {
       chmodSync(wrapper, 0o600);
     }
+  });
+
+  it('answers live:null for a dangling wrapper link, never treating it as an absent field', () => {
+    const home = box('ccrc-account-cred-row-dangling-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    const wrapper = join(home, '.cc-sessions', 'orchard-api.wrapper');
+    rmSync(wrapper);
+    symlinkSync(join(home, 'absent-wrapper-target'), wrapper);
+
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['live']).toBeNull();
+    expect(existsSync(join(home, 'tmux-poison')), 'tmux was asked after the registry read failed')
+      .toBe(false);
   });
 
   it('a row that records NO lane is skipped, and the measurement still stands (D-2185)', () => {
@@ -6450,7 +7506,7 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     expect(String(h['detail'])).toContain('within 1s');
   });
 
-  it('bounds a launcher-controlled note before it reaches argv (D-2222)', () => {
+  it('bounds a launcher-controlled note at the SOURCE, with the argv cap still behind it (D-2222)', () => {
     // `classify` reads the auth-status BODY from stdin on purpose. The NOTE
     // derived from it went out as `--note "$n"` with no bound but the kernel's:
     // 100 000 bytes of `authMethod` rode through, 200 000 hit `Argument list
@@ -6458,8 +7514,15 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     // and the verb answered `no-answer` with "Nothing in this tree is known to
     // exit 126 with an empty body" — a shrug about a lane it had measured.
     //
-    // BOTH SIDES OF THE BOUNDARY ARE MEASURED, because a cap asserted only on
-    // the huge input is a cap that could be `${n:0:0}`.
+    // THIS CASE USED TO DRIVE THE 1024 CAP THROUGH THAT SAME `authMethod`, AND
+    // IT NO LONGER CAN. The deferral that builds the note now describes a
+    // method it cannot vouch for instead of quoting it, so a 200 000-character
+    // `authMethod` never becomes a long note in the first place — the stronger
+    // property, and the one this case now asserts end to end. The cap it used to
+    // reach is NOT dead: `_acct_note_cap` has a second caller (the
+    // `classify-failed` refusal, which caps `$ACCT_HEALTH`), so it is pinned
+    // where it lives rather than through a path that can no longer produce an
+    // oversized note.
     const home = box('ccrc-account-check-notecap-');
     seedRosterJson(home, [UPSTREAM]);
     plantClaude(home, 'claude');
@@ -6470,25 +7533,35 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     const notes = j['notes'] as string[];
     expect(notes.length).toBe(1);
     const note = notes[0]!;
-    expect(note, 'the note was not truncated at all').toContain(
-      'this note was truncated by ccrc at 1024 characters');
-    // 1024 kept + the marker, and nothing between. The exact length is the
-    // assertion because "shorter than 200000" would pass for any cap at all.
-    expect(note.length).toBe(1024 + '… (this note was truncated by ccrc at 1024 characters)'.length);
+    // NOT ONE BYTE OF IT, and far below the cap that used to be what saved us.
+    expect(note, 'launcher text reached the note').not.toContain('xxx');
+    expect(note.length).toBeLessThan(400);
+    expect(note).toContain('an auth method this build cannot quote');
     expect(note.startsWith('the lane reports itself signed in (')).toBe(true);
     // The routing is untouched: a signed-in claim is still only the
     // precondition for the probe.
     expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
 
-    // THE OTHER SIDE: a note that fits is carried byte for byte, marker absent.
+    // THE OTHER SIDE: a method that IS quotable is carried byte for byte, so
+    // the bound above is a bound and not a redaction.
     const small = box('ccrc-account-check-notefits-');
     seedRosterJson(small, [UPSTREAM]);
     plantClaude(small, 'claude');
-    authFixture(small, `${JSON.stringify({ loggedIn: true, authMethod: 'y'.repeat(500) })}\n`, 0);
+    authFixture(small, `${JSON.stringify({ loggedIn: true, authMethod: 'setup-token' })}\n`, 0);
     const kept = (oneObject(run(small, ['account', 'check', '--id', 'claude']))['notes'] as string[])[0]!;
-    expect(kept).toContain('y'.repeat(500));
+    expect(kept).toContain('setup-token');
     expect(kept).not.toContain('truncated by ccrc');
-    expect(kept.length).toBeLessThanOrEqual(1024);
+
+    // AND THE CAP ITSELF, AT THE HELPER — both sides, because a cap asserted
+    // only on the huge input is a cap that could be `${n:0:0}`.
+    const long = sourceCall(home,
+      'printf -v n "%0200000d" 0\n_acct_note_cap "$n"');
+    expect(long.code, long.stderr).toBe(0);
+    expect(long.stdout.trim().length)
+      .toBe(1024 + '… (this note was truncated by ccrc at 1024 characters)'.length);
+    expect(long.stdout).toContain('this note was truncated by ccrc at 1024 characters');
+    const fits = sourceCall(home, '_acct_note_cap "a note that fits"');
+    expect(fits.stdout.trim()).toBe('a note that fits');
   });
 
   it('a loggedIn field in a shape it cannot read is NOT a verdict, and says which shape arrived (D-2223 F5)', () => {
@@ -6568,6 +7641,63 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     // …and the listing is not vacuously empty: it saw the roster it read.
     expect(before.some((l) => l.startsWith('F .ccrc/accounts.json '))).toBe(true);
     expect(before.length).toBeGreaterThan(8);
+  });
+
+  it('refuses a boolean flag it would otherwise have to guess at, on BOTH the late keys', () => {
+    // D-2131's ruling at its fourth and fifth addresses. `added`, `declared`,
+    // `switched` and `rotated` each refuse anything but the exact words, with
+    // the argument that mapping a typo to `false` publishes a fact nobody
+    // measured. `--timed-out` and `--limits-touched` did not: `--timed-out yes`
+    // read as "did not time out" and produced an `unknown` row where a
+    // `timeout` one belonged, and `--limits-touched TRUE` read as "the
+    // telemetry directory did not move" — which is the whole fact that flag
+    // exists to report. No bash caller can reach it; both keys are part of a
+    // CLI this file's own header says is meant to be run by hand.
+    const ROW = '{"verdict":"unknown","source":"probe"}';
+    for (const bad of ['yes', 'True', '1', '']) {
+      const t = opRun(['classify', '--source', 'probe', '--exit', '1',
+        '--timed-out', bad], '{}\n');
+      expect(t.code, `--timed-out ${JSON.stringify(bad)} was accepted`).toBe(2);
+      expect(oneObject(t)['error']).toBe('bad-argv');
+      const l = opRun(['health', '--id', 'claude', '--row', ROW, '--limits-touched', bad]);
+      expect(l.code, `--limits-touched ${JSON.stringify(bad)} was accepted`).toBe(2);
+      expect(oneObject(l)['error']).toBe('bad-argv');
+    }
+    // ABSENCE STILL PERMITS, and it must: `_acct_check` passes `--timed-out`
+    // only on the two paths where it IS true, so a total conversion that also
+    // refused an absent flag would refuse every ordinary run.
+    expect(opRun(['classify', '--source', 'probe', '--exit', '1'], '{}\n').code).toBe(0);
+    expect(opRun(['health', '--id', 'claude', '--row', ROW]).code).toBe(0);
+    // …and both words still mean what they meant.
+    expect(opRun(['classify', '--source', 'probe', '--exit', '124',
+      '--timed-out', 'true', '--deadline', '60'], '').code).toBe(0);
+    expect(JSON.parse(opRun(['health', '--id', 'claude', '--row', ROW,
+      '--limits-touched', 'true']).stdout)['limitsTouched']).toBe(true);
+  });
+
+  it('the signed-in deferral describes launcher text it cannot vouch for, rather than quoting it', () => {
+    // The rule `shapeOf` was introduced for, at the one arm that never got it:
+    // every other launcher-fed sentence in this file goes through `capDetail`
+    // or `shapeOf`, and this one interpolated `authMethod` raw. A launcher
+    // answering 200k characters there put all of them on the exit-4 line.
+    // `_acct_note_cap` bounds it before it crosses argv, so this is the last
+    // hole in a rule the file states three times rather than a live E2BIG.
+    const shouty = opRun(['classify', '--source', 'auth-status', '--exit', '0'],
+      `${JSON.stringify({ loggedIn: true, authMethod: 'z'.repeat(4000) })}\n`);
+    expect(shouty.code, shouty.stderr).toBe(4);
+    expect(shouty.stdout, 'launcher text reached the deferral line').not.toContain('zzz');
+    expect(shouty.stdout.length, 'the line is still unbounded').toBeLessThan(400);
+    // A SHAPE THAT IS NOT A STRING IS NAMED AS ONE, the same way `is_error` is.
+    expect(opRun(['classify', '--source', 'auth-status', '--exit', '0'],
+      `${JSON.stringify({ loggedIn: true, authMethod: { kind: 'oauth' } })}\n`).stdout)
+      .toContain('an object');
+    // …AND THE ORDINARY CASE STILL SAYS WHICH METHOD, which is what keeps this
+    // a bound rather than a redaction.
+    expect(opRun(['classify', '--source', 'auth-status', '--exit', '0'],
+      `${JSON.stringify({ loggedIn: true, authMethod: 'oauth' })}\n`).stdout)
+      .toContain('oauth');
+    expect(opRun(['classify', '--source', 'auth-status', '--exit', '0'],
+      `${JSON.stringify({ loggedIn: true })}\n`).stdout).toContain('method not stated');
   });
 
   it('carries limitsTouched on BOTH arms, and the wire says which (D-2223 F7)', () => {

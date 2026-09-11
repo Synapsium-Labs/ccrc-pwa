@@ -36,6 +36,7 @@
 // files and stays three.
 
 import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
 // refusing a hue, a label, a model id or a model map the writer would then
@@ -234,6 +235,52 @@ function rosterAdmits(candidate, opening) {
  *  `provider`/`baseUrl`/`models` from Task 3-4 on. An answer built from the
  *  return value would be a roster with four validated fields silently removed,
  *  which is the adapter-narrowing rule's exact shape. */
+/** ── THE ONE WRITER OF THE ROSTER FILE ────────────────────────────────────
+ *  `add-entry`, `declare-entry` and `drop` each carried their own copy of this
+ *  — same tmp, same rename, same mode carry, same catch — and three copies of a
+ *  rule is three chances for the next one to be written without it. `drop`
+ *  inherited D-2052's mode carry only because someone remembered; a fourth
+ *  writer would inherit nothing, and `single-definition.test.ts` cannot see
+ *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, three
+ *  callers, and `ccrc-account.test.ts` counts the `renameSync` calls in this
+ *  file so a fourth copy reds rather than drifts.
+ *
+ *  TMP + RENAME, `_inst_accounts_sh`'s discipline: the file is USER-OWNED and
+ *  must never be observable half-written.
+ *
+ *  THE MODE IS THE FILE'S OWN (D-2052). `renameSync` replaces the inode, so
+ *  whatever mode the tmp carries BECOMES the roster's — a literal here silently
+ *  discarded an operator's `chmod 600 ~/.ccrc/accounts.json` on every write.
+ *  `& 0o777` drops the special nibble: a roster is JSON nothing executes, so
+ *  propagating a setuid bit through a rename would be a widening of its own.
+ *  `statSync` is unguarded because every caller has just read this same path
+ *  through `readRoster` and got a non-null answer.
+ *
+ *  THE NAME IS RANDOM AND THE CREATE IS EXCLUSIVE. It used to be
+ *  `${file}.tmp.${process.pid}` written with a plain `writeFileSync`, which is
+ *  a name anyone who can read `/proc` can derive and a call that FOLLOWS a
+ *  symlink and truncates what it finds. `~/.ccrc` is the operator's own
+ *  directory, so that is a hardening rather than a live hole — but the same two
+ *  properties are what stop two writers of one roster choosing one name, and
+ *  `wx` turns a collision into a refusal instead of a lost roster.
+ *
+ *  IT REFUSES, IT DOES NOT THROW: the caller's `failed` clause says what the
+ *  box is left holding, because these three callers reach this line with very
+ *  different things already on disk. */
+function writeRoster(file, next, failed) {
+  const tmp = `${file}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
+      { mode: statSync(file).mode & 0o777, flag: 'wx' });
+    renameSync(tmp, file);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* the write above is the failure to report */ }
+    refuse('roster-write', `writing ${file} failed: ${e.message} — ${failed}`);
+    return false;
+  }
+  return true;
+}
+
 function readRoster(file) {
   let raw;
   try {
@@ -264,6 +311,19 @@ function readRoster(file) {
   // name a candidate entry, because at those four addresses one exists.
   if (rosterAdmits(json, `${file}: `) !== 0) return null;
   return json;
+}
+
+/** Facts removal must compare to the generated projection before it touches a
+ *  home or registry row. The validating read above proves these fields exist. */
+function removalFacts(json, id) {
+  const roster = rosterFromJson(json);
+  const account = json['accounts'].find((x) => x !== null && typeof x === 'object'
+    && x['id'] === id);
+  if (account === undefined) return null;
+  return {
+    configDirSuffix: account['configDirSuffix'],
+    upstreamId: roster.upstreamId,
+  };
 }
 
 /** ── THE GATES `check-add` AND `check-declare` BOTH RUN (D-2143) ──────────
@@ -594,6 +654,26 @@ const OPS = {
   // and `$( )` + `read` cannot carry an empty field safely in either of the
   // shapes JSON would arrive in.
   lane: { keys: ['file', 'id'], repeat: [] },
+  'removal-facts': { keys: ['file', 'id'], repeat: [] },
+  // `--stands` IS THE CALLER'S CLAUSE, and `drop` is the one write op that
+  // needs one. By the time `ccrc account remove` reaches this op it has already
+  // rehomed registry rows and swept a config directory — effects nothing rolls
+  // back and that THIS FILE CANNOT SEE. Every refusal from here is therefore a
+  // report about a half-moved box, and the half that already moved is the half
+  // the operator's next act depends on. It travels as a key rather than being
+  // appended to this file's envelope by bash, because `_acct_run_op` re-emits a
+  // helper refusal VERBATIM: the sentence has one owner, and the facts in it
+  // have another.
+  //
+  // ABSENCE-PERMITTING, like every other optional key here: a hand caller that
+  // has written nothing passes none, and the refusal keeps the sentence it
+  // always had.
+  drop: { keys: ['file', 'id', 'stands'], repeat: [] },
+  removed: {
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step'],
+    repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
+  },
+  'refuse-live': { keys: ['id', 'live'], repeat: ['live'] },
   // `live` REPEATS — `candidates`' pair at a third address, and for its reason:
   // one JSON blob on argv would put a value bash built with `printf` back into
   // the JSON-shaped position this file owns. `measured` is a separate key from
@@ -638,6 +718,34 @@ const defer = (note) => ({ deferred: true, note });
  *  itself. It exists so the `loggedIn` deferral below can say what arrived
  *  without echoing a launcher-controlled string into a sentence that ends up on
  *  argv (D-2222's class, closed at the source rather than only at the cap). */
+/** The auth method as a sentence may say it: a short, conservative token
+ *  verbatim, and anything else by its SHAPE. `shapeOf`'s rule at the one arm
+ *  that never had it — the token set is deliberately narrower than "a string",
+ *  because the value is a method NAME and a method name has no reason to carry
+ *  punctuation, newlines or four thousand characters. */
+function methodOf(v) {
+  if (v === undefined) return 'method not stated';
+  if (typeof v === 'string' && /^[A-Za-z0-9][\w .-]{0,39}$/.test(v)) return v;
+  return `an auth method this build cannot quote: ${shapeOf(v)}`;
+}
+
+/** An OPTIONAL boolean flag, read totally: `true`/`false` are the words, an
+ *  absent flag is `false`, and anything else is a refusal rather than a guess.
+ *  `added`, `declared`, `switched` and `rotated` each spell the REQUIRED form
+ *  of this rule inline (D-2131); these two keys are optional, which is the only
+ *  difference, and the reason they are a function is that they were the two
+ *  that got the rule wrong. Returns `null` when it has refused. */
+function boolFlagClass(a, key) {
+  if (a[key] === undefined) return false;
+  if (a[key] === 'true') return true;
+  if (a[key] === 'false') return false;
+  refuse('bad-argv',
+    `--${key} takes true or false, and got ${JSON.stringify(a[key])} — this field is a fact `
+    + 'this run measured, so a value this file would have to guess at is refused rather than '
+    + 'read as "false"');
+  return null;
+}
+
 function shapeOf(v) {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'an array';
@@ -705,7 +813,14 @@ function classify(source, body, exit, timedOut, deadline) {
       // logged in goes ON to the probe — a live credential is the precondition
       // for the expensive question, not an answer to it. §8's `ok` row is exit 0
       // and `is_error !== true` from a real `-p`, which this has not run.
-      return defer(`the lane reports itself signed in (${j.authMethod ?? 'method not stated'}); `
+      // THE METHOD IS LAUNCHER TEXT, and this was the one arm in the file that
+      // took it raw — `shapeOf` was introduced for the deferral's exposure and
+      // `capDetail` for the row's, and this line sat between them. A launcher
+      // answering 200k characters here put all of them on the exit-4 line.
+      // A conservative token prints VERBATIM, because "which method" is the
+      // whole value of the sentence; anything else is described rather than
+      // quoted, exactly as `is_error` is.
+      return defer(`the lane reports itself signed in (${methodOf(j.authMethod)}); `
         + 'the verdict below is the probe\'s, which is the question that costs something');
     }
     if (j.loggedIn === false) {
@@ -1468,16 +1583,7 @@ function main(argv) {
     // tmp afterwards is deliberate: the tmp is never WIDER than the file it
     // replaces for an instant, which is `_acct_write_secret`'s umask argument
     // (ccd/ccrc:4144-4147) at this address.
-    const tmp = `${a['file']}.tmp.${process.pid}`;
-    try {
-      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
-        { mode: statSync(a['file']).mode & 0o777 });
-      renameSync(tmp, a['file']);
-    } catch (e) {
-      try { unlinkSync(tmp); } catch { /* the failure above is the one to report */ }
-      refuse('roster-write', `writing ${a['file']} failed: ${e.message} — nothing was changed`);
-      return 1;
-    }
+    if (!writeRoster(a['file'], next, 'nothing was changed')) return 1;
     out({ ok: true, roster: next });
     return 0;
   }
@@ -1678,16 +1784,7 @@ function main(argv) {
     // literal would silently widen a roster its operator had chmod-ed 0600.
     // `statSync` is unguarded for `add-entry`'s reason — `readRoster` above read
     // this same path a few lines ago.
-    const tmp = `${a['file']}.tmp.${process.pid}`;
-    try {
-      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
-        { mode: statSync(a['file']).mode & 0o777 });
-      renameSync(tmp, a['file']);
-    } catch (e) {
-      try { unlinkSync(tmp); } catch { /* the failure above is the one to report */ }
-      refuse('roster-write', `writing ${a['file']} failed: ${e.message} — nothing was changed`);
-      return 1;
-    }
+    if (!writeRoster(a['file'], next, 'nothing was changed')) return 1;
     // SILENT ON SUCCESS, which is a CONTRACT and not a shrug: `_acct_write_op`
     // refuses `helper-noisy` if this path ever prints, because the answer is
     // `declared`'s and two JSON objects on one stdout is the seam bash closes.
@@ -1797,6 +1894,80 @@ function main(argv) {
     return 0;
   }
 
+  if (op === 'removal-facts') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `removal-facts needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const facts = removalFacts(json, a['id']);
+    if (facts === null) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so nothing can be removed`);
+      return 1;
+    }
+    process.stdout.write(`${facts.configDirSuffix}\n${facts.upstreamId}\nEND\n`);
+    return 0;
+  }
+
+  if (op === 'drop') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `drop needs --${k}`); return 2; }
+    }
+    // BOTH of this arm's refusals carry it, not just the write: an id the
+    // roster does not have is reached with the caller's earlier effects just as
+    // landed as a write that failed.
+    const stands = a['stands'] ?? 'the roster was unchanged';
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const next = {
+      ...json,
+      accounts: json['accounts'].filter((x) => !(x !== null && typeof x === 'object'
+        && x['id'] === a['id'])),
+    };
+    if (next.accounts.length === json['accounts'].length) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so ${stands}`);
+      return 1;
+    }
+    const admits = rosterAdmits(next,
+      `removing "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    if (!writeRoster(a['file'], next, stands)) return 1;
+    return 0;
+  }
+
+  if (op === 'removed') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `removed needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    if (json['accounts'].some((x) => x !== null && typeof x === 'object'
+      && x['id'] === a['id'])) {
+      refuse('internal-entry-remains',
+        `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
+      return 1;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      roster: json,
+      rehomed: a['rehomed'] ?? [],
+      kept: a['kept'] ?? [],
+      removed: a['removed'] ?? [],
+      'operator-steps': a['operator-step'] ?? [],
+    });
+    return 0;
+  }
+
+  if (op === 'refuse-live') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'refuse-live needs --id'); return 2; }
+    const live = a['live'] ?? [];
+    const detail = `${a['id']} has ${live.length} live session(s) — stop or swap each one first`;
+    out({ ok: false, error: 'live-sessions', detail, live });
+    process.stderr.write(`${SELF}: ${detail} (live-sessions)\n`);
+    return 0;
+  }
+
   if (op === 'rotated') {
     if (a['id'] === undefined) { refuse('bad-argv', 'rotated needs --id'); return 2; }
     // A BOOLEAN ON THE WIRE, TOTAL, `declared`'s rule (D-2131) at a third
@@ -1849,8 +2020,15 @@ function main(argv) {
     // `readFileSync(0)` rather than a stream, so `main` stays synchronous.
     let body = '';
     try { body = readFileSync(0, 'utf8'); } catch { body = ''; }
+    // D-2131's TOTAL CONVERSION at its fourth address. `=== 'true'` alone maps
+    // every other value — `yes`, `True`, a typo — to `false`, which here means
+    // reporting `unknown` about a call that DID time out. Absence still
+    // permits: `_acct_check` passes this flag only on the two paths where it is
+    // true, so refusing an absent one would refuse every ordinary run.
+    const timedOut = boolFlagClass(a, 'timed-out');
+    if (timedOut === null) return 2;
     const row = classify(source, body, Number(a['exit']),
-      a['timed-out'] === 'true', a['deadline'] ?? '?');
+      timedOut, a['deadline'] ?? '?');
     if (row.deferred === true) {
       // EXIT 3, EMPTY STDOUT: "this source produced no verdict, and nothing to
       // say about it". EXIT 4, ONE LINE OF PLAIN TEXT: "no verdict, but carry
@@ -1883,11 +2061,16 @@ function main(argv) {
         `the health classifier produced no readable row for "${a['id']}", so nothing was measured`);
       return 1;
     }
+    // TOTAL, `classify`'s rule one arm down: a value this file would have to
+    // guess at publishes "the telemetry directory did not move", which is the
+    // one fact this flag exists to report.
+    const limitsTouched = boolFlagClass(a, 'limits-touched');
+    if (limitsTouched === null) return 2;
     out({
       ok: true,
       id: a['id'],
       health: row,
-      limitsTouched: a['limits-touched'] === 'true',
+      limitsTouched: limitsTouched,
       notes: a['note'] ?? [],
     });
     return 0;

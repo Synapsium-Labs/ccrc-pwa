@@ -329,8 +329,18 @@ describe('ccd/ccd', () => {
     // (task 16) is the lifecycle journal's own direct `die` caller — its own
     // docstring names this exact set as the reason it must never be wrapped
     // in `$( )`.
+    // `_account_still_rostered` joined them when the account-valued writers
+    // began re-reading the roster they are about to name: it `die`s on an
+    // account a `ccrc account remove` took away mid-run, and on a projection it
+    // cannot re-read. Its own reader, `_wrapper_rostered_now`, is NOT in this
+    // set and must not be — it answers in a RETURN CODE precisely so the one
+    // caller that cannot afford a `die` (cmd_swap, past the teardown) can route
+    // its refusal through `_swap_refuse` and restart the session instead.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
-      .toEqual(['_lc_refuse', '_spawn', '_spawn_start', '_supervised_start', '_swap_refuse']);
+      .toEqual(['_account_still_rostered', '_lc_refuse', '_spawn', '_spawn_start',
+        '_supervised_start', '_swap_refuse']);
+    expect(fatal.has('_wrapper_rostered_now'),
+      'the roster re-read started dying instead of answering').toBe(false);
     expect(fatal.has('cmd_ws_add')).toBe(true);
     expect(fatal.has('cmd_start')).toBe(true);
     expect(fatal.has('cmd_ensure')).toBe(true);

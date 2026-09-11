@@ -976,7 +976,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare disable enable roster"
+ACCT_SUBS="add candidates check credential declare disable enable remove roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -4931,6 +4931,30 @@ _acct_add() {
   # not say "Nothing was written" — since D-2134 the marker is on disk on EVERY lane
   # by now, so it is named here beside the credential rather than left to be found.
   local wrote="$stands The kill-switch marker $_SVC_REG/$ACCT_ID-disabled was written before this step, for the reason THE ORDERED WRITE gives, and is inert for the reason the credential file is: no roster entry names that id, so it switches nothing off, and re-running this same command rewrites it."
+  # ── THE TRANSITION IS SERIALISED FROM HERE ──────────────────────────────
+  # The roster entry and the projection regenerated from it are ONE transition,
+  # and until this line `add` held nothing across them. `remove` takes this same
+  # lock before its census and keeps it through its own drop and regeneration,
+  # so an unserialised `add` could read the roster, have a removal complete
+  # underneath it, and then write BOTH a roster that still carries the removed
+  # account and an `accounts.sh` generated from it — and the projection written
+  # LAST is the one ccd reads, so the removed lane comes back as a destination
+  # ccd will place a session on.
+  #
+  # BELOW `_acct_mark_off` AND NOT ABOVE IT, which is a boundary rather than an
+  # oversight: that marker names an id NO OTHER VERB CAN BE TOUCHING. `enable`,
+  # `disable` and `remove` each refuse an id the projection does not name, and
+  # `_acct_placeable` reads its candidates out of that same projection — so a
+  # marker for an id the roster does not yet carry is read by nothing and
+  # contends with nothing. Hoisting the lock above it would also take
+  # `_acct_mark_off`'s three refusals away from it: `$REG` being a regular file
+  # is `disable-marker` with a `touch` an operator can type, and this helper
+  # would answer it as `marker-lock` first.
+  #
+  # HELD THROUGH `_acct_converge`, the slowest step this verb has, and that cost
+  # is deliberate: the alternative is a wrapper converge racing a removal's own
+  # artifact sweep over the same launcher.
+  _acct_marker_lock "$wrote"
   added="$(_acct_node add-entry --file "$(_acct_roster_path)" --plan "$plan")" || rc2=$?
   if [ "$rc2" -ne 0 ]; then
     [ -n "$added" ] || _acct_no_answer "$rc2" add-entry "$wrote"
@@ -5128,18 +5152,18 @@ _acct_suffix_or_refuse() {   # <suffix> — refuses, or returns 0
 # rescue the overload here, which is what makes it a defect rather than a
 # wrinkle: `declare` reads BOTH files in ONE subcommand.
 ACCT_ROSTER_IDS=()
-_acct_roster_ids() {   # -> fills ACCT_ROSTER_IDS
-  local sh="$HOME/.ccrc/accounts.sh" listed a
+_acct_roster_ids() {   # [<what-still-stands>] -> fills ACCT_ROSTER_IDS
+  local stands="${1:-Nothing was written.}" sh="$HOME/.ccrc/accounts.sh" listed a
   ACCT_ROSTER_IDS=()
   [ -f "$sh" ] \
-    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which accounts are already declared — run 'ccrc install' to generate it from \$HOME/.ccrc/accounts.json. Nothing was written."
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which accounts are already declared — run 'ccrc install' to generate it from \$HOME/.ccrc/accounts.json. $stands"
   listed="$(
     # Source stdout is not the id channel (D-2472); only this loop may print.
     # shellcheck source=/dev/null
     . "$sh" >/dev/null || exit 1
     declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
     for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$a"; done
-  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced as an account projection, so this box cannot say which accounts are already declared. Regenerate it with 'ccrc install'. Nothing was written."
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced as an account projection, so this box cannot say which accounts are already declared. Regenerate it with 'ccrc install'. $stands"
   while IFS= read -r a; do [ -n "$a" ] && ACCT_ROSTER_IDS+=("$a"); done <<<"$listed"
 }
 
@@ -5212,16 +5236,33 @@ _acct_placeable() {   # [<id to exclude>] -> fills global placeable lanes
 }
 
 ACCT_MARKER_LOCK_FD=""
-_acct_marker_lock() {   # -> lock held on ACCT_MARKER_LOCK_FD until the caller returns
-  local lock="$_SVC_REG/.account-placement.lock"
+_acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_FD until the caller returns
+  # `$1` IS THE CALLER'S CLAUSE, bound positionally — `_acct_mark_off`'s rule
+  # (D-2135) at this helper's address. The five callers reach this line holding
+  # different things: `add` has already written its 0600 credential, while
+  # `declare`, `enable`, `disable` and `remove` have written nothing, and one
+  # sentence baked in here would state the opposite of what happened for one of
+  # them. Under `set -u` a caller that forgets the clause dies rather than
+  # shipping another verb's sentence.
+  local stands="$1" lock="$_SVC_REG/.account-placement.lock"
+  # ONE ACQUISITION PER PROCESS, AND THE GUARD IS NOT TIDINESS. flock(2)
+  # attaches to the OPEN FILE DESCRIPTION rather than to the process, so a
+  # second `exec {FD}>>` of this same path in this same shell is a STRANGER to
+  # the first: `flock` on it waits for a lock this very process holds and does
+  # not release until it exits. The symptom is a wedged box rather than a
+  # refusal, and a verb reaching this helper twice is one ordinary edit away now
+  # that `add` and `declare` join the three marker verbs here. Holding the FIRST
+  # descriptor is the whole of the contract — the lock is held until the process
+  # exits either way — so returning is correct and not a silent skip.
+  [ -z "$ACCT_MARKER_LOCK_FD" ] || return 0
   mkdir -p "$_SVC_REG" \
-    || _acct_refuse 1 marker-lock "cannot create $_SVC_REG, so the account placement floor cannot be serialised. Nothing was written."
+    || _acct_refuse 1 marker-lock "cannot create $_SVC_REG, so the account placement floor cannot be serialised. $stands"
   command -v flock >/dev/null 2>&1 \
-    || _acct_refuse 1 marker-lock "flock is unavailable, so the account placement floor cannot be changed safely. Install flock, then retry. Nothing was written."
+    || _acct_refuse 1 marker-lock "flock is unavailable, so the account placement floor cannot be changed safely. Install flock, then retry. $stands"
   exec {ACCT_MARKER_LOCK_FD}>>"$lock" \
-    || _acct_refuse 1 marker-lock "cannot open $lock, so the account placement floor cannot be serialised. Fix that path, then retry. Nothing was written."
+    || _acct_refuse 1 marker-lock "cannot open $lock, so the account placement floor cannot be serialised. Fix that path, then retry. $stands"
   flock "$ACCT_MARKER_LOCK_FD" \
-    || _acct_refuse 1 marker-lock "cannot lock $lock, so the account placement floor was left unchanged. Nothing was written."
+    || _acct_refuse 1 marker-lock "cannot lock $lock, so the account placement floor was left unchanged. $stands"
 }
 
 _acct_enable() {   # [--id X]
@@ -5229,7 +5270,9 @@ _acct_enable() {   # [--id X]
   _acct_one_id enable "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
-  _acct_marker_lock
+  _acct_marker_lock "Nothing was written."
+  # Membership may have changed while this process waited for a removal.
+  _acct_known_or_refuse "$ACCT_ONE_ID"
   marker="$_SVC_REG/$ACCT_ONE_ID-disabled"
   # A directory is not a disabled marker to ccd's `-f` predicate. Do not call it
   # switched off, and do not let `rm -f`'s directory refusal phrase that lie.
@@ -5250,7 +5293,9 @@ _acct_disable() {   # [--id X]
   id="$ACCT_ONE_ID"
   _acct_id_or_refuse "$id"
   _acct_known_or_refuse "$id"
-  _acct_marker_lock
+  _acct_marker_lock "Nothing was written."
+  # Membership may have changed while this process waited for a removal.
+  _acct_known_or_refuse "$id"
   marker="$_SVC_REG/$id-disabled"
   [ ! -d "$marker" ] || [ -L "$marker" ] \
     || _acct_refuse 1 marker-conflict "$marker is a directory, not the regular marker ccd reads. Move that directory aside, then retry. Nothing was written."
@@ -5531,6 +5576,12 @@ _acct_declare() {
   # call could not tell a refusal from an answer, and a half-updated box answers
   # an op it does not have with exit 2 and an EMPTY body.
   local stands="the $_SVC_REG/$id-disabled kill-switch marker WAS written before this step, and it is inert: no roster entry names \"$id\", so it switches nothing off, and re-running this same command rewrites it."
+  # SERIALISED FROM HERE, for `add`'s reason at this verb's address and with its
+  # boundary: the roster entry and the projection regenerated from it are one
+  # transition, a removal holds this same lock across its own, and the marker
+  # written above stays outside because no other verb can be touching a marker
+  # for an id the projection does not name.
+  _acct_marker_lock "$stands"
   _acct_write_op "$stands" declare-entry --file "$(_acct_roster_path)" \
     --id "$id" --label "$label" --hue "$hue" \
     ${suffix:+--suffix "$suffix"} \
@@ -5634,6 +5685,67 @@ _acct_lane() {   # <id>
   ACCT_HOMEABLE="${f[6]}"
 }
 
+# Values are read from the generated projection in a subshell: the projection's
+# helper names cannot replace this file's helpers, and source output is never a
+# data channel. Every caller runs these before changing the roster projection.
+ACCT_REMOVAL_FACT_ID=""; ACCT_EXPECTED_SUFFIX=""; ACCT_EXPECTED_UPSTREAM=""
+_acct_removal_facts() {   # <id> <what-still-stands> -> current JSON roster facts
+  local id="$1" stands="$2" x
+  local -a f=()
+  _acct_read_op "$stands" removal-facts --file "$(_acct_roster_path)" --id "$id"
+  mapfile -t f <<<"$ACCT_OUT"
+  [ "${#f[@]}" -eq 3 ] && [ "${f[2]}" = END ] \
+    || _acct_refuse 1 helper-unreadable "the account helper did not return two removal facts and an END sentinel for account $id. This is a bug in ccrc, not a fact about your box. $stands"
+  for x in "${f[@]}"; do
+    [[ "$x" =~ [[:cntrl:]] ]] \
+      && _acct_refuse 1 helper-unreadable "the account helper returned a control character in account $id's removal facts. This is a bug in ccrc, not a fact about your box. $stands"
+  done
+  ACCT_REMOVAL_FACT_ID="$id"
+  ACCT_EXPECTED_SUFFIX="${f[0]}"
+  ACCT_EXPECTED_UPSTREAM="${f[1]}"
+}
+
+ACCT_CFG_DIR=""
+_acct_cfg_dir() {   # <id> <what-still-stands> -> ACCT_CFG_DIR
+  local id="$1" stands="$2" sh="$HOME/.ccrc/accounts.sh" expected=""
+  [ "$id" != "$ACCT_REMOVAL_FACT_ID" ] || expected="$ACCT_EXPECTED_SUFFIX"
+  ACCT_CFG_DIR=""
+  [ -f "$sh" ] \
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot name account $id's config directory - run 'ccrc install' to regenerate it. $stands"
+  ACCT_CFG_DIR="$(
+    # Source chatter is not a path. Only the generated lookup may answer.
+    # shellcheck source=/dev/null
+    . "$sh" >/dev/null || exit 1
+    declare -F _ccrc_cfg_dir >/dev/null || exit 1
+    _ccrc_cfg_dir "$id"
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced as an account projection with _ccrc_cfg_dir, so this box cannot name account $id's config directory. Regenerate it with 'ccrc install'. $stands"
+  [[ "$ACCT_CFG_DIR" =~ [[:cntrl:]] ]] \
+    && _acct_refuse 1 projection-invalid "$sh returned a control character while naming account $id's config directory, so no path from it is safe to use. Regenerate it with 'ccrc install'. $stands"
+  [ -z "$expected" ] || [ "$ACCT_CFG_DIR" = "$HOME/$expected" ] \
+    || _acct_refuse 1 projection-stale "$sh maps account $id to $ACCT_CFG_DIR, while the current JSON roster maps it to \$HOME/$expected. Regenerate the projection with 'ccrc install' before removing anything. $stands"
+}
+
+ACCT_UPSTREAM_ID=""
+_acct_upstream_id() {   # <what-still-stands> -> ACCT_UPSTREAM_ID
+  local stands="$1" sh="$HOME/.ccrc/accounts.sh"
+  ACCT_UPSTREAM_ID=""
+  ACCT_UPSTREAM_ID="$(
+    [ -f "$sh" ] || exit 3
+    # Source chatter is not an id. Only the generated scalar may answer.
+    # shellcheck source=/dev/null
+    . "$sh" >/dev/null || exit 1
+    declare -p CCRC_UPSTREAM 2>/dev/null | grep -q '^declare -- ' || exit 1
+    [ -n "$CCRC_UPSTREAM" ] || exit 1
+    printf '%s' "$CCRC_UPSTREAM"
+  )"; local rc=$?
+  [ "$rc" -ne 3 ] \
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which account is upstream - run 'ccrc install' to regenerate it. $stands"
+  [ "$rc" -eq 0 ] && [[ "$ACCT_UPSTREAM_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] \
+    || _acct_refuse 1 projection-invalid "$sh does not carry a usable scalar CCRC_UPSTREAM, so there is nowhere safe to rehome registry rows. Regenerate it with 'ccrc install'. $stands"
+  [ -z "$ACCT_EXPECTED_UPSTREAM" ] || [ "$ACCT_UPSTREAM_ID" = "$ACCT_EXPECTED_UPSTREAM" ] \
+    || _acct_refuse 1 projection-stale "$sh names $ACCT_UPSTREAM_ID as upstream, while the current JSON roster names $ACCT_EXPECTED_UPSTREAM. Regenerate the projection with 'ccrc install' before rehoming anything. $stands"
+}
+
 # ── which panes have not seen a rotated token yet ─────────────────────────
 # TWO MEASUREMENTS, AND EITHER ONE CAN FAIL (D-2185 — until this round only the
 # second could). First the registry: a row is a `<id>.uuid` file (`_box_sessions`
@@ -5695,12 +5807,22 @@ _acct_lane() {   # <id>
 # that comment names, not a precedent.
 ACCT_LIVE_MEASURED=false
 ACCT_LIVE_IDS=()
+# WHICH QUESTION WENT UNANSWERED. `ACCT_LIVE_MEASURED` goes false for three
+# unrelated conditions — the registry could not be listed, a `.wrapper` exists
+# and cannot be read, tmux could not be asked — and one refusal asserting the
+# tmux arm sends an operator whose registry field is a dangling symlink off to
+# look at tmux. Two of the three are refused earlier on `remove`'s own path
+# (`_acct_row_fields_on` runs first), which is exactly why nothing measured the
+# overload: the verb could not reach it, and the sentence was still wrong for
+# the other callers of this function.
+ACCT_LIVE_WHY=""
 _acct_live() {   # <id>
   local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0
   local blind=0
   local -a rows=()
   ACCT_LIVE_MEASURED=true
   ACCT_LIVE_IDS=()
+  ACCT_LIVE_WHY=""
   # `-e` FIRST, and the three arms are the three conditions the header names.
   # An absent registry falls through both branches with `rows` empty, which is
   # the measured `[]`; anything that exists but cannot be listed and entered
@@ -5709,6 +5831,7 @@ _acct_live() {   # <id>
   # directory holding one without the other tells us nothing either.
   if [ -e "$reg" ] && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
     ACCT_LIVE_MEASURED=false
+    ACCT_LIVE_WHY="$reg exists and cannot be listed and entered, so the rows on this lane cannot be counted"
     return 0
   fi
   if [ -d "$reg" ]; then
@@ -5725,7 +5848,8 @@ _acct_live() {   # <id>
       # replaces answered the same way for a row that records no lane and a row
       # whose lane could not be read. `-r` before `-e` because the readable case
       # is the one every row on a working box takes.
-      if [ -r "$reg/$sid.wrapper" ]; then
+      if [ -f "$reg/$sid.wrapper" ] && [ ! -L "$reg/$sid.wrapper" ] \
+         && [ -r "$reg/$sid.wrapper" ]; then
         # THE RETURN CODE IS NOT THE TEST, THE VALUE IS — `_acct_read_credential`'s
         # own rule at a second address, and this task's plan snippet had the
         # opposite: `IFS= read -r w < … || w=""`. `_reg_set` (ccd/ccd:1285-1291)
@@ -5736,7 +5860,7 @@ _acct_live() {   # <id>
         w=""
         IFS= read -r w < "$reg/$sid.wrapper"
         [ "$w" = "$id" ] && rows+=("$sid")
-      elif [ -e "$reg/$sid.wrapper" ]; then
+      elif [ -e "$reg/$sid.wrapper" ] || [ -L "$reg/$sid.wrapper" ]; then
         # It exists and this process cannot read it: the whole answer is
         # unmeasured, because this row may be the one still holding the old
         # token. `break` rather than `return`, so the shell option below is
@@ -5752,11 +5876,39 @@ _acct_live() {   # <id>
   if [ "$blind" -eq 1 ]; then
     ACCT_LIVE_MEASURED=false
     ACCT_LIVE_IDS=()
+    ACCT_LIVE_WHY="a session row's .wrapper field in $reg exists and cannot be read, so it may be the row still on this lane"
     return 0
   fi
   [ "${#rows[@]}" -gt 0 ] || return 0
-  names="$(_plat_timeout 5 tmux list-sessions -F '#{session_name}' 2>/dev/null)"; rc=$?
-  if [ "$rc" -ne 0 ]; then ACCT_LIVE_MEASURED=false; return 0; fi
+  # ── A NON-ZERO tmux IS NOT AUTOMATICALLY AN UNANSWERED QUESTION ──────────
+  # MEASURED: `tmux list-sessions` exits 1 when NO SERVER IS RUNNING, which is
+  # the ordinary state of a box whose sessions have all been stopped — not a
+  # failure, and `ccd` already reads that same non-zero as the answer "no
+  # server" at its two `_tmux_server_ensure` call sites. Reading it here as
+  # "tmux could not be asked" made this the one box on which `remove` could not
+  # proceed: a lane with registry rows and no live pane is EXACTLY the state a
+  # removal is for, and the refusal offered no way out but starting a session.
+  #
+  # THE MATCH IS ON tmux's OWN WORDS, and that is defensible because tmux has no
+  # i18n — there is no translated build in which these strings differ. Anything
+  # else it says is still unmeasured, which keeps the fail-closed direction
+  # intact for the condition that actually matters: a server that is there and
+  # cannot be talked to.
+  #
+  # `2>&1` MERGES THE STREAMS, and the merge cannot manufacture a live session:
+  # the comparison below is an EXACT match against `cc-<sid>` for rows this
+  # registry already named, so a stray warning line adds a name nothing matches.
+  # It cannot remove a real one.
+  names="$(_plat_timeout 5 tmux list-sessions -F '#{session_name}' 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$names" in
+      *"no server running"*|*"error connecting to"*) names="" ;;
+      *)
+        ACCT_LIVE_MEASURED=false
+        ACCT_LIVE_WHY="tmux could not be asked which sessions are running"
+        return 0 ;;
+    esac
+  fi
   # The pane's tmux session name is `cc-<id>` — `ccd`'s `_tmux()` (ccd/ccd:1114)
   # is the one place that mapping is spelled, and this is its second reader
   # rather than a looser substring match: `*"$sid"*` would call `cc-orchard`
@@ -5765,6 +5917,77 @@ _acct_live() {   # <id>
     case $'\n'"$names"$'\n' in *$'\n'"cc-$sid"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
   done
   return 0
+}
+
+# Registry rows can name a lane independently in `.wrapper` and `.home`. Reads
+# fail closed: an unreadable field may be the one that names the lane, so a
+# partial census must never be presented as complete.
+ACCT_ROW_FIELDS=()
+_acct_row_fields_on() {   # <id> -> "<sid>:<field>" entries in ACCT_ROW_FIELDS
+  local id="$1" f="" sid="" field="" value="" had_nullglob=0
+  ACCT_ROW_FIELDS=()
+  [ ! -e "$_SVC_REG" ] && return 0
+  { [ -d "$_SVC_REG" ] && [ -r "$_SVC_REG" ] && [ -x "$_SVC_REG" ]; } \
+    || _acct_refuse 1 registry-unreadable "$_SVC_REG cannot be listed and entered, so this removal cannot prove which registry fields name account $id. Nothing was removed."
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$_SVC_REG"/*.uuid; do
+    sid="${f##*/}"; sid="${sid%.uuid}"
+    for field in wrapper home; do
+      f="$_SVC_REG/$sid.$field"
+      if [ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ]; then
+        value=""; IFS= read -r value < "$f"
+        [ "$value" = "$id" ] && ACCT_ROW_FIELDS+=("$sid:$field")
+      elif [ -e "$f" ] || [ -L "$f" ]; then
+        [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+        _acct_refuse 1 registry-unreadable "$f exists and cannot be read, so this removal cannot prove whether it names account $id. Nothing was removed."
+      fi
+    done
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+}
+
+_ACCT_REHOME_SEQ=0
+_acct_rehome() {   # <sid> <field> <from> <to> -> 0 written, 3 no longer names <from>
+  local tmp current=""
+  if [ -f "$_SVC_REG/$1.$2" ] && [ ! -L "$_SVC_REG/$1.$2" ]; then
+    IFS= read -r current < "$_SVC_REG/$1.$2"
+  elif [ -e "$_SVC_REG/$1.$2" ] || [ -L "$_SVC_REG/$1.$2" ]; then
+    return 1
+  else
+    return 3
+  fi
+  [ "$current" = "$3" ] || return 3
+  _ACCT_REHOME_SEQ=$(( _ACCT_REHOME_SEQ + 1 ))
+  tmp="$_SVC_REG/.$1.$2.$BASHPID.$_ACCT_REHOME_SEQ.tmp"
+  printf '%s' "$4" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  _plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2" || { rm -f -- "$tmp"; return 1; }
+}
+
+# A read-only home preflight runs before registry rehoming. The actual sweep
+# resolves the home again so its position before the roster drop stays measurable.
+ACCT_REMOVE_CFG=""
+_acct_remove_home_preflight() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
+  local id="$1" stands="$2" cfg="" real="" other="" odir="" oreal=""
+  _acct_cfg_dir "$id" "$stands"
+  cfg="$ACCT_CFG_DIR"
+  [ -n "$cfg" ] \
+    || _acct_refuse 1 home-unnameable "\$HOME/.ccrc/accounts.sh does not name a config directory for account $id, so its hooks and skills cannot be swept. Regenerate the projection with 'ccrc install' and retry. $stands"
+  ACCT_REMOVE_CFG="$cfg"
+  [ -d "$cfg/skills" ] || return 0
+  real="$(realpath "$cfg/skills" 2>/dev/null)" \
+    || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so this removal cannot tell whether another account's skills live there. $stands"
+  _acct_roster_ids "$stands"
+  for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
+    [ "$other" = "$id" ] && continue
+    _acct_cfg_dir "$other" "$stands"
+    odir="$ACCT_CFG_DIR"
+    [ -n "$odir" ] && [ -d "$odir/skills" ] || continue
+    oreal="$(realpath "$odir/skills" 2>/dev/null)" \
+      || _acct_refuse 1 skills-unreadable "could not resolve $odir/skills, so this removal cannot prove it is separate from $cfg/skills. $stands"
+    [ "$oreal" != "$real" ] \
+      || _acct_refuse 1 shared-skills "$cfg/skills and $odir/skills resolve to the same directory, so sweeping account $id would remove account $other's managed skills too. Detach the shared link, then retry. $stands"
+  done
 }
 
 # ── credential — replace a token lane's secret, and say who has not seen it ─
@@ -5904,6 +6127,266 @@ _acct_credential() {
   # the list it was about to print.
   _acct_read_op "The 0600 credential file $ACCT_SECRET_WRITTEN WAS replaced and nothing rolls it back; the roster was not touched and no session was restarted. Only this report failed, so this run cannot name the panes still holding the OLD token: a wrapper sources its secrets file at exec time, so every session already running on \"$id\" keeps the old value until it is recreated." \
     rotated "${args[@]}"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── remove — rehome, sweep, drop, then remove proven-owned artifacts ─────
+ACCT_WRAPPER_VERDICT=""
+_acct_remove_wrapper() {   # <id> -> ACCT_WRAPPER_VERDICT
+  local id="$1" f="$WRAPPER_BIN_DIR/$1" mark="$CCRC_HERE/../shared/mark.mjs"
+  ACCT_WRAPPER_VERDICT=absent
+  { [ -e "$f" ] || [ -L "$f" ]; } || return 0
+  ACCT_WRAPPER_VERDICT=unverifiable
+  # A generated wrapper is a regular file. Never follow or remove a symlink,
+  # and never read a directory, FIFO, or other object at its managed name.
+  { [ -f "$f" ] && [ ! -L "$f" ]; } || return 0
+  [ -f "$mark" ] || return 0
+  ACCT_WRAPPER_VERDICT="$(node --no-warnings --input-type=module -e '
+import { readFileSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [markPath, filePath] = process.argv.slice(1);
+if (statSync(filePath).size > 1024 * 1024) { console.log("oversize"); process.exit(0); }
+const { verifyMarker } = await import(pathToFileURL(markPath).href);
+console.log(verifyMarker(readFileSync(filePath, "utf8")));
+' "$mark" "$f" 2>/dev/null)" || ACCT_WRAPPER_VERDICT=unverifiable
+  [ -n "$ACCT_WRAPPER_VERDICT" ] || ACCT_WRAPPER_VERDICT=unverifiable
+  if [ "$ACCT_WRAPPER_VERDICT" = ccrc-unmodified ]; then
+    rm -f -- "$f" \
+      || _acct_refuse 1 artifact-remove "could not remove marker-verified wrapper $f. The roster entry is already gone and the projection no longer names $id; move that wrapper aside by hand."
+    { [ ! -e "$f" ] && [ ! -L "$f" ]; } \
+      || _acct_refuse 1 artifact-remove "$f remains after its marker-verified removal. The roster entry is already gone and the projection no longer names $id; move that wrapper aside by hand."
+  fi
+}
+
+ACCT_SIGNOUT=""
+_acct_sign_out() {   # <id> <cfgdir> -> ACCT_SIGNOUT
+  local id="$1" cfg="$2" cred="$2/.credentials.json"
+  ACCT_SIGNOUT=absent
+  { [ -e "$cred" ] || [ -L "$cred" ]; } || return 0
+  { [ -f "$cred" ] && [ ! -L "$cred" ]; } \
+    || _acct_refuse 1 credential-conflict "$cred is not a regular credential file, so ccrc will not ask a launcher to rewrite it or remove it. The roster entry is already gone, the projection no longer names $id, and the config directory remains. Move that object aside or remove it by hand."
+  CLAUDE_CONFIG_DIR="$cfg" _plat_timeout "$ACCT_DEADLINE" \
+    "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" auth logout >/dev/null 2>&1 || :
+  if [ -e "$cred" ] || [ -L "$cred" ]; then
+    rm -f -- "$cred" \
+      || _acct_refuse 1 artifact-remove "could not sign account $id out: $cred remains. The roster entry is already gone, the projection no longer names $id, and the config directory around the credential was deliberately kept."
+  fi
+  { [ ! -e "$cred" ] && [ ! -L "$cred" ]; } \
+    || _acct_refuse 1 artifact-remove "$cred remains after sign-out cleanup. The roster entry is already gone, the projection no longer names $id, and the config directory was deliberately kept."
+  ACCT_SIGNOUT=removed
+}
+
+_acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
+  local id="$1" stands="$2" cfg="" real="" name="" inst="$CCRC_HERE/install-session-hooks.sh"
+  # Resolve here, rather than accepting a path from the caller. Moving this call
+  # below the roster transition therefore makes the cleanup fail closed.
+  _acct_remove_home_preflight "$id" "$stands"
+  cfg="$ACCT_REMOVE_CFG"
+  [ -d "$cfg" ] || return 0
+  if [ -d "$cfg/skills" ]; then
+    real="$(realpath "$cfg/skills" 2>/dev/null)" \
+      || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
+    for name in ccrc-coordinator ccrc-worker graphify; do
+      { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
+      if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
+        rm -f -- "$real/$name" \
+          || _acct_refuse 1 skills-remove "could not remove ccrc-managed skill $real/$name. Home cleanup may now be partial. $stands"
+      elif [ -d "$real/$name" ]; then
+        rm -rf -- "$real/$name" \
+          || _acct_refuse 1 skills-remove "could not remove ccrc-managed skill $real/$name. Home cleanup may now be partial. $stands"
+      else
+        _acct_refuse 1 skills-conflict "$real/$name is neither a regular file, directory, nor symlink, so recursive removal would not be safe. Home cleanup may now be partial. $stands"
+      fi
+    done
+  fi
+  _acct_settings_env "$cfg" clear "Home cleanup may now be partial. $stands"
+  [ -f "$inst" ] || return 0
+  bash "$inst" --remove --homes "$cfg" >/dev/null \
+    || _acct_refuse 1 hooks-remove "$inst --remove refused for $cfg. Its diagnostic is above; home cleanup may now be partial. $stands"
+}
+
+_acct_remove() {
+  local id="" v="" flag="" item="" sid="" field="" f="" model="" stands=""
+  local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
+  local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=()
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id)
+        [ "$seen_id" -eq 0 ] \
+          || _acct_refuse 2 duplicate-argument "the singular flag --id was given more than once. Nothing was written."
+        [ $# -ge 2 ] && [[ "$2" != --* ]] \
+          || _acct_refuse 2 missing-value "the flag --id takes a value and nothing followed it. Nothing was written."
+        seen_id=1; v="$2"; shift ;;
+      --id=*)
+        [ "$seen_id" -eq 0 ] \
+          || _acct_refuse 2 duplicate-argument "the singular flag --id was given more than once. Nothing was written."
+        seen_id=1; v="${1#*=}" ;;
+      --keep-credential)
+        [ "$seen_keep" -eq 0 ] \
+          || _acct_refuse 2 duplicate-argument "the singular flag --keep-credential was given more than once. Nothing was written."
+        seen_keep=1; keepcred=1; shift; continue ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --keep-credential" ;;
+    esac
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag --id was given an empty value. Give it an account id. Nothing was written."
+    [ "$flag" = --id ] && id="$v"
+    shift
+  done
+
+  _acct_id_or_refuse "$id"
+  _acct_lane "$id"
+  [ "$ACCT_KIND" != upstream ] \
+    || _acct_refuse 1 upstream "$id is the upstream account - every generated wrapper on this box execs it, so removing it would leave those lanes pointing at nothing. Nothing was written."
+  # The registry census shares the placement lock with registry writers. A
+  # census taken before waiting can be made stale by a writer that lands the
+  # target account while this process is queued, leaving that row behind after
+  # the roster entry disappears. Keep the lock through projection regeneration.
+  _acct_removal_facts "$id" "Nothing was written."
+  _acct_upstream_id "Nothing was written."
+  _acct_remove_home_preflight "$id" "Nothing was written."
+  _acct_marker_lock "Nothing was written."
+  _acct_row_fields_on "$id"
+  _acct_live "$id"
+  [ "$ACCT_LIVE_MEASURED" = true ] \
+    || _acct_refuse 1 live-unmeasured "$ACCT_LIVE_WHY, and the registry has at least one row on $id, so this removal cannot prove the lane has no live pane. Nothing was written."
+  if [ "${#ACCT_LIVE_IDS[@]}" -gt 0 ]; then
+    local -a live_args=(--id "$id")
+    for sid in "${ACCT_LIVE_IDS[@]}"; do live_args+=(--live "$sid"); done
+    _acct_read_op "Nothing was written." refuse-live "${live_args[@]}"
+    printf '%s\n' "$ACCT_OUT"
+    exit 1
+  fi
+
+  # Validate the shared auth deadline before the first mutation, but only when
+  # this run will actually invoke logout for a login credential.
+  if [ "$keepcred" -eq 0 ] && [ "$ACCT_KIND" != external ] \
+     && [ "$ACCT_PROVIDER" = anthropic ] && [ -z "$ACCT_SECRETS" ] \
+     && { [ -e "$ACCT_REMOVE_CFG/.credentials.json" ] \
+       || [ -L "$ACCT_REMOVE_CFG/.credentials.json" ]; }; then
+    _acct_auth_deadline
+  fi
+
+  # The descriptor acquired before the census remains held until this process
+  # exits, including roster regeneration and marker removal.
+  _acct_placeable
+  for f in ${ACCT_PLACEABLE[@]+"${ACCT_PLACEABLE[@]}"}; do
+    [ "$f" = "$id" ] && was_placeable=1
+  done
+  if [ "$was_placeable" -eq 1 ]; then
+    _acct_placeable "$id"
+    [ "${#ACCT_PLACEABLE[@]}" -gt 0 ] \
+      || _acct_refuse 1 last-home-able "account $id is the only globally placeable lane - every other home-able account is disabled or has no executable launcher, so removing it would leave no fresh-placement destination. Nothing was written."
+  fi
+
+  for item in ${ACCT_ROW_FIELDS[@]+"${ACCT_ROW_FIELDS[@]}"}; do
+    sid="${item%%:*}"; field="${item#*:}"; rc=0
+    _acct_rehome "$sid" "$field" "$id" "$ACCT_UPSTREAM_ID" || rc=$?
+    if [ "$rc" -eq 3 ]; then
+      stands="No roster entry, projection, launcher, credential, marker, limits file, hookstate file, or config directory was removed."
+      [ "${#rehomed_fields[@]}" -eq 0 ] \
+        || stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]}. No roster entry or artifact was removed; those field moves remain."
+      _acct_refuse 1 registry-changed "$_SVC_REG/$sid.$field named $id during the registry census and changed before it could be rehomed. Re-measure the session row, then retry. $stands"
+    fi
+    if [ "$rc" -ne 0 ]; then
+      stands="No roster entry, projection, launcher, credential, marker, limits file, hookstate file, or config directory was removed."
+      [ "${#rehomed_fields[@]}" -eq 0 ] \
+        || stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]}. No roster entry or artifact was removed; those field moves remain."
+      _acct_refuse 1 rehome-failed "could not rehome $_SVC_REG/$sid.$field from $id to $ACCT_UPSTREAM_ID. $stands"
+    fi
+    rehomed_fields+=("$sid.$field")
+    already=0
+    for f in ${rehomed[@]+"${rehomed[@]}"}; do [ "$f" = "$sid" ] && already=1; done
+    [ "$already" -eq 1 ] || rehomed+=("$sid")
+  done
+
+  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. The roster entry, projection, launcher, credential, marker, limits file, hookstate file, and config directory still stand."
+  _acct_unprovision "$id" "$stands"
+  # THE ROWS BY NAME, not "registry fields were rehomed". This clause is the one
+  # the operator reads when the drop refuses, and by this line two irreversible
+  # things have happened: every registry field that named $id now names
+  # $ACCT_UPSTREAM_ID, and $ACCT_REMOVE_CFG has been swept. A sentence that said
+  # so without naming the rows would leave them to go and find which sessions
+  # moved. It is passed DOWN to the helper as `--stands` as well as held here:
+  # `_acct_write_op`'s clause covers the empty-body and noisy-helper paths, and
+  # the `--stands` key covers node's own refusals, which `_acct_run_op` re-emits
+  # verbatim and bash may not reword.
+  stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. ccrc-managed settings, hooks, and skills were swept from $ACCT_REMOVE_CFG. The roster entry and all account artifacts still stand; the config directory and transcript history remain intentionally."
+  _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
+  stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally."
+  _acct_projection "$stands"
+
+  if [ "$ACCT_KIND" = external ]; then
+    f="$WRAPPER_BIN_DIR/$id"
+    { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f")
+  else
+    _acct_remove_wrapper "$id"
+    case "$ACCT_WRAPPER_VERDICT" in
+      absent) : ;;
+      ccrc-unmodified) removed+=("$WRAPPER_BIN_DIR/$id") ;;
+      *) kept+=("$WRAPPER_BIN_DIR/$id") ;;
+    esac
+  fi
+
+  for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json"; do
+    { [ -e "$f" ] || [ -L "$f" ]; } || continue
+    { [ ! -d "$f" ] || [ -L "$f" ]; } \
+      || _acct_refuse 1 artifact-conflict "$f is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand."
+    rm -f -- "$f" \
+      || _acct_refuse 1 artifact-remove "could not remove $f. The roster and projection no longer name $id; other removal effects remain."
+    removed+=("$f")
+  done
+
+  if [ -n "$ACCT_SECRETS" ]; then
+    f="$HOME/$ACCT_SECRETS"
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      if [ "$ACCT_KIND" = external ] || [ -z "$ACCT_SECRET_ENV" ]; then
+        kept+=("$f")
+      else
+        _acct_secret_tag "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
+        local want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+        if [ "$ACCT_SECRETS" != "$want" ] || [ "$keepcred" -eq 1 ]; then
+          kept+=("$f")
+        else
+          { [ -f "$f" ] && [ ! -L "$f" ]; } \
+            || _acct_refuse 1 credential-conflict "$f is not a regular ccrc credential file, so it was kept rather than removed. The roster and projection no longer name $id; other removal effects remain."
+          rm -f -- "$f" \
+            || _acct_refuse 1 artifact-remove "could not remove token credential $f. The roster and projection no longer name $id; other removal effects remain."
+          removed+=("$f")
+        fi
+      fi
+    fi
+  elif [ "$ACCT_KIND" != external ] && [ "$ACCT_PROVIDER" = anthropic ] \
+       && { [ -e "$ACCT_REMOVE_CFG/.credentials.json" ] \
+         || [ -L "$ACCT_REMOVE_CFG/.credentials.json" ]; }; then
+    if [ "$keepcred" -eq 1 ]; then
+      kept+=("$ACCT_REMOVE_CFG/.credentials.json")
+    else
+      _acct_sign_out "$id" "$ACCT_REMOVE_CFG"
+      [ "$ACCT_SIGNOUT" = removed ] && removed+=("$ACCT_REMOVE_CFG/.credentials.json")
+    fi
+  elif [ "$ACCT_KIND" != external ] \
+       && { [ -e "$ACCT_REMOVE_CFG/.credentials.json" ] \
+         || [ -L "$ACCT_REMOVE_CFG/.credentials.json" ]; }; then
+    kept+=("$ACCT_REMOVE_CFG/.credentials.json")
+  fi
+
+  { [ -e "$ACCT_REMOVE_CFG" ] || [ -L "$ACCT_REMOVE_CFG" ]; } \
+    && kept+=("$ACCT_REMOVE_CFG")
+  model="$HOME/.ccrc/models/$id.classes.json"
+  if [ -e "$model" ] || [ -L "$model" ]; then
+    kept+=("$model")
+    operator_steps+=("Review $model and remove it by hand if it is no longer needed; ccrc kept it because this build has no owning cleanup verb.")
+  fi
+
+  local -a args=(--file "$(_acct_roster_path)" --id "$id")
+  for f in ${rehomed[@]+"${rehomed[@]}"}; do args+=(--rehomed "$f"); done
+  for f in ${kept[@]+"${kept[@]}"}; do args+=(--kept "$f"); done
+  for f in ${removed[@]+"${removed[@]}"}; do args+=(--removed "$f"); done
+  for f in ${operator_steps[@]+"${operator_steps[@]}"}; do args+=(--operator-step "$f"); done
+  _acct_read_op "Removal completed on disk: the roster and projection no longer name $id, proven-owned artifacts are gone, and every path reported as kept remains. Only the final JSON report failed; 'ccrc account roster' reads the surviving roster." \
+    removed "${args[@]}"
   printf '%s\n' "$ACCT_OUT"
 }
 
@@ -6747,6 +7230,10 @@ cmd_account() {
       # uses, so the `return 0` below is reached only when the whole ordered
       # write landed.
       _acct_declare "$@"
+      return 0
+      ;;
+    remove)
+      _acct_remove "$@"
       return 0
       ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;

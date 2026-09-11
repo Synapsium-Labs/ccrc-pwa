@@ -11129,6 +11129,15 @@ git commit -m "feat(account): enable/disable drive the kill switch, refusing the
 ---
 ### Task 32: `remove` takes a lane apart in the one order that cannot strand anything, and never deletes a config dir
 
+> **READ THE SHIPPED SOURCE, NOT THE SNIPPETS BELOW.** Task 32 executed on 2026-09-11, and the snippets in
+> this section are the pre-execution draft: they read registry fields without proving what they are, compare
+> nothing against the JSON roster before trusting the projection, delete any named `secretsFile` without
+> proving ccrc derived it, treat every generated no-secret lane as an Anthropic login, and carry neither
+> `removal-facts` nor the repeated `operator-step`. The ORDER they prescribe — rehome, sweep, drop,
+> regenerate, remove only what is proven owned, never the config directory — is what survived intact and is
+> the whole point of the task. Everything else that differs is written up in **D-2469..D-2474** and
+> **D-2523..D-2532** at the end of this plan, and the file list below is one file short (D-2532).
+
 **Files:**
 - Modify: `ccd/ccrc` — `_acct_cfg_dir`, `_acct_upstream_id`, `_acct_rehome`, `_acct_rows_on`,
   `_acct_remove_wrapper`, `_acct_sign_out`, `_acct_unprovision` and `_acct_remove` in the
@@ -18418,3 +18427,248 @@ switched off". That was false under the very predicate the feature exists to dri
 Marker mutations now distinguish a regular owned marker from a conflicting filesystem object. Enable
 refuses a non-regular path without calling it an off state; disable replaces non-directory names safely and
 refuses a directory. Success is reported only after the exact regular-file postcondition is measured.
+
+### D-2523 — a census called complete dropped a field it could not read
+
+`_acct_row_fields_on` tested each registry field with `[ -f ] && [ ! -L ]` and then read it. A mode-000
+regular file passes both, `read` fails, and the variable is left empty — so a `.home` naming the account
+being removed was simply absent from a list the refusal presents as every row that names it. Its sibling
+`_acct_live` had the same defect for `.wrapper` and was fixed one commit earlier; this is that fix's other
+half, and nothing had measured it because `_acct_live` reads only `.wrapper`, so a home-only row was
+invisible to the case that caught the first.
+
+The field is now readable-or-refuse: `-r` joins the pair, and an unreadable regular field is
+`registry-unreadable` like every other object this census cannot prove.
+
+### D-2524 — the shared lock could wait on a descriptor its own process already held
+
+`_acct_marker_lock` opened a new descriptor with `exec {FD}>>` on every call. flock(2) attaches to the OPEN
+FILE DESCRIPTION rather than to the process, so a second call in one shell is a stranger to the first and
+waits for a lock that shell never releases before it exits. With three callers this was unreachable; giving
+it two more made it one ordinary edit away, and the symptom is a wedged box rather than a refusal.
+
+The helper now holds one descriptor per process and returns on a second call. Measured: without the guard the
+case that calls it twice never returns.
+
+### D-2525 — one hard-coded clause for five callers holding different things
+
+`_acct_marker_lock` ended each of its four refusals with "Nothing was written." That was true for `enable`,
+`disable` and `remove` and became false the moment `add` reached it with its 0600 credential already on disk.
+D-2135's standing rule — a helper whose sentence mentions what else happened takes that sentence as a
+parameter — at this helper's address.
+
+`$1` is now bound positionally, so under `set -u` a caller that forgets the clause dies rather than shipping
+another verb's sentence.
+
+### D-2526 — two verbs wrote the roster and its projection with nothing serialising them
+
+`remove` holds `$REG/.account-placement.lock` from before its registry census through its roster drop and the
+`accounts.sh` regeneration that follows. `add` and `declare` held nothing: each read the roster, wrote it
+whole, and regenerated the projection from its own copy. A removal landing between any two of those steps is
+overwritten — and the projection written LAST is the one `ccd` reads, so the removed account returns as a lane
+`ccd` will place a session on.
+
+Both verbs now take the same lock immediately before their roster write and hold it through the projection.
+The cost is stated rather than hidden: `add` holds it across `_acct_converge`, its slowest step.
+
+**What this does NOT cover, said here rather than left to be found:** `ccrc install` regenerates `accounts.sh`
+through the same `_inst_accounts_sh` and takes no lock, so an install racing a removal can still write a
+projection naming the removed account. It is left alone deliberately — that verb's refusals are `_ccrc_die`
+lines in a human transcript, not this verb's JSON, and `_acct_marker_lock` cannot speak that dialect — and the
+residue is one stale projection that the next `ccrc install` or account verb corrects. The five account verbs
+are the ones that take the lock; the convergence verb is not one of them.
+
+### D-2527 — where that lock does NOT belong, and why
+
+The first cut took the lock above `_acct_mark_off`, on the argument that the kill-switch marker is a placement
+fact. It is not one here: `add` and `declare` write a marker for an id THE ROSTER DOES NOT YET CARRY, and
+`enable`, `disable` and `remove` each refuse an id the projection does not name while `_acct_placeable` draws
+its candidates from that same projection — so nothing reads it and nothing contends for it. Hoisting the lock
+also took `_acct_mark_off`'s three refusals away from the operator: `$REG` being a regular file is
+`disable-marker` with a `touch` they can type, and the lock answered it first as `marker-lock`. Measured: two
+pinned cases went red on exactly that substitution.
+
+The marker stays outside the lock, and `ccrc-account.test.ts` asserts it lands while the lock is held by
+somebody else — so the boundary is a measurement rather than a note.
+
+### D-2528 — three hand copies of one roster write, on a name a reader of /proc can derive
+
+`add-entry`, `declare-entry` and `drop` each spelled their own tmp+rename: the same four lines, the same mode
+carry, the same catch. `drop` inherited D-2052's mode rule only because someone remembered to copy it, and a
+fourth writer would inherit nothing — `single-definition.test.ts` filters `/\.tsx?$/` (D-1860) and cannot see
+a `.mjs` file at all. The name was `${file}.tmp.${process.pid}`, created with a plain `writeFileSync` that
+follows a symlink and truncates what it finds.
+
+One `writeRoster` now owns the write; the tmp carries random bytes beside the pid and is created `wx`, so a
+collision refuses instead of overwriting. `ccrc-account.test.ts` counts this file's `renameSync` calls.
+
+### D-2529 — a refusal about a half-moved box that said only "the roster was unchanged"
+
+By the time removal calls `drop`, two irreversible things have happened: every registry field that named the
+account now names the upstream, and the config directory has been swept of ccrc-managed settings, hooks and
+skills. `drop`'s own refusals are written by `deploy/account-op.mjs`, which cannot see either — and
+`_acct_run_op` re-emits a helper refusal VERBATIM, by design, so the caller's "what still stands" clause never
+reached the operator. Measured on an unwritable `~/.ccrc`: `writing … failed … — the roster was unchanged`,
+with no mention of the rows that had already moved.
+
+`drop` now takes `--stands`, absence-permitting, and both of its refusals carry it. The sentence keeps one
+owner and the facts in it keep another.
+
+### D-2530 — ccd wrote account names from a roster snapshot taken at startup
+
+`ccd` sources `~/.ccrc/accounts.sh` once, so `CCRC_ACCOUNTS` is a snapshot. Five sites write an account name
+into the registry — `_ws_seed_home`, `cmd_ws_add`, `cmd_start`, `cmd_swap`, `cmd_prefer` — and the verbs run
+for seconds: `cmd_ws_add` fetches and checks out a worktree between choosing an account and writing it, and
+`cmd_swap` can spend minutes carrying a transcript. A `ccrc account remove` landing in that window leaves a
+registry row naming a lane the roster no longer has, and that session then refuses to start until an operator
+re-points it.
+
+**Operator ruling, 2026-09-11: re-read, do not lock.** ccd's placement paths are the hot ones on this box and
+a fleet-wide flock there would let one stuck holder delay every session start. Each account-valued write now
+re-reads the projection in a subshell immediately before it writes; `ws-add` re-TAKES its automatic pick
+rather than refusing, and `cmd_swap` asks at both ends of the carry — the second answer routed through
+`_swap_refuse`, which restarts the session on the account that still holds its history. The window is narrowed
+to the microseconds between the re-read and the `_reg_set`, not closed, and the residue is the same
+operator-recoverable row it always was.
+
+### D-2531 — a concurrency case that was green for a reason that was not its own
+
+The first `cmd_swap` pre-teardown case passed before the guard it was written for existed. The swap was
+refusing at the TRANSCRIPT pre-flight two lines above — no transcript matched the fixture's uuid — so the case
+never reached the question it asked, and it answered identically with the guard deleted. `a-green-mutation
+-needs-a-control` in its other direction: a green test whose reason is not the one in its title.
+
+The case now stubs `_transcript_matches` so the pre-flight above it passes, and it fails when the guard is
+removed.
+
+### D-2532 — this task's production scope is wider than the plan gave it
+
+Task 32 lists `ccd/ccrc`, `deploy/account-op.mjs` and `server/test/ccrc-account.test.ts`. D-2530 puts
+production code in `ccd/ccd`, which drags in `server/test/ccd-account-ok.test.ts` for its fixture-only cases,
+`server/test/ccd-die-containment.test.ts` for its census of functions that can `die`, and the provenance
+re-stamp `server/test/ownership.test.ts` gates on. Recorded rather than absorbed: a reviewer reading the
+task's file list would otherwise read four touched files as scope creep.
+
+### D-2533 — the new ccd refusal sent the operator to a verb this build does not have
+
+`_account_still_rostered`'s absent-account sentence ended *"Pick an account that still exists (ccd
+accounts), then retry."* There is no `accounts` verb in `ccd` — zero dispatch arms, measured — so the
+remedy answered `unknown command`. This is the identical defect this same task had just corrected in
+removal's own report, which used to name `ccrc models <id> rm` for a file no command owns: a refusal that
+misnames the next act teaches the operator the tool is broken, and writing one INTO the fix for that class is
+worth recording rather than quietly repairing. Caught in a self-adversarial pass over the diff, before review.
+
+The sentence now names `ccrc account roster`, which is the verb that lists the roster, and
+`ccd-account-ok.test.ts` pins it in BOTH directions — the remedy is asserted present, and `ccd` is
+asserted to have no `accounts` arm, so the day it grows one the assertion says so rather than rotting.
+
+---
+
+**D-2534..D-2541 came out of the Task 32 review round** (five reviewers plus a refute pass, 2026-09-11).
+Every one was reproduced as a red test in this tree before it was repaired, and the two rated *medium* are
+both defects in code this task wrote rather than carries from earlier ones.
+
+### D-2534 — an idle box could not remove an account at all
+
+`_acct_live` read any non-zero from `tmux list-sessions` as "the question went unanswered". Measured:
+`tmux list-sessions` exits **1 when no server is running**, which is the ordinary state of a box whose
+sessions have all been stopped — and `ccd` already reads that same non-zero as the ANSWER "no server" at its
+two `_tmux_server_ensure` call sites. So on a box with registry rows on a lane and no tmux server,
+`ccrc account remove` refused `live-unmeasured` and offered no way past it but starting a session. That box
+is exactly the one a removal is for: the true answer, zero live panes, is the one that should let it proceed.
+
+The non-zero is now read against tmux's own words — `no server running`, `error connecting to` — which is
+defensible because tmux has no i18n and there is no translated build in which those strings differ. Anything
+else it says is still unmeasured, so the fail-closed direction survives for the condition that matters: a
+server that is there and cannot be talked to. The merge of stderr into stdout cannot manufacture a live
+session, because the comparison is an exact match against `cc-<sid>` for rows the registry already named.
+
+### D-2535 — three unanswerable questions, one sentence naming the third
+
+`ACCT_LIVE_MEASURED` goes false for an unlistable registry, an unreadable `.wrapper` field, and a tmux that
+could not be asked. All three arrived at one refusal asserting the tmux arm, so an operator whose registry
+field is a dangling symlink was sent to look at tmux. Two of the three are refused earlier on `remove`'s own
+path (`_acct_row_fields_on` runs first), which is why nothing measured the overload — the verb could not reach
+it, and the sentence was still wrong for this function's other callers.
+
+`ACCT_LIVE_WHY` now carries the cause out, and the three are driven at `_acct_live` itself and asserted
+distinguishable — the same shape `_wrapper_rostered_now` was given three answers for.
+
+**And the refusal's use of it is an EQUIVALENT MUTANT through the verb, measured green.** Putting the old
+hard-coded tmux sentence back into `_acct_remove` changes nothing any test can see, and it has to be: the only
+cause removal can reach IS the tmux one, so the two spellings are indistinguishable from outside. What the
+substitution costs is a FUTURE arm — a new way for liveness to go unmeasured, or a reordering that lets one of
+the other two through — shipping the tmux sentence about it, which is this deviation restated. So the call
+site is pinned at the SOURCE, and the green is recorded here rather than left to look like coverage.
+
+### D-2536 — the one refusal that strands a worktree blamed the wrong thing
+
+`cmd_ws_add`'s fresh re-pick yields an empty string for three conditions — `accounts.sh` unsourceable, the
+array no longer declared, every lane genuinely out — and the refusal said "the roster changed while this
+workspace was being created" and pointed at `rm $REG/<w>-disabled`. For two of the three the fix is
+`ccrc install`. This is the call site that cannot leave the box as it found it (the worktree and the branch
+exist), so it is the one where a misdirected remedy costs the most.
+
+Split: an unsourceable projection or a missing array is its own refusal naming `ccrc install`, and
+"every lane this box knew at startup is now disabled, missing or gone" is the other. Both still name the
+worktree, the branch, and the `ccd start` that adopts them.
+
+### D-2537 — the re-read could answer from the array it inherited
+
+`$( . accounts.sh )` runs in a subshell that has ALREADY inherited `CCRC_ACCOUNTS` from ccd's own startup
+source. A projection that sources cleanly and no longer DEFINES the array — truncated before the assignment,
+hand-edited — leaves `declare -p CCRC_ACCOUNTS | grep -q '^declare -a '` succeeding against the stale
+inherited value, so the re-read answers from the very snapshot it exists to correct. The identical idiom is
+sound in `ccrc` (`_acct_roster_ids`), which never sources the projection into its own shell; it is
+specifically `ccd` where the variable is pre-set, and copying the idiom across carried a hole with it.
+
+`unset -v` before the source, in both readers. Pinned by a case that hands ccd a projection with no
+assignment in it and asserts the answer is `2`, unmeasurable.
+
+### D-2538 — the fresh pick could name an account this process cannot resolve
+
+The re-pick reads the CURRENT projection, but `_ccrc_cfg_dir`, `_ccrc_label` and `_ccrc_hue` in the running
+process are still the startup snapshot's — and the generated `_ccrc_cfg_dir` has **no default arm**, so an id
+it has never heard of answers EMPTY at exit 0. An account added AND enabled during the `git fetch` window
+would be picked, exec'd fine, and then have no config directory for the rest of the run: `_sync_uuid` returns
+early and the session's uuid is never mirrored. Narrow, and a state the snapshot-only pick could not reach —
+which is the point: the fix for D-2530 opened it.
+
+The pick is now scoped to the INTERSECTION of the fresh home-able list and the startup snapshot. It exists to
+avoid an account that LEFT; it may drop a lane, never adopt one.
+
+### D-2539 — the one arm that quoted launcher text instead of describing it
+
+Every launcher-fed sentence in `deploy/account-op.mjs` goes through `capDetail` or `shapeOf` — the file states
+the rule three times and D-2222 says it was "closed at the source rather than only at the cap". The signed-in
+deferral did not: `${j.authMethod ?? 'method not stated'}` put a launcher's 200 000 characters straight onto
+the exit-4 line. `_acct_note_cap` bounded it before it crossed argv, so this was the last hole in the rule
+rather than a live E2BIG.
+
+A conservative token prints verbatim — "which method" is the whole value of the sentence — and anything else
+is described by shape.
+
+### D-2540 — two boolean flags read the way D-2131 forbids
+
+`added`, `declared`, `switched` and `rotated` each refuse anything but the exact words, with the argument that
+mapping a typo to `false` publishes a fact nobody measured. `classify`'s `--timed-out` and `health`'s
+`--limits-touched` used bare `=== 'true'`: `--timed-out yes` read as "did not time out" and produced an
+`unknown` row where a `timeout` one belonged, and `--limits-touched TRUE` read as "the telemetry directory did
+not move", which is the whole fact that flag reports. Unreachable from the bash callers, which always pass one
+of the two words — and both keys belong to a CLI this file's own header says is meant to be run by hand.
+
+`boolFlagClass` makes both total while keeping them OPTIONAL, which is the one difference from the four that
+spell the rule inline: `_acct_check` passes `--timed-out` only on the paths where it is true, so refusing an
+absent flag would refuse every ordinary run.
+
+### D-2541 — a fix made an older test's premise unreachable, and the test did not notice
+
+D-2222's case drove the 1024-character note cap by handing the launcher a 200 000-character `authMethod`.
+D-2539 bounds that value at the source, so the huge note can no longer be produced at all — and the case then
+failed asking for a truncation marker that nothing would ever write again. A test whose FIXTURE stops being
+able to reach its subject is the stale-green class in its loud direction, and the repair is not to restore the
+old path.
+
+The end-to-end half now asserts the stronger property — not one byte of launcher text reaches the note — and
+the cap is pinned where it lives, at `_acct_note_cap`, both sides. The cap is not dead code: its second caller
+is the `classify-failed` refusal, which caps `$ACCT_HEALTH`.

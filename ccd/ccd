@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=287afd7f24b92eb60b94d2756425d65d6733b806c490e95bc76055a012f6729c
+# ccrc:generated 1 sha256=9b23b33e6738517604eeb3c9670fd3e8a64732409237b337e54b926113df7294
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1132,6 +1132,76 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
 # every rostered account is a valid wrapper, and an opt-in lane is now expressed
 # by being absent from CCRC_HOME_ABLE rather than by being named in this line.
 _is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+# ── THE SAME QUESTION, ASKED OF THE FILE RATHER THAN OF THE SNAPSHOT ────────
+# `CCRC_ACCOUNTS` is sourced ONCE, at startup, so the predicate above answers
+# about the roster as it stood when this process began. A `ccrc account remove`
+# is a deliberate operator act that takes seconds, and ccd verbs run for
+# seconds — `cmd_ws_add` fetches and checks out a worktree between choosing an
+# account and writing it, and `cmd_swap` can spend minutes carrying a transcript
+# — so the two overlap. What a stale answer writes is a registry row naming a
+# lane the roster no longer has: that session then refuses to start ("wrapper
+# missing") until an operator re-points it with `ccd prefer` or `ccd swap`.
+#
+# A RE-READ, NOT A LOCK (operator ruling, 2026-09-11). `ccrc account`'s five
+# writing verbs serialise on $REG/.account-placement.lock; ccd deliberately does
+# NOT join them. These are the hot paths on this box, and making every session
+# start wait on a fleet-wide lock would let one stuck holder delay all of them.
+# This narrows the window to the microseconds between the re-read and the
+# `_reg_set` instead of closing it, and the residue is the same
+# operator-recoverable row it always was.
+#
+# A SUBSHELL, NEVER A RE-SOURCE INTO THIS SHELL. `accounts.sh` defines
+# `_ccrc_cfg_dir`, `_ccrc_label` and `_ccrc_hue` in the same `_ccrc_*` namespace
+# as ccd's own helpers, so sourcing it mid-run would let a generator change
+# redefine a function this verb is in the middle of using. `ccrc`'s own
+# `_acct_roster_ids` draws exactly this line for exactly this reason; only the
+# names cross back.
+#
+# THREE ANSWERS, NOT TWO. "not in the roster" and "the roster could not be read"
+# want different things from the operator — one is a removal that landed, the
+# other a projection to regenerate — and a caller that folded them would tell
+# half its users to do the wrong thing.
+_wrapper_rostered_now() {   # <wrapper> -> 0 named, 1 absent, 2 unmeasurable
+  local w="$1" listed="" v=""
+  listed="$(
+    # UNSET FIRST, AND THIS IS NOT TIDINESS. The subshell has already INHERITED
+    # `CCRC_ACCOUNTS` from ccd's own startup source, so a projection that
+    # sources cleanly and no longer DEFINES the array — truncated before the
+    # assignment, hand-edited — leaves the `declare -p` gate below succeeding
+    # against the stale inherited value, and this function answers from the very
+    # snapshot it exists to correct. `ccrc`'s copy of this idiom needs no unset
+    # because that process never sources the projection into its own shell; it
+    # is specifically HERE that the variable is pre-set.
+    unset -v CCRC_ACCOUNTS
+    # Source-time stdout is not the id channel: a projection that prints is a
+    # projection whose output would otherwise be read back as an account name.
+    { . "$CCRC_ACCOUNTS_SH" >/dev/null 2>&1; } || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
+    for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$v"; done
+  )" || return 2
+  while IFS= read -r v; do [[ "$v" == "$w" ]] && return 0; done <<<"$listed"
+  return 1
+}
+
+# FAIL CLOSED on an unreadable projection, and that is a deliberate asymmetry
+# with the startup path: ccd already refuses to run at all without a sourceable
+# `accounts.sh`, so the only process that can reach this branch is one that was
+# started while the file was good. Writing an account name on the strength of a
+# roster nobody can read is the one answer that cannot be right.
+#
+# `$2` IS THE CALLER'S CLAUSE — what this verb was about to do, and what it is
+# leaving behind. The five call sites reach here holding very different things:
+# `cmd_swap`'s pre-flight has touched nothing, while `cmd_ws_add` already has a
+# worktree and a branch on disk.
+_account_still_rostered() {   # <wrapper> <what-still-stands>
+  local w="$1" stands="$2" rc=0
+  _wrapper_rostered_now "$w" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) die "account '$w' is no longer in the roster — it was there when this ccd started, so a 'ccrc account remove' landed while this command was running. Read the roster with 'ccrc account roster', pick an account that is still in it, then retry. $stands" ;;
+    *) die "could not re-read $CCRC_ACCOUNTS_SH, so this command cannot prove account '$w' still exists — regenerate it: ccrc install. $stands" ;;
+  esac
+}
 # The placement half of the same question, and the general form of every rule
 # below that used to say `gpt`: an account that is not home-able is one a
 # session may only reach by having it as HOME.
@@ -3877,6 +3947,52 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
 
   local id="$project-$slug"
   local uuid; uuid=$(_plat_uuid)
+  # ── THE PICK IS RE-TAKEN HERE, AND NOT MERELY RE-VALIDATED ────────────────
+  # `$hw` was chosen in the pre-flight, above — deliberately, so that an
+  # all-excluded refusal leaves the box exactly as it found it — and between
+  # there and here this verb has run a `git fetch` and a `git worktree add`.
+  # That is the widest window any account-valued write in this file has, and
+  # unlike `start`, `swap` and `prefer` this placement is AUTOMATIC: nobody
+  # named this account, so a fresher measurement is simply the better answer and
+  # a refusal would be gratuitous. The pick runs in a subshell over the CURRENT
+  # projection — `_ws_least_loaded` is a pure read and reads `CCRC_HOME_ABLE`,
+  # so sourcing the file beside it is the whole of the update.
+  # THE INTERSECTION, NOT THE FRESH LIST. The re-pick exists to avoid an account
+  # that LEFT the roster; it must not adopt one that JOINED it. `_ccrc_cfg_dir`,
+  # `_ccrc_label` and `_ccrc_hue` in this process are still the startup
+  # snapshot's, and the generated `_ccrc_cfg_dir` has no default arm — an id it
+  # has never heard of answers EMPTY at exit 0 — so a lane added AND enabled
+  # during the `git fetch` window would be picked, exec'd fine, and then have no
+  # config directory for the rest of the run: `_sync_uuid` returns early and the
+  # session's uuid is never mirrored. So the snapshot is captured BEFORE the
+  # source and the fresh home-able list is filtered through it; this pick may
+  # drop a lane, never add one.
+  #
+  # THREE ANSWERS, NOT TWO — `_wrapper_rostered_now`'s rule at the one call site
+  # that cannot leave the box as it found it. An unreadable projection, an array
+  # it no longer declares and a roster with no lane left are three conditions
+  # with two different remedies, and the first cut of this said "the roster
+  # changed" for all of them while pointing at `rm $REG/<w>-disabled`.
+  local fresh fresh_rc=0
+  fresh=$(
+    snap=" ${CCRC_ACCOUNTS[*]} "
+    unset -v CCRC_ACCOUNTS CCRC_HOME_ABLE
+    { . "$CCRC_ACCOUNTS_SH" >/dev/null 2>&1; } || exit 9
+    declare -p CCRC_HOME_ABLE 2>/dev/null | grep -q '^declare -a ' || exit 9
+    keep=()
+    for v in ${CCRC_HOME_ABLE[@]+"${CCRC_HOME_ABLE[@]}"}; do
+      [[ "$snap" == *" $v "* ]] && keep+=("$v")
+    done
+    CCRC_HOME_ABLE=(${keep[@]+"${keep[@]}"})
+    _ws_least_loaded || true
+  ) || fresh_rc=$?
+  (( fresh_rc != 9 )) \
+    || die "$CCRC_ACCOUNTS_SH could not be re-read as an account projection, so this workspace cannot be placed on an account this box can still prove exists — regenerate it: ccrc install. The worktree $wt and the branch $branch EXIST and no registry row names them; adopt them once it is fixed with: ccd start <wrapper> $project $wt"
+  # NAMES WHAT IS ALREADY ON DISK. Unlike the pre-flight refusal, this one
+  # cannot leave the box as it found it: the worktree and the branch exist.
+  [[ -n "$fresh" ]] \
+    || die "no account is available for placement any more — every lane this box knew at startup is now disabled, missing or gone from the roster. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled), then adopt them with: ccd start <wrapper> $project $wt"
+  hw="$fresh"
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
@@ -12264,6 +12380,9 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   fi
   [[ -n "$wrapper" ]] || die "no wrapper recorded for '$id' and none given"
   [[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: $WRAPPER_DIR/$wrapper"
+  # AFTER the registry has won (above), so this asks about the account this verb
+  # will actually write rather than the one the operator typed.
+  _account_still_rostered "$wrapper" "Nothing was written."
 
   # The workdir stays the creating form's third argument to set. An id alone
   # carries no directory, so the id form READS what the row already has and
@@ -13079,6 +13198,14 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
+  # WITH THE PRE-FLIGHT, ABOVE THE TEARDOWN. Same reason the transcript
+  # pre-flight sits where it does: a refusal here costs nothing and leaves the
+  # session alive on the account that still holds its file, while the same
+  # refusal after the `systemctl stop` leaves a session that is dead AND still
+  # on its old lane. The matching check at the far end of the carry is at the
+  # registry flip below; this one is not redundant with it — it is the one that
+  # keeps a doomed swap from killing a pane.
+  _account_still_rostered "$target" "The session is untouched and stays on $cur."
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
   # its caller mid-flight — detach an orphan to finish the job after we return. The
   # detached process re-enters this function and runs the pre-flight itself; its refusal
@@ -13219,6 +13346,21 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   # heartbeat stops here, before the registry is flipped. What follows is
   # milliseconds of `_reg_set`, and the final stamp below covers the restart.
   _swap_beat_stop "$beat"
+  # RE-ASKED AT THE FLIP, because the carry between the pre-flight and this line
+  # is the longest window ccd has — `cp -a` over a sidecar can take minutes — and
+  # a removal fits inside it comfortably. Routed through `_swap_refuse` rather
+  # than `die`: by this line the pane is dead and the unit is stopped, and that
+  # helper is what restarts the session on the account that still holds its
+  # history. The transcripts copied into the departed lane's config directory are
+  # left where they are — inert bytes in a directory `remove` keeps by contract.
+  local _swap_rc=0
+  _wrapper_rostered_now "$target" || _swap_rc=$?
+  if [[ "$_swap_rc" -ne 0 ]]; then
+    local why="account $target left the roster while this swap was carrying its transcripts"
+    [[ "$_swap_rc" -eq 2 ]] && why="$CCRC_ACCOUNTS_SH could not be re-read while this swap was carrying its transcripts, so $target cannot be proved to still exist"
+    _swap_refuse "$id" "$cur" "$target" "$why" 1
+    return 1
+  fi
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
   # `cmd_ensure` runs in this same process at ccd:11034, but only when
@@ -13254,6 +13396,7 @@ cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps 
   local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
   _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _account_still_rostered "$w" "The home for '$id' is unchanged."
   _reg_set "$id" home "$w"
   echo "home for $id set to $w"
 }
