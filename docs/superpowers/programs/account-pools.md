@@ -2997,3 +2997,64 @@ The two halves now disagree precisely when the box is sick.
 
 Design is out to a panel: three approaches, each required to measure in a fixture, judged on
 fleet-safety and on which one actually removes the overloaded null rather than relocating it.
+
+### CORRECTION — the fail-open I reported is not live, and the error was mine
+
+I told the operator, an hour ago and in this ledger, that D-2000 is "a live fail-open on main right
+now". **It is not.** A design panel refuted the premise and I verified the refutation myself.
+
+Every registry-sourced pool decider reads `.project` through **`_reg_read`**, not `_reg_get`, and
+guards on its rc:
+
+```
+_reg_read() {   # id field -> stdout the value; rc 0 = read, 1 = absent, 2 = unreadable
+project=$(_reg_read "$id" project); prjrc=$?
+[[ "$prjrc" -eq 2 ]] && ! _pool_untaggable && return 3
+```
+
+Measured in a fixture against main's own extracted `_reg_read`: healthy+present → rc 0,
+healthy+absent-field → rc 1, unsearchable `$REG` → **rc 2** for any field. And the guard is present at
+`_swap_target`, `_auto_swap_check`, `cmd_start`, `cmd_swap` and `cmd_prefer`. `cmd_ws_add`'s project
+is `${1:?…}`, never empty, so it reaches the reader's own `$REG` test and answers `unreadable`.
+
+**So what did I actually measure?** I extracted `_reg_get` and `_project_pool_state`, composed them,
+and measured *that*. The composition is real — both functions exist and behave exactly as I showed —
+but it is **not the composition the deciders perform**. I took D-2009's sentence ("all three feed
+`_project_pool_state` from `project=$(_reg_get "$id" project)`") as the site inventory and never
+checked it against the call sites. That sentence predates wave 2b and #69's rounds 3–4, which
+introduced `_reg_read`.
+
+That is precisely the class I have been charging the worker with for ten rounds: **a measurement
+taken correctly, on the wrong thing, with the inference reaching past what it supports.** I had the
+evidence in my own terminal — my grep output showed `_reg_read` at those sites — and did not look.
+
+**My census was also wrong.** I reported nine call sites. The correct anchor
+(`/bin/grep -nF '_project_pool_state "'`, non-comment) gives **eleven**: I anchored on the variable
+name `pps=$(`, which is blind to `cmd_project_pool:6097` (`oldstate=`) and `:6343` (`finalstate=`).
+An anchor chosen on a spelling rather than on the symbol, which is the same defect as a positional
+citation.
+
+One panel claim I am NOT relaying, because I checked it and it is not the tree's shape: the
+`local p=$(_reg_read …); rc=$?` rc-masking hazard. All four deciders declare `local` on a separate
+line from the capture.
+
+### What is actually true, and what is worth doing
+
+- **`_reg_read` already is the measured sibling** the house rules ask for, in bash, with a three-value
+  rc. The pool deciders already consume it. The fail-shut is real.
+- **A narrow residual survives**: `_ws_least_loaded` (called zero-arg by design) and `_strand_why` can
+  still take the empty-argument arm and answer `untagged` where `unreadable` is true. The one-line
+  reorder closes it. Both judges agree it closes **zero** live verb outcomes today — its value is
+  structural: fail-shut stops depending on eleven callers each remembering to measure, right as wave 3
+  adds a second enforcer.
+- **D-2000, D-2009 and `ccd/ccd:16099` describe a tree that no longer exists**, and they are the
+  stated basis for holding wave 3's deploy. That is the highest-value correction available, because a
+  false premise is holding a deployment.
+- **The hold itself may be obsolete.** Both judges reached this independently: the five registry-sourced
+  deciders already refuse in every state wave 3's server refuses, so "ccd silently permits what the
+  server refuses" is not reproducible at `b879510f`. Neither the reorder nor any design here lifts the
+  hold — what would is a state-by-state re-measurement of ccd's verdicts against wave 3's actual
+  enforcement (`refusePool`/`poolRule`). That is the next act, and it is measurement, not more reading.
+
+Run 43's dispatch is refused `cap-concurrency` (7/7 running, five of them `expoAI-assistant`'s). It
+holds its place as `planned`.
