@@ -3058,3 +3058,33 @@ line from the capture.
 
 Run 43's dispatch is refused `cap-concurrency` (7/7 running, five of them `expoAI-assistant`'s). It
 holds its place as `planned`.
+
+### My close raced the worker's fingerprint — ruling, and the second error in an hour
+
+The worker reported (mail 569) that wave-done mail 565 came back `rejected / run closed`: they
+measured and sent exactly one merged fingerprint, and my close of run 35 landed first. They declined
+to send a second — worker clause 9 forbids reasserting a rejected claim without a new commit — put
+task 6 back to `in_progress`, and asked for a ruling. All of that is correct.
+
+**The error is mine, twice over.** The protocol requires the WORKER's post-merge fingerprint; I
+measured one myself and closed on it. And I built it from `origin/ws/clear-meadow` — a ref GitHub had
+already deleted at merge. `git fetch` printed `couldn't find remote ref` **in my own terminal** and I
+used the stale local copy anyway.
+
+Nothing is lost on the claim: their sha and the one the close carried are byte-identical
+(`5e6b683b…`, prNumber 81, prPhase merged), and `verifyDone` re-measured the workspace's own refs
+rather than trusting my body, which is the only reason a fingerprint built from a deleted ref was
+still correct. Right answer, wrong source — [[remote-tracking-ref-is-not-evidence]], ignored by the
+person who keeps citing it.
+
+Ruled: no second fingerprint (their clause-9 reading affirmed, not overridden); task 6 back to
+`done`; and re-send only the half of wave-done that is **not** a claim — the prose saying what waves
+4/5 need that their plans cannot see, which my early close destroyed. Prose reasserts nothing, so
+clause 9 does not reach it.
+
+**The pattern across today is one thing, not three.** The stale-citation class, the `_reg_get`
+composition I measured instead of the one the deciders perform, and now a fingerprint off a deleted
+ref: each is a correct measurement of the wrong object. I have spent ten rounds naming that class in
+someone else's work and produced three instances of it in a morning. The common cause is not
+carelessness about measuring — every one of these was measured — it is failing to check that the
+thing measured is the thing in question.
