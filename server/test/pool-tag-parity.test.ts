@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_TAG_CASES, stateWordForCcd } from './fixtures/poolTag.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { loadConfig } from '../src/config.js';
@@ -120,6 +120,18 @@ const localeWhere = (probe: string): string | null => {
   return null;
 };
 
+/** `skipIf` gates EXECUTION, not the TYPE, so a block it guards still sees
+ *  `string | null`. Throwing here rather than defaulting is deliberate: a
+ *  default of `'C'` would make a block that wrongly ran compare C against C,
+ *  agree trivially, and pass — the precise failure this file already made once
+ *  by picking a locale that could not show the defect. */
+const required = (v: string | null, what: string): string => {
+  if (v === null) {
+    throw new Error(`${what} is null but its block ran — skipIf did not gate it`);
+  }
+  return v;
+};
+
 /** A locale in which bash's `[a-z]` really does collate a non-ASCII letter into
  *  range — the condition D-2522's shadow exists to neutralise. */
 const collatingLocale = localeWhere(
@@ -165,8 +177,9 @@ describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
       plant(h.home, c.bytes);
       const snippet = `{ _project_pool_state ${JSON.stringify(PROJECT)}; } 2>&1`;
       const underC = h.sh(snippet, { LC_ALL: 'C' });
-      const underUtf8 = h.sh(snippet, { LC_ALL: wideSpaceLocale });
-      expect(underC, `${c.name}: C and ${wideSpaceLocale} disagree — ${c.why}`).toBe(underUtf8);
+      const wide = required(wideSpaceLocale, 'wideSpaceLocale');
+      const underUtf8 = h.sh(snippet, { LC_ALL: wide });
+      expect(underC, `${c.name}: C and ${wide} disagree — ${c.why}`).toBe(underUtf8);
       // and both are the table's answer, so "deterministic" cannot be satisfied
       // by being consistently wrong.
       expect(underC, c.why).toBe(stateWordForCcd(c.expect));
@@ -201,9 +214,12 @@ describe('the harness really delivers LC_ALL to ccd (the channel every locale cl
 // the behaviour
 // ---------------------------------------------------------------------------
 describe('the locale shadows are present in the source (D-2520/D-2522/D-2542)', () => {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const ccdSrc = fs.readFileSync(path.join(root, 'ccd', 'ccd'), 'utf8');
-  const checksSrc = fs.readFileSync(path.join(root, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  // `CCD` comes from `ccdWsHelpers.ts`, which `single-definition.test.ts`
+  // requires to be the ONE file spelling the path to the ccd script — measured,
+  // because an earlier draft joined it here and that scan went red. The doctor
+  // sits beside it, so it is derived rather than spelled a second time.
+  const ccdSrc = fs.readFileSync(CCD, 'utf8');
+  const checksSrc = fs.readFileSync(path.join(path.dirname(CCD), 'ccrc-doctor-checks'), 'utf8');
 
   /** The body of a bash function, from its `name() {` to the first line that is
    *  a bare `}` at column 0 — enough for these four, all of which are written
