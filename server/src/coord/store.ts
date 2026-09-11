@@ -1490,16 +1490,15 @@ export class CoordStore {
    * below is reached by this live path, not only by the store test that
    * drives it directly.
    *
-   * NO `tx()` OF ITS OWN. `DatabaseSync` transactions do not nest, so whether
-   * a call here sits inside a transaction depends entirely on the caller:
-   * `markDispatched` reaches this from inside the `tx()` of the store method
-   * whose docstring opens "The WHOLE dispatch commit, as ONE transaction"
-   * (`dispatchRun` — there is no `commitDispatch` in this file), so its
-   * re-issue is part of that transaction. The open route's `setSession` call
-   * runs in autocommit, AFTER its `ws-hold` has already succeeded, so a later
-   * failure on that request cannot undo the re-issue — which is exactly why
-   * the bind runs after the hold rather than before it: a refused hold now
-   * leaves the occupant unchanged.
+   * NO `tx()` OF ITS OWN. `DatabaseSync` transactions do not nest, so both
+   * callers own the transaction around this funnel. `markDispatched` reaches
+   * it from inside the `tx()` of the store method whose docstring opens "The
+   * WHOLE dispatch commit, as ONE transaction" (`dispatchRun` — there is no
+   * `commitDispatch` in this file). The open route performs `ws-hold` first,
+   * then wraps its predecessor read, `setSession` call and rebound event in one
+   * `tx()`. Thus a refused external hold makes no database write, while any
+   * later SQLite failure rolls the binding, re-issued delivery and event back
+   * together (D-2505).
    */
   bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
@@ -2690,18 +2689,16 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to FIVE reachable paths. Four run
-   * in the same transaction as their `queueDelivery`: the mail route's send
-   * `tx`, the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx`
-   * through `markDispatched` -> `bindSession` -> `requeueAbandonedMail`, and
-   * `reclaimProgram`'s `tx`. `tx` is `BEGIN IMMEDIATE` over a synchronous
-   * `DatabaseSync`, so those paths see no concurrent writer and the row this
-   * stamps is provably `'queued'`. The fifth path — `requeueAbandonedMail`
-   * reached from the open route's `setSession` -> `bindSession` — runs in
-   * autocommit after its `ws-hold` succeeds. Its queue and stamp are
-   * synchronous but not atomic. The `state NOT IN ${TERMINAL_DELIVERY_SQL}`
-   * guard and the result union therefore refuse and expose a row that became
-   * terminal before the stamp instead of silently overwriting it. The guard is
+   * GUARDED. The three direct callers expand to FIVE reachable paths, all in
+   * the same transaction as their `queueDelivery`: the mail route's send `tx`,
+   * the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx` through
+   * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
+   * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
+   * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
+   * synchronous `DatabaseSync`, so those paths see no concurrent writer and
+   * the row this stamps is provably `'queued'`. The `state NOT IN
+   * ${TERMINAL_DELIVERY_SQL}` guard and the result union still refuse and expose
+   * a row that is already terminal rather than silently overwriting it. The guard is
    * here because a writer whose safety rests on its callers' shape breaks
    * silently when an unguarded path appears — as one did in this wave — and
    * because an audit with one exception in it is an audit nobody finishes. DO

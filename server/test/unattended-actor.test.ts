@@ -189,7 +189,7 @@ const SITES: readonly Site[] = [
     find: /const dispatchDec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/,
     label: '`run:${run.id} dispatch`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
-    find: /const argv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(program, wave, waveOfVal, opened\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    find: /const argv = CCD_ARGV\.wsHold\(sessionId,\n\s+holdReason\(programSlug, wave, waveOfVal, opened\.id\),\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
     label: '`run:${opened.id} open`' },
 ];
 

@@ -128,6 +128,42 @@ describe('POST /api/sessions/:id/kickoff — the four pre-queue arms', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
   });
 
+  it.each([
+    ['a forward-slash traversal', '../other'],
+    ['a nested forward-slash path', 'build9-demo/other'],
+    ['a backslash traversal', '..\\other'],
+    ['a nested backslash path', 'build9-demo\\other'],
+    ['the current directory component', '.'],
+    ['the parent directory component', '..'],
+    ['a dotted filename', 'build9-demo.md'],
+    ['a space-bearing label', 'build 9 demo'],
+    ['a query-bearing label', 'build9-demo?wave=2'],
+  ])('400 bad-request for %s, and queues NOTHING', async (_label, slug) => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, { ...BODY, slug });
+    expect(res.statusCode, slug).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
+  it('trims one safe programme name before composing the ledger path', async () => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const slug = 'build9_demo-name';
+    const res = await post(app, ID, { ...BODY, slug: `  ${slug}  ` });
+    expect(res.statusCode).toBe(200);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due).toHaveLength(1);
+    expect(due[0]!.envelope).toContain(programKickoff(slug, BODY.title));
+    expect(due[0]!.envelope).toContain(`docs/superpowers/programs/${slug}.md`);
+    expect(due[0]!.envelope).not.toContain(`  ${slug}  `);
+  });
+
   it('400 bad-request for NO body at all — the shape the auth sweep probes with', async () => {
     // Its own test, not an `it.each` row: `post`'s default parameter would
     // substitute the VALID body for an `undefined` argument, and the first draft

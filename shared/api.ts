@@ -3729,6 +3729,23 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** A programme is a ledger filename, never a path or a display label. */
+export type ProgramSlugShape =
+  | { ok: true; slug: string }
+  | { ok: false; detail: string };
+
+/** Shape every HTTP programme ingress once before it can reach {@link ledgerPath}. */
+export const shapeProgramSlug = (raw: string): ProgramSlugShape => {
+  const slug = raw.trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(slug)) {
+    return {
+      ok: false,
+      detail: 'program must contain only letters, numbers, underscores, and hyphens',
+    };
+  }
+  return { ok: true, slug };
+};
+
 /** The path a program's ledger is expected to live at. It NAMES the path the
  *  operator is expected to have committed and asserts nothing about it: the
  *  open route parses no ledger ("PARSED BY NOTHING", `coord/routes.ts`), and

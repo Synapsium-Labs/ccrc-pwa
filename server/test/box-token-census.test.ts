@@ -13,7 +13,8 @@
 // each counting a DIFFERENT thing — "box-token-gated coordination routes"
 // (hard-require), "box-token machine lanes" (including the dual-credential GETs
 // — five when this note was written in 2026-09, six once the ask lane added
-// `GET /api/asks` — and `/api/notify`), and `requireMailToken` call sites alone. A scanner
+// `GET /api/asks`, and seven once feed joined them — and `/api/notify`), and
+// `requireMailToken` call sites alone. A scanner
 // demanding one word from all three would be wrong twice. So this file derives
 // ONE set — every route handler that CONSULTS the box token, by either
 // mechanism, across both files that register one — and the prose was rewritten
@@ -418,15 +419,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // Scoped to `requireMailToken` because that is what the sentence says. The
     // dual-credential GETs also consult the token, but through an inline
     // `checkMailToken` as a cookie-OR-token fallback, and the bullet does not
-    // claim them. There are SIX of them now — `/api/runs`, `/api/runs/:id/items`,
-    // `/api/lifecycle`, `/api/peers`, `/api/claims` and `/api/asks` (the ask
-    // pre-emption lane) — of which the first two are inside the `/api/runs*`
-    // prefix and the last four sit outside it. This note named three, and had
+    // claim them. There are SEVEN of them now — `/api/runs`, `/api/runs/:id/items`,
+    // `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims` and `/api/asks`
+    // (the ask pre-emption lane) — of which the first two are inside the
+    // `/api/runs*` prefix and the last five sit outside it. This note named three, and had
     // named three since before either of the two additions; corrected by the
     // whole-branch review (M5 of that pass). It is a NOTE, not an assertion —
     // the loop below derives its own set, and this sentence only says which
     // lanes that set deliberately leaves out. What IS derived for this family
-    // is `EXEMPT_BUT_AUTHENTICATED` above, a SUPERSET of these six (it also
+    // is `EXEMPT_BUT_AUTHENTICATED` above, a SUPERSET of these seven (it also
     // carries `POST /api/runs`, which hard-requires the token rather than
     // accepting a cookie), and the README sentence it feeds is where a route
     // added to the class without a mention reds the build.

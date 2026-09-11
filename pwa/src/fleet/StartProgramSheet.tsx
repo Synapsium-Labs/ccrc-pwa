@@ -40,7 +40,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
-import { ledgerPath } from '../../../shared/api';
+import { ledgerPath, shapeProgramSlug } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { accountLabel } from '../lib/accounts';
@@ -575,9 +575,10 @@ export function StartProgramSheet({
   // independent measurements.
   const runVerdict: OpenRunVerdict | null =
     project === null ? null : openRunVerdict(openRunProjects, project.name);
+  const slugShape = shapeProgramSlug(slug);
 
   const start = async (): Promise<void> => {
-    if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
+    if (starting || !slugShape.ok || title.trim() === '' || project === null) return;
     if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
     // …and the run-board arm above it in the same `? :` chain withholds the
@@ -649,7 +650,7 @@ export function StartProgramSheet({
     }
     if (gen.current !== mine) return; // superseded while the create was in flight
 
-    waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim(), preLive };
+    waitRef.current = { mine, wrapper, project: projectName, slug: slugShape.slug, title: title.trim(), preLive };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
@@ -764,9 +765,14 @@ export function StartProgramSheet({
           type="text"
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
+          aria-invalid={slug !== '' && !slugShape.ok}
+          aria-describedby={slug !== '' && !slugShape.ok ? 'program-slug-error' : undefined}
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
         />
+        {slug !== '' && !slugShape.ok && (
+          <p id="program-slug-error" className="program-start-error">{slugShape.detail}.</p>
+        )}
         <input
           className="proj-search"
           type="text"
@@ -1007,7 +1013,7 @@ export function StartProgramSheet({
                 type="button"
                 className="program-start-go"
                 disabled={
-                  slug.trim() === '' || title.trim() === '' || starting
+                  !slugShape.ok || title.trim() === '' || starting
                   || projected === undefined || existing !== null
                 }
                 onClick={() => void start()}

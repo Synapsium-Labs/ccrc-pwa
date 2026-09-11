@@ -61,7 +61,7 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  * were refusing, presenting a token would change nothing.
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
-  ['GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
+  ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
    'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
@@ -382,11 +382,11 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 25 = /health + the 13
-    // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door + the FIVE exempt-BUT-authenticated GETs
-    // (D-149's pattern): GET /api/runs, GET /api/runs/:id/items,
-    // GET /api/lifecycle, GET /api/peers and GET /api/claims.
+    // that edits this list with a reviewer looking at it. 29 = /health + the 15
+    // hard-token coordination lanes + /api/notify + login + status + the SPA shell
+    // + the two halves of the passkey door + the SEVEN exempt-BUT-authenticated
+    // GETs: GET /api/runs, GET /api/runs/:id/items, GET /api/feed,
+    // GET /api/lifecycle, GET /api/peers, GET /api/claims and GET /api/asks.
     //
     // It read 24 and enumerated 24 until F7 (D-1302), three lines above a
     // `toEqual` listing 25 keys: the tail omitted `GET /api/runs/:id/items`,
@@ -399,6 +399,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/asks',
       'GET /api/auth/status',
       'GET /api/claims',
+      'GET /api/feed',
       'GET /api/ledger',
       'GET /api/lifecycle',
       'GET /api/mail',
@@ -437,7 +438,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-one box-token lanes in EXEMPT are those coord routes, and twenty-two with notify', () => {
+  it('the twenty-two box-token lanes in EXEMPT are those coord routes, and twenty-three with notify', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -455,9 +456,11 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
-    // TWENTY-ONE since `GET /api/asks` (Task 11, the same lane's READ side)
-    // — the same inline `checkMailToken` fallback the other four
-    // exempt-but-authenticated GETs already carry, so this scan (which reads
+    // TWENTY-TWO since `GET /api/feed` joined the same dual-credential class:
+    // `ccrc-api feed list` reads cookieless from the fleet host while the PWA
+    // reads with a session. TWENTY-ONE before that, when `GET /api/asks` (Task
+    // 11, the same lane's READ side) added the inline `checkMailToken` fallback
+    // the other exempt-but-authenticated GETs already carry, so this scan (which reads
     // ONLY the token check, not the credential shape around it) counts it
     // here beside them, not as a plain lane.
     // NINETEEN since `POST /api/asks/:id/release` (Task 10, the ask
@@ -479,7 +482,7 @@ describe('EXEMPT is complete in both directions', () => {
     // stated justification is a gate the route does not actually have is the
     // worst kind of hole.
     expect(gated.sort()).toEqual([
-      'GET /api/asks', 'GET /api/claims', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
+      'GET /api/asks', 'GET /api/claims', 'GET /api/feed', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
       'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items',
       'POST /api/asks/:id/answer', 'POST /api/asks/:id/release',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
@@ -488,12 +491,12 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the twenty-second lane, which lives in server.ts
+    // …and `/api/notify`, the twenty-third lane, which lives in server.ts
     // (D-1242: this comment used to call it the eighteenth, double-counting
     // the coord routes' own eighteen — since corrected once already for
     // `POST /api/asks/:id/answer` joining the nineteen, again for `POST
-    // /api/asks/:id/release` joining the twenty, and again for `GET
-    // /api/asks` joining the twenty-one).
+    // /api/asks/:id/release` joining the twenty, again for `GET /api/asks`
+    // joining the twenty-one, and now for `GET /api/feed` joining the twenty-two).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });
@@ -511,8 +514,8 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 71 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 44; the gated non-exempt
+    // 74 scanned - 3 websockets - 28 exempt-and-scanned (29 EXEMPT entries less
+    // `GET /*`, which no `app.get('...')` registers) = 43; the gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
     // do, — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`, and —
@@ -531,9 +534,9 @@ describe('with the gate ARMED and no cookie', () => {
     // raised the scanned count and the exempt count by one each and left the
     // difference alone. A new route that is NOT exempt moves this number, which
     // is exactly what the kickoff route just did.
-    // 44 since the caps pair: both are NOT exempt (an operator dial is not a
-    // machine lane), so both raise the scanned count without raising the exempt
-    // count — the arithmetic this comment's own paragraph above describes.
+    // 44 after the caps pair: both were NOT exempt (an operator dial is not a
+    // machine lane), so both raised the scanned count without raising the exempt
+    // count. It is 43 now because feed already existed and only joined EXEMPT.
     // DERIVED (F7), the same move as the HTTP half above. The relation on the
     // line below already WAS this arithmetic; collapsing the literal into it
     // means the count cannot disagree with the sets it is a count of.
@@ -644,18 +647,17 @@ describe('the exempt check is set membership on the MATCHED ROUTE, not the raw u
 
   it('a crafted url cannot borrow an exemption it did not match', async () => {
     const w = await openApp(); app = w.app;
-    // `/api/runs/1/dispatch` is exempt; `/api/runs/1` is not a route at all and
-    // `GET /api/feed` is a wholly different entry. Neither may ride the other's.
+    // `/api/runs/1/dispatch` is exempt, while `/api/runs/1` is not a route at
+    // all and `GET /api/fleet` is a wholly different, genuinely gated entry.
+    // Neither may ride the other's exemption.
     //
-    // `GET /api/runs` USED TO BE THE FOIL HERE and no longer can be: D-149 put
-    // it in the table (exempt-but-authenticated), so the GATE lets it through
-    // and its own handler refuses. `gateRefused` would still answer `true` —
-    // that helper matches a verdict-carrying 401, which this route now sends
-    // deliberately — so leaving it here would have kept the test GREEN while it
-    // measured something else entirely. `/api/feed` is a real gated sibling on
-    // the same router.
+    // `GET /api/runs` and `GET /api/feed` both used to serve as foils and no
+    // longer can: D-149 and D-2507 put them in the exempt-but-authenticated
+    // class, so the GATE lets them through and their handlers refuse. Matching
+    // that handler 401 here would keep this test green while measuring the wrong
+    // mechanism; `/api/fleet` has no handler-owned auth and remains the real foil.
     expect(gateRefused(await app.inject({ method: 'POST', url: '/api/runs/1/dispatch' }))).toBe(false);
-    expect(gateRefused(await app.inject({ method: 'GET', url: '/api/feed' }))).toBe(true);
+    expect(gateRefused(await app.inject({ method: 'GET', url: '/api/fleet' }))).toBe(true);
   });
 
   it('EXEMPT is keyed by METHOD as well as path — POST /api/runs is a machine lane, GET is not', async () => {
@@ -790,7 +792,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 71, not the 27 exempt.
+          //    is not itself flag-aware — the assertion that covers all 71 HTTP routes, not the 28 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

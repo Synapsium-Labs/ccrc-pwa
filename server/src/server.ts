@@ -65,7 +65,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState,
+  type FloorState, shapeProgramSlug,
 } from '../../shared/api.js';
 
 /**
@@ -429,9 +429,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
-   * `GET /api/runs` is the one caller (D-149), and it needs the whole decision
-   * rather than a boolean so its refusal can carry the same `AuthVerdict` the
-   * gate would have sent.
+   * the EXEMPT-BUT-AUTHENTICATED coordination GETs need the whole decision,
+   * rather than a boolean, so each refusal can carry the same `AuthVerdict` the
+   * gate would have sent (the class began with `GET /api/runs`, D-149).
    *
    * Passed as a FUNCTION rather than by exposing `authStore` on `Deps`: the
    * store must be loaded exactly once at boot, and putting it on `Deps` is the
@@ -1351,10 +1351,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  // The 4th argument is D-149: `GET /api/runs` is EXEMPT from the session gate
-  // and authenticates for itself, because the coordinator skill reads it
-  // cookieless from the fleet host with the box token. The session half of that
-  // decision can only be made here, where `authStore` lives.
+  // The 4th argument serves the EXEMPT-BUT-AUTHENTICATED coordination GETs:
+  // each handler accepts either the box token from a cookieless fleet caller or
+  // a live PWA session. The session half can only be decided here, where
+  // `authStore` lives (the class began with `GET /api/runs`, D-149).
   //
   // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
   // reached from `POST /api/asks/:id/answer` serializes through the exact
@@ -1534,9 +1534,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     const body = (req.body ?? {}) as
       { slug?: unknown; title?: unknown; runId?: unknown; wave?: unknown };
-    if (typeof body.slug !== 'string' || body.slug.trim() === ''
+    if (typeof body.slug !== 'string'
       || typeof body.title !== 'string' || body.title.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const slugShape = shapeProgramSlug(body.slug);
+    if (!slugShape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: slugShape.detail });
     }
     // ONE reader for the new pair (the wire rule), computed once and handed on as
     // a value that CANNOT be half-formed — the refusal below is the only place a
@@ -1605,7 +1609,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       });
     }
     const out = queueProgramKickoff({ coord }, id,
-      { slug: body.slug.trim(), title: body.title.trim() }, resume);
+      { slug: slugShape.slug, title: body.title.trim() }, resume);
     // 413 in the shape every other cap on this server answers in (claims paths,
     // claim intent, ledger title, and `POST /api/mail` itself). The seam
     // MEASURED it and named it; this maps, and decides nothing — `out.kind` is

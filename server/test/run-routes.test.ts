@@ -158,10 +158,9 @@ const postClose = (app: FastifyInstance, id: number, body: unknown, token: strin
 const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
-// GET /api/runs stays UNGATED — it is not one of the six routes PR J's
-// contract item 6 names, and this build's GET routes (`/api/runs`,
-// `/api/feed`) carry no token check either before or after review findings
-// 3/10/27's fix.
+// The fixture leaves auth disabled, so both GETs retain their dark-box
+// behavior. Armed, `/api/runs` and `/api/feed` are EXEMPT-BUT-AUTHENTICATED:
+// each handler accepts either a live session or the box token (D-149, D-2507).
 const getRuns = (app: FastifyInstance, closed = false) =>
   app.inject({ method: 'GET', url: `/api/runs${closed ? '?closed=1' : ''}` });
 const getMail = (
@@ -261,6 +260,54 @@ describe('POST /api/runs', () => {
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
 
+  it.each([
+    ['a forward-slash traversal', '../other'],
+    ['a nested forward-slash path', 'build4/other'],
+    ['a backslash traversal', '..\\other'],
+    ['a nested backslash path', 'build4\\other'],
+    ['the current directory component', '.'],
+    ['the parent directory component', '..'],
+    ['a dotted filename', 'build4.md'],
+    ['a space-bearing label', 'build 4'],
+    ['a query-bearing label', 'build4?wave=2'],
+  ])('refuses a programme slug shaped as %s, before any row or hold exists', async (_label, program) => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, program });
+    expect(res.statusCode, program).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
+  });
+
+  it('shapes a programme slug once and uses it for storage, ledger paths, and the contained absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const projectsRoot = path.join(home, 'projects');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot } }); app = w.app;
+    const res = await postOpen(app, {
+      ...OPEN_BODY, program: '  build_4-name  ', homeProject: 'demo',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      id: number; program: string; ledgerPath: string; ledgerRepo: string; ledgerAbsPath: string;
+    };
+    expect(body).toMatchObject({
+      program: 'build_4-name',
+      ledgerPath: 'docs/superpowers/programs/build_4-name.md',
+      ledgerRepo: 'demo',
+    });
+    expect(w.coord.run(body.id)?.program).toBe('build_4-name');
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['build_4-name']);
+    expect(w.coord.programHome('build_4-name')).toBe('demo');
+    const homeRoot = path.join(projectsRoot, 'demo');
+    const relative = path.relative(homeRoot, body.ledgerAbsPath);
+    expect(relative.startsWith('..') || path.isAbsolute(relative), body.ledgerAbsPath).toBe(false);
+    expect(body.ledgerAbsPath).toBe(path.join(homeRoot, body.ledgerPath));
+  });
+
   it('a second open of the same planned wave naming a DIFFERENT sessionId re-binds the run, hands the heir the brief, parks the predecessor, and records `session-rebound` naming both occupants', async () => {
     // store-2 / MUT-3. `openRun`'s dup arm keys on (program, wave, waveOf,
     // claimedBy, planned) and NOT on sessionId, so this retry finds the same
@@ -288,6 +335,45 @@ describe('POST /api/runs', () => {
     // RECORDED, naming predecessor and heir and what moved.
     expect(w.coord.runEvents(id).map((e) => e.detail))
       .toContain('session-rebound: demo-existing -> demo-second, 1 re-issued');
+  });
+
+  it('rolls a late re-bind failure back, then retries the whole transfer exactly once', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_session_rebound
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail LIKE 'session-rebound:%'
+      BEGIN
+        SELECT RAISE(ABORT, 'late rebound fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(failed.statusCode).toBe(500);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toEqual([]);
+    expect(w.coord.runEvents(id).filter((e) => e.detail?.startsWith('session-rebound'))).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_session_rebound');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(retried.statusCode).toBe(200);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    expect(w.coord.outstandingMailFor('demo-existing')).toEqual([]);
+    expect(w.coord.outstandingMailFor('demo-second').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second').filter((m) => m.subject === 'the wave brief')).toHaveLength(1);
+    expect(w.coord.runEvents(id).map((e) => e.detail)
+      .filter((d) => d?.startsWith('session-rebound')))
+      .toEqual(['session-rebound: demo-existing -> demo-second, 1 re-issued']);
   });
 
   it('a refused ws-hold leaves the occupant unchanged — no re-bind, no re-issue, no park, no event', async () => {
@@ -394,6 +480,37 @@ describe('POST /api/runs', () => {
     expect(w.coord.programHome('build4')).toBe('demo');
     const id = (second.json() as { id: number }).id;
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('home-project-backfilled');
+  });
+
+  it('rolls home back when its event cannot be inserted, then writes both facts exactly once on retry', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_home_backfill_event
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail = 'home-project-backfilled'
+      BEGIN
+        SELECT RAISE(ABORT, 'home backfill event fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(failed.statusCode).toBe(500);
+    const failedRun = w.coord.runs().find((r) => r.wave === 2);
+    expect(failedRun).toBeDefined();
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(w.coord.runEvents(failedRun!.id).filter((e) => e.detail === 'home-project-backfilled')).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_home_backfill_event');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(retried.statusCode).toBe(200);
+    const id = (retried.json() as { id: number }).id;
+    expect(id).toBe(failedRun!.id);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(w.coord.runEvents(id).filter((e) => e.detail === 'home-project-backfilled')).toHaveLength(1);
   });
 
   it('refuses a home that differs from the stored one, naming the stored value', async () => {

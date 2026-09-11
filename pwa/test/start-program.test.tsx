@@ -591,6 +591,22 @@ describe('StartProgramSheet', () => {
     expect(ledgerLine.textContent).not.toMatch(/exists|confirmed|found|verified/i);
   });
 
+  it('refuses an invalid slug before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build 9 demo');
+
+    expect(await screen.findByText(/only letters, numbers, underscores, and hyphens/i)).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start build 9 demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   it('warns, and does NOT block, when coord.pause is set', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
