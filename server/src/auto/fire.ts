@@ -457,8 +457,16 @@ export async function deliverPrompt(
  * Writes the `close` step ITSELF, because the step's own `ok` flag and detail
  * are the part that was lying: on a refusal it says so, and names the outcome
  * that actually stands.
+ *
+ * NOT named `closeRun`: that identifier already means something else in this
+ * tree — the COORDINATION run's close, which D-46 requires every caller to
+ * make inside `coordMutex.run(...)`, enforced by a textual scan over
+ * `server/src` that reads a bare `closeRun(` call as one of those. An
+ * automation run is not a coordination run and takes no such mutex, so
+ * sharing the name made this file's four calls read as four unserialised
+ * dispatches. The scanner is the mechanism; this paragraph is why.
  */
-function closeRun(
+function closeAutomationRun(
   deps: FireDeps, runId: number, settlement: RunSettlement, nowMs: number,
   ok: boolean, detail: string,
 ): { readonly applied: true }
@@ -488,7 +496,7 @@ function refuseSpawn(
 ): FireOutcome {
   deps.coord.markAutomationSpawn({ runId, spawnRc, identity: { bound: false } });
   deps.coord.appendRunEvent(runId, 'identify', false, detail, nowMs);
-  const closed = closeRun(
+  const closed = closeAutomationRun(
     deps, runId, { outcome: 'refused', refusal }, nowMs, false, `settled refused:${refusal}`,
   );
   if ('refused' in closed) {
@@ -521,7 +529,7 @@ export async function fireAutomation(
   const verdict = await checkPostClaim(deps, a, nowMs);
   if ('refused' in verdict) {
     deps.coord.appendRunEvent(runId, 'precheck', false, verdict.detail, nowMs);
-    const closed = closeRun(
+    const closed = closeAutomationRun(
       deps, runId, { outcome: 'refused', refusal: verdict.refused }, nowMs,
       false, `settled refused:${verdict.refused}`,
     );
@@ -635,7 +643,7 @@ export async function fireAutomation(
     // HARD lease was settled `lost` by pass 1 while it ran, and reporting
     // `ok` over that is a `✓` on the operator's phone for a run whose own row
     // says otherwise.
-    const closed = closeRun(deps, runId, { outcome: 'ok' }, nowMs, true, 'settled ok');
+    const closed = closeAutomationRun(deps, runId, { outcome: 'ok' }, nowMs, true, 'settled ok');
     if ('refused' in closed) {
       return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
     }
@@ -663,7 +671,7 @@ export async function fireAutomation(
   // `promptLadder` over the run's own accumulated `prompt` steps. Spec §6's
   // own sentence: "The operator gets a live session with no prompt in it,
   // which is strictly better than a lie" — `sessionId` stays SET.
-  const closed = closeRun(
+  const closed = closeAutomationRun(
     deps, runId, { outcome: 'failed', refusal: 'prompt-refused' }, nowMs,
     false, 'settled failed:prompt-refused',
   );
