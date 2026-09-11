@@ -397,7 +397,7 @@ describe("POST /api/mail — the 'worker' role", () => {
   const withRun = (coord: CoordStore, sessionId: string | null): number => {
     const r = coord.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
-    if ('refused' in r) throw new Error('open refused');
+    if (!('id' in r)) throw new Error('open refused');
     if (sessionId !== null) coord.setSession(r.id, sessionId);
     return r.id;
   };

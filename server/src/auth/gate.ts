@@ -72,17 +72,17 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The twenty-one box-token machine lanes plus `/api/notify` — the fleet
+ *  2. The twenty-two box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-two
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-three
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
  *     as well as in number). Most of the coordination lanes refuse every
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
- *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/lifecycle`, `/api/peers`,
- *     `/api/claims`, `/api/asks`) do NOT: they take a live session cookie OR the token
+ *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/feed`, `/api/lifecycle`,
+ *     `/api/peers`, `/api/claims`, `/api/asks`) do NOT: they take a live session cookie OR the token
  *     (D-149), which is why the coordinator can read its own wave ledger
  *     cookieless from the fleet host. And `/api/notify` still passes `'legacy'` (no token
  *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
@@ -132,8 +132,8 @@ import type { SessionStore } from './sessions.js';
  *     credential ids without which no browser can run the ceremony at all.
  *     The REGISTER pair is deliberately NOT here — see below.
  *
- *  6. `GET /api/runs` — EXEMPT-BUT-AUTHENTICATED, and the newest entry (D-149),
- *     found by the whole-branch review rather than by any task review. It is
+ *  6. The EXEMPT-BUT-AUTHENTICATED reads, introduced by `GET /api/runs`
+ *     (D-149) in the whole-branch review rather than by any task review. It is
  *     reason 3's shape — a route that authenticates for ITSELF because the gate
  *     cannot make the right decision for it — arrived at from the opposite
  *     direction: not "the gate would lock everyone out", but "the gate reads the
@@ -213,6 +213,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
     'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
     'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
+  ['GET /api/feed',
+    'EXEMPT-BUT-AUTHENTICATED (D-2507), the same dual-credential arrangement as `GET /api/runs`: ' +
+    '`ccrc-api feed list` is a cookieless fleet-host caller and the PWA reads with a session. The ' +
+    'handler requires one of those credentials before revealing even `501 not-configured`, so this ' +
+    'entry restores the machine read without making the durable feed anonymous'],
   ['GET /api/runs/:id/items',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern), the same shape as `GET /api/runs` above and for " +
     'the same caller: the coordinator reads its own wave ledger COOKIELESS from the fleet host. ' +
@@ -699,8 +704,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-one box-token machine
- * lanes plus `/api/notify` — twenty-two in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-two box-token machine
+ * lanes plus `/api/notify` — twenty-three in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

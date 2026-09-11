@@ -18,9 +18,17 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
-import { holdReason } from '../src/coord/rundefs.js';
+import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
-import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, isSkillState } from '../../shared/api.js';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_SLUG_MAX_CHARS,
+  RUN_HOLD_NUMBER_MAX,
+  RUN_ID_MAX_DECIMAL,
+  WORK_ITEM_MAX,
+  WORK_ITEM_TITLE_MAX,
+  isSkillState,
+} from '../../shared/api.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -158,10 +166,9 @@ const postClose = (app: FastifyInstance, id: number, body: unknown, token: strin
 const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
-// GET /api/runs stays UNGATED — it is not one of the six routes PR J's
-// contract item 6 names, and this build's GET routes (`/api/runs`,
-// `/api/feed`) carry no token check either before or after review findings
-// 3/10/27's fix.
+// The fixture leaves auth disabled, so both GETs retain their dark-box
+// behavior. Armed, `/api/runs` and `/api/feed` are EXEMPT-BUT-AUTHENTICATED:
+// each handler accepts either a live session or the box token (D-149, D-2507).
 const getRuns = (app: FastifyInstance, closed = false) =>
   app.inject({ method: 'GET', url: `/api/runs${closed ? '?closed=1' : ''}` });
 const getMail = (
@@ -189,6 +196,45 @@ describe('POST /api/runs', () => {
     });
     const id = (res.json() as { id: number }).id;
     expect(w.coord.run(id)?.state).toBe('planned');
+  });
+
+  it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const detail = `hold reason ${HOLD_REASON_MAX_CHARS + 1} characters exceeds the ` +
+      `${HOLD_REASON_MAX_CHARS} character session-card cap`;
+    vi.spyOn(w.coord, 'openRun').mockReturnValue({
+      ok: false, kind: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
+    });
+
+    const res = await postOpen(app);
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toEqual({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
+    });
+    expect(w.coord.programs()).toEqual([]);
+    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('maps an invalid generated open-run id to 400 and rolls the insert back', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    w.coord.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'unsafe-id' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({
+      ok: false,
+      error: 'hold-invalid',
+      detail: 'generated run id is not a positive safe integer',
+    });
+    expect(w.coord.programs()).toEqual([]);
+    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
   it('refuses a second coordinator rather than arbitrating', async () => {
@@ -261,6 +307,54 @@ describe('POST /api/runs', () => {
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
 
+  it.each([
+    ['a forward-slash traversal', '../other'],
+    ['a nested forward-slash path', 'build4/other'],
+    ['a backslash traversal', '..\\other'],
+    ['a nested backslash path', 'build4\\other'],
+    ['the current directory component', '.'],
+    ['the parent directory component', '..'],
+    ['a dotted filename', 'build4.md'],
+    ['a space-bearing label', 'build 4'],
+    ['a query-bearing label', 'build4?wave=2'],
+  ])('refuses a programme slug shaped as %s, before any row or hold exists', async (_label, program) => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, program });
+    expect(res.statusCode, program).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
+  });
+
+  it('shapes a programme slug once and uses it for storage, ledger paths, and the contained absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const projectsRoot = path.join(home, 'projects');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot } }); app = w.app;
+    const res = await postOpen(app, {
+      ...OPEN_BODY, program: '  build_4-name  ', homeProject: 'demo',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      id: number; program: string; ledgerPath: string; ledgerRepo: string; ledgerAbsPath: string;
+    };
+    expect(body).toMatchObject({
+      program: 'build_4-name',
+      ledgerPath: 'docs/superpowers/programs/build_4-name.md',
+      ledgerRepo: 'demo',
+    });
+    expect(w.coord.run(body.id)?.program).toBe('build_4-name');
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['build_4-name']);
+    expect(w.coord.programHome('build_4-name')).toBe('demo');
+    const homeRoot = path.join(projectsRoot, 'demo');
+    const relative = path.relative(homeRoot, body.ledgerAbsPath);
+    expect(relative.startsWith('..') || path.isAbsolute(relative), body.ledgerAbsPath).toBe(false);
+    expect(body.ledgerAbsPath).toBe(path.join(homeRoot, body.ledgerPath));
+  });
+
   it('a second open of the same planned wave naming a DIFFERENT sessionId re-binds the run, hands the heir the brief, parks the predecessor, and records `session-rebound` naming both occupants', async () => {
     // store-2 / MUT-3. `openRun`'s dup arm keys on (program, wave, waveOf,
     // claimedBy, planned) and NOT on sessionId, so this retry finds the same
@@ -288,6 +382,45 @@ describe('POST /api/runs', () => {
     // RECORDED, naming predecessor and heir and what moved.
     expect(w.coord.runEvents(id).map((e) => e.detail))
       .toContain('session-rebound: demo-existing -> demo-second, 1 re-issued');
+  });
+
+  it('rolls a late re-bind failure back, then retries the whole transfer exactly once', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_session_rebound
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail LIKE 'session-rebound:%'
+      BEGIN
+        SELECT RAISE(ABORT, 'late rebound fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(failed.statusCode).toBe(500);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toEqual([]);
+    expect(w.coord.runEvents(id).filter((e) => e.detail?.startsWith('session-rebound'))).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_session_rebound');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(retried.statusCode).toBe(200);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    expect(w.coord.outstandingMailFor('demo-existing')).toEqual([]);
+    expect(w.coord.outstandingMailFor('demo-second').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second').filter((m) => m.subject === 'the wave brief')).toHaveLength(1);
+    expect(w.coord.runEvents(id).map((e) => e.detail)
+      .filter((d) => d?.startsWith('session-rebound')))
+      .toEqual(['session-rebound: demo-existing -> demo-second, 1 re-issued']);
   });
 
   it('a refused ws-hold leaves the occupant unchanged — no re-bind, no re-issue, no park, no event', async () => {
@@ -357,6 +490,92 @@ describe('POST /api/runs', () => {
       ['ws-hold', '--session', 'demo-existing', '--reason', `program:build4 wave:2/3 run:${id}`]);
   });
 
+  it('consumes the store-validated hold reason instead of recomposing it in the route', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const sentinel = 'program:store-validated wave:7/9 run:11';
+    vi.spyOn(w.coord, 'openRun').mockReturnValue({
+      id: 11, program: 'build4', state: 'planned', holdReason: sentinel,
+    });
+
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual([
+      'ws-hold', '--session', 'demo-existing', '--reason', sentinel,
+    ]);
+  });
+
+  it('accepts a slug at exactly the derived budget and passes the complete hold to ccd', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const expected = holdReason(program, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, 1);
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY,
+      program,
+      wave: RUN_HOLD_NUMBER_MAX,
+      waveOf: RUN_HOLD_NUMBER_MAX,
+      sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual([
+      'ws-hold', '--session', 'demo-existing', '--reason', expected,
+    ]);
+  });
+
+  it('refuses a slug one character past the budget before opening a row or calling ccd', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS + 1);
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY, program, sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      ok: false,
+      error: 'bad-request',
+      detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
+    });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['zero wave', { wave: 0 }],
+    ['negative wave', { wave: -1 }],
+    ['fractional wave', { wave: 1.5 }],
+    ['unsafe wave', { wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['exponent-scale wave', { wave: 1e100 }],
+    ['zero denominator', { waveOf: 0 }],
+    ['negative denominator', { waveOf: -1 }],
+    ['fractional denominator', { waveOf: 1.5 }],
+    ['unsafe denominator', { waveOf: Number.MAX_SAFE_INTEGER + 1 }],
+    ['exponent-scale denominator', { waveOf: 1e100 }],
+  ])('refuses %s before opening a row or calling ccd', async (_label, fields) => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY, ...fields, sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a malformed body', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
@@ -394,6 +613,37 @@ describe('POST /api/runs', () => {
     expect(w.coord.programHome('build4')).toBe('demo');
     const id = (second.json() as { id: number }).id;
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('home-project-backfilled');
+  });
+
+  it('rolls home back when its event cannot be inserted, then writes both facts exactly once on retry', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_home_backfill_event
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail = 'home-project-backfilled'
+      BEGIN
+        SELECT RAISE(ABORT, 'home backfill event fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(failed.statusCode).toBe(500);
+    const failedRun = w.coord.runs().find((r) => r.wave === 2);
+    expect(failedRun).toBeDefined();
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(w.coord.runEvents(failedRun!.id).filter((e) => e.detail === 'home-project-backfilled')).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_home_backfill_event');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(retried.statusCode).toBe(200);
+    const id = (retried.json() as { id: number }).id;
+    expect(id).toBe(failedRun!.id);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(w.coord.runEvents(id).filter((e) => e.detail === 'home-project-backfilled')).toHaveLength(1);
   });
 
   it('refuses a home that differs from the stored one, naming the stored value', async () => {
@@ -458,6 +708,45 @@ describe('POST /api/runs', () => {
 describe('POST /api/runs/:id/dispatch', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it.each([
+    ['hold-oversize', 413],
+    ['hold-invalid', 400],
+  ] as const)('maps a reconstructed %s dispatch refusal to %i before pause, cap, or fleet work',
+    async (kind, statusCode) => {
+      const home = mkTmp('ccrc-runs-');
+      mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      const { run, calls } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const wave = 22;
+      const waveOf = 333;
+      const overhead = holdReason('', wave, waveOf, 1).length;
+      const program = kind === 'hold-oversize'
+        ? 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead)
+        : 'bad program';
+      const [reconstructed] = w.coord.reconstruct({
+        ledger: { slug: program, title: 'Recovered', waves: [
+          { wave, of: waveOf, handoffCommit: null },
+        ] },
+        registry: { sessionId: `demo-dispatch-${kind}`, project: PROJECT,
+          workspace: `dispatch-${kind}`, branch: `ws/dispatch-${kind}`, held: 'legacy hold' },
+        prHistory: [],
+      });
+      if (!reconstructed) throw new Error('reconstruct did not return a run');
+      w.coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?")
+        .run(reconstructed.id);
+
+      const res = await postDispatch(app, reconstructed.id);
+      expect(res.statusCode).toBe(statusCode);
+      expect(res.json()).toMatchObject({
+        ok: false,
+        error: kind,
+        ...(kind === 'hold-oversize' ? { limit: HOLD_REASON_MAX_CHARS } : {}),
+        detail: expect.any(String),
+      });
+      expect(calls).toEqual([]);
+      expect(w.coord.run(reconstructed.id)!.state).toBe('planned');
+    });
 
   it('refuses while $REG/coordinator-paused exists, before counting anything', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -1431,6 +1720,76 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
   });
 
+  it('refuses an oversized next-wave hold before changing the fleet or closing the run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const overhead = holdReason('', 9, null, null).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+    const [reconstructed] = w.coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 9, of: 9, handoffCommit: null },
+      ] },
+      registry: { sessionId: 'demo-close-overflow', project: PROJECT,
+        workspace: 'close-overflow', branch: 'ws/close-overflow', held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+    expect(holdReason(program, 10, 9, null).length).toBe(HOLD_REASON_MAX_CHARS + 3);
+
+    const res = await postClose(app, reconstructed.id, {
+      fingerprint: { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP },
+      final: false,
+      state: 'failed',
+    });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+  });
+
+  it('refuses the next-wave hold when wave+1 leaves the safe-integer domain — the last wave a ' +
+     'programme can close from, with the overflow as the SOLE cause', async () => {
+    const home = mkTmp('ccrc-runs-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = 'demo-close-invalid';
+
+    // THE DISCRIMINATOR, stated before the route runs: every OTHER field of the
+    // hold this close would write is independently valid at this very wave, and
+    // the only thing that refuses is the successor wave the close computes. A
+    // reader (and a later edit) can therefore not mistake the dotted legacy slug
+    // or the denominator for the cause.
+    expect(holdReasonVerdict('legacy.program', RUN_HOLD_NUMBER_MAX, 1, null))
+      .toMatchObject({ ok: true });
+    expect(holdReasonVerdict('legacy.program', RUN_HOLD_NUMBER_MAX + 1, 1, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+
+    const [reconstructed] = w.coord.reconstruct({
+      ledger: { slug: 'legacy.program', title: 'Recovered', waves: [
+        { wave: RUN_HOLD_NUMBER_MAX, of: 1, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT,
+        workspace: 'close-invalid', branch: 'ws/close-invalid', held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+
+    const res = await postClose(app, reconstructed.id, {
+      fingerprint: { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP },
+      final: false,
+      state: 'failed',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+  });
+
   it('final:true with a sibling open re-holds with the SIBLING reason and answers released:false', async () => {
     const sessionId = `${PROJECT}-close-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
@@ -1448,6 +1807,68 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('refuses an invalid ordinary-close survivor before lineage, fleet, or close writes', async () => {
+    const sessionId = `${PROJECT}-close-invalid-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const [survivor] = coord.reconstruct({
+      ledger: { slug: 'bad program', title: 'Recovered', waves: [
+        { wave: 2, of: 3, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+    const lineage = [{ pr: 91, branch: `ws/${sessionId}`, phase: 'merged' as const,
+      recordedAt: 12345 }];
+    coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?')
+      .run(JSON.stringify(lineage), id);
+    calls.length = 0;
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
+    expect(calls).toEqual([['pr-state', '--session', sessionId]]);
+    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(coord.run(id)!.prLineage).toEqual(lineage);
+    expect(coord.run(survivor.id)!.state).toBe('working');
+  });
+
+  it('refuses an oversized ordinary-close survivor before lineage, fleet, or close writes', async () => {
+    const sessionId = `${PROJECT}-close-oversize-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const overhead = holdReason('', 22, 333, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const [survivor] = coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 22, of: 333, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+    const lineage = [{ pr: 92, branch: `ws/${sessionId}`, phase: 'merged' as const,
+      recordedAt: 12346 }];
+    coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?')
+      .run(JSON.stringify(lineage), id);
+    calls.length = 0;
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(calls).toEqual([['pr-state', '--session', sessionId]]);
+    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(coord.run(id)!.prLineage).toEqual(lineage);
+    expect(coord.run(survivor.id)!.state).toBe('working');
   });
 
   it('the non-final arm re-holds with the SURVIVING run, never with its own next wave', async () => {
@@ -2520,6 +2941,152 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
 });
 
 describe('the hold reason', () => {
+  it('derives the slug budget from each slot\'s OWN widest decimal — sixteen digits for the two ' +
+     'JavaScript-validated waves, nineteen for SQLite\'s run id — and reserves exactly 127', () => {
+    expect(String(RUN_HOLD_NUMBER_MAX)).toHaveLength(16);
+    expect(RUN_ID_MAX_DECIMAL).toHaveLength(19);
+    expect(PROGRAM_SLUG_MAX_CHARS).toBe(56);
+
+    // THE RESERVATION, composed through the real serializer: a budget-sized slug
+    // plus every slot at its widest lands exactly on the hook's window, and one
+    // further slug character overflows it. That pair is what makes 56 a
+    // derivation rather than a number somebody chose.
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const reserved = holdReason(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL);
+    expect(reserved).toHaveLength(HOLD_REASON_MAX_CHARS);
+    expect(holdReason(`${slug}x`, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL).length)
+      .toBeGreaterThan(HOLD_REASON_MAX_CHARS);
+
+    // The run-id placeholder is decimal TEXT precisely BECAUSE it is not a
+    // JavaScript number: coercing it changes the value it stands for, so a
+    // budget derived from the coerced form would be reserving for a width no
+    // database row can hold.
+    expect(String(Number(RUN_ID_MAX_DECIMAL))).not.toBe(RUN_ID_MAX_DECIMAL);
+    expect(Number.isSafeInteger(Number(RUN_ID_MAX_DECIMAL))).toBe(false);
+
+    // What this process will ever actually SERIALIZE stays inside that
+    // reservation, because every runtime seam still holds ids to the JavaScript
+    // domain — the reservation is headroom against the column, not a promise to
+    // write a nineteen-digit id.
+    const widest = holdReason(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX);
+    expect(widest).toHaveLength(HOLD_REASON_MAX_CHARS - 3);
+    expect(holdReasonVerdict(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX))
+      .toEqual({ ok: true, reason: widest });
+  });
+
+  it('reports a hold that is BOTH malformed and over-cap as hold-invalid, never hold-oversize', () => {
+    // The two codes carry DIFFERENT remedies (SKILL.md): `hold-oversize` tells
+    // the coordinator to shorten the programme slug, `hold-invalid` to stop and
+    // report a stored defect. A malformed row that is also long would be sent to
+    // the first remedy and earn a second refusal under a different name, so the
+    // grammar and numeric domain decide before the length does.
+    const overhead = holdReason('', 1, null, null).length;
+    const long = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    expect(holdReasonVerdict(long, 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-oversize' });
+
+    // The SAME length, one illegal character in it: shortening cannot repair
+    // this row, and the code the caller receives says so.
+    const malformedAndLong = `${'x'.repeat(long.length - 1)} `;
+    expect(malformedAndLong).toHaveLength(long.length);
+    expect(holdReasonVerdict(malformedAndLong, 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+
+    // …and an over-cap hold whose NUMBERS are out of domain is invalid on the
+    // same reasoning, not merely long.
+    expect(holdReasonVerdict(long, Number.MAX_SAFE_INTEGER + 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+  });
+
+  it('validates the complete shell grammar and the positive-safe-integer domain', () => {
+    expect(holdReasonVerdict('legacy.program-name_1', 1, null, null)).toEqual({
+      ok: true, reason: 'program:legacy.program-name_1 wave:1',
+    });
+    const invalid = [
+      holdReasonVerdict('bad program', 1, null, null),
+      holdReasonVerdict('bad/program', 1, null, null),
+      holdReasonVerdict('bad:program', 1, null, null),
+      holdReasonVerdict('program', 0, null, null),
+      holdReasonVerdict('program', -1, null, null),
+      holdReasonVerdict('program', 1.5, null, null),
+      holdReasonVerdict('program', Number.MAX_SAFE_INTEGER + 1, null, null),
+      holdReasonVerdict('program', 1e100, null, null),
+      holdReasonVerdict('program', 1, 0, null),
+      holdReasonVerdict('program', 1, -1, null),
+      holdReasonVerdict('program', 1, Number.MAX_SAFE_INTEGER + 1, null),
+      holdReasonVerdict('program', 1, 1e100, null),
+      holdReasonVerdict('program', 1, null, 0),
+      holdReasonVerdict('program', 1, null, -1),
+      holdReasonVerdict('program', 1, null, Number.MAX_SAFE_INTEGER + 1),
+      holdReasonVerdict('program', 1, null, 1e100),
+    ];
+    for (const verdict of invalid) {
+      expect(verdict).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    }
+  });
+
+  it('accepts and refuses the complete serialized reason at each dynamic boundary', () => {
+    const lengths = (wave: number, waveOf: number | null, runId: number | null) => {
+      const overhead = holdReason('', wave, waveOf, runId).length;
+      const exact = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+      const over = `${exact}x`;
+      expect(holdReason(exact, wave, waveOf, runId)).toHaveLength(HOLD_REASON_MAX_CHARS);
+      expect(holdReasonVerdict(exact, wave, waveOf, runId)).toEqual({
+        ok: true, reason: holdReason(exact, wave, waveOf, runId),
+      });
+      expect(holdReasonVerdict(over, wave, waveOf, runId)).toMatchObject({
+        ok: false, kind: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+      });
+      return [exact.length, over.length];
+    };
+
+    expect(lengths(1, null, null)).toEqual([112, 113]);
+    expect(lengths(1, null, 1)).toEqual([106, 107]);
+    expect(lengths(1, 1, 1)).toEqual([104, 105]);
+    expect(lengths(22, 333, 4444)).toEqual([98, 99]);
+  });
+
+  it('binds the shared cap to the hook\'s literal, and keeps every hold the server can write ' +
+     'inside what the hook displays — the SUBSET direction that must never invert', () => {
+    const hook = readFileSync(path.join(repoRoot, 'ccd', 'session-hook.sh'), 'utf8');
+    const match = hook.match(/^CCRC_HOLD_MAX=(\d+)$/m);
+    if (!match) throw new Error('session-hook.sh no longer assigns CCRC_HOLD_MAX as a decimal literal');
+    expect(Number(match[1])).toBe(HOLD_REASON_MAX_CHARS);
+    expect(hook).toContain(
+      '[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:[0-9]+(/[0-9]+)?(\' \'run:[0-9]+)?$ ]] || return 0',
+    );
+
+    // SUBSET, NOT EQUALITY, and the asymmetry is deliberate rather than a gap.
+    // The hook is a DISPLAY gate over strings already on disk — holds written by
+    // hand, or by a build older than this policy — so it accepts a wider
+    // language than this server emits: `[0-9]+` admits `wave:0` and widths past
+    // the safe-integer domain, each of which every server boundary refuses as
+    // `hold-invalid`. The property that must hold is the DIRECTION: everything
+    // the server writes renders. A hook narrowed below the server's own output
+    // would stop displaying live claims, which is the inversion this pins.
+    const hookGrammar = /^program:[A-Za-z0-9._-]+ wave:[0-9]+(\/[0-9]+)?( run:[0-9]+)?$/;
+    const writable: ReadonlyArray<[string, number, number | null, number | null]> = [
+      ['build4', 1, null, null],
+      ['build4', 2, 3, null],
+      ['build4', 2, 3, 17],
+      ['legacy.program-name_1', 1, null, 1],
+      ['x'.repeat(PROGRAM_SLUG_MAX_CHARS), RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX],
+    ];
+    for (const [program, wave, waveOf, runId] of writable) {
+      const verdict = holdReasonVerdict(program, wave, waveOf, runId);
+      expect(verdict, `${program} wave:${wave}`).toMatchObject({ ok: true });
+      if (!verdict.ok) throw new Error('unreachable — asserted above');
+      expect(verdict.reason.length).toBeLessThanOrEqual(Number(match[1]));
+      expect(hookGrammar.test(verdict.reason), verdict.reason).toBe(true);
+    }
+
+    // The wider half, measured rather than left implicit: the hook renders a
+    // legacy hold this server would never compose.
+    expect(hookGrammar.test('program:build4 wave:0')).toBe(true);
+    expect(holdReasonVerdict('build4', 0, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+  });
+
   it('the reason names its run, and NOTHING in the tree parses one back', () => {
     // DISPLAY-ONLY. `run:` exists so a human reading ~/.cc-sessions can answer
     // "whose claim is this?" from the box alone — which they could not during
@@ -2560,7 +3127,7 @@ describe('the programme filters on the two GET routes', () => {
   const seedTwoProgrammes = (coord: CoordStore): void => {
     const mk = (program: string, project: string, claimedBy: string): number => {
       const r = coord.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
-      if ('refused' in r) throw new Error('open refused');
+      if (!('id' in r)) throw new Error('open refused');
       coord.setSession(r.id, `${project}-worker`);
       return r.id;
     };
@@ -2595,6 +3162,29 @@ describe('the programme filters on the two GET routes', () => {
       headers: tokenHeaders(TOKEN) });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('both GET filters TRIM the programme, so a padded query names the stored programme', async () => {
+    // The write side trims (`POST /api/runs` shapes the slug before storing), so
+    // a filter binding the raw query value tested non-empty, bound `'build4 '`
+    // and matched nothing — rendering as "this programme has no mail" rather
+    // than as the typo it is. Both GET routes, because they had the same line.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+
+    const mail = await app.inject({ method: 'GET', url: '/api/mail?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(mail.statusCode).toBe(200);
+    expect((mail.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject))
+      .toEqual(['ours']);
+
+    const feed = await app.inject({ method: 'GET', url: '/api/feed?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(feed.statusCode).toBe(200);
+    expect((feed.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
   });
 
   it('GET /api/mail?to= is unchanged, and still sees the programless mail', async () => {

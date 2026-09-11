@@ -10,7 +10,14 @@ import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
-import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
+import {
+  COORDINATOR_PAUSE_MARKER,
+  MAIL_DISABLED_MARKER,
+  clearRefusedDetail,
+  holdReasonVerdict,
+  queueSystemMail,
+  type HoldReasonVerdict,
+} from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
   type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
@@ -108,6 +115,7 @@ export type DispatchOutcome =
    *  indistinguishable from a bug") applied to a total the sender cannot
    *  compute from what they sent. */
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
+  | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
         'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
@@ -230,6 +238,14 @@ export async function dispatchRun(
     }
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
+
+  // The complete hold is known from the persisted run. Validate it after the
+  // cheaper untrusted-body checks retain their existing precedence, but before
+  // pause/cap reads and, critically, before a fresh dispatch can spawn a
+  // workspace. `openRun` checks this too; this seam rechecks authoritatively
+  // because reconstructed or newer-database rows can bypass that ingress.
+  const hold = holdReasonVerdict(run.program, run.wave, run.waveOf, run.id);
+  if (!hold.ok) return hold;
 
   // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
   // directory we cannot list is a pause we cannot rule out — fail-shut, the
@@ -635,9 +651,7 @@ export async function dispatchRun(
   // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
   // file, so the fix is the `/clear` relocating to meet the hold, not a
   // second hold call meeting the `/clear`.
-  const holdArgv = CCD_ARGV.wsHold(sessionId,
-    holdReason(run.program, run.wave, run.waveOf, run.id),
-    dispatchDec);
+  const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };
   }

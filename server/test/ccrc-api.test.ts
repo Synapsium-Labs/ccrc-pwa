@@ -17,7 +17,13 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from '../src/server.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -284,6 +290,53 @@ describe('the output contract', () => {
     reply = { code: 200, body: '{"ok":true,"runs":[]}' };
     const r = await runBoth(['runs', 'list']);
     expect(r.stdout.trim()).toBe('{"ok":true,"runs":[]}');
+  });
+
+  it('uses the fixture box token against an armed real feed route', async () => {
+    const base = testDeps(home);
+    fs.writeFileSync(
+      path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine('fixture passphrase', { n: 1024, r: 8, p: 1, keylen: 32 }, 1)}\n`,
+      { mode: 0o600 },
+    );
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildServer({
+        ...base,
+        cfg: { ...base.cfg, authEnabled: true },
+        mailToken: TOKEN,
+        coord,
+      });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      expect(port).toBeGreaterThan(0);
+      fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
+        `CCRC_AGENT_TOKEN=irrelevant\nCCRC_SERVER_URL=http://127.0.0.1:${port}\n`);
+
+      const authenticated = await run(['feed', 'list']);
+      expect(authenticated.status).toBe(0);
+      expect(JSON.parse(authenticated.stdout)).toEqual({ events: [] });
+      expect(authenticated.stderr).toMatch(/^http 200$/m);
+
+      // A handler refusal is still protocol output, not a transport failure.
+      fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), `${'x'.repeat(64)}\n`);
+      const refused = await run(['feed', 'list']);
+      expect(refused.status).toBe(0);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: 'unauthenticated',
+        verdict: 'no-session',
+      });
+      expect(refused.stderr).toMatch(/^http 401$/m);
+    } finally {
+      try {
+        if (app) await app.close();
+      } finally {
+        coord.db.close();
+      }
+    }
   });
 
   it('puts the status on stderr, so a caller never parses it back out of the body', async () => {

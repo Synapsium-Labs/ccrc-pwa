@@ -24,10 +24,11 @@ import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispa
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { holdReason, queueSystemMail } from './rundefs.js';
+import { queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath,
+  isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
@@ -137,6 +138,10 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     // sentence itself is L1's, spelled beside the check that refuses.
     case 'oversize':
       return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'refused': {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
@@ -184,6 +189,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
@@ -1003,7 +1012,14 @@ export function registerCoordRoutes(
 
     const q = req.query as { to?: unknown; program?: unknown; limit?: unknown; all?: unknown };
     const to = typeof q.to === 'string' && q.to.trim() !== '' ? q.to : null;
-    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
     // EXACTLY ONE, and neither is a default for the other: `to` is a MAILBOX
     // (what one session was actually sent) and `program` is a THREAD (what one
     // programme has said), and a request that named both would be asking two
@@ -1106,12 +1122,12 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
-    if (typeof program !== 'string' || program.trim() === '' ||
+    if (typeof program !== 'string' ||
         typeof title !== 'string' || title.trim() === '' ||
         typeof project !== 'string' || project.trim() === '' ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
-        !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
+        !isPositiveDecimalSafeInteger(wave) ||
+        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
         // Present-and-not-a-string is a malformed body. The VALUE is shaped
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
@@ -1121,7 +1137,16 @@ export function registerCoordRoutes(
         !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // THE ONE SHAPING. Every consumer below — the verdict, `openRun`,
+    // A programme names one ledger file, so separators, dot components, and
+    // display-label punctuation are refused before the value reaches storage or
+    // `ledgerPath`. Every programme consumer below reads this one shaped value.
+    const programShape = shapeProgramSlug(program);
+    if (!programShape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
+    }
+    const programSlug = programShape.slug;
+
+    // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
     // `setProgramHome` (through the verdict's own `home`), the response —
     // reads `home`, never the raw body field.
     let home: string | undefined;
@@ -1154,10 +1179,10 @@ export function registerCoordRoutes(
     // answers null for two conditions this route handles differently, and asking
     // it only about a programme this box has proven exists is what keeps them
     // apart. `programs()` is one read of a table with one row per programme.
-    const known = coord.programs().some((p) => p.slug === program);
+    const known = coord.programs().some((p) => p.slug === programSlug);
     const homeVerdict = homeProjectVerdict({
       body: home,
-      known, stored: known ? coord.programHome(program) : null,
+      known, stored: known ? coord.programHome(programSlug) : null,
       legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
     });
     if (homeVerdict.kind === 'mismatch') {
@@ -1179,8 +1204,16 @@ export function registerCoordRoutes(
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy,
+    const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
       ...(home !== undefined ? { homeProject: home } : {}) });
+    if ('kind' in opened) {
+      return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
+        ok: false,
+        error: opened.kind,
+        ...('limit' in opened ? { limit: opened.limit } : {}),
+        detail: opened.detail,
+      });
+    }
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
@@ -1191,23 +1224,23 @@ export function registerCoordRoutes(
     // date anything. `recordRunEvent` writes `fromState === toState`, so the
     // notify lane skips it and no push impersonates a transition.
     if (homeVerdict.kind === 'backfill') {
-      coord.setProgramHome(program, homeVerdict.home);
-      coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
+      tx(coord.db, () => {
+        coord.setProgramHome(programSlug, homeVerdict.home);
+        coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
+      });
     }
     if (homeVerdict.kind === 'legacy') {
       coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
     }
 
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the hold FIRST, and bind the id onto the row only
-    // once the hold stands (D-2350; PR #75 review round 1, store-1).
-    // `setSession`
-    // funnels into `bindSession`, which on a RE-bind re-issues the
+    // wave 1 held): place the external hold FIRST, then commit every related
+    // database write as one unit (D-2350, D-2505). `setSession` funnels into
+    // transaction-free `bindSession`, which on a RE-bind re-issues the
     // predecessor's outstanding worker mail to the heir and parks the
-    // predecessor's rows — writes that run in autocommit, outside any `tx()`
-    // — so a refused hold (501/502) must not have moved the occupant: the
-    // coordinator is told the open FAILED, and the row, the predecessor's
-    // delivery and the heir's queue all read exactly as they did before. The
+    // predecessor's rows. Keeping the transaction here avoids nesting at the
+    // dispatch caller while ensuring a late event failure rolls all of those
+    // writes back. A refused hold (501/502) still changes no database fact. The
     // dispatch route later reads `run.sessionId` back to choose `ensure`
     // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
     //
@@ -1218,46 +1251,49 @@ export function registerCoordRoutes(
     // predecessor — a live path, not a store-test-only one — and an occupant
     // change must be attributable like every other run write.
     if (typeof sessionId === 'string') {
-      const argv = CCD_ARGV.wsHold(sessionId,
-        holdReason(program, wave, waveOfVal, opened.id),
-        sweepDec(deps.fleetState, `run:${opened.id} open`));
+      const argv = CCD_ARGV.wsHold(
+        sessionId, opened.holdReason,
+        sweepDec(deps.fleetState, `run:${opened.id} open`),
+      );
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-      const predecessor = coord.resolveWorker(opened.id);
-      const bound = coord.setSession(opened.id, sessionId);
-      if (bound.rebound) {
-        // `bindSession` reports a rebound only when its pre-read found a
-        // non-null predecessor distinct from `sessionId`; keep that invariant
-        // visible rather than interpolating the impossible `null` silently.
-        if (predecessor === null) throw new Error('rebound reported without a predecessor');
-        coord.recordRunEvent(opened.id, 'coordinator',
-          'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
-      }
+      tx(coord.db, () => {
+        const predecessor = coord.resolveWorker(opened.id);
+        const bound = coord.setSession(opened.id, sessionId);
+        if (bound.rebound) {
+          // `bindSession` reports a rebound only when its pre-read found a
+          // non-null predecessor distinct from `sessionId`; keep that invariant
+          // visible rather than interpolating the impossible `null` silently.
+          if (predecessor === null) throw new Error('rebound reported without a predecessor');
+          coord.recordRunEvent(opened.id, 'coordinator',
+            'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+        }
+      });
     }
 
     // Re-read rather than reasoned about: `openRun`'s first insert and the
     // backfill above are two different writers of this column, and the response
     // must say what the row now HOLDS, not what this request happened to send.
-    const ledgerRepo = coord.programHome(program);
+    const ledgerRepo = coord.programHome(programSlug);
     return reply.code(200).send({
-      ok: true, id: opened.id, program: opened.program, state: opened.state,
+      ok: true, id: opened.id, program: programSlug, state: opened.state,
       // UNCHANGED for the caller, now DERIVED: `shared/api.ts`'s `ledgerPath`
       // is the one spelling of where a programme's ledger lives — the PWA and
       // `coord/kickoff.ts` tell the operator where to commit it from the same
       // helper — so a change there reaches this response too (PR #75 review
       // round 1, WIRE-3; `single-definition.test.ts`'s census could not see the
       // segmented join this replaces).
-      ledgerPath: ledgerPath(program),
+      ledgerPath: ledgerPath(programSlug),
       // Both null while the stored home is null, and never derived from the
       // registry or the claimant (design §3 F2's rejected alternative): a fact
       // the programme carries forever must not depend on a live read that can
       // degrade. `ledgerRepo` is the SHAPED home the row holds (F2/F4 above).
       ledgerRepo,
       ledgerAbsPath: ledgerRepo === null ? null
-        : path.join(deps.cfg.projectsRoot, ledgerRepo, ledgerPath(program)),
+        : path.join(deps.cfg.projectsRoot, ledgerRepo, ledgerPath(programSlug)),
     });
     });
   });
@@ -1580,7 +1616,7 @@ export function registerCoordRoutes(
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
    * so the coordinator CANNOT unpause itself — "no verb, no route, no way"
-   * (`rundefs.ts:47-52`). A pause route gated by that token would hand the
+   * (`rundefs.ts`'s `MAIL_DISABLED_MARKER`). A pause route gated by that token would hand the
    * coordinator its own unpause: the same key, both sides of a boundary that
    * only means anything because the two callers are different. So this rides
    * the PWA's existing unauthenticated surface, the same perimeter
@@ -1898,10 +1934,36 @@ export function registerCoordRoutes(
    * session, not about a programme.
    */
   app.get('/api/feed', async (req, reply) => {
+    // EXEMPT-BUT-AUTHENTICATED (D-2507): `ccrc-api feed list` runs
+    // cookieless on the fleet host, while the PWA carries a live session.
+    // Authenticate before `not-configured`, preserving the global gate's
+    // information boundary on an armed box.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/feed takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); ccrc-api reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { limit?: string; program?: string };
     const limit = Number(q.limit);
-    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
     return { events: program === null
       ? deps.coord.feedEvents(limit)
       : deps.coord.feedEventsForProgram(program, limit) };

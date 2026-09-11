@@ -13,8 +13,17 @@ import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
-import { releaseIsSafe } from '../src/coord/rundefs.js';
-import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
+import {
+  HOLD_REASON_MAX_CHARS,
+  holdReason,
+  releaseIsSafe,
+} from '../src/coord/rundefs.js';
+import {
+  PROGRAM_KICKOFF_SUBJECT,
+  PROGRAM_SLUG_MAX_CHARS,
+  RUN_HOLD_NUMBER_MAX,
+  RUN_ID_MAX_DECIMAL,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>
@@ -47,6 +56,154 @@ describe('CoordStore: runs', () => {
     openRun(s);
     expect(openRun(s, { wave: 2, claimedBy: 'ccrc-pwa-other' }))
       .toMatchObject({ refused: 'claimed-by-another' });
+  });
+
+  it('validates a fresh hold with SQLite\'s exact id and rolls both inserts back on overflow', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+      detail:
+        `hold reason ${HOLD_REASON_MAX_CHARS + 1} characters exceeds the ` +
+        `${HOLD_REASON_MAX_CHARS} character session-card cap`,
+    });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+
+    // A rolled-back AUTOINCREMENT insert does not consume its id. This pins the
+    // sentinel path rather than accepting a refusal that committed then cleaned.
+    const next = openRun(s, { program: 'after-refusal', title: 'After refusal' });
+    expect(next).toMatchObject({ id: 1, holdReason: 'program:after-refusal wave:1/5 run:1' });
+  });
+
+  it('measures the actual multi-digit generated id at the fresh-insert boundary', () => {
+    const s = store();
+    for (let wave = 1; wave <= 9; wave++) {
+      const decoy = openRun(s, { program: `decoy-${wave}`, title: 'Decoy', wave });
+      expect(decoy).toMatchObject({ id: wave });
+    }
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 10).length;
+    const exact = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+    const accepted = openRun(s, { program: exact, title: exact, wave, waveOf });
+    expect(accepted).toMatchObject({
+      id: 10,
+      holdReason: holdReason(exact, wave, waveOf, 10),
+    });
+  });
+
+  it('revalidates an idempotent planned row with its reused exact id', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run(program, program, now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(program, wave, waveOf, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toMatchObject({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(s.runs({ includeClosed: true })).toHaveLength(1);
+  });
+
+  it('opens the widest hold a budget-sized slug can compose, inside the cap by exactly the ' +
+     'width the nineteen-digit run-id reservation buys', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX - 1);
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const opened = openRun(s, {
+      program,
+      title: program,
+      wave: RUN_HOLD_NUMBER_MAX,
+      waveOf: RUN_HOLD_NUMBER_MAX,
+    });
+    expect(opened).toMatchObject({ id: RUN_HOLD_NUMBER_MAX });
+    if (!('id' in opened)) throw new Error('worst-case open refused');
+
+    // THE RESERVATION, MEASURED. The budget sizes the run-id slot against
+    // SQLite's INTEGER width, not JavaScript's safe maximum, so the widest hold
+    // this process will ever actually serialize lands strictly INSIDE the cap —
+    // and the gap is precisely the three digits the wider reservation bought.
+    const reserved = RUN_ID_MAX_DECIMAL.length - String(RUN_HOLD_NUMBER_MAX).length;
+    expect(reserved).toBe(3);
+    expect(opened.holdReason).toHaveLength(HOLD_REASON_MAX_CHARS - reserved);
+
+    // …while the reserved shape itself lands exactly ON the cap. That equality
+    // is what makes the slug budget a derivation rather than a guess: one more
+    // slug character would put the reserved worst case over the hook's window.
+    expect(holdReason(program, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL))
+      .toHaveLength(HOLD_REASON_MAX_CHARS);
+    expect(holdReason(`${program}x`, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL).length)
+      .toBeGreaterThan(HOLD_REASON_MAX_CHARS);
+  });
+
+  it('rejects an unsafe generated SQLite id and rolls both inserts back', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    const refused = openRun(s, { program: 'unsafe-id', title: 'Unsafe id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'generated run id is not a positive safe integer',
+    });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+  });
+
+  it.each([
+    ['an unsafe wave', { wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an exponent-scale wave', { wave: 1e100 }],
+    ['a negative denominator', { waveOf: -1 }],
+    ['an unsafe denominator', { waveOf: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a malformed programme', { program: 'bad program' }],
+  ])('rejects %s and rolls a fresh programme and run back', (_label, fields) => {
+    const s = store();
+    const refused = openRun(s, fields);
+    expect(refused).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+  });
+
+  it('rejects an unsafe persisted id on an idempotent retry', () => {
+    const s = store();
+    const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run('unsafe-reused-id', 'Unsafe reused id', now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(unsafe, 'unsafe-reused-id', 1, 5, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program: 'unsafe-reused-id', title: 'Unsafe reused id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'reused run id is not a positive safe integer',
+    });
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM runs').get() as { n: number }).n).toBe(1);
   });
 
   it('records who caused every transition, and refuses one the machine forbids', () => {
@@ -2303,7 +2460,7 @@ describe('the durable feed carries the run it is about', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
     const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
-    if ('refused' in r) throw new Error('open refused');
+    if (!('id' in r)) throw new Error('open refused');
     s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'mail', sessionId: 'demo-quiet-mesa',
       title: 't', body: 'b', runId: r.id });
     // An `ask` is about a SESSION and belongs to no run. Programless, not
@@ -2319,7 +2476,7 @@ describe('programHome', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
     const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
-    if ('refused' in r) throw new Error('open refused');
+    if (!('id' in r)) throw new Error('open refused');
     expect(s.programHome('build4')).toBeNull();
   });
 });
@@ -2409,7 +2566,7 @@ describe('sessionProject — which repo a reused session belongs to', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
     const a = s.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator' });
-    if ('refused' in a) throw new Error('open refused');
+    if (!('id' in a)) throw new Error('open refused');
     s.setSession(a.id, 'demo-existing');
     expect(s.sessionProject('demo-existing')).toBe('demo');
     // ORDER BY id LIMIT 1 and not "the newest": the question is which repo the
@@ -2417,7 +2574,7 @@ describe('sessionProject — which repo a reused session belongs to', () => {
     // run. A later row naming the same session cannot re-home a worktree.
     const b = s.openRun({ program: 'build5', title: 'U', project: 'other-project',
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two' });
-    if ('refused' in b) throw new Error('open refused');
+    if (!('id' in b)) throw new Error('open refused');
     s.setSession(b.id, 'demo-existing');
     expect(s.sessionProject('demo-existing')).toBe('demo');
     // ABSENCE PERMITS, and it is a real answer rather than a failure: every
@@ -2431,7 +2588,7 @@ describe('the programme row remembers its home', () => {
   const open = (s: CoordStore, over: Record<string, unknown> = {}) => {
     const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator', ...over } as Parameters<CoordStore['openRun']>[0]);
-    if ('refused' in r) throw new Error('open refused');
+    if (!('id' in r)) throw new Error('open refused');
     return r;
   };
 
@@ -2477,7 +2634,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
   const openOne = (s: CoordStore): number => {
     const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
-    if ('refused' in r) throw new Error('open refused');
+    if (!('id' in r)) throw new Error('open refused');
     return r.id;
   };
   /** One `to:'worker'` mail queued to the session that holds the run today —
@@ -2624,7 +2781,7 @@ describe('the programme filters', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
     const mk = (program: string, project: string, claimedBy: string): number => {
       const r = s.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
-      if ('refused' in r) throw new Error('open refused');
+      if (!('id' in r)) throw new Error('open refused');
       s.setSession(r.id, `${project}-worker`);
       return r.id;
     };

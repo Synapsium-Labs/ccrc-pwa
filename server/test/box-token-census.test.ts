@@ -13,7 +13,8 @@
 // each counting a DIFFERENT thing — "box-token-gated coordination routes"
 // (hard-require), "box-token machine lanes" (including the dual-credential GETs
 // — five when this note was written in 2026-09, six once the ask lane added
-// `GET /api/asks` — and `/api/notify`), and `requireMailToken` call sites alone. A scanner
+// `GET /api/asks`, and seven once feed joined them — and `/api/notify`), and
+// `requireMailToken` call sites alone. A scanner
 // demanding one word from all three would be wrong twice. So this file derives
 // ONE set — every route handler that CONSULTS the box token, by either
 // mechanism, across both files that register one — and the prose was rewritten
@@ -418,18 +419,23 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // Scoped to `requireMailToken` because that is what the sentence says. The
     // dual-credential GETs also consult the token, but through an inline
     // `checkMailToken` as a cookie-OR-token fallback, and the bullet does not
-    // claim them. There are SIX of them now — `/api/runs`, `/api/runs/:id/items`,
-    // `/api/lifecycle`, `/api/peers`, `/api/claims` and `/api/asks` (the ask
-    // pre-emption lane) — of which the first two are inside the `/api/runs*`
-    // prefix and the last four sit outside it. This note named three, and had
+    // claim them. There are SEVEN of them now — `/api/runs`, `/api/runs/:id/items`,
+    // `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims` and `/api/asks`
+    // (the ask pre-emption lane) — of which the first two are inside the
+    // `/api/runs*` prefix and the last five sit outside it. This note named three, and had
     // named three since before either of the two additions; corrected by the
     // whole-branch review (M5 of that pass). It is a NOTE, not an assertion —
     // the loop below derives its own set, and this sentence only says which
     // lanes that set deliberately leaves out. What IS derived for this family
-    // is `EXEMPT_BUT_AUTHENTICATED` above, a SUPERSET of these six (it also
-    // carries `POST /api/runs`, which hard-requires the token rather than
-    // accepting a cookie), and the README sentence it feeds is where a route
-    // added to the class without a mention reds the build.
+    // is `EXEMPT_BUT_AUTHENTICATED` above, and it is NOT a superset of these
+    // seven: it is derived by filtering the EXEMPT table for the
+    // `EXEMPT-BUT-AUTHENTICATED` marker, and `POST /api/runs` carries no such
+    // marker — its EXEMPT reason reads "the coordinator opens a run — box-token
+    // gated". So that route is exempt from the SESSION gate while hard-requiring
+    // the box token, which is a different arrangement from the dual-credential
+    // reads this set collects, and it is absent from the set rather than an
+    // extra member of it. The README sentence the set feeds is where a route
+    // added to the dual-credential class without a mention reds the build.
     const requireSites = ((): string[] => {
       const starts = [...COORD_SRC.matchAll(/app\.(get|post)\('([^']+)'/g)]
         .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, path: m[2]!, at: m.index! }));

@@ -846,7 +846,8 @@ _hook_hold_card() {
   # trigger (`worker-skill/SKILL.md:3`) is `program:<slug> wave:N/M` AND "you
   # are not the session that opened the run" — but the gate above accepts
   # `wave:N` with NO denominator, which `holdReason` really writes whenever
-  # `waveOf === null` (`rundefs.ts:90-93`), and the second condition is not
+  # `waveOf === null` (`shared/api.ts`'s `holdReason`, which `coord/rundefs.ts`
+  # re-exports under the same name), and the second condition is not
   # measurable from this box at all. (b) The skill's first read is
   # `ccrc-api whoami` (SKILL.md:24-33, "Learn who you are, first"); `mail
   # list` appears NOWHERE in it. What survives is what the hook can measure:

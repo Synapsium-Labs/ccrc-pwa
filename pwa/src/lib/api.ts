@@ -236,7 +236,12 @@ export function apiErrorText(err: unknown): string {
 const KICKOFF_ERROR_TEXT: Record<string, string> = {
   'unknown-session': 'That session is no longer in the registry — nothing can be queued for it.',
   'bad-session-id': 'That session id is not one this box will accept.',
-  'bad-request': 'The program name and title did not arrive with the request.',
+  // NOT "did not arrive": since the shared kickoff verdict, this code also
+  // answers a name that DID arrive and was refused on its shape or length, and
+  // a blank title. The server sends a `detail` naming which; `kickoffErrorText`
+  // is the fallback for when it does not.
+  'bad-request': 'That program name or title was refused — check the name is letters, numbers, '
+    + 'underscores or hyphens and within the length limit, and that the title is not blank.',
   oversize: 'That program title is too long to send as mail — shorten it and start again.',
 };
 

@@ -71,6 +71,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
+  programKickoffVerdict,
 } from '../../shared/api.js';
 
 /**
@@ -437,9 +438,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
-   * `GET /api/runs` is the one caller (D-149), and it needs the whole decision
-   * rather than a boolean so its refusal can carry the same `AuthVerdict` the
-   * gate would have sent.
+   * the EXEMPT-BUT-AUTHENTICATED coordination GETs need the whole decision,
+   * rather than a boolean, so each refusal can carry the same `AuthVerdict` the
+   * gate would have sent (the class began with `GET /api/runs`, D-149).
    *
    * Passed as a FUNCTION rather than by exposing `authStore` on `Deps`: the
    * store must be loaded exactly once at boot, and putting it on `Deps` is the
@@ -1401,10 +1402,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  // The 4th argument is D-149: `GET /api/runs` is EXEMPT from the session gate
-  // and authenticates for itself, because the coordinator skill reads it
-  // cookieless from the fleet host with the box token. The session half of that
-  // decision can only be made here, where `authStore` lives.
+  // The 4th argument serves the EXEMPT-BUT-AUTHENTICATED coordination GETs:
+  // each handler accepts either the box token from a cookieless fleet caller or
+  // a live PWA session. The session half can only be decided here, where
+  // `authStore` lives (the class began with `GET /api/runs`, D-149).
   //
   // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
   // reached from `POST /api/asks/:id/answer` serializes through the exact
@@ -1590,62 +1591,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     const body = (req.body ?? {}) as
       { slug?: unknown; title?: unknown; runId?: unknown; wave?: unknown };
-    if (typeof body.slug !== 'string' || body.slug.trim() === ''
+    if (typeof body.slug !== 'string'
       || typeof body.title !== 'string' || body.title.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // ONE reader for the new pair (the wire rule), computed once and handed on as
-    // a value that CANNOT be half-formed — the refusal below is the only place a
-    // half-formed pair can reach. Shape borrowed from `coord/routes.ts`'s own
-    // integer body checks: `typeof === 'number'` AND `Number.isInteger`, because
-    // `NaN` and 1.5 are both numbers and neither is a wave.
-    //
-    // …AND THE LOWER BOUND THAT SHIPS IN THE SAME CONJUNCTION THERE (D-1151,
-    // wave-5 review MINOR 8). The borrow was one term short: `POST /api/runs`
-    // reads `!Number.isInteger(wave) || wave < 1` (`coord/routes.ts:894`), and
-    // only the integer half made the trip. Written positively here to fit the
-    // ternary, the missing term is `>= 1`, and it belongs on BOTH fields: a run
-    // id is `INTEGER PRIMARY KEY AUTOINCREMENT` (`coord/schema.ts:66`) and a wave
-    // is refused below 1 at open, so the smallest either can be is 1. Without it
-    // `{runId:-5, wave:0}` IS a pair — it composes `programResumeKickoff(…, -5, 0)`
-    // and durably queues a brief telling a revived coordinator to find run -5 at
-    // wave 0 in `GET /api/runs` and pick that wave up. Nothing downstream catches
-    // it: the composer interpolates, `queueSystemMail` writes, and the recipient
-    // is a session reading prose.
-    //
-    // The expensive half is not the false sentence, it is the DEDUPE KEY. That
-    // key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — one outstanding
-    // kickoff per session whatever program it names — so the nonsense brief takes
-    // the slot, and the operator's corrected re-kickoff a second later answers
-    // `queued:false`, which the sheet renders as "one is already waiting". True,
-    // and useless: the one waiting names run -5. A refusal writes nothing, so it
-    // cannot occupy anything, which is why the range test lives HERE, before the
-    // queue, and not as a repair downstream.
-    //
-    // Failing the range makes `resume` `undefined` — the same value an ABSENT
-    // pair produces — so this term alone would demote `{runId:-5, wave:0}` to
-    // wave 4's kickoff rather than refusing it. It does not, because the
-    // both-or-neither guard below tests the RAW body keys and not the computed
-    // value; the two are one mechanism and `kickoff-route.test.ts` reds on either
-    // half being removed.
-    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId) && body.runId >= 1
-      && typeof body.wave === 'number' && Number.isInteger(body.wave) && body.wave >= 1
-      ? { runId: body.runId, wave: body.wave }
-      : undefined;
-    // BOTH OR NEITHER (D-1126). Absent-both is wave 4's kickoff, byte for byte —
-    // absence permits. Half-present is refused rather than completed: no build
-    // ever sent a lone field, so it is a caller that meant something, and the
-    // default that would complete it (wave 1) is the one instruction a REVIVED
-    // coordinator must not be given. A silent fallback would answer `queued:true`
-    // to an operator whose revive had just been briefed to open a second run.
-    //
-    // It reads the RAW body keys, not `resume`, which is what lets it carry a
-    // second duty for free (D-1151): an OUT-OF-RANGE pair also arrives here as
-    // `undefined` with its keys present, so it is refused on the same line and by
-    // the same argument — a caller that meant something, and a default that would
-    // complete it into the one instruction a revived coordinator must not get.
-    if (resume === undefined && (body.runId !== undefined || body.wave !== undefined)) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // The route distinguishes absent-both from any attempted resume, but makes
+    // no numeric decision. The shared verdict alone rejects half-present,
+    // fractional, non-positive, unsafe, and exponent-scale pairs; its success
+    // arm carries the normalized pair used by the authoritative queue seam.
+    // That keeps shaping, resume validation, composer selection, and UTF-8
+    // measurement in one browser/server-compatible decision before registry I/O.
+    const resumeInput = body.runId === undefined && body.wave === undefined
+      ? undefined
+      : { runId: body.runId, wave: body.wave };
+    const kickoff = programKickoffVerdict(body.slug, body.title, resumeInput);
+    if (!kickoff.ok) {
+      return reply.code(kickoff.kind === 'oversize' ? 413 : 400).send({
+        ok: false,
+        error: kickoff.kind,
+        ...('limit' in kickoff ? { limit: kickoff.limit } : {}),
+        detail: kickoff.detail,
+      });
     }
     // Deliberately NOT `knownId` (above), whose `names !== null &&` folds an
     // unlistable registry into "unknown" — right for a keystroke route that
@@ -1661,7 +1627,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       });
     }
     const out = queueProgramKickoff({ coord }, id,
-      { slug: body.slug.trim(), title: body.title.trim() }, resume);
+      { slug: kickoff.slug, title: kickoff.title }, kickoff.resume);
     // 413 in the shape every other cap on this server answers in (claims paths,
     // claim intent, ledger title, and `POST /api/mail` itself). The seam
     // MEASURED it and named it; this maps, and decides nothing — `out.kind` is
