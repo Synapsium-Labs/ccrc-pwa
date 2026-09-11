@@ -20,8 +20,9 @@
 // with `files: []`, no card); 2 usage; 1 any failure. `card` prints nothing on
 // stdout; `measure` prints exactly one JSON object. Every failure names itself
 // on stderr, which the hook discards — the hook's contract is silence.
-import { openSync, readSync, closeSync, fstatSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
+import { openSync, readSync, closeSync, fstatSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync, lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 export const EXIT = Object.freeze({ OK: 0, FAILURE: 1, USAGE: 2, EMPTY: 3 });
@@ -446,16 +447,111 @@ export function slotIsMine(setPath, nonce) {
 }
 
 /** A failed card write must not turn `files:null` into a false mining result.
- *  Restore the exact hook document only while it remains ours; separately
- *  remove a partial card only when its first line bears our nonce. */
-function rollbackCard(setPath, outPath, nonce, original, write) {
-  if (slotIsMine(setPath, nonce)) {
-    try { write(setPath, original); } catch { /* preserve the primary failure */ }
-  }
+ * Claiming moves a live pathname to a private regular file before inspecting it.
+ * The claimed inode is the only thing this rollback ever decides to unlink; a
+ * foreign claimed inode stays available through the stale-temp sweep. */
+function rollbackClaimPath(target, nonce, kind) {
+  const tag = createHash('sha256').update(nonce).digest('hex').slice(0, 16);
+  return join(dirname(target), `.${basename(target)}.${process.pid}.${tag}.${randomUUID()}.${kind}.tmp`);
+}
+
+function reserveClaim(claim) {
   try {
-    const card = readFileSync(outPath, 'utf8');
-    if (card.slice(0, card.indexOf('\n')) === nonce) unlinkSync(outPath);
-  } catch { /* no partial card, or another writer removed it */ }
+    // A regular placeholder rejects rename(directory, regular-file), so rollback
+    // cannot relocate a live directory while attempting to claim it.
+    writeFileSync(claim, '', { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasCanonicalOwner(target) {
+  try { lstatSync(target); return true; } catch { return false; }
+}
+
+function firstCardLine(card) {
+  const nl = card.indexOf('\n');
+  return nl < 0 ? null : card.slice(0, nl);
+}
+
+function firstSetNonce(text) {
+  try {
+    const set = JSON.parse(text);
+    return set && typeof set === 'object' && typeof set.nonce === 'string' ? set.nonce : null;
+  } catch {
+    return null;
+  }
+}
+
+function rollbackSet(setPath, nonce, original, hook) {
+  // When the helper already left the exact hook document in place, do not
+  // create a later destructive action after this harmless observation.
+  try {
+    if (readFileSync(setPath, 'utf8') === original) return;
+  } catch { /* claim path handles an absent or unreadable entry */ }
+
+  const claim = rollbackClaimPath(setPath, nonce, 'compactset');
+  const restore = rollbackClaimPath(setPath, nonce, 'compactset-restore');
+  if (!reserveClaim(claim)) return;
+  try { writeFileSync(restore, original, { flag: 'wx', mode: 0o600 }); } catch {
+    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
+    return;
+  }
+  try { hook?.('setBeforeClaim', claim); } catch { /* a test seam cannot change rollback */ }
+  try { renameSync(setPath, claim); } catch {
+    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
+    try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
+    return;
+  }
+
+  let ours;
+  try { ours = firstSetNonce(readFileSync(claim, 'utf8')) === nonce; } catch { return; }
+  try { hook?.('setClaimed', claim); } catch { /* a test seam cannot change rollback */ }
+  if (ours) {
+    let restored = false;
+    try { linkSync(restore, setPath); restored = true; } catch { /* later owner remains at setPath */ }
+    if (restored || hasCanonicalOwner(setPath)) {
+      try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
+      try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
+    }
+    try { hook?.('setRestored', claim); } catch { /* a test seam cannot change rollback */ }
+    return;
+  }
+
+  // B/C owns the claimed set: recreate only an absent canonical entry, then
+  // retain the claim so a later C replacement cannot make B's bytes disappear.
+  try { linkSync(claim, setPath); } catch { /* later owner remains at setPath */ }
+  try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
+  try { hook?.('setRestored', claim); } catch { /* a test seam cannot change rollback */ }
+}
+
+function rollbackCard(outPath, nonce, hook) {
+  const claim = rollbackClaimPath(outPath, nonce, 'compactcard');
+  if (!reserveClaim(claim)) return;
+  try { hook?.('cardBeforeClaim', claim); } catch { /* a test seam cannot change rollback */ }
+  try { renameSync(outPath, claim); } catch {
+    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
+    return;
+  }
+
+  let ours;
+  try { ours = firstCardLine(readFileSync(claim, 'utf8')) === nonce; } catch { return; }
+  try { hook?.('cardClaimed', claim); } catch { /* a test seam cannot change rollback */ }
+  if (ours) {
+    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
+    return;
+  }
+
+  // `link` is an atomic create: EEXIST retains both the newer live card and
+  // this displaced one. Keep the claim after success for a third-writer race.
+  try { linkSync(claim, outPath); } catch { /* later owner remains at outPath */ }
+  try { hook?.('cardRestored', claim); } catch { /* a test seam cannot change rollback */ }
+}
+
+function rollbackPair(setPath, outPath, nonce, original, hook) {
+  rollbackSet(setPath, nonce, original, hook);
+  rollbackCard(outPath, nonce, hook);
 }
 
 /** `card`: window → tokens → staged card → set file → card. Key ORDER in the
@@ -491,7 +587,7 @@ export function cardCommand(o) {
     if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the card was written — slot taken`);
     write(o.out, card);
   } catch (error) {
-    rollbackCard(o.set, o.out, o.nonce, mine.text, write);
+    rollbackPair(o.set, o.out, o.nonce, mine.text, o.rollbackHook);
     throw error;
   }
   return EXIT.OK;

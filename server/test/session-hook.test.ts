@@ -10,6 +10,8 @@ import { CCD } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+const sh = (text: string): string => `'${text.replace(/'/g, "'\"'\"")}'`;
 
 let home: string;
 beforeEach(() => {
@@ -217,7 +219,7 @@ const minimalPath = (omit: string[]): string => {
   const bin = path.join(home, 'binmin');
   fs.mkdirSync(bin, { recursive: true });
   for (const t of ['bash', 'jq', 'git', 'tail', 'head', 'grep', 'tr', 'cat', 'mv', 'rm', 'wc', 'sort', 'date',
-    'find', 'timeout', 'node', 'sed', 'mkdir']) {
+    'find', 'timeout', 'node', 'sed', 'mkdir', 'link']) {
     if (omit.includes(t)) continue;
     const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
     if (real) fs.symlinkSync(real, path.join(bin, t));
@@ -2353,13 +2355,21 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     const { transcript } = plantSession({ lines: workLines(tree) });
     const reg = path.join(home, '.cc-sessions');
     const stale = path.join(reg, '.demo-quiet-basin.compactcard.999.tmp');
+    // A retained rollback claim is a direct regular dot file, not a directory.
+    const staleClaim = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactcard-rollback.tmp');
+    const staleSetClaim = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactset-rollback.tmp');
+    const staleRestore = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactset-restore.tmp');
     const young = path.join(reg, '.demo-quiet-basin.4242.compactset.tmp');
     const other = path.join(reg, '.other-id.compactcard.999.tmp');
-    for (const f of [stale, young, other]) fs.writeFileSync(f, 'x');
+    for (const f of [stale, staleClaim, staleSetClaim, staleRestore, young, other]) fs.writeFileSync(f, 'x');
     const old = Math.floor(Date.now() / 1000) - 1200 - 60;
-    fs.utimesSync(stale, old, old); fs.utimesSync(other, old, old);
+    fs.utimesSync(stale, old, old); fs.utimesSync(staleClaim, old, old);
+    fs.utimesSync(staleSetClaim, old, old); fs.utimesSync(staleRestore, old, old); fs.utimesSync(other, old, old);
     run(preCompact(tree, transcript, 'auto'));
     expect(fs.existsSync(stale), 'stale temp of this id swept').toBe(false);
+    expect(fs.existsSync(staleClaim), 'stale retained card rollback claim swept').toBe(false);
+    expect(fs.existsSync(staleSetClaim), 'stale retained set rollback claim swept').toBe(false);
+    expect(fs.existsSync(staleRestore), 'stale failed set restore source swept').toBe(false);
     expect(fs.existsSync(young), 'a young temp may belong to a helper in flight').toBe(true);
     expect(fs.existsSync(other), 'another id\'s temp is not ours to sweep').toBe(true);
   });
@@ -2547,6 +2557,235 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
     expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
     expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
+  });
+
+  it('timeout rollback claims and validates A before B installs, so B survives byte-for-byte', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    stub('timeout', `shift; "$@"; exit 71`);
+    // The rollback calls `rm` only AFTER it read A's claimed first line. This
+    // seam installs B at that exact point; a pathname read-then-unlink deletes B.
+    stub('rm', [
+      'for arg; do target="$arg"; done',
+      'case "$target" in *compactcard*)',
+      `  printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `  printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard" ;;`,
+      'esac',
+      `exec ${sh(realTool('rm'))} "$@"`,
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
+  });
+
+  it('timeout rollback moves A before validation so a no-clobber B install owns canonical', () => {
+    const tree = cardTree(); plantHelper();
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    const laterSource = path.join(home, 'later-card-source');
+    fs.writeFileSync(laterSource, laterCard);
+    stub('timeout', 'shift; "$@"; exit 71');
+    // Both wrappers run their real operation, then let B use an atomic
+    // no-clobber link to claim canonical before rollback reads A's claim. The
+    // `cp` wrapper makes the mv->cp mutation diagnostic: A still occupies the
+    // path, B cannot claim it, and the test observes A instead of B.
+    for (const tool of ['mv', 'cp']) {
+      stub(tool, [
+        `real=${sh(realTool(tool))}`,
+        '"$real" "$@"',
+        'rc=$?',
+        'case "$*" in *demo-quiet-basin.compactcard*)',
+        `  ${sh(realTool('link'))} "$HOME/later-card-source" "$HOME/.cc-sessions/demo-quiet-basin.compactcard" 2>/dev/null || true ;;`,
+        'esac',
+        'exit "$rc"',
+      ].join('\n'));
+    }
+    // The cp wrapper is dormant in the shipped path. Mutation swaps mv for cp,
+    // then this exact post-command seam shows B cannot claim A's live pathname.
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
+  });
+
+  it('timeout rollback retains displaced B when C wins its no-clobber restore race', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
+    const currentCard = 'current-hook-nonce\ncurrent card\n';
+    stub('timeout', [
+      'shift; "$@"',
+      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
+      'exit 71',
+    ].join('\n'));
+    // `link claim card` creates exactly the requested target or fails. Install
+    // C immediately before it; B must remain in the dot claim and C survive.
+    stub('link', [
+      `printf '%s' ${sh(currentSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `printf '%s' ${sh(currentCard)} > "$2"`,
+      `exec ${sh(realTool('link'))} "$@"`,
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(currentCard);
+    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((name) => name.includes('compactcard-rollback.tmp'));
+    expect(claims).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
+  });
+
+  it('timeout rollback does not create a child in C directory while retaining B claim', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    stub('timeout', [
+      'shift; "$@"',
+      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
+      'exit 71',
+    ].join('\n'));
+    // A portable `link source target` treats this target directory as occupied.
+    // GNU/BSD `ln source directory` instead creates a contaminating child.
+    stub('link', [
+      'rm -f "$2"',
+      'mkdir "$2"',
+      'printf C > "$2/sentinel"',
+      `exec ${sh(realTool('link'))} "$@"`,
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.statSync(cardFile()).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(cardFile(), 'sentinel'), 'utf8')).toBe('C');
+    expect(fs.readdirSync(cardFile()).sort()).toEqual(['sentinel']);
+    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((name) => name.includes('compactcard-rollback.tmp'));
+    expect(claims).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
+  });
+
+  it('a successful rollback restore retains B after C replaces the live link', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const laterCard = 'later-hook-nonce\nlater card\n';
+    const currentCard = 'current-hook-nonce\ncurrent card\n';
+    stub('timeout', [
+      'shift; "$@"',
+      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
+      'exit 71',
+    ].join('\n'));
+    // The real link succeeds, then this wrapper replaces its canonical entry.
+    // B must remain available through the retained claim after C wins live path.
+    stub('link', [
+      `real=${sh(realTool('link'))}`,
+      '"$real" "$@"',
+      'rc=$?',
+      'if [ "$rc" -eq 0 ]; then',
+      '  rm -f "$2"',
+      `  printf '%s' ${sh(currentCard)} > "$2"`,
+      'fi',
+      'exit "$rc"',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(currentCard);
+    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((name) => name.includes('compactcard-rollback.tmp'));
+    expect(claims).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
+  });
+
+  it('timeout rollback claims A set before B installs, so B survives byte-for-byte', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    stub('timeout', 'shift; "$@"; exit 71');
+    // A's set is already in the regular claim when this move returns. B wins
+    // canonical before A can no-clobber-link its staged original back.
+    stub('mv', [
+      `real=${sh(realTool('mv'))}`,
+      '"$real" "$@"',
+      'rc=$?',
+      'case "$*" in *compactset-rollback.tmp*)',
+      `  printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset" ;;`,
+      'esac',
+      'exit "$rc"',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
+  });
+
+  it('timeout rollback retains claimed B set when C wins before no-clobber restoration', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
+    stub('timeout', [
+      'shift; "$@"',
+      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      'exit 71',
+    ].join('\n'));
+    stub('link', [
+      'case "$2" in *demo-quiet-basin.compactset)',
+      `  printf '%s' ${sh(currentSet)} > "$2" ;;`,
+      'esac',
+      `exec ${sh(realTool('link'))} "$@"`,
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
+    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((name) => name.includes('compactset-rollback.tmp'));
+    expect(claims).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterSet);
+  });
+
+  it('timeout rollback retains B set after a successful restore when C replaces it', () => {
+    const tree = cardTree(); plantHelper();
+    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
+    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
+    stub('timeout', [
+      'shift; "$@"',
+      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      'exit 71',
+    ].join('\n'));
+    stub('link', [
+      `real=${sh(realTool('link'))}`,
+      '"$real" "$@"',
+      'rc=$?',
+      'if [ "$rc" -eq 0 ] && case "$2" in *demo-quiet-basin.compactset) true;; *) false;; esac; then',
+      '  rm -f "$2"',
+      `  printf '%s' ${sh(currentSet)} > "$2"`,
+      'fi',
+      'exit "$rc"',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
+    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((name) => name.includes('compactset-rollback.tmp'));
+    expect(claims).toHaveLength(1);
+    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterSet);
+  });
+
+  it('timeout rollback does not relocate a canonical set directory', () => {
+    const tree = cardTree(); plantHelper();
+    stub('timeout', 'shift; "$@"; exit 71');
+    stub('mv', [
+      'case "$*" in *compactset-rollback.tmp*)',
+      '  rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      '  mkdir "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      '  printf sentinel > "$HOME/.cc-sessions/demo-quiet-basin.compactset/sentinel" ;;',
+      'esac',
+      `exec ${sh(realTool('mv'))} "$@"`,
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.statSync(setFile()).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(setFile(), 'sentinel'), 'utf8')).toBe('sentinel');
+    expect(fs.readdirSync(setFile())).toEqual(['sentinel']);
   });
 
   it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {

@@ -521,6 +521,23 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(fs.readdirSync(path.join(dir, 'reg')).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 
+  it('a directory at the card path and its sentinel survive rollback', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'directory-nonce');
+    const initial = fs.readFileSync(set, 'utf8');
+    fs.mkdirSync(out);
+    fs.writeFileSync(path.join(out, 'sentinel'), 'directory survives\n');
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'directory-nonce' })).toThrow();
+    expect(fs.readFileSync(set, 'utf8')).toBe(initial);
+    expect(fs.statSync(out).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(out, 'sentinel'), 'utf8')).toBe('directory survives\n');
+    expect(fs.readdirSync(path.join(dir, 'reg')).sort()).toEqual(['x.compactcard', 'x.compactset']);
+  });
+
   it('helper rollback never restores or removes a later owner with another nonce', () => {
     const { graph, labels } = plant();
     const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
@@ -541,6 +558,214 @@ describe('the card from the graph (spec §3.2)', () => {
       built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic })).toThrow(/slot taken/);
     expect(fs.readFileSync(set, 'utf8')).toBe(laterSet);
     expect(fs.readFileSync(out, 'utf8')).toBe(laterCard);
+  });
+
+  it('helper rollback claims its partial card before B installs, so B survives byte-for-byte', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterCard = 'later-nonce\nlater card\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(out, 'older-nonce\npartial card\n');
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claimed = false;
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase) => {
+        if (phase === 'cardClaimed') {
+          claimed = true;
+          fs.writeFileSync(out, laterCard);
+        }
+      } })).toThrow(/card write failed/);
+    expect(claimed).toBe(true);
+    expect(fs.readFileSync(out, 'utf8')).toBe(laterCard);
+    expect(fs.readdirSync(path.join(dir, 'reg')).filter((n) => n.endsWith('.compactcard.tmp'))).toEqual([]);
+  });
+
+  it('helper rollback retains a displaced B card when C wins the no-clobber restore race', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterCard = 'later-nonce\nlater card\n';
+    const currentCard = 'current-nonce\ncurrent card\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(out, laterCard);
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claim = '';
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase, path) => {
+        if (phase === 'cardClaimed') {
+          claim = path;
+          fs.writeFileSync(out, currentCard);
+        }
+      } })).toThrow(/card write failed/);
+    expect(fs.readFileSync(out, 'utf8')).toBe(currentCard);
+    expect(claim).not.toBe('');
+    expect(fs.readFileSync(claim, 'utf8')).toBe(laterCard);
+  });
+
+  it('helper rollback retains B after a successful restore when C replaces its live link', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterCard = 'later-nonce\nlater card\n';
+    const currentCard = 'current-nonce\ncurrent card\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(out, laterCard);
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claim = '';
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase, path) => {
+        if (phase === 'cardRestored') {
+          claim = path;
+          expect(fs.readFileSync(out, 'utf8')).toBe(laterCard);
+          fs.rmSync(out);
+          fs.writeFileSync(out, currentCard);
+        }
+      } })).toThrow(/card write failed/);
+    expect(fs.readFileSync(out, 'utf8')).toBe(currentCard);
+    expect(claim).not.toBe('');
+    expect(fs.readFileSync(claim, 'utf8')).toBe(laterCard);
+  });
+
+  it('helper set rollback atomically claims A before B lands, so B survives byte-for-byte', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterSet = '{"v":1,"at":2,"nonce":"later-nonce","scope":"main","files":null}\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(out, 'older-nonce\npartial card\n');
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claimed = false;
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase, claim) => {
+        if (phase === 'setClaimed') {
+          claimed = true;
+          expect(JSON.parse(fs.readFileSync(claim, 'utf8')).nonce).toBe('older-nonce');
+          fs.writeFileSync(set, laterSet);
+        }
+      } })).toThrow(/card write failed/);
+    expect(claimed).toBe(true);
+    expect(fs.readFileSync(set, 'utf8')).toBe(laterSet);
+    expect(fs.readdirSync(path.join(dir, 'reg')).filter((n) => n.includes('compactset-'))).toEqual([]);
+  });
+
+  it('helper set rollback retains claimed B when C wins before no-clobber restoration', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterSet = '{"v":1,"at":2,"nonce":"later-nonce","scope":"main","files":null}\n';
+    const currentSet = '{"v":1,"at":3,"nonce":"current-nonce","scope":"main","files":null}\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(set, laterSet);
+        fs.writeFileSync(out, 'older-nonce\npartial card\n');
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claim = '';
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase, claimPath) => {
+        if (phase === 'setClaimed') {
+          claim = claimPath;
+          expect(fs.readFileSync(claim, 'utf8')).toBe(laterSet);
+          fs.writeFileSync(set, currentSet);
+        }
+      } })).toThrow(/card write failed/);
+    expect(fs.readFileSync(set, 'utf8')).toBe(currentSet);
+    expect(claim).not.toBe('');
+    expect(fs.readFileSync(claim, 'utf8')).toBe(laterSet);
+  });
+
+  it('helper set rollback retains B after a successful restore when C replaces it', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'older-nonce');
+    const laterSet = '{"v":1,"at":2,"nonce":"later-nonce","scope":"main","files":null}\n';
+    const currentSet = '{"v":1,"at":3,"nonce":"current-nonce","scope":"main","files":null}\n';
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(set, laterSet);
+        fs.writeFileSync(out, 'older-nonce\npartial card\n');
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    let claim = '';
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'older-nonce', writeAtomic,
+      rollbackHook: (phase, claimPath) => {
+        if (phase === 'setRestored') {
+          claim = claimPath;
+          expect(fs.readFileSync(set, 'utf8')).toBe(laterSet);
+          fs.rmSync(set);
+          fs.writeFileSync(set, currentSet);
+        }
+      } })).toThrow(/card write failed/);
+    expect(fs.readFileSync(set, 'utf8')).toBe(currentSet);
+    expect(claim).not.toBe('');
+    expect(fs.readFileSync(claim, 'utf8')).toBe(laterSet);
+  });
+
+  it('a directory at the set path and its sentinel survive rollback', () => {
+    const { graph, labels } = plant();
+    const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');
+    const set = path.join(dir, 'reg', 'x.compactset'), out = path.join(dir, 'reg', 'x.compactcard');
+    fs.mkdirSync(path.join(dir, 'reg'));
+    hookSet(set, 1, 'directory-nonce');
+    const writeAtomic = (target: string, text: string): void => {
+      if (target === out) {
+        fs.writeFileSync(out, 'directory-nonce\npartial card\n');
+        throw new Error('card write failed');
+      }
+      fs.writeFileSync(target, text);
+    };
+    expect(() => cardCommand({ transcript, cwd: dir, graph, labels, out, set, maxChars: 4000, maxFiles: 12,
+      built: 'b', fresh: 'fresh', scope: 'main', agent: null, at: 1, nonce: 'directory-nonce', writeAtomic,
+      rollbackHook: (phase) => {
+        if (phase === 'setBeforeClaim') {
+          fs.rmSync(set);
+          fs.mkdirSync(set);
+          fs.writeFileSync(path.join(set, 'sentinel'), 'directory survives\n');
+        }
+      } })).toThrow(/card write failed/);
+    expect(fs.statSync(set).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(set, 'sentinel'), 'utf8')).toBe('directory survives\n');
+    expect(fs.existsSync(out)).toBe(false);
+    expect(fs.readdirSync(path.join(dir, 'reg')).sort()).toEqual(['x.compactset']);
   });
 
   it('requires a nonempty --nonce for card ownership, before touching its inputs', () => {

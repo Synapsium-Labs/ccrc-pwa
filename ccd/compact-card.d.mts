@@ -47,4 +47,5 @@ export function cardCommand(o: {
   maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent';
   agent: string | null; at: number; nonce: string;
   writeAtomic?: (target: string, text: string) => void;
+  rollbackHook?: (phase: 'setBeforeClaim' | 'setClaimed' | 'setRestored' | 'cardBeforeClaim' | 'cardClaimed' | 'cardRestored', claim: string) => void;
 }): number;

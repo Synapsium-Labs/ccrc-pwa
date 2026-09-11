@@ -342,9 +342,18 @@ the print. Exit 0: the card was written and the set rewritten with the working s
 then prints `STEER_TEXT` (§3.5) — one line, plain text, the second and last deliberate stdout site in the
 file — and stamps. Exit 3: the working set was empty — the set is rewritten with `files: []`, no card.
 Any other exit (a slot no longer the helper's, a graph over `GRAPH_MAX_BYTES`, a failure), or the
-timeout: the hook nonce-gated restores its exact initial set document and removes only a card whose
-first line is that nonce. A later owner is never overwritten or unlinked. The existing
-`state="working"` write is unchanged.
+timeout: the hook rolls back **both set and card** through atomic regular-file claims. For the set it
+first compares the canonical set with the exact original document; a match is a safe no-op. Otherwise
+it stages a regular claim placeholder and an exact-byte original-restore source, then atomically
+renames the set into the claim before inspecting its nonce. A claimed A set is restored only with POSIX `link source
+target` no-clobber creation from the staged original; a claimed B/C set is restored only with the
+same no-clobber link from its claim. The foreign claim remains after either a failed or successful
+restore, because C can replace canonical afterward. The card uses the equivalent claim protocol,
+inspecting its claimed first line and deleting only an A-owned partial. Regular placeholders mean a
+canonical directory cannot be moved over a claim; exact-target `link` treats a current directory as
+occupied rather than creating a child inside it. Claims and any failed-A restore artifacts are direct
+dot files eligible for the existing stale `.*compact*.tmp` sweep. A later owner is never overwritten
+or unlinked. The existing `state="working"` write is unchanged.
 
 **Cost, and the contract it amends (§6, R2).** The helper is bounded by `COMPACT_HELPER_TIMEOUT` = 8 s.
 The inputs: node startup ~0.05 s; `graph.json` parsed once and indexed; a window of at most
@@ -367,10 +376,17 @@ writes `--nonce` as the **first line of the card file** (the hook strips it befo
 **The slot check.** It stages the render before naming either target, then immediately before each target
 write re-reads the set and refuses — exit 1, nothing written — unless its nonce is the helper's own
 `--nonce`: the hook's overlap verdict (§3.0) is then durable against a helper that lands late. If the
-set rewrite succeeded but the subsequent card write fails, the helper restores the exact initial set
-bytes only while its nonce still owns the set, removes only a same-nonce card, then rethrows. A later
-owner is never overwritten or unlinked. `graph.json` larger than `GRAPH_MAX_BYTES` is refused the same
-way, before it is parsed. A subagent transcript has the same line shapes as the parent's, measured: an
+set rewrite succeeded but the subsequent card write fails, the helper rolls back both targets with
+the same atomic-claim discipline: it stages an exact-byte original set source beside a regular set
+claim placeholder, moves the canonical set into that claim before inspecting ownership, and restores
+only through no-clobber hard links. A claimed A set links the staged original back; a claimed B/C set
+links the foreign claim back and keeps that claim through C-before/after-restore races. It then claims
+the card pathname before inspecting its first line, removes only a claimed same-nonce partial, and
+uses no-clobber hard-link creation for a displaced later card. The regular reservations mean a
+directory at either canonical pathname cannot be relocated over a claim. The next PreCompact sweeps
+retained claims and any failed-A restore artifacts after the in-flight window. A later owner is never
+overwritten or unlinked. `graph.json` larger
+than `GRAPH_MAX_BYTES` is refused the same way, before it is parsed. A subagent transcript has the same line shapes as the parent's, measured: an
 `assistant` row is `{type:"assistant", message:{content:[{type:"tool_use", name, input}]}}`; the boundary
 row is `{type:"system", subtype:"compact_boundary", compactMetadata:{trigger,…}}`; the previous summary
 is `{type:"user", isCompactSummary:true, message:{content:"<string>"}}` — a string in 1,307 of 1,307
@@ -641,7 +657,7 @@ export interface CompactionMeas {
 | no graph, or > `GRAPH_GATE_MAX_BEHIND` behind | no card, no steering; the set stands with `files: null`; the standing graph card still says why |
 | graph built at another commit but same content as HEAD, or ≤ `GRAPH_GATE_MAX_BEHIND` behind | the card header carries the same freshness word the graph card uses |
 | `find` missing | nothing written by PreCompact — the scope cannot be measured and a silent `main` would be a wrong answer; PostCompact writes nothing either |
-| `node` or both deadline names missing (a BSD userland); helper missing, refusing, or timing out | silent; `_hook_timeout` resolves `timeout` then `gtimeout` and returns 127 if neither exists. Any non-0/non-3 helper result nonce-gated restores the hook's exact initial set and removes only a same-nonce card; a later owner survives. PostCompact consumes the set, and a temp orphaned by a deadline is swept by the next PreCompact. |
+| `node` or both deadline names missing (a BSD userland); helper missing, refusing, or timing out | silent; `_hook_timeout` resolves `timeout` then `gtimeout` and returns 127 if neither exists. Any non-0/non-3 helper result claims both set and card before inspecting either; it restores A only through a staged no-clobber set link, removes only a claimed same-nonce card, and retains displaced B/C claims through later-owner races. PostCompact consumes the set, and a temp orphaned by a deadline is swept by the next PreCompact. |
 | `graph.json` over `GRAPH_MAX_BYTES` | no card; the set stands with `files: null` and `built` set — the journal shows a graphed tree that was never carded |
 | PostCompact's helper fails, or the set will not parse | `compaction` carried, no journal line; the set is consumed all the same, so the next compaction is not `ambiguous` for it |
 | compaction blocked or failed after PreCompact | card and set remain. Inside `COMPACT_CARD_MAX_AGE` the next PreCompact reads them as overlap (§3.0): that compaction is `ambiguous`, no card. After the window the card is removed at the next SessionStart(compact) and the set at the next PostCompact, both unread |
@@ -683,6 +699,8 @@ export interface CompactionMeas {
 | the `find` guard in the resolver dropped | a fixture PATH with no `find` → a set is written with a silent `main`; with the guard, nothing is written and stderr is empty |
 | nonce slot check dropped | a set with the same numeric `at` but a different nonce → the helper exits 1 and writes nothing; with the check dropped it overwrites |
 | post-set rollback dropped | a card-write failure after the set rewrite leaves mined fields instead of the exact hook-owned bytes |
+| atomic rollback claim dropped or weakened | install B after A claims/validates its set or partial card; B survives byte-for-byte, while a nonce-read then atomic-original-set-write or card read-then-unlink mutation loses B |
+| no-clobber displaced restore dropped | B is claimed and C installs the live set or card before B restores; C remains live and B remains in its dot claim |
 | rollback ownership check dropped | a later nonce owner installed during card write is restored or its card is removed; with the check it survives byte-for-byte |
 | hookstate-first order dropped | the deadline stub starts the helper while persisted hookstate is not `working` |
 | the temp sweep dropped | a stale `.<id>.compactcard.999.tmp` older than the window survives PreCompact; a young one always survives |

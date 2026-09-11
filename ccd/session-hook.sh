@@ -772,16 +772,65 @@ _hook_write_atomic() {   # <path> <text> -> 0 written whole; 1 nothing left behi
 }
 
 # Ownership is the hook's nonce, never its epoch-ms measurement: simultaneous
-# hooks can share `at`. Restore only our exact initial document and remove a
-# card only when card line 1 still bears that nonce.
-_hook_compact_rollback() {   # <set> <card> <nonce> <original document>
-  local set="$1" cardf="$2" nonce="$3" original="$4" cur="" first=""
-  cur=$(jq -r '.nonce // empty' "$set" 2>/dev/null) || cur=""
-  [[ "$cur" == "$nonce" ]] && _hook_write_atomic "$set" "$original" || true
-  if [ -f "$cardf" ]; then
-    IFS= read -r first < "$cardf" 2>/dev/null || first=""
-    [[ "$first" == "$nonce" ]] && rm -f "$cardf"
+# hooks can share `at`. Both set and card are claimed with an atomic rename
+# before inspection. A regular claim placeholder rejects directory relocation;
+# exact-target POSIX `link` restores only an absent canonical pathname. Foreign
+# claims remain for the existing stale `.*compact*.tmp` sweep, so a third writer
+# cannot turn a successful restore into data loss.
+_hook_compact_rollback_set() {   # <set> <nonce> <original document>
+  local set="$1" nonce="$2" original="$3" current="" claim="" restore="" claimed_nonce=""
+  # This exact-byte fast path leaves canonical untouched; after it observes the
+  # initial document, rollback makes no canonical-path action unless it claims.
+  current=$(cat "$set" 2>/dev/null) || current=""
+  [[ "$current" == "$original" ]] && return 0
+  # This nonce shape is generated above, never supplied by an untrusted caller.
+  claim="$REG/.$id.$$.${nonce}.compactset-rollback.tmp"
+  restore="$REG/.$id.$$.${nonce}.compactset-restore.tmp"
+  ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  if ! { ( set -C; printf '%s\n' "$original" > "$restore"; ); } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
   fi
+  if ! { mv -f "$set" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim" "$restore"; } 2>/dev/null || true
+    return 0
+  fi
+  claimed_nonce=$(jq -r '.nonce // empty' "$claim" 2>/dev/null) || claimed_nonce=""
+  if [[ "$claimed_nonce" == "$nonce" ]]; then
+    # The staged original has the exact initial bytes. Link is no-clobber: B/C
+    # wins intact if it claims the pathname after A's move.
+    if { link "$restore" "$set"; } 2>/dev/null || [[ -e "$set" || -L "$set" ]]; then
+      { rm -f "$claim" "$restore"; } 2>/dev/null || true
+    fi
+    return 0
+  fi
+  # B/C was the claimed inode. Never delete it: after a successful restore C
+  # can still replace canonical, and this retained claim is B's only copy.
+  { link "$claim" "$set"; } 2>/dev/null || true
+  { rm -f "$restore"; } 2>/dev/null || true
+}
+
+_hook_compact_rollback_card() {   # <card> <nonce>
+  local cardf="$1" nonce="$2" first="" claim=""
+  claim="$REG/.$id.$$.${nonce}.compactcard-rollback.tmp"
+  ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  if ! { mv -f "$cardf" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  IFS= read -r first 2>/dev/null < "$claim" || first=""
+  if [[ "$first" == "$nonce" ]]; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  # POSIX `link source target` creates exactly target or fails EEXIST. Unlike
+  # `ln`, a directory at target cannot receive a child named after the source.
+  { link "$claim" "$cardf"; } 2>/dev/null || true
+}
+
+_hook_compact_rollback() {   # <set> <card> <nonce> <original document>
+  _hook_compact_rollback_set "$1" "$3" "$4" || true
+  _hook_compact_rollback_card "$2" "$3" || true
 }
 
 # ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
