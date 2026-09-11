@@ -721,8 +721,8 @@ export interface CompactionMeas {
 | age bound dropped | a card older than `COMPACT_CARD_MAX_AGE` is served |
 | compact SessionStart writes hookstate | D-306 test, extended with a card present |
 | standing clip deleted or moved | a fixture with 3,000 digits in the report head (D-1899's own) plus a card present: the standing subjects exceed `CARD_MAX_CHARS`, or the compact card is not intact |
-| total clip raised | envelope > `CARD_TOTAL_MAX_CHARS` with a pathological card |
-| ceilings drift | `CARD_MAX_CHARS + COMPACT_CARD_MAX_CHARS >= HARNESS_CONTEXT_SPILL_CHARS` |
+| `CARD_TOTAL_MAX_CHARS` hand-kept instead of derived (fix-round I2: the VALUE cannot redden — `CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS` already equals it exactly, so only a coordinated three-site mutation, text and both source ceilings together, could ever fire it as a runtime effect) | a source-level pin: the hook spells `CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))` literally, not a hand-kept number |
+| ceilings drift | `CARD_MAX_CHARS + COMPACT_CARD_MAX_CHARS >= HARNESS_CONTEXT_SPILL_CHARS`, read from the hook's own source so raising either ceiling reddens it (Task 7, fix-round I2 — this row had no owning task before) |
 | PostCompact measures raw text | fixture summary with an `<analysis>` block → `chars` excludes it |
 | `<summary>` unwrapped instead of replaced | fixture with a `<summary>` block → the `Summary:` line survives into the measured text |
 | helper stdout accepted unparsed | helper printing `not json` with exit 0 → hookstate still written, `compaction` unchanged; a corrupt `compaction` on disk → hookstate still written, member `null` |

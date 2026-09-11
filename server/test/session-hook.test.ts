@@ -2,7 +2,7 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -49,6 +49,23 @@ const runFull = (payload: object, env: Record<string, string> = {}): { stdout: s
   });
   return { stdout: r.stdout, stderr: r.stderr };
 };
+/** `n` real hook PROCESSES started as close together as `spawn` (async,
+ *  non-blocking) allows, all against the same fixture HOME/id — the shape
+ *  M1's concurrency regression needs: `execFileSync`/`spawnSync` block, so a
+ *  loop of them can never overlap in wall time and would never race. Captures
+ *  stderr per racer too (M2's stderr-silence check, extended to N processes). */
+const runConcurrent = (payload: object, n: number): Promise<{ stdout: string; stderr: string }[]> =>
+  Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve) => {
+    const child = spawn('bash', [HOOK], {
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
+    });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+    child.on('close', () => resolve({ stdout, stderr }));
+    child.stdin.end(JSON.stringify(payload));
+  })));
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
@@ -2877,13 +2894,20 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     fs.writeFileSync(cardFile(), `${opts.nonce ?? nonce}\n${text}\n`);
   };
   const CARD_TEXT = 'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):\n- a.ts [edited]\nBlast radius: 0 files import or call something in these 1 files.\nRe-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
+  /** `card`, plus the stderr assertion the 13 sibling PreCompact tests already
+   *  make via `runFull` and this describe was missing (fix-round M2). */
+  const cardChecked = (payload: object, env: Record<string, string> = {}): string => {
+    const r = runFull(payload, env);
+    expect(r.stderr).toBe('');
+    return card(r.stdout);
+  };
 
   it('serves the card as the fourth subject on compact, strips the nonce, deletes the card, writes no hookstate (D-306)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
     const { nonce, text } = readCard();
-    const out = card(run(compactStart(tree, transcript)));
+    const out = cardChecked(compactStart(tree, transcript));
     expect(out).toContain('graphify: this tree has a knowledge graph');       // the standing subject
     expect(out).toContain('graphify card — this context');                    // the fourth
     expect(out.endsWith(text.trimEnd())).toBe(true);
@@ -2896,15 +2920,59 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(typeof readSet().at, 'the stamp preserves numeric measurement').toBe('number');
     expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
     // consume-once: a second compact SessionStart has no fourth subject
-    const again = card(run(compactStart(tree, transcript)));
+    const again = cardChecked(compactStart(tree, transcript));
     expect(again).not.toContain('graphify card');
+  });
+
+  // fix-round M1: a bare read-then-`rm` lets every one of N concurrent
+  // SessionStart(compact) racers read the card before the first deletes it —
+  // the main thread and its own live subagents can all hit this arm close
+  // together. Measured against the PRE-fix code, 8 real concurrent hook
+  // PROCESSES (spawn, not spawnSync — a loop of blocking calls can never
+  // overlap and would never race) against one planted card, 3 isolated
+  // trials: 2 of 3 served the card to 2 racers instead of 1 (the third trial
+  // happened to serialize cleanly — the race is real but not every trial
+  // hits it). Contradicts spec §3.3 step 3, "a card is never served to two
+  // contexts". Fixed by an atomic `mv` claim: exactly one racer's `mv` can
+  // win the pathname — 5/5 isolated runs of THIS test serve exactly once
+  // after the fix, deterministically.
+  it('consume-once is ATOMIC: N concurrent SessionStart(compact) racers against one card serve exactly once (M1)', async () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const outs = await runConcurrent(compactStart(tree, '/t.jsonl'), 8);
+    for (const o of outs) expect(o.stderr, 'every racer, silent on stderr').toBe('');
+    const served = outs.filter((o) => o.stdout.includes('graphify card'));
+    expect(served, 'exactly one of the 8 racers served the card').toHaveLength(1);
+    expect(fs.existsSync(cardFile()), 'consumed, not left behind').toBe(false);
+    expect(readSet().served, 'the winner stamped it').toBe(true);
+  });
+
+  // I4: the brief's mutation #8b (return 1 -> return 0) was CONFOUNDED —
+  // breaking jq entirely reds the same assertions `card()`'s own "the hook
+  // printed nothing" check trips on, before the `served` line is ever
+  // reached. This is the real single-site pin: a jq shim that fails ONLY the
+  // SessionStart-envelope program (matched by text, not by call order) and
+  // execs the REAL jq for every other call this file makes (three other card
+  // builders, the served/set-doc rewrites, the nonce regex uses no jq at
+  // all). Reading stdout directly (not through `card()`) avoids the same
+  // confound the brief's version had.
+  it('a jq that fails ONLY the envelope build stamps served:false and prints nothing — the single-site pin for the emitter\'s return code (I4)', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const real = realTool('jq');
+    stub('jq', `for a in "$@"; do\n  case "$a" in\n    *hookSpecificOutput*SessionStart*) exit 1 ;;\n  esac\ndone\nexec ${sh(real)} "$@"`);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stdout.trim(), 'the broken envelope printed nothing').toBe('');
+    expect(r.stderr).toBe('');
+    expect(readSet().served, 'no print, no stamp').toBe(false);
+    expect(fs.existsSync(cardFile()), 'still consumed independent of the print').toBe(false);
   });
 
   it('never serves it on startup, resume or clear — a card describes the compacted context and nothing else', () => {
     const tree = cardTree();
     plantPair(1, CARD_TEXT);
     for (const source of ['startup', 'resume', 'clear']) {
-      const out = card(run({ hook_event_name: 'SessionStart', source, cwd: tree }));
+      const out = cardChecked({ hook_event_name: 'SessionStart', source, cwd: tree });
       expect(out, source).not.toContain('graphify card');
       expect(fs.existsSync(cardFile()), source).toBe(true);
     }
@@ -2915,7 +2983,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     plantPair(1, CARD_TEXT);
     const old = Math.floor(Date.now() / 1000) - 1200 - 60;
     fs.utimesSync(cardFile(), old, old);
-    const out = card(run(compactStart(tree, '/t.jsonl')));
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
     expect(out).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(false);
   });
@@ -2923,12 +2991,43 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   it('a crossed pair is not served: another nonce, or no set at all — the card stays, served stays false', () => {
     const tree = cardTree();
     plantPair(1, CARD_TEXT, { nonce: '2' });
-    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(true);
     expect(readSet().served).toBe(false);
     fs.rmSync(setFile());
-    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(true);
+  });
+
+  // M3: `[[ "$body" != "$raw" ]]` is real, not a no-op like the deleted
+  // `[ -n "$body" ]` — without it the nonce ITSELF would be served as the
+  // card body (`body` would equal `raw`, i.e. the whole file, i.e. the
+  // nonce line). Only reachable when the bounded read finds NO newline at
+  // all: the file IS the nonce, with nothing after it.
+  it('a nonce with no text after it is not served — the card stays', () => {
+    const tree = cardTree();
+    const nonce = 'nonce-1';
+    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null,
+      transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
+      steered: false, served: false, files: null, stats: null }) + '\n');
+    fs.writeFileSync(cardFile(), nonce);   // no trailing newline: the file IS the nonce
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'restored, not consumed').toBe(true);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(nonce);
+    expect(readSet().served).toBe(false);
+  });
+
+  // M3: `command -v find` is real, not a no-op — without it, `find "$f"
+  // -mmin ...` fails to run at all, `$(...)` captures nothing, and the age
+  // check's `|| { rm -f "$f"; ... }` fires as though the card were aged out,
+  // silently deleting every card on a box without `find` regardless of age.
+  it('with no find on PATH the card is left untouched, nothing served', () => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'), { PATH: minimalPath(['find']) });
+    expect(out).not.toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'find absent: must not be silently deleted').toBe(true);
   });
 
   it('the operator file silences the fourth subject and leaves the card on disk', () => {
@@ -2936,7 +3035,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     plantPair(1, CARD_TEXT);
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
-    expect(card(run(compactStart(tree, '/t.jsonl')))).not.toContain('graphify card');
+    expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(true);
   });
 
@@ -2947,10 +3046,10 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
       `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
       + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
-    const standing = card(run(compactStart(tree, '/t.jsonl')));   // no card on disk: the standing clip alone
+    const standing = cardChecked(compactStart(tree, '/t.jsonl'));   // no card on disk: the standing clip alone
     expect(standing.length).toBe(2400);
     plantPair(1, CARD_TEXT);
-    const out = card(run(compactStart(tree, '/t.jsonl')));
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
     expect(out.slice(0, 2400)).toBe(standing);
     expect(out.charAt(2400)).toBe(' ');
     expect(out.slice(2401)).toBe(CARD_TEXT);
@@ -2960,40 +3059,79 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   it('a pathological card is clipped at COMPACT_CARD_MAX_CHARS and the sum at CARD_TOTAL_MAX_CHARS', () => {
     const tree = cardTree();
     plantPair(1, 'x'.repeat(100_000));
-    const out = card(run(compactStart(tree, '/t.jsonl')));
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
     expect(out.length).toBeLessThanOrEqual(6401);
     expect(out.length - out.indexOf(' x')).toBeLessThanOrEqual(4001);
+  });
+
+  // I2(a): CARD_TOTAL_MAX_CHARS's VALUE cannot redden — max(text) is
+  // 2400+1+4000=6401, exactly the constant, so deleting the clip or raising
+  // the constant 10x is invisible to any output-shaped assertion (only a
+  // three-site mutation — text AND both source ceilings — would fire it).
+  // Defence in depth is the intended design (spec §3.3 step 4: the sum clip
+  // is a pin on the DERIVATION, never a third budget), so this pins the
+  // SOURCE spelling instead of the runtime effect the value can never prove.
+  it('CARD_TOTAL_MAX_CHARS is spelled as the derivation, not a hand-kept number (I2a)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toContain('CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))');
+  });
+
+  // I2(b): spec:189's HARNESS_CONTEXT_SPILL_CHARS (10000 — 2.1.266 spills
+  // SessionStart context to disk above this, per the emitter's own header
+  // comment) named a "ceilings drift" row that no task in this plan owned —
+  // confirmed absent from every file and every task before this test. Reads
+  // the two ceilings from the HOOK'S OWN SOURCE (not hand-copied numbers) so
+  // raising either one reddens this, independent of CARD_TOTAL_MAX_CHARS's
+  // own unreddenable value above.
+  it('the two clip ceilings stay under the harness context-spill budget (I2b, spec:189)', () => {
+    const HARNESS_CONTEXT_SPILL_CHARS = 10_000;
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const cardMax = Number(/^CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
+    const compactMax = Number(/^COMPACT_CARD_MAX_CHARS=(\d+)$/m.exec(src)?.[1]);
+    expect(Number.isFinite(cardMax) && Number.isFinite(compactMax), 'both constants found in source').toBe(true);
+    expect(cardMax + compactMax).toBeLessThan(HARNESS_CONTEXT_SPILL_CHARS);
   });
 
   it('costs no more than 4x the cheap PostToolUse arm with a card present, on a 200-row registry — its OWN ratio', () => {
     // D-1898's method (see the startup-arm test above for why an absolute ms
     // number is the wrong shape): the compact arm interleaved with the cheap
-    // arm in ONE run, its own array, its own p95.
+    // arm in ONE run, its own array, its own p95 — SUPERSEDED to median below
+    // (I3). Original finding (2026-09-11, p95 estimator, 15+15 isolated runs):
+    // shipped 2.257-4.057 (p95-over-15-runs 3.326), a two-jq-fork mutated band
+    // 2.292-3.740 (p95 3.672) — overlapping bands, the two-fork mutation never
+    // crossing R=4. Read at the time as "this row has no power here"; fix-round
+    // review (I3) corrected the DIAGNOSIS: the row has real power (see the
+    // true-positive measurement below), the ESTIMATOR was the defect.
     //
-    // MEASURED 2026-09-11 on `openclaw` (the fleet box; 16 cores, load average
-    // ~34 across the runs below — this box runs the live fleet at the same
-    // time, unlike D-1898's quieter sample): 15 isolated runs of the shipped
-    // `_hook_compact_card` (two bounded, fork-free `read -N`s) gave ratios of
-    // 2.257-4.057 (mean 3.092, this test's own p95 formula over the 15 values:
-    // 3.326). A mutated band — `_hook_compact_card`'s two bounded reads replaced
-    // by two jq forks (`jq -r '.at' "$set"` for the nonce line, `jq -Rs '.' "$f"`
-    // for the card) — gave ratios of 2.292-3.740 (mean 2.953, p95 3.672) over
-    // 15 more isolated runs.
+    // WHY p95 WAS THE WRONG ESTIMATOR: p95 of n=20 is `s[18]`, the
+    // SECOND-LARGEST of only 20 samples — one noisy outlier (iteration 0 is a
+    // cold-start outlier: 258 ms vs ~90 ms typical) owns the statistic. On
+    // this loaded box (`openclaw`, 16 cores, load average ~34 — this box runs
+    // the live fleet at the same time, unlike D-1898's quieter sample) that
+    // made the RATIO OF p95s noisy. RE-MEASURED 2026-09-11 with warm-up added
+    // and the estimator switched to median: 15 isolated shipped runs gave
+    // 2.926-3.375 (mean 3.089), a spread of 14.5% of the mean against p95's
+    // earlier 58.2% — 0/15 false positives (none crossed R=4). A LARGER
+    // mutation (ten extra no-op `jq -n 'empty'` forks in `_hook_compact_card`,
+    // five times the original two-fork probe) gave 4.071-4.679 (mean 4.391)
+    // over 10 isolated runs — 10/10 true positives, cleanly separated from
+    // the shipped band. The two-jq-fork mutation's signal genuinely sits
+    // inside this row's noise floor UNDER EVERY ESTIMATOR (unchanged by this
+    // fix — a ~2-fork cost is simply too small against this box's variance to
+    // detect with 20 samples); the ten-fork measurement proves the row still
+    // has real power for a regression an order of magnitude bigger, so R=4
+    // and the row itself stand — median replaces p95, nothing else changes.
     //
-    // R=4 stands: the shipped band's p95 (3.326) sits under the 3.5 report
-    // threshold, so nothing here forces a change. But UNLIKE D-1898's ERE
-    // mutation, these two bands are NOT clean: they overlap heavily (shipped's
-    // own worst run, 4.057, exceeds every one of the 15 mutated runs; mutated's
-    // best run, 2.292, undercuts most of the shipped runs) and not one of the 15
-    // mutated runs crossed R=4. On this box, at this load, THIS ratio test would
-    // not reliably redden for the two-extra-jq-fork mutation it was proposed to
-    // calibrate against — the fleet box's own concurrent load dominates the
-    // ~2 extra forks' cost. Reported, not silently tuned: R stays 4 because nothing
-    // in the brief asks this guard to catch that specific mutation, and the
-    // mutations Step 7 actually lists (delete the nonce compare, delete the age
-    // find, delete the consume-once `rm`, etc.) are correctness mutations this
-    // ratio test was never meant to catch — those are pinned by the other rows
-    // in this describe, not by the ratio.
+    // D-1898's sibling row (~line 548) is DELIBERATELY NOT touched: it was
+    // separately measured and argued on its own (quieter) sample, and
+    // generalizing an estimator fix from THIS row's noisier sample to that
+    // one without measuring it there would repeat this repo's own lesson
+    // about not applying one sample's fix to a different one blind.
+    //
+    // What this row was never meant to catch stands too: the mutations Step 7
+    // actually lists (delete the nonce compare, delete the age find, delete
+    // the consume-once `rm`, etc.) are correctness mutations pinned by the
+    // other rows in this describe, not by the ratio.
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -3006,6 +3144,13 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     fs.writeFileSync(path.join(reg, 'demo-quiet-basin.project'), 'alpha');
     fs.writeFileSync(path.join(reg, 'demo-quiet-basin.supervised'), String(now - 5));
     const tree = cardTree();
+    // WARM-UP (I3): iteration 0's cold start (process/OS caches, not yet
+    // touched by this test) measured as an outlier (258 ms vs ~90 ms typical
+    // for later iterations) — one untimed pass of both arms before the timed
+    // loop, so every array entry is a steady-state measurement.
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    plantPair(0, CARD_TEXT);
+    run(compactStart(tree, '/t.jsonl'));
     const cheapTimes: number[] = [];
     const compactTimes: number[] = [];
     for (let i = 0; i < 20; i++) {
@@ -3017,7 +3162,22 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
       run(compactStart(tree, '/t.jsonl'));
       compactTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
     }
-    const p95 = (xs: number[]): number => { const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length * 0.95) - 1]!; };
-    expect(p95(compactTimes) / p95(cheapTimes)).toBeLessThan(4);
+    // MEDIAN, not p95 (I3): p95 of n=20 is `s[18]`, the SECOND-LARGEST value —
+    // one noisy outlier owns it, and on this loaded box (openclaw, load ~34)
+    // that made the ratio itself noisy: run-to-run spread of the p95/p95
+    // ratio was far wider than median/median's (measured below). This row's
+    // own power to catch a REGRESSION was unaffected by the swap (see the
+    // measurement below); D-1898's sibling row at line ~548 is DELIBERATELY
+    // NOT touched — it was separately measured and argued on its own sample
+    // (a quieter one), and applying an estimator fix measured on THIS row's
+    // noisier sample to that one blind would be exactly the error this repo
+    // already has a memory about (a-shared-deadline-hides-serialization's
+    // sibling lesson: don't generalize one sample's fix to another's).
+    const median = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+    };
+    expect(median(compactTimes) / median(cheapTimes)).toBeLessThan(4);
   });
 });

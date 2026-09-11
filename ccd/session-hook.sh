@@ -907,28 +907,72 @@ _hook_compact_pre() {
 # An aged card belongs to no compaction that can still arrive and is REMOVED
 # (a dot-free registry file that outlives its use would hold the slug); a
 # crossed pair — another nonce, or no set — serves nothing and leaves the card
-# for the overlap check or the age bound to retire. Two bounded, fork-free
-# reads (`read -N`, the `_ct_read` idiom); one `find` for the age; one `rm`.
+# for the overlap check or the age bound to retire. THE ONLY CLIP LIVES IN THE
+# EMITTER (`_hook_emit_context`'s `${2:0:$COMPACT_CARD_MAX_CHARS}`) — a second
+# slice here was a duplicate in series with it: each was a complete substitute
+# for the other, so neither alone was pinnable (fix-round I1). The bounded
+# `read -N COMPACT_CARD_MAX_CHARS+64` below is not that clip; it is the real
+# cost guard — measured on a 100 MB card, 114 ms vs 17,370 ms for a `cat` fork
+# (152x) — and stays, uncoupled from the emitter's own slice.
 _hook_compact_card() {   # sets CARD_COMPACT; silent on every path
   CARD_COMPACT=""
   [ -e "$COMPACT_CARD_OFF" ] && return 0
-  local f="$REG/$id.compactcard" set="$REG/$id.compactset" head="" nonce="" raw="" line1="" body=""
+  local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
   [[ -f "$f" && -r "$f" ]] || return 0
   command -v find >/dev/null 2>&1 || return 0
   [ -n "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || { rm -f "$f"; return 0; }
+  # ARGUED, UNPINNABLE (fix-round M3): measured on this box, deleting this
+  # guard changes nothing observable — a missing/unreadable `$set` makes the
+  # `read < "$set"` below fail its redirection silently (swallowed same as a
+  # `2>/dev/null` command failure; `head` stays "" and the nonce regex below
+  # fails), so no test can redden it here, the way D-2417's dropped guards
+  # could not. Kept anyway, unlike those: this file declares two userlands
+  # (header, line 1), and whether a failed stdin redirection stays silent
+  # is shell-and-platform behaviour this box's bash cannot prove for every
+  # `sh`/`bash` a fleet box might run. One cheap `[[ ]]` against that risk.
   [[ -f "$set" && -r "$set" ]] || return 0
   IFS= read -r -N 4096 head 2>/dev/null < "$set"
   [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
   nonce="${BASH_REMATCH[1]}"
-  IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$f"
+  # ATOMIC CLAIM (consume-once, spec §3.3 step 3, fix-round M1): a bare
+  # read-then-`rm` lets every one of N concurrent SessionStart(compact)
+  # racers (the main thread and its live subagents can all hit this arm
+  # close together) read the card before the first one deletes it, serving
+  # the same bytes to N contexts — measured against the pre-fix code, 8
+  # concurrent racers per trial: 2 of 3 isolated trials served the card to 2
+  # racers instead of 1. `mv` wins
+  # the pathname for exactly one racer; a losing `mv` (ENOENT — another racer
+  # already claimed it) serves nothing. The claim is PROVISIONAL: a crossed
+  # pair or a body-less nonce restores the card (spec's "the card stays")
+  # through the same regular-placeholder-then-no-clobber-`link` idiom
+  # `_hook_compact_rollback_card` already uses; only a matching, non-empty
+  # pair keeps the claim consumed. Dot-prefixed, pid-scoped, `compact`-tagged
+  # so an orphaned claim (this process killed mid-read) is swept by
+  # PreCompact's existing `.$id.*compact*.tmp` glob.
+  claim="$REG/.$id.$$.compactcard-claim.tmp"
+  ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  if ! { mv -f "$f" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$claim"
   line1="${raw%%$'\n'*}"
-  [[ "$line1" == "$nonce" ]] || return 0
+  if [[ "$line1" != "$nonce" ]]; then
+    # POSIX `link source target` creates exactly target or fails EEXIST —
+    # unlike `ln`, a directory at target cannot receive a child named after
+    # the source.
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
   body="${raw#*$'\n'}"
-  [[ "$body" != "$raw" ]] || return 0                 # a nonce with no text after it
-  rm -f "$f"
-  body="${body:0:$COMPACT_CARD_MAX_CHARS}"
+  if [[ "$body" == "$raw" ]]; then                    # a nonce with no text after it
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  { rm -f "$claim"; } 2>/dev/null || true
   body="${body%"${body##*[![:space:]]}"}"
-  [ -n "$body" ] || return 0
   CARD_COMPACT="$body"
   return 0
 }
