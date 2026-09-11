@@ -99,6 +99,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the plan-review mutant: a two-token grant whose verb was never enrolled',
     codes: ['TS2322'],
   },
+  // ACCOUNT POOLS wave 2a, g9's finding one verb over: a two-token grant is
+  // only two tokens wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`.
+  'g10-project-pool-without-project.ts': {
+    what: 'the pool tag verb granted without the flag that is its whole argument surface',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {

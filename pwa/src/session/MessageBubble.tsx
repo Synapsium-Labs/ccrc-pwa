@@ -296,6 +296,19 @@ export function MessageBubble({
   streaming?: boolean;
 }): ReactNode {
   if (event.kind === 'system') {
+    // D-2228: the harness's resume pair. The prompt line is neutral (whether it
+    // was submitted is what the NEXT row says); the padding line IS the stall —
+    // it exists only when Claude Code wrote the prompt and drove nothing.
+    if (event.origin === 'resume-prompt') {
+      return <p className="sys-divider sys-divider--restart">restart · resume prompt</p>;
+    }
+    if (event.origin === 'no-response') {
+      return (
+        <p className="sys-divider sys-divider--stalled">
+          restart · interrupted turn not re-driven — send a message to resume
+        </p>
+      );
+    }
     return <p className="sys-divider">{event.text}</p>;
   }
 

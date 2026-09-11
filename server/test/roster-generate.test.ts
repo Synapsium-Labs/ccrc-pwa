@@ -99,6 +99,10 @@ describe('generateAccountsSh', () => {
       id: 'hostile', label: 'Hostile', configDirSuffix: hostileSuffix,
       exec: { kind: 'upstream' as const }, homeAble: true,
       hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false,
+      // Required on `AccountDef` — this object is deliberately built by hand
+      // rather than parsed, so the compiler is the only thing that can ask it
+      // for every field. Untagged: this case is about `dqEscape`, not pools.
+      pool: null,
     };
     const hostileRoster = {
       version: 1 as const,
@@ -192,5 +196,119 @@ describe('generateAccountsSh — the statusline projection', () => {
     expect(sh(labelHome, "_ccrc_label 'h'")).toBe(hostileLabel);
     expect(existsSync(canary), 'a hostile label executed instead of round-tripping as inert text')
       .toBe(false);
+  });
+});
+
+// The account half of project pools. `_ccrc_pool` is the ONE thing on the
+// account side that crosses into bash, and it is emitted rather than
+// hand-written for the reason the whole of this file exists: a hand-kept `case`
+// is a roster copy, and a roster copy is a silently unplaced account.
+describe('generateAccountsSh — the pool projection', () => {
+  // Some accounts tagged, some not — the only shape that can tell "one arm per
+  // TAGGED account" from "one arm per account".
+  const pooledRoster = parseRoster({ version: 1, accounts: [
+    { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-a' },
+    { id: 'a-b-c', label: 'ABC', configDirSuffix: '.abc', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic', pool: 'pool-b' },
+    { id: 'a-b', label: 'AB', configDirSuffix: '.ab', exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+  ] });
+
+  const pooledHome = mkTmp('roster-gen-pool-');
+  mkdirSync(path.join(pooledHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(pooledHome, '.ccrc', 'accounts.sh'), generateAccountsSh(pooledRoster));
+
+  // The module-level `roster` (a, a-b-c, a-b) carries no pool at all — every
+  // roster on every box, the day this ships.
+  const untaggedHome = mkTmp('roster-gen-untagged-pool-');
+  mkdirSync(path.join(untaggedHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(untaggedHome, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+
+  it('is defined even when NO account is tagged, so `declare -F` is a version probe', () => {
+    // Two independent things depend on the unconditional emission: ccd's
+    // `_acct_pool` (wave 2a landed it) asks `declare -F _ccrc_pool` to learn
+    // whether this box's accounts.sh knows about pools at all, and a new ccd
+    // will call the function every 5 seconds once wave 2b wires the swap tick
+    // — a conditional emission would be `command not found` on the
+    // supervisor's hot loop, on every box whose roster has no tags yet.
+    expect(sh(untaggedHome, 'declare -F _ccrc_pool >/dev/null && echo yes')).toBe('yes');
+    expect(sh(untaggedHome, "_ccrc_pool 'a' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits an EMPTY case for an all-untagged roster, not a missing function and not a default arm', () => {
+    const body = generateAccountsSh(roster);
+    expect(body).toContain('_ccrc_pool() {');
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    expect(block.slice(0, block.indexOf('esac'))).not.toMatch(/\) echo /);
+  });
+
+  it('answers the pool name for a tagged account', () => {
+    expect(sh(pooledHome, "_ccrc_pool 'a'")).toBe('pool-a');
+    expect(sh(pooledHome, "_ccrc_pool 'a-b-c'")).toBe('pool-b');
+  });
+
+  it('answers empty at rc 0 for an untagged account AND for an unknown id — the caller decides what silence means', () => {
+    // `_ccrc_cfg_dir`'s contract, restated: the two silences are deliberately
+    // one value here, and that fold is safe only because `_is_valid_wrapper`
+    // gates every id before any pool question is asked (design §6).
+    expect(sh(pooledHome, "_ccrc_pool 'a-b' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(pooledHome, "_ccrc_pool 'nosuch' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits one arm per TAGGED account only, in byIdLengthDesc order', () => {
+    const body = generateAccountsSh(pooledRoster);
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    const arms = [...block.slice(0, block.indexOf('esac'))
+      .matchAll(/^ {4}([a-z0-9-]+)\) echo ([a-z0-9-]+) ;;$/gm)].map((m) => [m[1]!, m[2]!]);
+    // `a-b` is untagged and has NO arm; the two that remain are longest-first.
+    expect(arms).toEqual([['a-b-c', 'pool-b'], ['a', 'pool-a']]);
+  });
+
+  it('sits after _ccrc_hue, where the roster projection ends', () => {
+    const body = generateAccountsSh(pooledRoster);
+    expect(body.indexOf('_ccrc_pool() {')).toBeGreaterThan(body.indexOf('_ccrc_hue() {'));
+  });
+
+  // The arms above are filtered by `typeof a.pool === 'string'`, not by
+  // `!= null`, and the 12-line comment on that predicate in
+  // `shared/generate.mjs` argues the difference. Nothing measured it: every
+  // case above is reachable with `!= null` too, because `parseRoster` cannot
+  // build a non-string pool. So this roster is built BY HAND and never parsed,
+  // the same way `hostileRoster` exercises `dqEscape` independent of the
+  // parser — `generateAccountsSh` consumes a `Roster` structurally, and its
+  // `.mjs` callers are not typechecked against that type at all.
+  //
+  // Under `!= null` the emitter would answer `junk) echo 7 ;;` for a value it
+  // was never allowed to see; under `typeof === 'string'` it emits no arm, and
+  // the account reads as untagged — the only honest answer for an unvalidated
+  // value. Mutate the predicate and both assertions below red.
+  it('emits NO arm for a non-string pool that reached the generator unvalidated', () => {
+    const junkAccount = {
+      id: 'junk', label: 'Junk', configDirSuffix: '.junk',
+      exec: { kind: 'upstream' as const }, homeAble: true,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false,
+      // `shared/generate.d.mts` types the parameter as `Roster`, so the cast is
+      // what lets an unvalidated value past the compiler here the way an
+      // untypechecked `.mjs` caller would let one past in production.
+      pool: 7 as unknown as string,
+    };
+    const junkRoster = {
+      version: 1 as const,
+      accounts: [junkAccount],
+      byId: new Map([['junk', junkAccount]]),
+      byIdLengthDesc: [junkAccount],
+      homeAble: [junkAccount],
+      upstreamId: 'junk',
+    };
+
+    const body = generateAccountsSh(junkRoster);
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    const caseBody = block.slice(0, block.indexOf('esac'));
+    expect(caseBody).not.toMatch(/^ {4}junk\)/m);
+
+    // And the generated file in a real bash, which is what ccd will source:
+    // silence at rc 0, indistinguishable from an untagged account.
+    const junkHome = mkTmp('roster-gen-junk-pool-');
+    mkdirSync(path.join(junkHome, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(junkHome, '.ccrc', 'accounts.sh'), body);
+    expect(sh(junkHome, "_ccrc_pool 'junk' ; echo \"rc=$?\"")).toBe('rc=0');
   });
 });

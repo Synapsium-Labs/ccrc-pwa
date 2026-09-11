@@ -492,20 +492,24 @@ whole time, which is the only prevention this ordering rule buys.
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold
 (`ws-release`) **only when no other open run names this session**. The response
-carries `released`. `released: true` means the claim is gone and the ordinary
-sweep will archive the workspace once its PR merges. `released: false` means the
+carries `released`. `released: true` means the claim is gone — this workspace is
+an ordinary unheld, unclaimed row again, and nothing archives it: it stays live
+and supervised until a human archives it. `released: false` means the
 claim was **handed over**, not dropped: another run still owns this workspace,
 so the hold was rewritten with that run's own reason and nothing was archived.
 That is not an error — it is the ordinary consequence of opening wave N+1
 before closing wave N — but the program is not finished until that run closes
 too. The same field rides the abandon response.
 
-Since Build 8 the archive sweep asks the same question the close does: a
-workspace whose hold is absent but whose run is still open is **not** archived.
-Releasing a hold by hand no longer re-arms the sweep on its own.
+Since Build 8 the merged sweep asks the same question the close does, before it
+picks which notice to push: a workspace whose hold is absent but whose run is
+still open is announced as **still claimed**, naming that run. Releasing a hold
+by hand only changes which of the two notices the next sweep sends.
 
-When the claim really is released, the ordinary sweep archives the workspace on
-its own clock and its manifest carries the whole PR lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
+Neither notice archives anything, and nothing else does either. A merged
+workspace stays where it is — live, supervised, its PR merged — until a human
+archives it, and when a human does, its manifest carries the whole PR lineage.
+You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
 
 ## What happened to a workspace that is gone
@@ -538,3 +542,52 @@ route-parity suite binds each registration to this corpus from the commit that r
 - `POST /api/ledger/deviations` — allocate the program's D-number block at run-open; never
   invent a number, and never reuse one.
 - `GET /api/ledger` — the allocation record and the floor for a project.
+
+## The ask lane — pre-empting a child's question (Tasks 9-11)
+
+Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route that types into
+a child's pane, and this session never does it by any other means. All three routes in the
+lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
+entry, not an invitation like the operator-only doors above.
+
+- `POST /api/asks/:id/answer` — press an answer in. Body `{"fromId":"<your id>","fromUuid":"<your
+  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of THREE different
+  conditions, and none of them is interchangeable with another. Nothing was pressed in any of
+  the three — every gate on this route runs before the keystroke.
+  - `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
+    endings, not one: another principal is mid-answer, the grace window lapsed and the operator
+    was notified after all, the child's dialog went away, or someone already ruled. Only the
+    first is a race a retry could win, and you cannot tell which from this code alone — read the
+    row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
+    against another principal that already took the row" for one wave, naming one of the four:
+    the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+  - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
+    on its screen right now may be a different instance of what looks like the same question.
+    This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
+    same call — a blind retry risks pressing a digit into a menu that has since moved on.
+  - `child-unmeasurable` — the server could not read the child's live state at all (no session
+    record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
+    wrong with your call: re-reading the ask will show you the same `held` row it showed before,
+    so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
+    the operator's own notification on schedule regardless.
+- `POST /api/asks/:id/release` — decline to rule on it. Body `{"fromId":"<your
+  id>","fromUuid":"<your uuid>"}`. A decline is not a failure: it is what turns the grace window
+  into a CEILING rather than a flat tax on every question you cannot answer — the operator's
+  notification fires AT ONCE on release, instead of the child's question sitting quiet until the
+  window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
+  words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+  guessing at it.
+- `GET /api/asks?parent=<your id>&fromUuid=<your uuid>` — read your own children's open asks, to
+  see whether two of them are asking contradictory things before either grace window lapses.
+  **`&fromUuid=` is not optional the moment `CCRC_AUTH` is armed on the box you are running on.**
+  The box token alone proves only "a process on this box", never WHICH parent is asking, so an
+  armed box additionally requires the same attribution proof `/answer` and `/release` already
+  take above — omit it and the call answers `400` on every armed box, not just some. A dark box
+  (the shipped default) accepts the bare `?parent=` form, but nothing here tells you which kind
+  of box you are on, so always send both.
+
+What the ask row does NOT carry is the reason to answer it. `question` and `options` are its
+entire evidentiary surface — no rationale, no chat history, no transcript of the child's
+reasoning is readable through any route in this tree. Rule only from what you can already read
+elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
+program. If answering would require guessing rather than reading, decline it.

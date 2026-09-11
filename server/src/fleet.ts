@@ -12,6 +12,13 @@ import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress
 // producer and the two must not be able to disagree — see its own docstring.
 import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
+// Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
+// from this file, the same pairing `watch.ts` already has with both.
+import type { AskRow, CoordStore } from './coord/store.js';
+// F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
+// windows. It lives in `askwindow.ts` because `watch.ts` (their first
+// reader) imports this module, so the constants could not stay there.
+import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -58,6 +65,111 @@ function hookAskText(hs: HookState | null): string | null {
   }
   const { tool, summary } = hs.ask.approval;
   return tool === '' && summary === '' ? null : `${tool}: ${summary}`;
+}
+
+/**
+ * Fix round 1, item 4 (coordinator review): how long the `answered` chip
+ * stays lit past `answeredAt`. `currentAsksFor` below names the newest ask
+ * row for a child in ANY state, with no prune or retention on `asks` at
+ * all — left unbounded, `ruled by <parent>` would sit on a session's row
+ * FOREVER once one ask is answered, through the child going busy, idle,
+ * swapped and dead, until a new ask happens to be minted for the same
+ * child. The chip exists to explain why the operator was NOT asked, and
+ * that explanation is only true while it is recent — past this window the
+ * operator has long since had other reasons to look at the row, and the
+ * chip would be reporting ancient history as if it were live.
+ *
+ * Thirty minutes, a judgement call rather than a measured ceiling (unlike
+ * `ASK_GRACE_MS`/`ASK_ANSWERING_MAX_MS` in `askwindow.ts`, which are each
+ * argued from a specific failure mode): long enough that an operator who
+ * glances at the fleet view some time after the fact still finds the
+ * explanation waiting, short enough that the chip cannot outlive the
+ * session's next several turns. Deliberately NOT tied to the child's own
+ * hookstate — answering the question writes a hook event, so gating on
+ * that would clear the chip the instant it appeared, defeating the whole
+ * point of "ruled by" (`held` is bound too, by `ASK_HELD_CHIP_MAX_MS` —
+ * but that ceiling is DERIVED from `ASK_GRACE_MS` and
+ * `ASK_ANSWERING_MAX_MS` rather than chosen like this window, since past
+ * their sum a held row is stale by construction, not by judgement). */
+const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
+
+/**
+ * `FleetSession.ask`'s server-side fold (Task 19, ruling F5) — the ONE place
+ * an `asks` table row becomes the wire's two-state chip. See
+ * `FleetSession.ask`'s own docstring (shared/api.ts) for the full reasoning;
+ * restated briefly here because this is where the mapping actually happens:
+ * `held`/`answering` both fold onto `held` (a digit has not landed, so the
+ * design doc's "while a parent may still pre-empt" still holds); `answered`
+ * passes through ONLY within `ASK_ANSWERED_CHIP_WINDOW_MS` of `answeredAt`
+ * (fix round 1, item 4) — past it, or with no `answeredAt` at all (should
+ * never happen for a genuinely `'answered'` row, but a row is data, not a
+ * type, so this reads defensively rather than trusting the column), it
+ * folds to no chip; `released`/`stale`/`unknown` fold to no chip
+ * unconditionally — the operator's ordinary push already fired or the
+ * dialog is gone, so there is nothing left for this chip to explain.
+ *
+ * `answeredBy` is carried through VERBATIM, never inferred from `parentId`
+ * (whole-branch review F1). This function built its `answered` arm from
+ * `parentId` alone for one wave, on a premise `shared/api.ts` asserted
+ * outright and Task 12 had already falsified: `server.ts`'s
+ * `POST /api/sessions/:id/ask` settles the operator's OWN answer with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered from their own
+ * phone inside the grace window rendered as "ruled by <parent>". `held`
+ * carries a `null` — nobody has ruled yet — and an `answered` row whose
+ * column is genuinely empty carries `null` too rather than borrowing the
+ * parent's name (`settleAsk` is guarded on both routes precisely because it
+ * can fail after the digit has landed).
+ *
+ * `nowMs` is `assembleFleet`'s own `now` (SECONDS) times 1000, computed once
+ * per call and threaded through rather than read again here — one clock per
+ * assembly, the same reasoning every other `now`-consuming field in this
+ * file already follows. BOTH states are bounded by it: `answered` by
+ * `ASK_ANSWERED_CHIP_WINDOW_MS` since `answeredAt`, and `held` by
+ * `ASK_HELD_CHIP_MAX_MS` since the row's own MINT time (`askwindow.ts`,
+ * F2(b) — the ruling). The `held` bound is the one this function went a
+ * wave without, on the premise that "a held ask is live by definition":
+ * true only within one process lifetime and only while `staleAsk` can still
+ * reach the row, and a restart mid-hold breaks both (`heldAsks` is never
+ * rehydrated, and `dialogIds` is stamped before the notify gate, so no
+ * re-mint ever clears it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
+ * why the ceiling is derived from the lane's two windows rather than picked.
+ */
+function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
+  if (row === null) return null;
+  if (row.state === 'held' || row.state === 'answering') {
+    return nowMs - row.at <= ASK_HELD_CHIP_MAX_MS
+      ? { state: 'held', parentId: row.parentId, answeredBy: null }
+      : null;
+  }
+  if (row.state === 'answered' && row.answeredAt !== null && nowMs - row.answeredAt <= ASK_ANSWERED_CHIP_WINDOW_MS) {
+    return { state: 'answered', parentId: row.parentId, answeredBy: row.answeredBy };
+  }
+  return null;
+}
+
+/**
+ * `coord.currentAsksFor`'s guarded, WHOLE-FRAME read (fix round 1, item 3 —
+ * collapsing what was one `db.prepare`/`.get` PER registry row into one
+ * query for the whole assembly). Guarded for the identical reason the prior
+ * per-session `readCurrentAsk` was (found by the full suite rather than by
+ * any Task 19 test: `push-copy.test.ts`'s "a broken coord.db degrades,
+ * never crashes the poll" and `fleetws.test.ts`'s matching cold-start
+ * case): `assembleFleet` is called UNWRAPPED from both `FleetWatcher.tick()`
+ * and the `/ws/fleet` connect handler, and `node:sqlite` throws
+ * SYNCHRONOUSLY on a closed connection or a lock race. Because this is now
+ * ONE call per assembly rather than one per session, a broken box warns
+ * ONCE per tick/connect/request here, not once per session — the "20
+ * near-identical lines a second, burying the one warn that names the real
+ * cause" the reviewer measured is gone by construction, not by an
+ * extra dedup flag. */
+function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
+  if (!coord || childIds.length === 0) return new Map();
+  try {
+    return coord.currentAsksFor(childIds);
+  } catch (err) {
+    console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
+    return new Map();
+  }
 }
 
 /**
@@ -235,7 +347,7 @@ export async function assembleFleet(
   /**
    * The registry rows this assembly must describe, when the caller has
    * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
-   * `watch.ts`'s own `sweepTasks`/`archiveMerged` lanes use.
+   * `watch.ts`'s own `sweepTasks`/`sweepMerged` lanes use.
    *
    * Load-bearing for correctness, not just for the saved round trips
    * (bba5c09; restated here — blocking review finding 4 — on its REAL ground,
@@ -258,8 +370,29 @@ export async function assembleFleet(
    * read with `sweepHookStates`/`detectDialogs` in the first place.
    */
   records?: SessionRecord[],
+  /**
+   * Task 19: the ask pre-emption lane's own store, when this box runs
+   * coordination at all — `undefined` on every caller that predates the
+   * lane's threading here, on a dark box, and in every existing test, which
+   * is exactly why `session.ask` below defaults to `null` rather than
+   * throwing on a missing store. NOT one `currentAskFor` read per session
+   * (fix round 1, item 3, below): `readCurrentAsks` batches the WHOLE
+   * assembly's lookup into one indexed `currentAsksFor` call, keyed on
+   * `asks_by_child`, outside the per-session map — a single synchronous
+   * SQLite read regardless of fleet size, cheap beside the registry/live-
+   * state reads this assembly already does per row, and paid only when a
+   * `coord` is actually passed.
+   */
+  coord?: CoordStore,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
+  // outside the per-session map below — never one `currentAskFor` per row.
+  // `now` here is SECONDS (this function's own parameter contract); `asks`
+  // rows carry millisecond timestamps (`settleAsk`'s callers all pass
+  // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
+  const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
@@ -421,6 +554,12 @@ export async function assembleFleet(
       // The statusline wins: it is a live pane capture and knows about a manual
       // checkout. The registry fills the gap before the first capture lands.
       ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
+      // D-2011: the pane's own `▓ ctx` reading, no registry fallback (nothing
+      // else on the record ever measured this). `?? null`, not `?? 0` —
+      // `Statusline.ctxPct` is `undefined` on a session with no fresh
+      // statusline (dead pane, pre-first-capture, or a build with no ▓
+      // segment at all), and a measured 0 must ride through unchanged.
+      ctxPct: sl?.ctxPct ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
@@ -428,11 +567,27 @@ export async function assembleFleet(
       held: r.held,
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs, liveWaitingFor),
+      // Task 19's chip. No `coord` at all (a dark box, or a caller that
+      // predates the lane) reads exactly like "no ask row for this child" —
+      // see `fleetAsk`/`FleetSession.ask`'s own docstrings for the state
+      // fold. `asksByChild` (fix round 1, item 3) is the whole assembly's
+      // ONE batched, guarded read, computed once above this map — a broken
+      // coord.db degrades every row to null rather than throwing out of
+      // `assembleFleet`, which neither caller wraps.
+      ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
       graphQueries: hs?.graphQueries ?? null,
+      // R5's counter beside R4's (D-1613), and read off its OWN field: the
+      // two numbers answer two different questions, so a carry that copied
+      // `hs?.graphQueries` onto both would ship a board on which the gate's
+      // effect is indistinguishable from the queries it is meant to cause.
+      // `?? null` for the same reason as its sibling — no hook data and a
+      // hook too old to have a gate both mean "nothing measured", and a
+      // measured 0 means the gate is armed and has not had to fire.
+      graphGateDenials: hs?.graphGateDenials ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
       // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
       // field of these very rows (one derivation of one fact — blocking

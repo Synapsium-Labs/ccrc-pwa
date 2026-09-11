@@ -1,0 +1,648 @@
+// Task 6 (D-2172, D-2173): the mint point. A live, single-select, single-
+// question dialog whose child has a derivable parent gets its operator push
+// DEFERRED — recorded, never pushed — and an ask row minted in `held`. Every
+// other shape (no parent; an envelope `askActions` refuses) pushes exactly as
+// today.
+//
+// The harness below combines two idioms already proven elsewhere in this
+// tree rather than inventing a third: `push-copy.test.ts`'s multi-session
+// `seedSessions`/`watcher()` (registry + live-status + a real `CoordStore`)
+// and its own `askFixture()`'s mutable pane + `writeHookState` (a menu that
+// can appear mid-test, with an envelope written alongside it). No existing
+// suite drives BOTH a parent/child `CoordStore` relationship and a dialog
+// scrape in the same fixture, because this is the first task that needs to.
+import { describe, it, expect } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Bus } from '../src/bus.js';
+import type { Runner } from '../src/exec.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { Presence } from '../src/presence.js';
+import type { PushPayload } from '../src/push.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+
+const dir = async () => mkdtemp(path.join(tmpdir(), 'asks-mint-'));
+
+/** Per-session bookkeeping the registry + live-status files need — copied
+ *  verbatim from `push-copy.test.ts`'s own `Seeded`/`seedSessions`. */
+interface Seeded { pid: number; cfgDir: string }
+
+const liveStatusFile = (s: Seeded): string => path.join(s.cfgDir, 'sessions', `${s.pid}.json`);
+
+const writeLiveStatus = (s: Seeded, id: string, status: 'busy' | 'idle'): void => {
+  writeFileSync(liveStatusFile(s), JSON.stringify({
+    pid: s.pid, sessionId: `s-${id}`, cwd: '/d', status, statusUpdatedAt: Date.now(),
+  }));
+};
+
+/** Seeds one registry entry + one live-status file (starting `busy`) per
+ *  `"<project>/<id>"` spec, all under the `claude` wrapper so every session
+ *  shares one cfgDir — verbatim idiom from `push-copy.test.ts`. */
+function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const cfgDir = path.join(home, '.claude');
+  mkdirSync(path.join(cfgDir, 'sessions'), { recursive: true });
+  const info = new Map<string, Seeded>();
+  let pid = 51000;
+  for (const spec of specs) {
+    const [project, id] = spec.split('/');
+    pid += 1;
+    const fields: Record<string, string> = {
+      wrapper: 'claude', project: project!, workdir: `/w/${id!}`, uuid: `u-${id!}`, started: '1',
+    };
+    for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id!}.${f}`), v);
+    const seeded: Seeded = { pid, cfgDir };
+    info.set(id!, seeded);
+    writeLiveStatus(seeded, id!, 'busy');
+  }
+  return info;
+}
+
+/** `~/.cc-sessions/<id>.hookstate.json`, the way `session-hook.sh` writes
+ *  it — verbatim from `push-copy.test.ts`. `sessionId` matches `seedSessions`'
+ *  `uuid` field so `readHookState`'s identity gate accepts it. */
+function writeHookState(home: string, id: string, ask: unknown, state = 'waiting'): void {
+  writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+    v: 1, state, sessionId: `u-${id}`, pid: 1, updatedAt: Date.now(), ask, subagents: [],
+  }));
+}
+
+const oneQuestion = (options: { label: string }[]) => ({
+  questions: [{ question: 'Which colour?', header: 'Colour', multiSelect: false, options }],
+});
+
+const MENU_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\n  3. Green\nEnter to select\n';
+const BARE_PROMPT = 'ready\n❯ \n';
+
+/**
+ * A `FleetWatcher` over a throwaway fixture home, wired to a real `CoordStore`
+ * (so `parentOfSession`/`insertAsk`/mail all land in a real `coord.db`), with
+ * one mutable pane PER SESSION so two children can show different menus in
+ * the same tick — `capture-pane`'s target (`args[2]`, same position
+ * `list-panes` already parses in `push-copy.test.ts`) routes to the right one.
+ */
+function fixture(opts: {
+  push: { notify: (p: PushPayload) => Promise<void> };
+  notifyLog?: NotifyLog;
+  presence?: Presence;
+  sessions: string[];
+}): {
+  coord: CoordStore; home: string;
+  tick: () => Promise<void>;
+  showMenu: (id: string, text?: string) => void;
+  writeAsk: (id: string, ask: unknown, state?: string) => void;
+} {
+  const home = mkTmp('ccrc-');
+  const info = seedSessions(home, opts.sessions);
+  const panes = new Map<string, string>(opts.sessions.map((spec) => [spec.split('/')[1]!, BARE_PROMPT]));
+  const runner: Runner = async (_cmd, args) => {
+    if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+    const target = args[2] ?? '';
+    const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+    if (args[0] === 'list-panes') {
+      const pid = info.get(id)?.pid;
+      return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
+    }
+    if (args[0] === 'capture-pane') return { code: 0, stdout: panes.get(id) ?? BARE_PROMPT, stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const deps = {
+    ...testDeps(home, runner), push: opts.push as never, notifyLog: opts.notifyLog,
+    presence: opts.presence, coord,
+  };
+  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  return {
+    coord, home,
+    tick: () => w.tick(),
+    showMenu: (id: string, text: string = MENU_PANE) => { panes.set(id, text); },
+    writeAsk: (id: string, ask: unknown, state?: string) => writeHookState(home, id, ask, state),
+  };
+}
+
+/**
+ * "No ask row exists, for ANY parent" — `SELECT COUNT(*) FROM asks`, the
+ * assertion the whole-branch review (M1) prescribed in place of the
+ * `asksForParent(<some id>, 'held')` reads these tests used to make.
+ *
+ * The defect it replaces: `asksForParent('coord-1', 'held')` is a
+ * KEYED read, so in a fixture that never names `coord-1` — the
+ * no-parent-derivable case below, whose only session is in no run at all —
+ * it answers `[]` whether or not a row was minted under some other parent.
+ * The assertion could not fail, so it proved nothing about the mint gate it
+ * was written to guard. Counting the whole table is the same sentence
+ * ("nothing was held") with no key to get wrong, and it is what actually
+ * reds when an eligibility gate is deleted.
+ */
+const askRowCount = (f: ReturnType<typeof fixture>): number =>
+  (f.coord.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n;
+
+/** The tag `pushOne` gives a `kind: 'ask'` push by default — `PushPayload`
+ *  itself carries no `kind`, so this is the only way a test can tell an ask
+ *  push for THIS session apart from any other push in the same tick. */
+const askTag = (id: string): string => `ask-${id}`;
+
+describe('the ask mint point (D-2172, D-2173)', () => {
+  it('holds the push and records the event when a child has a parent (D-2172)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
+
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();                                    // priming: no menu
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();                                     // the menu appears → eligible, has a parent
+
+    // Deferred: no actual push notification for the ask.
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    // Fix round 1, item 1 (CRITICAL): the mail `hold()` queues to WAKE the
+    // parent must not itself buzz the operator's phone — that would defeat
+    // the entire hold. Zero pushes of ANY kind this tick, not just zero
+    // `ask` ones.
+    expect(sent).toEqual([]);
+    // But recorded — the operator's only durable trace of the question.
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.sessionId).toBe('cc-a');
+    // And minted, held, addressed to the derived parent.
+    const held = f.coord.asksForParent('coord-1', 'held');
+    expect(held).toHaveLength(1);
+    expect(held[0]!.childId).toBe('cc-a');
+    expect(held[0]!.parentId).toBe('coord-1');
+    expect(held[0]!.question).toBe('Which colour?');
+    expect(held[0]!.options).toEqual(['Red', 'Blue']);
+  });
+
+  // WHOLE-BRANCH REVIEW, M1 — the missing PRIMING-TICK case. Every test in
+  // this block puts its menu up on the SECOND tick, so none of them ever
+  // exercised the first, and `hold`'s placement INSIDE `if (notify)` was
+  // unpinned: moving it out (or above the gate) kept the whole suite green.
+  //
+  // What the first tick must do, and this pins: nothing. `this.primed` is
+  // false on the tick after boot (`watch.ts`), so `notify` is false — the
+  // watcher has no way to tell a question raised a second ago from one that
+  // has been on screen for an hour, and raising every dialog in the fleet on
+  // every restart is the noise the priming tick exists to prevent. No push,
+  // and — the part that had no test — NO ASK ROW EITHER: minting one would
+  // hold a push that was never going to fire, addressed to a parent, for a
+  // question the operator will never be told about.
+  //
+  // It is also the mechanism behind F2(b): `dialogIds.set()` runs BEFORE the
+  // gate, unconditionally, so the edge is spent on the priming tick and no
+  // later tick ever re-mints for this dialog. A row that WAS held across a
+  // restart is therefore unreachable to every later tick, which is why the
+  // chip needs a time bound rather than a state transition it can wait for.
+  it('mints nothing and pushes nothing when the menu is already up on the PRIMING tick', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    // The dialog is on the pane BEFORE the very first tick — a server that
+    // restarted while a child was blocked on its question.
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();                                      // priming: notify === false
+
+    expect(sent).toEqual([]);
+    expect(askRowCount(f)).toBe(0);
+
+    // …and it stays that way: `dialogIds` was stamped on that first tick, so
+    // the same dialog is not a new one on the second and never becomes an
+    // ask at all. This is the residual D-2169 names, pinned rather than
+    // remembered.
+    await f.tick();
+    expect(sent).toEqual([]);
+    expect(askRowCount(f)).toBe(0);
+  });
+
+  it('pushes immediately when no parent is derivable', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/orphan-1'] });
+    // orphan-1 is in no run — `parentOfSession` answers null.
+
+    await f.tick();
+    f.writeAsk('orphan-1', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('orphan-1');
+    await f.tick();
+
+    expect(sent.filter((p) => p.tag === askTag('orphan-1'))).toHaveLength(1);
+    // THE ASSERTION THAT USED TO BE VACUOUS (M1): this fixture opens no run,
+    // so `coord-1` is a name it never uses — the old
+    // `asksForParent('coord-1', 'held')` answered `[]` no matter what was
+    // minted. The table count cannot be keyed wrong.
+    expect(askRowCount(f)).toBe(0);
+  });
+
+  it('pushes immediately for an ask askActions refuses (D-2173)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    // Two questions — `askActions` refuses multi-question no matter who would
+    // answer, so holding it would be pure latency with no route to resolve it.
+    f.writeAsk('cc-a', {
+      questions: [
+        { question: 'First?', options: [{ label: 'A' }] },
+        { question: 'Second?', options: [{ label: 'B' }] },
+      ],
+    });
+    f.showMenu('cc-a');
+    await f.tick();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    // Whole table (M1): deleting the `actions !== null` eligibility gate
+    // mints a row here, and this is what sees it.
+    expect(askRowCount(f)).toBe(0);
+  });
+
+  it('mails the derived parent with a subject unique per ask', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a', 'ccrc-pwa/cc-b'] });
+
+    const runA = f.coord.openRun({
+      program: 'prog-a', title: 'A', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(runA.id, 'cc-a');
+    const runB = f.coord.openRun({
+      program: 'prog-b', title: 'B', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(runB.id, 'cc-b');
+
+    await f.tick();                                     // priming
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    f.writeAsk('cc-b', oneQuestion([{ label: 'Yes' }, { label: 'No' }]));
+    f.showMenu('cc-b');
+    await f.tick();                                      // both mint in the same tick
+
+    const held = f.coord.asksForParent('coord-1', 'held');
+    expect(held).toHaveLength(2);
+
+    const rows = f.coord.db.prepare(
+      "SELECT toId, subject FROM mail WHERE fromId = 'operator' AND kind = 'question' ORDER BY id",
+    ).all() as { toId: string; subject: string }[];
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.toId === 'coord-1')).toBe(true);
+    const subjects = rows.map((r) => r.subject);
+    expect(new Set(subjects).size).toBe(2);              // distinct, one per ask id
+    for (const row of held) expect(subjects).toContain(`ask:${row.id}`);
+  });
+
+  // Fix round 1, item 1 (CRITICAL), dedicated. The prior test already asserts
+  // `sent` is empty for this exact scenario; this one is the review's own
+  // framing — the ask nudge mail RECORDS (feed) but never PUSHES, verified
+  // by reading the queued mail row directly rather than inferring it from
+  // the absence of a push.
+  it('the parent nudge mail records but never pushes — the hold defers everything', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    // The nudge mail really was queued...
+    const mailRows = f.coord.db.prepare(
+      "SELECT id FROM mail WHERE fromId = 'operator' AND toId = 'coord-1' AND kind = 'question'",
+    ).all() as { id: number }[];
+    expect(mailRows).toHaveLength(1);
+    // ...it shows up in the durable feed (recorded)...
+    const mailEvents = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'mail');
+    expect(mailEvents).toHaveLength(1);
+    // ...but produced no push of any kind — neither the ask push nor a
+    // `mail-*` one for its own delivery.
+    expect(sent).toEqual([]);
+  });
+
+  // Fix round 1, item 2 (Important). `hold()`'s db work is unguarded no
+  // longer: a throw anywhere inside it (here, `insertAsk` itself, the WRITE)
+  // must fall back to an ordinary immediate push rather than propagate out of
+  // `tick()`, which runs as `void this.tick()` with no `unhandledRejection`
+  // handler anywhere in this tree.
+  it('falls back to an immediate push when hold\'s db work throws, and the process survives', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    f.coord.insertAsk = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await expect(f.tick()).resolves.toBeUndefined();      // the tick itself does not throw
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+  });
+
+  // Fix round 1, item 3a (Important) — proves `recordAlways` on the hold's
+  // own record, the way `push-copy.test.ts` (`:113,132,185-188`) proves every
+  // other `recordAlways` claim: a VISIBLE session with no `recordAlways`
+  // would erase the record entirely (`pushOne`'s `if (visible &&
+  // !e.recordAlways) return;`), so a Presence claim on the CHILD is the only
+  // fixture shape that can tell "recorded because recordAlways" apart from
+  // "recorded because nobody was looking anyway" — this test's own suite ran
+  // with no `presence` at all until this fix, which is exactly why it never
+  // caught the flag's absence.
+  it('records the held ask even while the operator is watching the child\'s pane (recordAlways)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const presence = new Presence();
+    presence.setVisible(Symbol('t'), 'cc-a');
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, presence, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    expect(sent).toEqual([]);                              // presence suppresses the push either way
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    expect(recorded).toHaveLength(1);                       // but NOT the record — recordAlways
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);   // the hold itself is unaffected
+  });
+
+  // Fix round 1, item 3b (Important) — pins `parent !== r.id`: a session that
+  // is its own coordinator (it opened a run and claimed it) must not hold its
+  // own question and mail itself; it should push exactly as if it had no
+  // parent at all.
+  it('pushes immediately when the derived parent is the session itself', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'cc-a',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    // Whole table (M1): deleting the `parent !== r.id` guard mints a row
+    // naming the child as its own parent, and this is what sees it.
+    expect(askRowCount(f)).toBe(0);
+  });
+
+  // Fix round 1, item 4 (Important). Two single-question dialogs appear back
+  // to back with NO intervening `dialog_cleared` tick — `parseDialog`'s id
+  // hashes title+labels, so a genuinely different question is a different
+  // dialog id, and `detectDialogs`'s `last !== dialog.id` branch fires again
+  // directly, never routing through the clear branch that would otherwise
+  // settle the first hold. Without the fix, the first held row is silently
+  // overwritten in `heldAsks` and orphaned forever — this proves it is
+  // settled to `stale` instead, and exactly one `held` row survives.
+  it('settles an orphaned hold to stale when a second dialog replaces the first with no clear tick', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();                                        // priming
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');                                     // dialog 1: "Which colour?"
+    await f.tick();                                         // mints ask #1, held
+
+    const firstHeld = f.coord.asksForParent('coord-1', 'held');
+    expect(firstHeld).toHaveLength(1);
+    const firstAskId = firstHeld[0]!.id;
+
+    // A SECOND, genuinely different question replaces the first — same
+    // session, no clear tick in between.
+    f.writeAsk('cc-a', {
+      questions: [{ question: 'Continue?', header: 'Confirm', multiSelect: false,
+        options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    f.showMenu('cc-a', 'Continue?\n❯ 1. Yes\n  2. No\nEnter to select\n');
+    await f.tick();                                         // mints ask #2, orphans ask #1
+
+    const nowHeld = f.coord.asksForParent('coord-1', 'held');
+    expect(nowHeld).toHaveLength(1);                         // exactly one survives
+    expect(nowHeld[0]!.id).not.toBe(firstAskId);
+    expect(nowHeld[0]!.question).toBe('Continue?');
+    expect(f.coord.askById(firstAskId)!.state).toBe('stale');   // the orphan, settled
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);   // still deferred, both times
+  });
+
+  // Fix round 2, item 1 (Important). The orphan-settle write
+  // (`staleAsk(last, r.id, ...)`, run BEFORE the `notify` gate on every tick
+  // that sees a new dialog id) was unguarded — eleven lines above the try
+  // that already guards `hold()` itself. This proves the guard: a throwing
+  // `staleAsk` must not kill the tick, and the lane must keep working —
+  // ask #2 still mints normally even though settling ask #1's orphan failed.
+  it('survives a throwing staleAsk while settling an orphaned hold, and the lane continues', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();                                          // priming
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();                                          // mints ask #1, held
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);
+
+    f.coord.staleAsk = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    // A second, genuinely different question replaces the first with no
+    // clear tick — the same shape the orphan-settle test above drives.
+    f.writeAsk('cc-a', {
+      questions: [{ question: 'Continue?', header: 'Confirm', multiSelect: false,
+        options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    f.showMenu('cc-a', 'Continue?\n❯ 1. Yes\n  2. No\nEnter to select\n');
+    await expect(f.tick()).resolves.toBeUndefined();          // the tick itself does not throw
+
+    // The lane continues: ask #2 still mints and holds normally despite the
+    // failed settle of ask #1's orphan (which is left `held`, undead, in
+    // coord.db — the acknowledged cost of a guard whose job is surviving the
+    // tick, not full correctness under a coord.db fault).
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(2);
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+  });
+
+  // Fix round 2, item 2 (Minor). `insertAsk` and `queueSystemMail` are
+  // SEPARATE transactions inside `hold()` — a throw strictly AFTER
+  // `insertAsk` already committed (here: `queueSystemMail`'s own `tx()`
+  // fails on its first write, `insertMail`) must not leave the just-minted
+  // row stuck in `held` with no `heldAsks` entry to ever reach it again.
+  // The catch's own compensating `staleAsk` settles it.
+  it('compensates a committed ask row when hold fails after insertAsk but before queueSystemMail', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    f.coord.insertMail = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await expect(f.tick()).resolves.toBeUndefined();
+
+    // The fallback push still fires...
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    // ...and the row `insertAsk` committed before the failure is NOT left
+    // orphaned in `held` — it was settled to `stale` by the compensation.
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    const rows = f.coord.db.prepare("SELECT id, state FROM asks WHERE childId = 'cc-a'").all() as
+      { id: number; state: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe('stale');
+  });
+});
+
+
+// ── The instance guard's second half: `askAt` ADVANCED under a live dialog.
+//
+// The mint stores the child's hookstate `updatedAt` as `askAt`, and
+// `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals it.
+// `session-hook.sh` stamps `updatedAt` on EVERY write, and its subagent arm
+// re-reads `.ask` straight back off the file — so a subagent event under an
+// open dialog rewrites the identical envelope under a new number and, with
+// nothing re-stamping the row, refused every parent answer for the row's
+// whole life. `server/test/ask-instance-guard.test.ts` measures that at the
+// hook and at the CAS; THIS suite measures the thing neither of those can —
+// that the watcher actually calls the re-stamp on an ordinary tick. A CAS
+// nothing invokes is decoration.
+describe('the ask instance guard advances under a live dialog', () => {
+  /** The hookstate write `session-hook.sh`'s `SubagentStart`/`SubagentStop`
+   *  arm performs: the SAME ask envelope, the same `waiting` state, a fresh
+   *  `updatedAt`. `at` is passed explicitly because two `Date.now()` calls in
+   *  one test can land in the same millisecond, which would make the
+   *  assertion vacuous rather than false. */
+  const bump = (home: string, id: string, ask: unknown, at: number): void => {
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', sessionId: `u-${id}`, pid: 1, updatedAt: at,
+      ask, subagents: [{ name: 'reviewer', startedAt: at - 1000 }],
+    }));
+  };
+
+  const heldRow = (f: ReturnType<typeof fixture>) => {
+    const rows = f.coord.asksForParent('coord-1', 'held');
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
+
+  /** Mint one held ask against a live menu, and hand back everything the
+   *  assertions below need. */
+  const minted = async (): Promise<{
+    f: ReturnType<typeof fixture>; ask: ReturnType<typeof oneQuestion>; askAt: number;
+  }> => {
+    const push = { notify: async () => { /* deferred; never called here */ } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    await f.tick();                                     // priming: no menu
+    const ask = oneQuestion([{ label: 'Red' }, { label: 'Blue' }]);
+    f.writeAsk('cc-a', ask);
+    f.showMenu('cc-a');
+    await f.tick();                                     // the mint edge
+    return { f, ask, askAt: heldRow(f).askAt };
+  };
+
+  it('a bump that leaves the menu on screen re-stamps the row', async () => {
+    const { f, ask, askAt } = await minted();
+    const later = askAt + 5_000;
+    bump(f.home, 'cc-a', ask, later);                   // the subagent event
+    await f.tick();                                     // same pane, same question
+
+    // The row now names the child's CURRENT hookstate, so the parent's next
+    // answer measures equal instead of refusing `ask-moved`.
+    expect(heldRow(f).askAt).toBe(later);
+    expect(f.coord.takeAskForAnswer(heldRow(f).id, later).ok).toBe(true);
+  });
+
+  it('a bump does NOT re-stamp when the question itself changed', async () => {
+    const { f, askAt } = await minted();
+    // Same pane (so the dialog witness still says "unchanged"), different
+    // envelope — the case the guard exists for. `askKey` is the second
+    // witness and it refuses: the row keeps the `askAt` it was minted with.
+    bump(f.home, 'cc-a', oneQuestion([{ label: 'Green' }, { label: 'Violet' }]), askAt + 5_000);
+    await f.tick();
+
+    expect(heldRow(f).askAt).toBe(askAt);
+    expect(f.coord.takeAskForAnswer(heldRow(f).id, askAt + 5_000)).toEqual(
+      expect.objectContaining({ ok: false, why: 'ask-moved' }),
+    );
+  });
+
+  it('a bump does NOT re-stamp once the dialog has left the pane', async () => {
+    const { f, ask, askAt } = await minted();
+    f.showMenu('cc-a', 'ready\n❯ \n');                  // the operator escaped it
+    bump(f.home, 'cc-a', ask, askAt + 5_000);
+    await f.tick();
+
+    // The clear branch settled the row `stale`; nothing is held, so there is
+    // nothing to advance and the CAS could not have applied anyway.
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+  });
+});

@@ -32,11 +32,11 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
   workspace: 'quiet-basin', name: null, status: 'busy', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: null,
-  archivedBytes: null, hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
+  branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: null,
+  archivedBytes: null, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: 'running', stoppedBy: null, swapBlocked: null, substrate: null, started: true,
-  spawnState: null, ...over,
+  spawnState: null, ask: null, ...over,
 });
 
 const FAULT = { at: 1755620112000, text: 'protocol version mismatch' } as const;

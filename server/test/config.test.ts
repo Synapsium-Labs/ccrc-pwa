@@ -351,9 +351,9 @@ describe('configDirFor — the ONE place a wrapper becomes a directory', () => {
     expect(configDirFor(cfg, 'claude-d')).toBe('/fake/home/.claude-d');
   });
 
-  // `SessionRecord.wrapper` is an untrusted string read off disk (registry
-  // fixtures write `'ghost-wrapper'` on purpose — see pr-sweep.test.ts's
-  // archiveSafety tests) — `configDirFor` must answer `undefined`, not throw
+  // `SessionRecord.wrapper` is an untrusted string read off disk (this
+  // fixture writes `'ghost-wrapper'` on purpose, standing in for a stale or
+  // renamed account) — `configDirFor` must answer `undefined`, not throw
   // and not silently build a path under a wrapper that doesn't exist.
   it('answers undefined for a wrapper the roster does not have, rather than fabricating a path', () => {
     const cfg = loadConfig({ CCRC_HOME: '/fake/home', CCRC_ACCOUNTS: ROSTER_PATH });

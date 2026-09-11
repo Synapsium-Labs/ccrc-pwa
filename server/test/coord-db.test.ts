@@ -657,9 +657,16 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 9 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(9);
-    expect(MIGRATIONS.length).toBe(9);
+  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
+    // TEN since the automations migration landed. Both parents of that merge
+    // said NINE and both were right about their own tree: `main` had taken 9
+    // for the ask pre-emption lane while this branch had taken 9 for
+    // automations, so the merge renumbered the automations entry to 10 (its
+    // own banner records both renumbers). The literal here is the point of
+    // the test — it is the one place the derivation is checked against a
+    // number a human read off the array.
+    expect(COORD_SCHEMA_VERSION).toBe(10);
+    expect(MIGRATIONS.length).toBe(10);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {

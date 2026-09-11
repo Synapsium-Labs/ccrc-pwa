@@ -1,11 +1,17 @@
 // `ccrc install` — the graphify engine step (`_inst_graphify_engine`). This
 // file mirrors `ccrc-install.test.ts`'s fixture idiom (freshBox / ccrcEnv /
-// runInstall / installFixtureTree / healthyDoctorBox) rather than importing
-// it: that file's helpers are not exported (only `installFixtureTree` is),
-// and importing a sibling `.test.ts` module for its side-effecting
-// `describe()` blocks would register that whole suite a second time. The
-// copy is deliberate, not drift — see that file's own header comment for the
-// full reasoning behind each piece copied below.
+// runInstall / healthyDoctorBox) rather than importing it: that file's
+// helpers are not exported, and importing a sibling `.test.ts` module for its
+// side-effecting `describe()` blocks would register that whole suite a second
+// time. The copy is deliberate, not drift — see that file's own header
+// comment for the full reasoning behind each piece copied below.
+//
+// The fixture TREE itself (`TREE_FILES` / `TREE_STUBS` / `installFixtureTree`)
+// is the one piece that is NOT copied: both this file and `ccrc-install.test.ts`
+// import it from `installTreeFixture.ts`, a plain module with no `describe()`
+// in it, so importing it registers no suite twice. See that module's header
+// for why the two-copy shape it replaces was a real cost, not a style
+// preference.
 //
 // HOME is a throwaway `mkTmp` directory in every test, exactly as in
 // `ccrc-install.test.ts`: this verb writes `~/.ccrc/*` and, as of this task,
@@ -14,7 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
+  copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync, symlinkSync, lstatSync, realpathSync, readlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
@@ -22,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
+import { installFixtureTree } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -41,81 +48,8 @@ const RSYNC = realPath('rsync');
 // `exec` an absolute path and never re-enter itself through `<home>/.local/bin`.
 const SED = realPath('sed');
 
-/** Same list `ccrc-install.test.ts` builds its fixture tree from — copied
- *  rather than imported for the reason at the top of this file. Grows only
- *  in step with that file's own list. */
-const TREE_FILES = [
-  'ccd/ccrc',
-  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
-  // refuses a tree without it, which is the point — a placed tree missing it
-  // would leave the box refusing builds over ccrc's own artifacts.
-  'ccd/graph-noise.default.list',
-  'ccd/ccrc-doctor-checks',
-  'ccd/ccrc-wrapper-shape',
-  'ccd/ccrc-adopt',
-  'deploy/gen-accounts.mjs',
-  'deploy/gen-wrappers.mjs',
-  'deploy/accounts.default.json',
-  'shared/generate.mjs',
-  'shared/mark.mjs',
-  'shared/roster-json.mjs',
-  'shared/wrapper.mjs',
-  'server/package.json',
-  'agent/package.json',
-  'ccd/ccd',
-  'ccd/ccd-cap-scopes',
-  // graphify Task 10 (O3/O6b): the fourth `_inst_bins` executable.
-  'ccd/ccd-graph-sweep',
-  'ccd/session-hook.sh',
-  'ccd/install-session-hooks.sh',
-  'ccd/tmux.conf',
-  'ccd/statusline-command.sh',
-  'deploy/notify.sh',
-  'deploy/systemd',
-  'deploy/ccrc.service',
-  'ccd/claude-session@.service',
-  'deploy/verify-service.sh',
-  'deploy/ccrc-agent.service',
-  'deploy/gen-auth-hash.mjs',
-  'ccd/coordinator-skill',
-  'ccd/worker-skill',
-  'ccd/install-coordinator-skill.sh',
-  'ccd/install-worker-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two,
-  // right after `_inst_skills`, through the same `_inst_atomic`. Without it
-  // in the fixture tree every test in this file (all of which run the full
-  // spine on a role other than `server`) dies at that step.
-  'ccd/install-graphify-skill.sh',
-];
-
-const TREE_STUBS: Record<string, string> = {
-  'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
-  // D-1159: `ccrc install` preflights the agent build for every role but
-  // `server`, and every test in this file installs a fleet-capable box.
-  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
-  'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
-};
-
 const treeRoot = (home: string): string => join(home, 'checkout');
 const ccrcIn = (root: string): string => join(root, 'ccd', 'ccrc');
-
-function installFixtureTree(home: string, sub = 'checkout'): string {
-  const root = join(home, sub);
-  for (const rel of TREE_FILES) {
-    const src = join(REPO, rel);
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    if (statSync(src).isDirectory()) { cpSync(src, dest, { recursive: true }); continue; }
-    copyFileSync(src, dest);
-    chmodSync(dest, statSync(src).mode & 0o777);
-  }
-  for (const [rel, body] of Object.entries(TREE_STUBS)) {
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, body);
-  }
-  return root;
-}
 
 /** `ccrc-install.test.ts`'s `healthyDoctorBox`, copied: the stub shapes a
  *  fresh box needs so the install's closing `ccrc doctor` passes. Graphify's
@@ -598,7 +532,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
     expect(m![2], 'the two counts in the same sentence disagree with each other').toBe(WORDS[n]);
   });
 
-  it('the README documents the read side as it now is — hook, skill, PATH, counter', () => {
+  it('the README documents the read side as it now is — hook, skill, PATH, counter, gate', () => {
     // The whole point of this plan, and the thing the canonical overview would
     // otherwise still describe as a block in somebody else's CLAUDE.md.
     //
@@ -637,17 +571,78 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       // reader for both chips, so an older server's omitted field cannot paint
       // an ignorant row as one that reported.
       'graphReadCount',
+      // R5's two, for the same reason (D-1613). `graphGateDenials` is the
+      // counter the gate keeps beside `graphQueries` — named nowhere else in
+      // the file — and `graph-gate-off` is the operator's kill-switch file,
+      // the one thing in the whole mechanism that has no writer in this tree
+      // and therefore nothing but prose to tell an operator it exists. A
+      // README that describes the gate without naming the file that turns it
+      // off documents a switch nobody can find.
+      'graphGateDenials',
+      'graph-gate-off',
+      // R6's two (D-1745). NOT `GRAPH_NUDGE_READ_RE`: that identifier is the
+      // hook's own spelling of graphify's extension list, harvested from the
+      // hook by `session-hook.test.ts` and pinned there — requiring it here
+      // would make the README quote a shell variable name to stay green, and
+      // the token would then be satisfied by a README that never says what
+      // the nudge DOES. What the overview owes a reader is the mechanism's
+      // name and its verb: `Read nudge` is what the paragraph is called, and
+      // `nudged` is the word the card's own armed sentence uses for what
+      // happens to a source read. A nudge the canonical overview does not
+      // mention is a mechanism nobody can find — every session on the fleet
+      // meets it, and the only place it is written down is the hook.
+      //
+      // WHAT THIS PAIR ACTUALLY BINDS, measured rather than assumed (the
+      // D-1355 lesson two comments up): deleting the R6 paragraph whole
+      // leaves BOTH tokens standing, because the hook bullet's stdout
+      // sentence names the nudge too — so the pair binds the two mentions
+      // together, not the paragraph. The paragraph itself is bound by the
+      // anchored assertion below, which is the row that went red for that
+      // deletion (1 failed / 56 passed).
+      'Read nudge',
+      'nudged',
     ]) {
       expect(readme, `the README never mentions ${token}`).toContain(token);
     }
-    // R5 is a DECISION, and the spec asks for it in writing ("Recorded so it
-    // is not re-derived", §2 R5) for the same reason the ledger exists: a
-    // decline nobody wrote down is re-proposed by the next reader of the same
-    // design. It is the one read-side item with no code to point at, so
-    // nothing but this asserts it survives an edit.
-    expect(readme.replace(/\s+/g, ' '),
-      'the README does not record the DECLINED PreToolUse speed bump — an undocumented decline gets re-derived')
+    // R5 IS A DECISION THAT WAS TAKEN TWICE, and both halves have to survive an
+    // edit. The spec asked for the DECLINE in writing ("Recorded so it is not
+    // re-derived", §2 R5) for the reason the ledger exists: a decline nobody
+    // wrote down is re-proposed by the next reader of the same design. The
+    // operator then REVERSED it on R4's own reading (D-1613, 2026-09-05), and a
+    // ruling nobody wrote down is re-litigated exactly as readily — the three
+    // grounds are still good arguments, and the next reader who meets them with
+    // no record of what answered them will make them again. So this pins BOTH,
+    // in the same 240-character window the decline was pinned within: the
+    // README records that the gate was BUILT, and it still carries the decline
+    // as the history the ruling reversed.
+    const flatReadme = readme.replace(/\s+/g, ' ');
+    expect(flatReadme,
+      'the README still records the PreToolUse speed bump only as declined — the ruling that ' +
+      'built it is not written down, and an unrecorded reversal is re-litigated')
+      .toMatch(/PreToolUse[\s\S]{0,240}?(built|ruling)/i);
+    // ANCHORED on the same window, not the whole file: the bare word is
+    // satisfied 470 lines away by an unrelated paragraph ("declined, not
+    // forgotten", the unread bucket), so a whole-file /declined/ stayed green
+    // with the R5 history deleted — measured, D-1691. The sliced guard in the
+    // describe below caught it; this one now catches it on its own too.
+    expect(flatReadme,
+      'the README no longer says the gate was declined first — without that history the three ' +
+      'grounds get re-derived as if nothing had ever answered them')
       .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
+    // R6 IS THE OTHER HALF OF THE SAME RULING, and the half a reader gets
+    // wrong by default. The gate denies; the nudge sitting beside it in the
+    // same `PreToolUse` arm does NOT, and a README that documents "a Read
+    // nudge" without saying so leaves every reader — and every operator
+    // reading a complaint about a blocked session — to assume the gate's own
+    // shape. The distinction is the ruling itself (`Edit` requires a prior
+    // `Read`), so it has to survive an edit of the paragraph that carries it.
+    // ANCHORED on the paragraph's own opener, in the same window idiom as the
+    // two above, so the phrase cannot be satisfied from somewhere else in a
+    // 2000-line file.
+    expect(flatReadme,
+      'the README describes the Read nudge without saying it is not a deny — the one thing ' +
+      "that distinguishes it from the gate it sits beside, and the ruling's own reason")
+      .toMatch(/Read nudge[\s\S]{0,600}?nudge, not a deny/i);
   });
 
   it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
@@ -673,7 +668,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
-describe("R5's decline defers to a number nobody was told to take (D-1365)", () => {
+describe("R5's decline deferred to a reading nobody was told to take — it was taken (D-1365, D-1613)", () => {
   // THE GAP THIS CLOSES. §2 R5 declines the `PreToolUse` speed bump on three
   // grounds, and the third is CONDITIONAL ON A MEASUREMENT: "R4 makes adoption
   // measurable. Gate **after** the number says the card and the clause did not
@@ -691,6 +686,21 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
   // criterion nobody can evaluate is the same shape as the state the spec
   // criticises three sections earlier ("5/5 homes converged was shape; this is
   // effect"). Both R5 texts now say how the figure is actually taken.
+  //
+  // AND THEN SOMEBODY TOOK IT (D-1613, 2026-09-05). The act this guard forced
+  // both texts to state was performed two days after the read side deployed —
+  // 4 graph queries fleet-wide, 10 of 18 live sessions still at `graphQueries`
+  // 0 — recorded in the ledger each text names, and the operator ruled on that
+  // reading: the gate is built. So the criterion is no longer the live half of
+  // this pin; the RECORD is. A text that still defers to a reading nobody has
+  // taken describes a decision this tree has already reversed, which is the
+  // same staleness one step on, so each text must now name the entry the
+  // reading was recorded under and that entry must be IN the ledger it names.
+  // Everything else here is unchanged and still load-bearing: the premise is
+  // still measured off the tree (nothing persists either counter, so the next
+  // reading — the gate's own effect — is another sample), the destination is
+  // still extracted and checked on disk, and the reset word is still
+  // harvested from the hook.
   //
   // DERIVED THREE WAYS, so this is not a spelling test:
   //  1. THE PREMISE is measured off the tree. If somebody later persists the
@@ -740,19 +750,27 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
     return body;
   };
 
-  it('graphQueries lives only in the two live-state sites — the premise both texts state', () => {
-    const root = path.resolve(REPO, 'server/src');
-    const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
-      .filter((f) => f.endsWith('.ts'))
-      .filter((f) => readFileSync(path.join(root, f), 'utf8').includes('graphQueries'))
-      .map((f) => f.split(path.sep).join('/'))
-      .sort();
-    expect(hits,
-      'a third server-side site now names graphQueries — if it PERSISTS the count (a run row, ' +
-      "coord.db, a log), R5's revisit reads a series rather than a sample and both R5 texts " +
-      'must be re-derived against it')
-      .toEqual(['fleet.ts', 'hookstate.ts']);
-  });
+  // BOTH counters, since D-1613: the gate's denials are the next reading, and
+  // they are kept exactly the way the queries are — live state on the hookstate
+  // the hook rewrites, carried onto `FleetSession`, and nowhere else. If either
+  // one grows a third server-side site that PERSISTS it, the reading stops
+  // being a sample and both R5 texts have to be re-derived against the series
+  // that then exists.
+  for (const field of ['graphQueries', 'graphGateDenials']) {
+    it(`${field} lives only in the two live-state sites — the premise both texts state`, () => {
+      const root = path.resolve(REPO, 'server/src');
+      const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
+        .filter((f) => f.endsWith('.ts'))
+        .filter((f) => readFileSync(path.join(root, f), 'utf8').includes(field))
+        .map((f) => f.split(path.sep).join('/'))
+        .sort();
+      expect(hits,
+        `a third server-side site now names ${field} — if it PERSISTS the count (a run row, ` +
+        "coord.db, a log), R5's readings are a series rather than a sample and both R5 texts " +
+        'must be re-derived against it')
+        .toEqual(['fleet.ts', 'hookstate.ts']);
+    });
+  }
 
   for (const c of R5) {
     it(`${c.label}: the revisit criterion names an act, and the ledger it is recorded in exists`, () => {
@@ -777,12 +795,41 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
       expect(readFileSync(destPath, 'utf8'),
         `${dest![0]} carries no "## Deviations found" ledger for the reading to land in`)
         .toContain('## Deviations found');
+      // D-1613 — AND THE READING LANDED THERE. The act is done, so a text that
+      // describes it in the future tense is describing a decision that has
+      // already been reversed. Each text names the entry, and the entry is
+      // read back out of the ledger the text itself pointed at: naming a
+      // number that is not in that file is the same defect as naming a file
+      // that does not exist, one turn later.
+      expect(flat,
+        `${c.label} says the reading is recorded in ${dest![0]} but never names the entry — the ` +
+        'reader is sent to a ledger of some 200 deviations with nothing to look up')
+        .toContain('D-1613');
+      expect(readFileSync(destPath, 'utf8'),
+        `${dest![0]} carries no D-1613 entry, so the reading ${c.label} points at is not there`)
+        .toMatch(/\*\*D-1613\*\*/);
     });
   }
 
+  it('the spec records the RULING as a section of its own, not a footnote to the decline', () => {
+    // The decline stays (this guard's whole first half depends on it), so the
+    // ruling cannot be a rewrite of it — it is a second section, and the slice
+    // above deliberately spans both. Delete the heading and the built design
+    // reads as an appendix to the argument against it: the next reader meets
+    // the three grounds first and the answer to them as commentary.
+    expect(spec, "the spec's `### R5 — built` section is gone — the decline is left standing as " +
+      'the design of a gate this tree ships')
+      .toMatch(/^### R5 — built\b/m);
+    expect(spec, 'the spec no longer carries the decline the ruling reversed')
+      .toMatch(/^### R5 — declined\b/m);
+  });
+
   it('both R5 texts explain the sampling by the source the hook actually exempts (harvested)', () => {
     const m = hook.match(
-      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0; fi/);
+      // D-1613 put the gate's denial counter on this same line (`gq=0; gd=0;`),
+      // so what is pinned is the reset and the source it exempts, not how many
+      // counters ride it.
+      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0;[^\n]*fi/);
     expect(m, "the hook's graphQueries reset moved or was rewritten — re-derive this guard")
       .not.toBeNull();
     for (const c of R5) {
@@ -824,7 +871,12 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  exports it, and a helper module extracted for three call sites would put
    *  the vocabulary one indirection away from the file that WRITES it. */
   const FRESHNESS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    // D-1613 moved these assignments out of `_hook_graph_card` and into
+    // `_hook_graph_measure`, which the card and the R5 search gate both read,
+    // and the locals became `GM_*` globals with them. The harvest follows the
+    // spelling — it threw the error below on the rename, which is the mechanism
+    // working: a doc pinned to words the hook no longer prints is the failure.
+    const vals = [...hook.matchAll(/\bGM_FRESH="([^"]+)"/g)].map((m) => m[1]!);
     if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
       'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
       'looking at the wrong file');
@@ -845,7 +897,9 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  reason the states are. Leading punctuation is stripped so the pin is on
    *  the words, not on the em dash that joins them. */
   const QUALIFIERS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+    // The qualifier's spelling followed the same D-1613 rename as the words
+    // above: one measurement, `_hook_graph_measure`, read by the card and the gate.
+    const vals = [...hook.matchAll(/\bGM_FRESH\+="([^"]+)"/g)]
       .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
     if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
       'all — the card was rewritten, and the README bullet that names one has to be re-derived ' +
@@ -894,7 +948,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // the `if/elif` chain decides them, and the claim is only that the `ahead`
     // arm is first. `-gt 0` could become `-ge 1` without changing the rule, and
     // a guard that reddens on that teaches the next editor to delete it.
-    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then fresh=/g)]
+    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then GM_FRESH=/g)]
       .map((m) => m[1]!);
     expect(arms.length, 'ccd/session-hook.sh no longer decides freshness on an `ahead`/`behind` ' +
       'chain — this pin is looking at the wrong file').toBeGreaterThan(1);
@@ -912,7 +966,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // README promised for that very case until D-1369. Nothing here pins a
     // spelling of either predicate, only which one decides first.
     const content = hook.indexOf('_hook_same_tree "$cwd"');
-    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$GM_BUILT...HEAD"');
     expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
       'looking at the wrong file').toBeGreaterThanOrEqual(0);
     expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
@@ -1427,6 +1481,179 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     runInstall(home, ['install', '--role', 'server']);
     expect(readFileSync(f, 'utf8'), 'a server box has no rostered homes to clear')
       .toContain(START);
+  });
+});
+
+// ── TWO ROSTERED HOMES, and what "every home" could not mean until now ────
+// D-1456. `deploy/accounts.default.json` declares ONE account, so every
+// fixture above seeds a one-home box: each "every rostered home" step in this
+// file is measured against a single directory, and the suite cannot tell
+// "every" from "at least one". The shared-file case the symlink resolution
+// cites as its own motivation — two homes pointing at ONE physical CLAUDE.md,
+// the live fleet's ordinary shape — was exercised only through a dotfiles
+// target OUTSIDE the homes, which puts the write on the `mv` path but leaves
+// the COUNTERS unbound. D-1244's plan wrote that gap down rather than closing
+// it ("Known, and deliberately not fixed here": "the `$n`/`$same` counters
+// double-counting one physical file is unmeasured. A two-account fixture would
+// close all three and is the next thing to do here."). This is that fixture.
+//
+// THE ROSTER IS PLANTED, NOT PATCHED. `_inst_roster` seeds the shipped
+// single-account default ONLY when `$HOME/.ccrc/accounts.json` is absent — an
+// existing roster is user-owned and never overwritten (`ccd/ccrc`,
+// `_inst_roster`) — so writing the file before the run is the supported door,
+// and `_inst_accounts_sh` then GENERATES the `accounts.sh` every step below
+// reads through `_ccrc_cfg_dir`. Nothing here hand-writes that projection: a
+// roster this suite generated the same way the box does is the only kind whose
+// `CCRC_ACCOUNTS` order, config dirs and hues are the real ones.
+//
+// `exec.kind: external` ON THE SECOND ACCOUNT, for a fixture reason with
+// teeth. Exactly one account may be `upstream` (`shared/roster-json.mjs`:
+// "the roster has N upstream accounts: exactly one account must have exec.kind
+// upstream"), so the second cannot be that; `generated` would put
+// `_inst_wrappers` to work writing a launcher this describe is not about,
+// while `external` is the one kind ccrc never writes at all ("upstream and
+// external are never written"). The account is still fully rostered — it gets
+// a config dir from `_inst_dirs` and a `_ccrc_cfg_dir` arm like any other —
+// which is all any step measured below asks of it.
+const SECOND_SUFFIX = '.claude-second';
+
+/** Plant a TWO-account roster and answer both homes' config dirs, in the
+ *  order `CCRC_ACCOUNTS` will carry them (declaration order — `shared/generate.mjs`
+ *  emits `_ccrc_cfg_dir`'s arms length-descending but the ARRAY in roster order). */
+function seedTwoAccountRoster(home: string): [string, string] {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify({
+    version: 1,
+    accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'second', label: 'second', configDirSuffix: SECOND_SUFFIX,
+        exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'anthropic' },
+    ],
+  }, null, 2)}\n`);
+  // THE EXTERNAL ACCOUNT'S LAUNCHER IS THE OPERATOR'S, and doctor measures that
+  // it exists: `FAIL wrappers: second has no executable at $HOME/.local/bin/second`
+  // is what a run without this line ends on, and `install` exits with doctor's
+  // code. ccrc never writes this file for an `external` account — that is the
+  // whole meaning of the kind — so the fixture writes it, exactly as the
+  // operator who declared the account would have.
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'second'),
+    '#!/bin/sh\n# fixture: an external account\'s hand-written launcher\nexit 0\n', { mode: 0o755 });
+  return [join(home, '.claude'), join(home, SECOND_SUFFIX)];
+}
+
+describe('ccrc install: EVERY rostered home, measured against two of them (D-1456)', () => {
+  const START = '<!-- ccrc:graphify-always-on:start -->';
+  const END = '<!-- ccrc:graphify-always-on:end -->';
+  const BLOCK = `${START}\n## graphify\n\n- first run \`graphify query\`\n${END}`;
+
+  /** The roster really did reach the box: a run that seeded the shipped
+   *  single-account default instead would make every row below a statement
+   *  about one home wearing two names. Asserted from the GENERATED projection,
+   *  not from the JSON this fixture wrote. */
+  const rosteredAccounts = (home: string): string => {
+    const sh = readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8');
+    return /^CCRC_ACCOUNTS=(.*)$/m.exec(sh)?.[1] ?? '';
+  };
+
+  it('clears the always-on block from BOTH homes, and its count line says 2', () => {
+    const home = freshBox('ccrc-inst-gfx-two-off-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    for (const d of [a, b]) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'CLAUDE.md'), `# head\n\n- operator line\n\n${BLOCK}\n\n## TAIL\n- keep me\n`);
+    }
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    // BOTH files, byte-identically around the block. A remover that stops after
+    // the first home leaves the second one's stale instruction in place — the
+    // exact failure "every rostered home" was never able to distinguish.
+    for (const d of [a, b]) {
+      expect(readFileSync(join(d, 'CLAUDE.md'), 'utf8'), `${d} still carries the block`)
+        .toBe('# head\n\n- operator line\n\n## TAIL\n- keep me\n');
+    }
+    // AND THE COUNT, because the files alone do not bind it: the step reports
+    // what it did, and a report that says 1 while clearing 2 is the same class
+    // of untrue sentence D-1454 found in doctor.
+    expect(r.stdout).toMatch(/always-on read rule — 2 home\(s\) cleared, 0 left in place/);
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+  });
+
+  it('converges the worker skill and the graphify skill into BOTH homes', () => {
+    // `_inst_skills` and `_inst_graphify_skill` both enumerate homes out of
+    // `accounts.sh` (`install-worker-skill.sh`, `install-graphify-skill.sh`:
+    // `for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")")`),
+    // and until this fixture existed that loop ran exactly once on every box
+    // this suite built — so "each account's skills directory", the sentence
+    // both steps print, was a claim no row could contradict.
+    const home = freshBox('ccrc-inst-gfx-two-skills-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    for (const d of [a, b]) {
+      expect(existsSync(join(d, 'skills', 'ccrc-worker', 'SKILL.md')),
+        `${d} has no ccrc-worker skill`).toBe(true);
+      // The graphify skill's body is the PACKAGE's, copied verbatim — so this
+      // asserts the assembled bytes, not merely a file at a path.
+      expect(readFileSync(join(d, 'skills', 'graphify', 'SKILL.md'), 'utf8'),
+        `${d}'s graphify SKILL.md is not the package's body`).toBe(skillMd(PKG_DESCRIPTION));
+      expect(readFileSync(join(d, 'skills', 'graphify', '.graphify_version'), 'utf8').trim(),
+        `${d} carries no version stamp`).toBe('0.9.9');
+    }
+  });
+
+  it('counts ONE physical file once when two homes share it through a symlink', () => {
+    // THE CASE D-1244 NAMED AND COULD NOT REACH. Two rostered homes, one
+    // physical CLAUDE.md: the second home's path is a symlink to the first's
+    // file, which is the live fleet's own shape ("Two homes on this fleet ARE
+    // symlinks to a third's file, so this is the ordinary case, not the exotic
+    // one" — `_inst_graph_always_on_off`). The step resolves the link, finds
+    // the block already gone, and must count the physical file ONCE: the
+    // remover cleared one file, not two, and it says so.
+    const home = freshBox('ccrc-inst-gfx-two-shared-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    for (const d of [a, b]) mkdirSync(d, { recursive: true });
+    const real = join(a, 'CLAUDE.md');
+    const PRE = `# shared\n\n${BLOCK}\n`;
+    writeFileSync(real, PRE);
+    symlinkSync(real, join(b, 'CLAUDE.md'));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    // THE PREMISE, ASSERTED BEFORE THE EFFECT (D-1457) — this row is the one that cannot
+    // see its own fixture degrade. Every assertion below is satisfied by a
+    // ONE-home run: with only `.claude` rostered the remover clears the real
+    // file, leaves `b/CLAUDE.md` an untouched symlink, prints the same
+    // `1 home(s) cleared, 0 left in place`, and cuts the same single backup.
+    // Rows 1 and 2 are bound by effect (two files, two skill trees); this one
+    // is bound only by this line.
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    expect(readFileSync(real, 'utf8')).toBe('# shared\n');
+    expect(lstatSync(join(b, 'CLAUDE.md')).isSymbolicLink(), 'the alias was replaced by a file')
+      .toBe(true);
+    // ONE, not two. The alias is the same inode; a counter that adds a home
+    // rather than a file reports a second clearance that never happened.
+    expect(r.stdout).toMatch(/always-on read rule — 1 home\(s\) cleared, 0 left in place/);
+    // …and the DEGRADED accounting agrees: nothing was left in place, so the
+    // landing line names no `graphify-read-rule` at all.
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).not.toMatch(/graphify-read-rule/);
+    // EXACTLY ONE BACKUP of that physical file, for the reason the idempotence
+    // row above states: two copies under one run would mean the remover visited
+    // the same physical path twice.
+    const backupsRoot = join(home, 'ccrc-backups');
+    const copies = (existsSync(backupsRoot) ? readdirSync(backupsRoot) : []).flatMap((d) =>
+      readdirSync(join(backupsRoot, d)).filter((f) => f.endsWith('_CLAUDE.md')));
+    expect(copies.length, 'the shared physical file was backed up once per home, not once')
+      .toBe(1);
   });
 });
 

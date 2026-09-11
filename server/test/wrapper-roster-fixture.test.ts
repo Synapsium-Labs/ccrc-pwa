@@ -35,7 +35,7 @@
 // this file's own first draft, and it has a hole: it only ever asks ccd
 // about wrappers the mirror already knows, so a lane ccd grew on its own was
 // invisible to it. That used to be a live hazard — the established idiom for
-// adding an opt-in lane was a literal appended after `${VALID_WRAPPERS[@]}`
+// adding an overflow lane was a literal appended after `${VALID_WRAPPERS[@]}`
 // plus new `_cfg_dir`/`_id_wrapper` case arms, per `gpt`'s own precedent —
 // and it is now structurally impossible, because there is nowhere in ccd to
 // append one. The bidirectional form stays anyway: it is what NOTICES that,
@@ -161,7 +161,7 @@ describe('ccd _is_valid_wrapper agrees with CCD_MIRROR.ccdValid', () => {
   it("ccd -> roster: _is_valid_wrapper's own accepted set is exactly the mirror's ccd-valid set", () => {
     // `_is_valid_wrapper`'s body used to be `for v in "${VALID_WRAPPERS[@]}"
     // gpt; do ... done` — the home-able array plus literal EXTRAS appended
-    // after it, the established idiom for adding an opt-in ccd-valid lane —
+    // after it, the established idiom for adding an overflow ccd-valid lane —
     // and this parsed that tail to catch a lane ccd grew that the roster never
     // heard of. It now iterates CCRC_ACCOUNTS, which comes from the roster, so
     // the tail must be EMPTY: a literal appended here would be exactly the

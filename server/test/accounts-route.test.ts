@@ -8,8 +8,10 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountsResponse, AccountUsage } from '../../shared/api.js';
+import { loadConfig } from '../src/config.js';
 import { buildServer } from '../src/server.js';
-import { testDeps } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { mkTmp } from './tmpHelpers.js';
 
 /** The route calls readLimits without a clock, so fixtures live against real now. */
@@ -30,6 +32,29 @@ function seedLimits(files: Record<string, unknown>): string {
  *  compile error here rather than a value that silently never arrives. */
 async function getPayload(home: string): Promise<AccountsResponse> {
   const app = await buildServer(testDeps(home));
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+    expect(res.statusCode).toBe(200);
+    return res.json() as AccountsResponse;
+  } finally {
+    await app.close();
+  }
+}
+
+/** `testDeps` seeds `DEFAULT_TEST_ROSTER` into the home it is handed; this
+ *  re-seeds a different roster over that file and rebuilds the config from it,
+ *  so the route answers over a roster that actually carries pool tags. Two
+ *  `loadConfig` calls, not one, because the roster is read once at boot.
+ *
+ *  ONLY safe for routes that never shell out: `base.runCcd` was built by
+ *  `testDeps` against the FIRST config, so a route reading `cfg.ccdBin` through
+ *  the runner would be running against the pre-swap one. `GET /api/accounts`
+ *  touches neither, which is why this shortcut is enough here and would not be
+ *  enough for a swap or sessions route. */
+async function getPayloadWithRoster(home: string, rosterJson: unknown): Promise<AccountsResponse> {
+  const base = testDeps(home);
+  seedRoster(home, rosterJson);
+  const app = await buildServer({ ...base, cfg: loadConfig({ CCRC_HOME: home }) });
   try {
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.statusCode).toBe(200);
@@ -60,12 +85,12 @@ describe('GET /api/accounts', () => {
     expect(byWrapper['claude']).toEqual({
       wrapper: 'claude', five: 0, seven: 93, ts: t - 120,
       fiveResetAt: t - 60, sevenResetAt: t + 200000,
-      fiveRolledOver: true, sevenRolledOver: false, disabled: false,
+      fiveRolledOver: true, sevenRolledOver: false, disabled: false, authDead: false,
     });
     expect(byWrapper['claude-a']).toEqual({
       wrapper: 'claude-a', five: 0, seven: 12, ts: t - 60,
       fiveResetAt: t + 9000, sevenResetAt: t + 400000,
-      fiveRolledOver: false, sevenRolledOver: false, disabled: false,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
     });
     // The whole point: two accounts both reading five=0, told apart only by
     // the flag. If the map drops it, these two become indistinguishable.
@@ -164,11 +189,11 @@ describe('GET /api/accounts', () => {
     // every entry looks like an account — exactly the silent loss this file
     // exists to catch.
     expect(roster).toEqual([
-      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false },
-      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false },
-      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false },
-      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false },
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null },
     ]);
   });
 
@@ -179,9 +204,33 @@ describe('GET /api/accounts', () => {
   // drawn — this asserts the line is real on the wire, not just in the type.
   it('ships no launch or secrets detail to the browser', async () => {
     const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
+    // The loop below is the assertion, and a loop over an empty array runs no
+    // assertion at all: a handler that shipped `roster: []` — the exact silent
+    // wire loss this file exists to catch — would pass it green. `testDeps`
+    // seeds `DEFAULT_TEST_ROSTER`, which has five accounts, so the count is a
+    // fact about the fixture and not a guess about the handler.
+    expect(roster).toHaveLength(5);
     for (const entry of roster) {
-      expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label']);
+      expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label', 'pool']);
     }
+  });
+
+  // The account half of project pools reaches the phone here and nowhere else.
+  // `null` for an untagged account is a VALUE on this wire, not an omission:
+  // the PWA's single reader (wave 4) must answer `null` for an absent key too
+  // (an older server), and both must mean "untagged" — the permissive
+  // direction. What must never happen is a handler that quietly drops the field
+  // and makes every account look untagged on a fleet where pools are enforced.
+  it('carries each account\'s pool, and null for the untagged ones', async () => {
+    const { roster } = await getPayloadWithRoster(
+      seedLimits({ claude: { five: 2, seven: 3 } }), POOLED_TEST_ROSTER);
+    expect(roster.map((a) => [a.id, a.pool])).toEqual([
+      ['claude', 'pool-a'],
+      ['claude-a', 'pool-a'],
+      ['claude-b', 'pool-b'],
+      ['gpt', null],
+      ['claude-d', null],
+    ]);
   });
 
   // The handler rebuilds each AccountUsage field by field, so a field it forgets
@@ -209,5 +258,18 @@ describe('GET /api/accounts', () => {
     const accounts = await getAccounts(home);
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
     expect(accounts.find((a) => a.wrapper === 'autocompact')).toBeUndefined();
+  });
+
+  it('carries authDead onto the wire', async () => {
+    // `AccountUsage` is restated by hand in three places, and this is the field
+    // that would go missing in the third: the route builds its rows field by
+    // field, so nothing but a test notices a dropped copy.
+    const home = seedLimits({ claude: { five: 2, seven: 3 }, 'claude-a': { five: 1, seven: 1 } });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'claude-authdead'), '1757203200 auth-401');
+    const accounts = await getAccounts(home);
+    const byWrapper = Object.fromEntries(accounts.map((a) => [a.wrapper, a]));
+    expect(byWrapper['claude'].authDead).toBe(true);
+    expect(byWrapper['claude-a'].authDead).toBe(false);
   });
 });

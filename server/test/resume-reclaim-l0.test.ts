@@ -117,16 +117,20 @@ describe('the sixth refusal union', () => {
     // ever, a guard accepts a member added later and still rejects a typo'd one.
     const src = readFileSync(path.join(root, 'server/test/mail-routes.test.ts'), 'utf8');
     expect(src).toContain('|| isReclaimRefuseCode(tok)');
-    // …imported, not just mentioned in prose. This reads the import BLOCK rather
-    // than the literal `isReclaimRefuseCode }`, which was an accidental encoding of
-    // that property: it held only while the symbol happened to sit LAST in a
-    // one-line import, and died the moment a second vocabulary joined that import
-    // and reflowed it. `[^}]*` cannot cross a closing brace, so the capture is that
-    // one specifier list — a mention in a comment between imports is not in it.
-    const apiImport = /import\s*\{([^}]*)\}\s*from\s*'[^']*shared\/api\.js'/.exec(src);
-    expect(apiImport, "mail-routes.test.ts no longer imports a specifier list from "
-      + "'shared/api.js' — this harvest is reading a shape that moved").not.toBeNull();
-    expect((apiImport as RegExpExecArray)[1]!).toContain('isReclaimRefuseCode');
+    // …imported, not just mentioned in prose — read the NAMED-IMPORT LIST off
+    // `shared/api.js`'s own import line and require the guard to be one of its
+    // members. BOTH SIDES OF THIS MERGE FIXED THE SAME DEFECT (the old form
+    // anchored on the literal `isReclaimRefuseCode }`, which held only while
+    // that symbol happened to sit LAST in a one-line import and died the
+    // moment a second vocabulary joined it and reflowed it — `main` hit it
+    // with `isAskRefuseCode`, the automations branch with four automation
+    // guards). This is main's version, kept because it is the stronger of the
+    // two: a comma-separated MEMBERSHIP check rather than a substring one, so
+    // a longer sibling (`isReclaimRefuseCodeX`) cannot satisfy it.
+    const apiImport = /import \{([\s\S]*?)\} from '\.\.\/\.\.\/shared\/api\.js';/.exec(src);
+    expect(apiImport, "mail-routes.test.ts's shared/api.js import line moved shape").not.toBeNull();
+    const apiImportNames = (apiImport as RegExpExecArray)[1]!.split(',').map((s) => s.trim());
+    expect(apiImportNames).toContain('isReclaimRefuseCode');
     const notCodes = /const NOT_CODES = new Set\(\[([\s\S]*?)\n\s*\]\);/.exec(src);
     expect(notCodes, 'mail-routes.test.ts no longer declares `const NOT_CODES = new Set([...]);` — '
       + 'this harvest is reading a shape that moved, and a silent miss would pass everything').not.toBeNull();

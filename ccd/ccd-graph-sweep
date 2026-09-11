@@ -61,6 +61,41 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
   printf '%s' "$p"
 }
 
+# D-1562 — WHICH REGISTERED SESSION LIVES ON THIS TREE, ASKED ONCE AND ASKED BY
+# REALPATH. The idle gate used to answer it inline with
+# `[ "$(cat "$wd")" = "$tree" ]` — the registry's `<id>.workdir` TEXT against
+# the census's glob spelling of the tree — and those two are the same string
+# only by luck. `$PROJECTS_ROOT` on the live box is a symlink (`~/projects ->
+# /data/projects`, itself a symlink onto the volume), so a project-root
+# session's workdir reads the canonical name while the sweep names that same
+# tree through `$HOME`. MEASURED 2026-09-05 against the live registry: 13 of 18
+# workdirs match a census path as a string, 18 of 18 match by realpath — and
+# the five that never matched are the five project-root and `.claude/worktrees`
+# sessions, EXACTLY the trees the gate exists to protect from a build under a
+# working session. Every one had read `idle` on every pass since the gate
+# shipped; the O3 escape hatch never got a say. Same shape as D-1367's realpath
+# dedupe and D-1449's "compare git's truth, not its quoting".
+#
+# An unreadable or unresolvable workdir is SKIPPED, never matched: _gs_realpath
+# answers nothing rather than empty-equals-empty (its own contract), and two
+# unmeasurable paths comparing equal is what would hand a tree the wrong
+# session. D-1563 asks this same question of a `.claude/worktrees` candidate,
+# which is why it lives here and not inside the gate.
+_gs_session_on() {   # <tree> -> the session id whose workdir names it, or nothing
+  local tree="$1" want wd txt
+  want="$(_gs_realpath "$tree")" || return 1
+  for wd in "$REG"/*.workdir; do
+    [ -f "$wd" ] || continue
+    txt="$(cat "$wd" 2>/dev/null)" || continue
+    [ -n "$txt" ] || continue
+    txt="$(_gs_realpath "$txt")" || continue
+    [ "$txt" = "$want" ] || continue
+    basename "$wd" .workdir
+    return 0
+  done
+  return 1
+}
+
 # D-1367 — A TREE IS A TOPLEVEL, NEVER A DIRECTORY INSIDE ONE.
 #
 # The old predicate was `git rev-parse --is-inside-work-tree`, which is true of
@@ -88,13 +123,13 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # to whichever root is listed first ($PROJECTS_ROOT), i.e. to the alias.
 #
 # That matters because of the contract in the next paragraph: the row keeps the
-# path AS GLOBBED, not the canonical one — `$REG/<id>.workdir` and the hook's
-# `cwd` are compared against it VERBATIM (`_gs_busy`'s string compare;
-# `ccd/session-hook.sh`'s `.path == $p` census lookup), and canonicalising the
-# census would silently unmatch every reader. A census carrying the ALIAS
-# unmatches them just as silently for a session recorded under the real name:
-# no idle-gate match (the sweep builds while that session is `working`, the one
-# thing the gate exists to prevent) and no "the sweep refused this tree" card.
+# path AS GLOBBED, not the canonical one — the hook's `cwd` is compared against
+# it VERBATIM (`ccd/session-hook.sh`'s `.path == $p` census lookup), and
+# canonicalising the census would silently unmatch that reader. A census
+# carrying the ALIAS unmatches it just as silently for a session recorded under
+# the real name: no "the sweep refused this tree" card. (The idle gate was the
+# other such reader until D-1562 taught it to compare realpaths; the card's
+# lookup still is.)
 # MEASURED: with a real tree at `~/worktrees/foo` and `~/projects/foo` a
 # symlink to it, the pass carried exactly one row and it was the alias.
 #
@@ -112,10 +147,46 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # IS one. Two aliases (or two names under symlinked ancestors) leave the
 # first-seen standing — there the names are equally arbitrary and only the
 # count matters.
+#
+# D-1510 — AND CLAUDE CODE'S OWN WORKTREES ARE TREES. `EnterWorktree` puts a
+# session's worktree at `<repo>/.claude/worktrees/<name>`, a real toplevel at a
+# depth none of the first three globs reaches, so the sweep never saw it and
+# nothing ever rebuilt its graph. MEASURED on the live fleet 2026-09-05: a
+# session in `$PROJECTS_ROOT/<repo>/.claude/worktrees/<name>` over a graph.json
+# a week old with no `.graphify_engine` beside it — not this sweep's build —
+# reading fresh only because no commit had landed there yet. The last THREE
+# globs below ask the same toplevel question of that shape — one per shape of
+# workspace the fleet has, because `$WORKTREES_ROOT/<name>` is itself a toplevel
+# (D-1367) and its `.claude/worktrees/<x>` therefore sits one level shallower
+# than a depth-2 workspace's (review finding: the depth-1 shape was missed).
+# Nothing else changes (the noise-list key is the basename of
+# `--git-common-dir`'s parent, so it already resolves to the PARENT project, and
+# the default noise list withholds `.claude/` from the parent's own corpus
+# unless that repo tracks files there).
+#
+# D-1563 — AND ONE IS A TREE ONLY WHILE A SESSION LIVES IN IT. D-1510's three
+# globs found 15 directories on the live fleet, 14 of them git toplevels: ONE
+# named worktree with a registered session (the tree D-1510 was written for),
+# three named ones with no session, and TEN minted by Claude Code's own
+# isolation — `agent-<hex>` subagent worktrees and `wf_<run>-<n>` workflow
+# ones, six touched within the hour and five a fortnight old. The pass built
+# eight of them cold at ~75 s each, ran eleven minutes against the two it took
+# before, and recorded `skipped-budget` for eight trees — the one the rule was
+# written for among them. Every future workflow with worktree isolation would
+# mint more. The rule that was missing is the one the idle gate already states:
+# A TREE IS WORTH A BUILD BECAUSE A SESSION LIVES IN IT. So a candidate under
+# `.claude/worktrees/` is kept only while some `$REG/<id>.workdir` names it,
+# `_gs_realpath` on both sides (D-1562's comparison, spelled once). The
+# project roots and the ccd workspaces are unchanged — the operator put those
+# there. A subagent's `agent-*` worktree is never a session's workdir, so it is
+# never built; a named worktree a session later enters is picked up next pass.
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   local d top real i dup
   local -a seen=() named=()
-  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
+  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/ \
+           "$PROJECTS_ROOT"/*/.claude/worktrees/*/ \
+           "$WORKTREES_ROOT"/*/.claude/worktrees/*/ \
+           "$WORKTREES_ROOT"/*/*/.claude/worktrees/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
     top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || continue
@@ -123,6 +194,12 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
     top="$(_gs_realpath "$top")" || continue
     real="$(_gs_realpath "$d")" || continue
     [ "$top" = "$real" ] || continue
+    # D-1563: the path decides, not which glob produced it — a candidate under
+    # `.claude/worktrees/` is Claude Code's, and it is a tree only while a
+    # registered session lives in it.
+    case "$d" in
+      */.claude/worktrees/*) _gs_session_on "$d" >/dev/null || continue ;;
+    esac
     dup=-1
     if [ "${#seen[@]}" -gt 0 ]; then
       for i in "${!seen[@]}"; do
@@ -179,13 +256,24 @@ _gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
   [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
 }
 
+# D-1509 — ONE SPELLING OF "THE STAMP". `built_at_commit` is read by the
+# freshness predicate, by the idle gate's escape hatch and — since D-1509 — by
+# the build itself, which re-measures it to find out whether the engine wrote
+# anything at all. Three hand-written `jq -r '.built_at_commit // empty'` reads
+# are three places a later change can part; the restamp splices the value this
+# helper reads, so a second spelling here is a restamp that verifies one field
+# and rewrites another.
+_gs_stamp() {    # <tree> -> graph.json's built_at_commit, or nothing
+  jq -r '.built_at_commit // empty' "$1/graphify-out/graph.json" 2>/dev/null
+}
+
 _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
-  local tree="$1" head built stamp
+  local tree="$1" head built pin_stamp
   head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || { REASON=unreadable-head; return 0; }
   [ -f "$tree/graphify-out/graph.json" ] || { REASON=never-built; return 0; }
-  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
-  stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
-  [ "$stamp" = "$PIN" ] || { REASON=engine; return 0; }
+  built="$(_gs_stamp "$tree")"
+  pin_stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
+  [ "$pin_stamp" = "$PIN" ] || { REASON=engine; return 0; }
   if [ "$built" != "$head" ]; then
     _gs_same_tree "$tree" "$built" || { REASON=head; return 0; }
   fi
@@ -200,11 +288,10 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
 : "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"
 BUSY_OUTCOME=""; BUSY_REASON=""
 _gs_busy() {
-  local tree="$1" id="" wd hs pid wrapper cfg sf now age
-  for wd in "$REG"/*.workdir; do
-    [ -f "$wd" ] || return 1
-    if [ "$(cat "$wd")" = "$tree" ]; then id="$(basename "$wd" .workdir)"; break; fi
-  done
+  local tree="$1" id="" hs pid wrapper cfg sf now age
+  # D-1562 — one spelling of "which session lives here", and it compares
+  # realpaths: the registry and the census need not spell a tree alike.
+  id="$(_gs_session_on "$tree")" || id=""
   [ -n "$id" ] || return 1                       # no session on this tree -> idle
   hs="$REG/$id.hookstate.json"
   [ -f "$hs" ] || return 1
@@ -220,7 +307,7 @@ _gs_busy() {
   [ "$(jq -r '.state // empty' "$sf" 2>/dev/null)" = working ] || return 1
   # O3 escape hatch: bounded staleness beats politeness past the thresholds.
   local built commits stamp_age
-  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
+  built="$(_gs_stamp "$tree")"
   if [ -n "$built" ]; then
     # D-1368: the same predicate, once more and spelled once — `rev-list
     # --count "$built..HEAD"` for a NON-ANCESTOR counts everything since the
@@ -283,6 +370,57 @@ _gs_rm_generated() {   # remove ONLY a filter this sweep generated — never a f
   rm -f "$t/.graphifyignore"
 }
 _gs_disarm() { trap - EXIT INT TERM; GS_FILTER_TREE=""; }
+
+# D-1458 — the generated filter is opened ONCE and appended to, because it is
+# now written in two steps (the noise patterns, then whatever the first
+# measurement proves the corpus needs). Idempotent: the header — the ownership
+# marker `_gs_owns_ignore` and `_gs_rm_generated` both read — is written only
+# when the file is ABSENT (by the time the test below runs, "absent or ours" is
+# all that can reach it), and the trap is (re-)armed either way.
+# D-1459 — a FOREIGN `.graphifyignore` is refused HERE, in the helper, and not
+# only by the two callers' preconditions. Both callers still carry theirs (RULE
+# 2 empties `patterns`; the derivation skips on `foreign`), so this line is
+# unreachable today — but before D-1458 the single write site carried the
+# ownership test INLINE, and moving the write into a shared helper turned a
+# mechanism into a comment enumerating the callers it trusts, an enumeration
+# that goes stale the moment a third appears. Refusing costs the happy paths
+# nothing (`_gs_owns_ignore` already answers 0 for "absent or ours"), and the
+# failure it forecloses is D-1161's one step worse: the marker header written
+# over a TRACKED file, which `_gs_rm_generated` — reading its own marker on what
+# is now a marker-bearing file — then DELETES at exit. Callers MUST treat a
+# non-zero return as "no filter written, append nothing".
+_gs_open_filter() {   # tree -> 0 filter open (trap armed) / 1 foreign, nothing written
+  _gs_owns_ignore "$1" || return 1
+  if [ ! -f "$1/.graphifyignore" ]; then
+    echo "# generated by ccd-graph-sweep for one build — never committed, never edited" > "$1/.graphifyignore"
+  fi
+  GS_FILTER_TREE="$1"
+  trap '_gs_rm_generated "$GS_FILTER_TREE"' EXIT INT TERM
+}
+
+# The corpus, as detect() would ingest it from this tree right now — read
+# through whatever `.graphifyignore` is in place at the moment of the call.
+# Named because D-1458 calls it twice: once over the noise patterns alone, and
+# again only if that first answer proves something has to be derived.
+_gs_detect() {   # tree -> one relative path per line
+  ( cd "$1" && "$VENV/bin/python" - <<'GFXPY' 2>/dev/null
+import os
+from pathlib import Path
+from graphify.detect import detect
+r = detect(Path('.')); root = os.path.abspath('.')
+for k in ('code','document','paper','image','video'):
+    for f in r['files'].get(k, []):
+        print(os.path.relpath(f, root))
+GFXPY
+  )
+}
+
+# corpus minus tracked, less the query results detect re-adds whatever the
+# ignore rules say (detect.py:1160-1166). Named for the same reason as
+# `_gs_detect`: the breach is measured before the derivation and again after.
+_gs_breach() {   # corpus tracked -> the corpus paths git does not track
+  comm -23 <(sort -u <<<"$1") <(sort -u <<<"$2") | grep -v '^graphify-out/memory/' || true
+}
 _gs_guard() {
   local tree="$1" repo noise="" line
   repo="$(basename "$(dirname "$(git -C "$tree" rev-parse --path-format=absolute --git-common-dir)")")"
@@ -329,12 +467,13 @@ _gs_guard() {
   # An operator's list is an instruction about THIS repo that cannot be
   # honoured, so it refuses; the default is hygiene the repo never asked for,
   # and hygiene yields to a repo that has stated its own corpus policy.
+  local foreign=0
   if [ -f "$tree/.graphifyignore" ] && ! _gs_owns_ignore "$tree"; then
     if [ -f "$own" ]; then
       GUARD_REASON="$tree/.graphifyignore exists and was not written by ccd-graph-sweep — refusing to overwrite a file this tree owns"
       return 1
     fi
-    noise_files=()
+    noise_files=(); foreign=1
   fi
   # RULE 3 — a DEFAULT pattern is withheld when this repo TRACKS anything it
   # would hide; an operator pattern is honoured as written. D-1161: a
@@ -375,31 +514,402 @@ _gs_guard() {
   # to be able to see why, and the remedy (a `<repo>.list`, which is honoured
   # as written) named.
   [ -n "$withheld" ] && echo "graph-sweep: $tree: default noise withheld, repo tracks matching files:$withheld (a $repo.list is honoured as written)" >&2
-  if [ "${#patterns[@]}" -gt 0 ]; then
-    { echo "# generated by ccd-graph-sweep for one build — never committed, never edited"
-      printf '%s\n' "${patterns[@]}"; } > "$tree/.graphifyignore"
-    GS_FILTER_TREE="$tree"
-    trap '_gs_rm_generated "$GS_FILTER_TREE"' EXIT INT TERM
+  # ── the corpus, measured with the noise filter alone (D-1458) ─────────────
+  # The generated filter is now written in TWO steps: the noise patterns here,
+  # and — only if this measurement finds a breach git itself ignores — the
+  # derived entries below. Everything from here to the refusal is one loop:
+  # measure, derive from what the measurement actually caught, measure again.
+  # `&&` (D-1459): a refusal from `_gs_open_filter` means NO FILTER WAS WRITTEN
+  # — the tree owns its own — so nothing may be appended either. RULE 2 has
+  # already emptied `patterns` on such a tree; this is the belt behind it.
+  if [ "${#patterns[@]}" -gt 0 ] && _gs_open_filter "$tree"; then
+    printf '%s\n' "${patterns[@]}" >> "$tree/.graphifyignore"
   fi
-  local corpus tracked breach
-  corpus="$(cd "$tree" && "$VENV/bin/python" - <<'PY' 2>/dev/null
-import os
-from pathlib import Path
-from graphify.detect import detect
-r = detect(Path('.')); root = os.path.abspath('.')
-for k in ('code','document','paper','image','video'):
-    for f in r['files'].get(k, []):
-        print(os.path.relpath(f, root))
-PY
-)" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-  tracked="$(git -C "$tree" ls-files)"
-  breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
-            | grep -v '^graphify-out/memory/' | head -5 || true)"
-  if [ -n "$breach" ]; then
-    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")"
+  local corpus tracked breach breach_all breach_n
+  corpus="$(_gs_detect "$tree")" || { GUARD_REASON="detect() failed in $tree"; return 1; }
+  # D-1449, widened by D-1450 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING.
+  # `ls-files` C-quotes a path (wrapping it in double quotes) in FOUR classes,
+  # not one: a non-ASCII byte (`"J\303\240rn.py"`), a backslash
+  # (`"back\\slash.py"`), a double quote (`"quo\"te.py"`) and any control byte
+  # (`"tab\tname.py"`). detect() prints raw UTF-8 relative paths, so `comm -23`
+  # read a TRACKED file as untracked and refused the tree for ever, with no
+  # remedy on the box. Measured on the live fleet: mm-data refused over two
+  # tracked files (a JSON named with a/o diacritics, a PNG named with an
+  # umlaut). `-c core.quotepath=false` silences ONLY the non-ASCII class and
+  # leaves the other three quoting exactly as before (measured), so the fix is
+  # `-z`, which is raw for every class in one call and makes core.quotepath
+  # irrelevant. The one shape `-z | tr` cannot represent is a newline inside a
+  # filename — and that breaks the line-based corpus side identically, so the
+  # two sides stay in step. The `ls-files -c -i -X` probe above quotes too, but
+  # its output is only ever tested for EMPTINESS, never compared to a path, so
+  # quoting cannot change its answer and it is left as it is.
+  tracked="$(git -C "$tree" ls-files -z | tr '\0' '\n')"
+  breach_all="$(_gs_breach "$corpus" "$tracked")"
+  # D-1451 — WHAT GIT IGNORES NEVER ENTERS THE CORPUS. D-1458 — AND NOTHING
+  # ELSE DOES, EITHER: the derivation is driven by the BREACH, not by git's
+  # whole ignored census.
+  #
+  # detect() reads `.gitignore` only along the ANCESTOR CHAIN from the VCS root
+  # down to the scan root (`_load_graphifyignore`, detect.py:793-836: it walks
+  # `ceiling` → `root`, never below). A NESTED `.gitignore` under the scan root
+  # is therefore never applied at all, so a gitignored build artifact enters the
+  # corpus, is untracked, and this guard refuses the tree — for ever, with no
+  # remedy on the box (nothing an operator does to the tree changes what detect
+  # picks up, and `<repo>.list` does not apply because the path is not ccrc's
+  # noise). MEASURED on the live fleet: synapsium-platform refused over
+  # `frontend/exposynapse-site/.astro/settings.json` (ignored by
+  # `frontend/exposynapse-site/.gitignore`), MekWarLive/swift-harbor over
+  # `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  #
+  # D-1458 — A MEASURED COST WAS ACCEPTED INSTEAD OF REMOVED. D-1451..D-1453
+  # derived EVERY path git ignores, and the ledger measured what that costs and
+  # signed it off as "inside the timeout". MEASURED on the live fleet
+  # (2026-09-04, custom-tools): 308 derived entries — 211 files under
+  # `.superpowers/`, 59 under `tools/`, 24 under `.remember/`, because
+  # `--directory` collapses a directory only when it holds no TRACKED file — and
+  # detect spends ~50 us per (pattern, path) with the path re-resolved inside
+  # the per-pattern loop (detect.py:891-895), so 308 entries over a 1938-file
+  # corpus is ~600k matches, ~30 s added to EVERY pass over that tree. And the
+  # value was near zero: detect() run read-only over that tree with no
+  # ephemeral filter shows only 22 of the 308 entries cover a file it would
+  # ingest AT ALL, every one of them under `.remember/`, which the DEFAULT
+  # noise list already excludes. The three cases the derivation exists for
+  # (`.astro/`, `.husky/_/`, `apps/web/static/parts/`) are ONE entry each.
+  #
+  # So derive what the corpus needs and nothing else. The breach — corpus ∖
+  # tracked, already computed above for the refusal — is exactly the set of
+  # paths where detect and git disagree; every other ignored path in the tree
+  # is a pattern detect would evaluate against 1938 files to no effect. Ask git
+  # whether each BREACH path is ignored (`check-ignore -z --stdin`, one call,
+  # NUL-framed for the same four quoting classes as D-1450 — a non-ASCII name
+  # must survive the round trip), and derive one entry per ignored one. On a
+  # tree like custom-tools that is ZERO entries and ZERO extra cost; on the
+  # trees this was written for it is one to three.
+  #
+  # Each entry is ANCHORED at the tree root with a leading `/` (detect.py:883-895
+  # anchors on that, against the directory holding the file — here the root), a
+  # directory keeping its trailing `/` so the ancestor walk (detect.py:924-931)
+  # takes everything under it. Anchoring is not cosmetic: `build/` unanchored
+  # matches at EVERY depth, which is how an ignored root `build/` would hide a
+  # tracked `src/build/`.
+  #
+  # D-1452 lives on, inverted: git's `--directory` census still names the
+  # directories it COLLAPSES (those holding no tracked file), and a breach path
+  # under one is derived as THAT DIRECTORY instead of itself — so a whole
+  # ignored tree costs one line however many of its files reached the corpus.
+  # The census is only ever read when the breach holds something git ignores,
+  # so the tree that has nothing to derive never pays for it either.
+  #
+  # The seam here is THREE-WAY, not two-way (D-1453, correcting D-1452): git
+  # spells an entry as a PATH; the RULE-3 probe spends it as a WILDMATCH glob
+  # (`git ls-files -X`, where `*` does NOT cross `/`); detect spends it as an
+  # `fnmatch.fnmatch` glob (detect.py:866, anchored arm, where `*` DOES cross
+  # `/`). A filename carrying a glob metacharacter parts all three, and the two
+  # glob dialects part from each other — so the probe alone CANNOT stand in for
+  # detect. MEASURED: `.gitignore` `/a\*.py` (a LITERAL star) with a tracked
+  # `ax/b.py` and an untracked `a*.py` — git derives `a*.py`; the probe answers
+  # EMPTY (wildmatch will not let `*` cross the `/` in `ax/b.py`), so the entry
+  # is kept; and real detect (0.9.9) then returns ['keep.py'] where it returned
+  # ['a*.py', 'ax/b.py', 'keep.py'] — the TRACKED `ax/b.py` is gone from the
+  # corpus, SILENTLY: no withheld line, no breach, exit 0. That is exactly the
+  # wedge graph-noise.default.list's D-1160/D-1161 header names (shrink guard
+  # sees an unaccounted net loss and every pass ends `refused-shrink`).
+  #
+  # So make the entry LITERAL IN BOTH DIALECTS before anyone spends it:
+  # neutralize each metacharacter into a single-character class — `[` -> `[[]`
+  # first (so the brackets the next two insert are not re-escaped), then
+  # `*` -> `[*]`, `?` -> `[?]`. Both wildmatch and fnmatch read `[*]` as one
+  # literal star. Measured on the same fixture: with `/a[*].py` the probe still
+  # reports no tracked file AND detect returns ['ax/b.py', 'keep.py'] — the
+  # tracked file survives, the untracked `a*.py` is still excluded.
+  #
+  # The RULE-3 probe stays, and is now a genuine belt rather than the load-
+  # bearing member the previous comment claimed: after neutralization an entry
+  # matches exactly the path git named (plus, for a collapsed directory, its
+  # subtree). Its one remaining reachable class is the OTHER dialect gap, and
+  # it errs SAFE there: a backslash is literal to fnmatch but an ESCAPE to
+  # wildmatch, so an ignored untracked `a\b.log` beside a tracked `ab.log` makes
+  # the probe fire on a file detect would never have hidden — withheld and
+  # reported, and the tree is then refused over that path in the open rather
+  # than losing a tracked file in silence. A test pins that row. The probe runs
+  # ONCE over the whole set in the common case (git's answer over a union is
+  # empty iff it is empty for every member), and only falls back to one call per
+  # entry when that union is non-empty, i.e. when there is a culprit.
+  #
+  # Not capped: a capped list is a corpus this guard cannot explain. The count
+  # is logged instead — and it is now a count of what the corpus needed, so a
+  # tree that logs nothing is a tree that cost nothing.
+  # The `foreign` skip keeps this derivation away from a repo's own COMMITTED
+  # `.graphifyignore` — and since D-1459 it is no longer the ONLY thing doing
+  # so: `_gs_open_filter` refuses a foreign tree itself, so deleting this skip
+  # costs the file nothing (the derivation runs and then writes nowhere). What
+  # this skip still owns is the WORK: on a tree the sweep may not filter, none
+  # of it is worth doing. Pinned by ownership row (d), the only ownership
+  # fixture carrying a gitignored untracked path IN THE CORPUS — i.e. the only
+  # one where the derivation has anything to write — through the stderr line
+  # that only a derivation which RAN can print.
+  local -a derived=()
+  local dheld="" e esc
+  if [ -n "$breach_all" ] && [ "$foreign" -eq 0 ]; then
+    local -a ignored=()
+    # ONE call over the whole breach. `-z` makes input AND output NUL-framed,
+    # so a non-ASCII or backslash-bearing name survives the round trip raw
+    # (D-1450's four classes).
+    #
+    # `--no-index` is LOAD-BEARING, not tidiness. Without it `check-ignore`
+    # first drops every input the index matches — and it matches it as a
+    # PATHSPEC, not as a pathname, so a filename carrying a glob metacharacter
+    # is dropped because some OTHER, tracked file matches it. MEASURED (git
+    # 2.43.0) on D-1453's own fixture: with a tracked `ax/b.py` and an ignored
+    # untracked `a*.py`, `check-ignore --stdin` answers NOTHING for `a*.py`
+    # (exit 1) while `--no-index` correctly answers `.gitignore:1:/a\*.py`;
+    # same for `a\b.log` beside a tracked `ab.log`, where the backslash is a
+    # pathspec escape. Skipping the index costs nothing here: the input IS the
+    # breach, i.e. corpus paths git does not track, so a tracked path can never
+    # reach this call in the first place.
+    while IFS= read -r e; do
+      [ -n "$e" ] && ignored+=("$e")
+    done < <(printf '%s\n' "$breach_all" | tr '\n' '\0' \
+             | git -C "$tree" check-ignore --no-index -z --stdin 2>/dev/null | tr '\0' '\n')
+    if [ "${#ignored[@]}" -gt 0 ]; then
+      # The collapsed-directory census, read ONLY now that something needs it.
+      local -A dirset=() seenent=()
+      local -a entries=()
+      local p acc rest
+      while IFS= read -r e; do
+        case "$e" in */) dirset["$e"]=1 ;; esac
+      done < <(git -C "$tree" ls-files -o -i --exclude-standard --directory -z 2>/dev/null | tr '\0' '\n')
+      for p in "${ignored[@]}"; do
+        # the OUTERMOST collapsed ancestor wins — it covers the most subtree
+        # for one entry. Walking prefixes is O(depth), never entries x dirs.
+        acc=""; rest="$p"
+        while [ -n "$rest" ]; do
+          case "$rest" in */*) acc="$acc${rest%%/*}/"; rest="${rest#*/}" ;; *) break ;; esac
+          if [ -n "${dirset["$acc"]+x}" ]; then p="$acc"; break; fi
+        done
+        [ -n "${seenent["$p"]+x}" ] && continue
+        seenent["$p"]=1; entries+=("$p")
+      done
+      for e in "${entries[@]}"; do
+        # literal in BOTH glob dialects before the probe or detect sees it —
+        # see the three-way-seam note above. `[` first, then `*`, then `?`.
+        esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"
+        derived+=("/$esc")
+      done
+    fi
+    if [ "${#derived[@]}" -gt 0 ]; then
+      probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test derived ignore entries"; return 1; }
+      printf '%s\n' "${derived[@]}" > "$probe"
+      if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+        local -a kept=()
+        for e in "${derived[@]}"; do
+          printf '%s\n' "$e" > "$probe"
+          if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+            dheld="$dheld $e"
+          else
+            kept+=("$e")
+          fi
+        done
+        derived=(${kept[@]+"${kept[@]}"})
+      fi
+      rm -f "$probe"
+    fi
+  fi
+  # NOT SILENT either — and a withheld derived entry is a stronger signal than a
+  # withheld default: it means git's own verdicts disagree with git's own index
+  # about a path, so the tree WILL be refused below for that path (it is in the
+  # corpus; that is why it was derived at all).
+  [ -n "$dheld" ] && echo "graph-sweep: $tree: derived ignore entries withheld, repo tracks matching files:$dheld" >&2
+  [ "${#derived[@]}" -gt 0 ] && echo "graph-sweep: $tree: git-ignored entries derived into the corpus filter: ${#derived[@]}" >&2
+  # The SECOND detect() run, and the only one this fix ever adds — reached only
+  # when something was derived, i.e. when the first measurement caught a path
+  # git ignores. Without it the derivation would be inert: the census below
+  # re-reads `corpus`, and the breach it saw the first time is still there.
+  # `&&` again (D-1459): if the helper refuses, nothing was written, so nothing
+  # is appended and nothing is re-measured — `breach_all` stands and the tree is
+  # refused below over the very path the derivation would have filtered away,
+  # which is the honest outcome for a repo whose filter this sweep may not touch.
+  # WHAT IT COSTS, measured, not bounded by adjective (D-1458's timing table,
+  # completed on review): on a deriving tree the FIRST run also pays, because it
+  # sees the ignored subtree unfiltered. 2000 tracked files with a nested
+  # `.gitignore` over a 5000-file ignored subtree — 4.4 s (step 1, 7000 files
+  # ingested) + 1.4 s (here, 2000) against 1.4 s for the old single run, i.e.
+  # ~+3 s, scaling with the IGNORED SUBTREE and paid only where the derivation
+  # earns it. A tree that derives nothing runs detect() once, as it always did.
+  if [ "${#derived[@]}" -gt 0 ] && _gs_open_filter "$tree"; then
+    printf '%s\n' "${derived[@]}" >> "$tree/.graphifyignore"
+    corpus="$(_gs_detect "$tree")" || { GUARD_REASON="detect() failed in $tree"; return 1; }
+    breach_all="$(_gs_breach "$corpus" "$tracked")"
+  fi
+  # D-1454 — THE CAP STAYS, THE SIZE OF THE BREACH STOPS BEING A SECRET. Five
+  # paths is all a census row can carry (it is read on a phone, and this one
+  # line is the only place the refusal is ever stated), but "6 untracked paths"
+  # and "60" are different problems with different remedies — one commit
+  # against a corpus filter — and the capped reason spelled them identically.
+  # So the FULL breach is computed once and the cap applied after, with the
+  # remainder counted: `head -5` on its own can never report what it dropped.
+  # `wc -l` over a non-empty capture is exact here — every line comm emits ends
+  # in a newline, and the empty case never reaches it (the `-n` test above).
+  if [ -n "$breach_all" ]; then
+    breach="$(head -5 <<<"$breach_all")"
+    breach_n="$(wc -l <<<"$breach_all")"
+    breach_n="${breach_n//[![:digit:]]/}"   # BSD `wc` pads its count with spaces
+    local more=""
+    [ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"
+    # NB the `tr` above leaves a TRAILING SPACE (the here-string's own final
+    # newline becomes one), so the suffix needs no separator of its own and the
+    # uncapped reason keeps the exact text it has always had.
+    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")$more"
     _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
     return 1
   fi
+  return 0
+}
+
+# D-1509 — THE SWEEP WRITES THE STAMP GRAPHIFY WOULD HAVE WRITTEN, AND ONLY
+# THAT. Reached from `_gs_build` alone, and only after the engine exited 0 AND
+# printed one of its two "left untouched" verdicts, each of which is a full
+# fresh extraction of the disk compared against the graph on disk. graphify's
+# own stamp is `_git_head()` at build time (export.py:537) whatever the working
+# tree holds, so this splices exactly the value the engine skipped writing —
+# it invents no freshness of its own (D-1511 records the hole that leaves, and
+# the row names the dirty count so the census does not hide it).
+#
+# WHAT IT MAY TOUCH: `graph.json`'s last `built_at_commit` and
+# `GRAPH_REPORT.md`'s "- Built from commit:" line. NEVER `manifest.json`,
+# `cache/` or `.graphify_labels.json` — those are the engine's own fingerprints
+# of the corpus, and a stamp is not a fingerprint.
+#
+# HOW IT WRITES: copy, splice, ONE rename. The card reads this file with
+# `tail -c 4096` while the sweep runs (`ccd/session-hook.sh`:131), so an
+# in-place rewrite of an 8 MB file is a torn read waiting for a session hook;
+# `mv -f` over the same directory is atomic and a concurrent reader sees either
+# file whole. The splice itself seeks to the tail's base offset and truncates,
+# so a shorter or longer replacement sha is fine.
+#
+# WHAT IT REFUSES: a graph.json whose last `built_at_commit` in the tail is
+# absent, or is not the value `_gs_stamp` measured before the engine ran (the
+# file moved under us). Refusal writes NOTHING and the build reads `failed`.
+# The report's absence is not a failure — it is graphify's human echo, not the
+# stamp any reader in ccrc spends. Every refusal below is now a census reading
+# a test spends (D-1509's second mutation table): outcome `failed`, a reason
+# that NAMES it, graph.json byte-identical to what the pass found.
+#
+# AND WHAT IT NO LONGER REFUSES (D-1509, review finding). graph.json is renamed
+# at the END of its own loop iteration, so a refusal raised for GRAPH_REPORT.md
+# (unreadable file, an interpreter that dies, a failed rename) used to return 1
+# over a graph.json ALREADY carrying HEAD: `failed` — a word the doctor's WARN
+# set counts — for a tree whose stamp had advanced and which both readers then
+# read as fresh. Two conditions on one census word. The report step is
+# best-effort now (`_gs_restamp_refuse`): a miss there is one line in
+# `graph-sweep.log` and the row still reads `restamped`. Every refusal that
+# remains is raised for graph.json BEFORE its rename, so "refusal writes
+# NOTHING" is now true of all of them without exception.
+
+# D-1509 (review finding) — GRAPH.JSON IS THE STAMP; THE REPORT IS AN ECHO.
+# graph.json is what every reader in ccrc spends (`_gs_stale`, and the session
+# card's `tail -c 4096`); GRAPH_REPORT.md's "- Built from commit" line is
+# graphify's human echo — the card reads only the node count, from its head. So
+# a failure rewriting the report is named in the log and the restamp stands,
+# while the same failure on graph.json is still a refusal the census reads.
+_gs_restamp_refuse() {   # <tree> <file> <why> -> 0 the caller goes on / 1 refuse the restamp
+  if [ "$2" = graph.json ]; then RESTAMP_WHY="$3"; return 1; fi
+  printf 'graph-sweep: %s: GRAPH_REPORT.md not restamped (%s)\n' "$1" "$3" \
+    >> "$HOME/.ccrc/graph-sweep.log"
+  return 0
+}
+_gs_restamp() {   # <tree> <old-sha> <new-sha> -> 0 rewrote / 1 refused (RESTAMP_WHY)
+  local tree="$1" old="$2" new="$3" out="$1/graphify-out" f res rc
+  RESTAMP_WHY=""
+  [[ "$new" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="HEAD unreadable"; return 1; }
+  [[ "$old" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="no built_at_commit to replace"; return 1; }
+  for f in graph.json GRAPH_REPORT.md; do
+    if [ ! -f "$out/$f" ]; then
+      [ "$f" = graph.json ] || continue
+      RESTAMP_WHY="no graph.json"; return 1
+    fi
+    # stdout is the temp path (or the refusal line); stderr — a traceback from
+    # a python that could not run at all — goes to the log, never swallowed.
+    res="$("$VENV/bin/python" - "$out/$f" "$old" "$new" 2>>"$HOME/.ccrc/graph-sweep.log" <<'GFXPY'
+import os, re, shutil, sys, tempfile
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+name = os.path.basename(path)
+is_graph = name == 'graph.json'
+try:
+    size = os.path.getsize(path)
+except OSError:
+    print('cannot measure %s' % name); sys.exit(1)
+# graph.json is 8 MB on a real tree and `built_at_commit` is its LAST key, so
+# it is read from the tail exactly as the card reads it; the report is small.
+base = max(0, size - 4096) if is_graph else 0
+pat = (re.compile(rb'"built_at_commit"\s*:\s*"([0-9a-f]+)"') if is_graph
+       else re.compile(rb'- Built from commit: `([0-9a-f]+)`'))
+with open(path, 'rb') as fh:
+    fh.seek(base); tail = fh.read()
+m = None
+for m in pat.finditer(tail):
+    pass
+if m is None:
+    if is_graph:
+        print('no built_at_commit in the last %d bytes of graph.json' % len(tail)); sys.exit(1)
+    sys.exit(0)
+val = m.group(1).decode()
+if val != (old if is_graph else old[:len(val)]):
+    if is_graph:
+        print('graph.json holds %s, not the %s this build measured' % (val, old)); sys.exit(1)
+    sys.exit(0)
+repl = (new if is_graph else new[:len(val)]).encode()
+# D-1509 (review finding) — THE TEMP LIVES INSIDE graphify-out/, SO NOTHING
+# AFTER THIS LINE MAY DIE HOLDING IT: a copy of an 8 MB graph.json left by an
+# ENOSPC or a killed interpreter is never named by the sweep again, and it sits
+# in the very directory the corpus guard measures. The reason travels on stdout
+# like every other refusal, so the census names it instead of a bare
+# "python refused".
+#
+# `copyfile` + `copymode`, not `copy2`: the mode is the engine's, the mtime is
+# the RESTAMP's. (copy2's mtime never survived the splice write below anyway —
+# MEASURED — so the old comment claimed a preservation the code did not do;
+# graph.json's mtime is the signal D-1509 was found by, and it now says when
+# the stamp last moved.)
+fd, tmp = tempfile.mkstemp(prefix='.' + name + '.', dir=os.path.dirname(path) or '.')
+os.close(fd)
+try:
+    shutil.copyfile(path, tmp)
+    shutil.copymode(path, tmp)
+    with open(tmp, 'r+b') as fh:
+        fh.seek(base)
+        fh.write(tail[:m.start(1)] + repl + tail[m.end(1):])
+        fh.truncate()
+except Exception as exc:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    print('%s: %s' % (name, exc)); sys.exit(1)
+print(tmp)
+GFXPY
+    )"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      _gs_restamp_refuse "$tree" "$f" "${res:-python refused ($f)}" || return 1
+      continue
+    fi
+    if [ -z "$res" ]; then
+      # nothing to rewrite: only ever the report (graph.json either printed a
+      # path or exited non-zero), and only when its line is absent or already
+      # carries another commit.
+      [ "$f" = graph.json ] || continue
+      RESTAMP_WHY="no replacement written for graph.json"; return 1
+    fi
+    if [ ! -f "$res" ]; then
+      _gs_restamp_refuse "$tree" "$f" "replacement for $f is not a file" || return 1
+      continue
+    fi
+    if ! mv -f "$res" "$out/$f"; then
+      rm -f "$res"
+      _gs_restamp_refuse "$tree" "$f" "rename failed ($f)" || return 1
+      continue
+    fi
+  done
   return 0
 }
 
@@ -411,17 +921,35 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   if [ -e "$out/.rebuild.lock" ] && ! flock -n -E 99 "$out/.rebuild.lock" true 2>/dev/null; then
     BUILD_OUTCOME=skipped-locked; BUILD_REASON="rebuild lock held"; return 2
   fi
-  local before_sz=0 before_mt=0 errf
+  local before_sz=0 before_mt=0 errf outf head
   if [ -f "$out/graph.json" ]; then
     before_sz=$(stat -c %s "$out/graph.json"); before_mt=$(stat -c %Y "$out/graph.json")
   fi
   errf="$(mktemp "${TMPDIR:-/tmp}/gfx-stderr.XXXXXX")"
+  # D-1509 — STDOUT IS EVIDENCE NOW, not only log freight. graphify announces
+  # its two short-circuits there ("... left untouched."), and that announcement
+  # is the only thing that earns a restamp, so it is captured to a temp and
+  # appended to the log afterwards rather than streamed straight into it.
+  outf="$(mktemp "${TMPDIR:-/tmp}/gfx-stdout.XXXXXX")"
+  # HEAD as it stood when the engine started — the value graphify's own
+  # `_git_head()` would have stamped (export.py:537). Measured BEFORE the build
+  # because a commit landing mid-build must not be claimed by it.
+  head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || head=""
+  # D-1512 — THE LOG NAMES ITS TREE. Attributing "No code-graph topology
+  # changes detected" to a tree used to mean correlating re-extracted file
+  # counts and durations against the census; one header line ends that.
+  printf 'graph-sweep: build %s at %s\n' "$tree" "$(date -u +%FT%TZ)" \
+    >> "$HOME/.ccrc/graph-sweep.log"
   ( cd "$tree" && GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
       GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
       nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
-      >>"$HOME/.ccrc/graph-sweep.log" 2>"$errf"
-  local rc=$? first full
+      >"$outf" 2>"$errf"
+  local rc=$? first full said
+  # NB `head` above is the local sha; `head -n1` here is the command — bash
+  # keeps variables and commands in different namespaces.
   first="$(head -n1 "$errf" 2>/dev/null || true)"
+  said="$(cat "$outf" 2>/dev/null || true)"
+  cat "$outf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$outf"
   # Full stderr, not just the first line: a real `graphify update` can print
   # conditional warnings BEFORE the shrink refusal on the same invocation
   # (e.g. build.py:384's extraction-warning line, watch.py:510's invalid-
@@ -431,8 +959,53 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   full="$(cat "$errf" 2>/dev/null || true)"
   cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
   if [ "$rc" -eq 0 ]; then
-    printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
-    BUILD_OUTCOME=""; BUILD_REASON=""; return 0
+    # D-1509 (review finding) — THE PIN IS A RECEIPT, NOT AN ANNOUNCEMENT. It
+    # was written HERE, before the stamp was re-measured, so both `failed` arms
+    # below still advanced `.graphify_engine` for a build that wrote nothing:
+    # the next pass reads the engine dimension as fresh and falls through to
+    # `head`, and `_gs_busy`'s O3 seconds hatch measures the age of a stamp no
+    # build ever earned. It is written on the two arms that return 0 — the
+    # stamp advanced, or the sweep restamped it — and nowhere else.
+    #
+    # D-1509 — A REBUILD IS A CLAIM UNTIL THE STAMP ADVANCES. graphify's full
+    # rebuild exits 0 without writing anything when the candidate graph's
+    # topology equals the existing one (watch.py `_rebuild_code`, 0.9.9: two
+    # short-circuits, `save_manifest` then `to_json` to a temp), and `graphify
+    # update` still prints "Code graph updated." So rc 0 alone said only that
+    # the engine ran; the loop wrote `stale-rebuilt`, `_gs_stale` read the same
+    # old stamp against the same HEAD on the next pass, and the tree rebuilt
+    # every 15 minutes for ever (MEASURED on the live fleet, six consecutive
+    # passes 2026-09-04T23:19Z -> 2026-09-05T00:35Z, 6.8 s and 73.8 s a pass).
+    # The success of a build is now re-measured on the stamp itself.
+    local stamp; stamp="$(_gs_stamp "$tree")"
+    if [ -n "$stamp" ] && { [ "$stamp" = "$head" ] || _gs_same_tree "$tree" "$stamp"; }; then
+      printf '%s\n' "$PIN" > "$out/.graphify_engine"
+      BUILD_OUTCOME=""; BUILD_REASON=""; return 0    # advanced: the loop's own words
+    fi
+    # Not advanced. graphify's own verdict — a full fresh extraction of the
+    # disk compared against the graph — is what earns the stamp it skipped.
+    if grep -qF 'left untouched' <<<"$said"; then
+      if _gs_restamp "$tree" "$stamp" "$head"; then
+        printf '%s\n' "$PIN" > "$out/.graphify_engine"
+        BUILD_OUTCOME=restamped
+        BUILD_REASON="unchanged topology; ${stamp:0:8} -> ${head:0:8}"
+        # D-1511 — commit-keyed freshness cannot see a working tree that
+        # differs from HEAD, and the engine's verdict is TRUE OF THE DISK. The
+        # count is named in the row so the census does not hide the gap.
+        local dirty
+        dirty="$(git -C "$tree" status --porcelain --untracked-files=no 2>/dev/null | wc -l)"
+        dirty="${dirty//[![:digit:]]/}"            # BSD `wc` pads its count
+        [ "${dirty:-0}" -gt 0 ] && BUILD_REASON="$BUILD_REASON; $dirty tracked file(s) modified"
+        return 0
+      fi
+      BUILD_OUTCOME=failed; BUILD_REASON="restamp refused: $RESTAMP_WHY"; return 1
+    fi
+    # Exit 0, nothing written, nothing said: a stamp nobody verified is not a
+    # stamp. Write NOTHING and report it — `failed` is already in the doctor's
+    # WARN set, where a silent forever-rebuild never was.
+    BUILD_OUTCOME=failed
+    BUILD_REASON="exit 0 but built_at_commit did not advance and graphify reported no unchanged verdict"
+    return 1
   fi
   if [ "$rc" -eq 124 ]; then
     BUILD_OUTCOME=timed-out; BUILD_REASON="exceeded ${CCRC_GRAPH_BUILD_TIMEOUT}s"; return 1
@@ -522,7 +1095,11 @@ while IFS= read -r tree; do
   _gs_rm_generated "$tree"; _gs_disarm
   case "$rc" in
     0)   BUILT=$((BUILT+1))
-         if [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
+         # D-1509: `restamped` still counts toward BUILT — the engine RAN (it
+         # re-extracted the whole corpus and compared), it merely had nothing
+         # to write, and that cost is what the budget is for.
+         if [ "$BUILD_OUTCOME" = restamped ]; then _gs_row "$tree" restamped "$BUILD_REASON" "$dur"
+         elif [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
          else _gs_row "$tree" stale-rebuilt "$stale_reason" "$dur"; fi ;;
     2)   _gs_row "$tree" skipped-locked "$BUILD_REASON" 0 ;;   # deferred; never counts against the budget
     *)   BUILT=$((BUILT+1)); _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;

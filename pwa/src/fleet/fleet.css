@@ -508,6 +508,32 @@
   color: var(--ink-tertiary);
   text-align: right;
 }
+/* The health probe's verdict, on the row rather than instead of it — a
+   condemned lane stays pickable (a measurement can be wrong, and the manual
+   swap it feeds accepts the target anyway), so the mark is the whole
+   affordance. Same muted tertiary ink and mono 2xs as `.acct-unknown` above,
+   which is the neighbour it shares the gauges column with. */
+.acct-condemned {
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-tertiary);
+  text-align: right;
+}
+/* Greying a condemned row's gauge fills is `.accounts-row[data-disabled='true']
+   .acct-fill`'s rule, one surface over, for its exact reason: nothing runs on
+   the lane to refresh its statusline, so a frozen crit-red bar keeps reading as
+   live pressure on an account the same row calls expired. Scoped to `.acct-list`
+   like every other picker-row rule in this block. */
+.acct-list .acct-row[data-disabled='true'] .limit-fill { background: var(--edge-subtle); }
+/* A picker with nothing to offer says which emptiness it is (SwapSheet's
+   `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
+   it should live meanwhile". Same treatment as `.proj-none`, the sibling
+   already doing this for the project step of the very same sheet. */
+.acct-none {
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--ink-secondary);
+  padding: var(--sp-4) var(--sp-1);
+}
 .acct-chev {
   flex: none;
   font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);
@@ -816,9 +842,9 @@
 .sess-line--active .sess-acct-away,
 .sess-line--active .sess-ask,
 .sess-line--active .sess-subagent-row,
-/* The five ink-tertiary meta cells (.sess-held / .sess-lifecycle /
-   .sess-swapblocked share one rule; .sess-unmeasured and .sess-substrate
-   each have their own). Being
+/* The six ink-tertiary meta cells (.sess-held / .sess-lifecycle /
+   .sess-swapblocked / .sess-ask-state share one rule; .sess-unmeasured and
+   .sess-substrate each have their own). Being
    INSIDE .sess-meta is not enough for them: a child's own `color` beats the
    colour it would inherit from its parent, so on the selected row they went
    on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
@@ -827,11 +853,12 @@
    .sess-held shipped that way on main; .sess-lifecycle and .sess-swapblocked
    joined its declarations later and inherited the omission with them, which
    is what widened it — .sess-lifecycle renders on every non-running row.
-   No new pair for design/contrast-check.mjs: they join the pair this rule
-   already declares. */
+   .sess-ask-state (Task 19) joins already knowing better — no new pair for
+   design/contrast-check.mjs: it joins the pair this rule already declares. */
 .sess-line--active .sess-held,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
+.sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
 /* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
@@ -844,6 +871,16 @@
    deeper. `[data-spawn]` (0,3,0) settles it by specificity rather than by
    source order, so moving either rule stays free. */
 .sess-line--active .sess-spawn[data-spawn],
+/* The context-pressure chip (D-2011) paints --status-attention-text of its
+   own, so it strands on the selected slab exactly like .sess-warn above
+   without this line. */
+.sess-line--active .sess-ctxpressure,
+/* …and its wedge VARIANT (D-2016), same shape as .sess-spawn's own variant
+   two lines up: `[data-wedge]` is (0,2,0), equal to the bare
+   `.sess-line--active .sess-ctxpressure` above and declared LATER in this
+   file (fleet.css's own `.sess-ctxpressure[data-wedge]` rule), so the tie
+   would go to source order without a higher-specificity member here too. */
+.sess-line--active .sess-ctxpressure[data-wedge],
 .sess-line--active .sess-meta > *:not(:first-child)::before {
   color: var(--edge-strong);
 }
@@ -1184,6 +1221,37 @@
   flex: none;
 }
 
+/* Context-window pressure (D-2011) — a live pane reading, quiet register
+   until D-2016's wedge signature escalates it. --status-attention-text is
+   already floored against --bg-surface (tokens.css: "8.52:1 on
+   attention-tint, 10.09:1 on surface") and is the same ink
+   .fleet-host-banner--warn/.substrate-banner already use for "worth
+   noticing, not yet an emergency" — no new contrast pair. `flex: none`,
+   same reasoning as .sess-warn/.sess-spawn: the only shrinkable cell in
+   .sess-meta is .sess-held. */
+.sess-ctxpressure {
+  font-family: var(--font-mono);
+  flex: none;
+  color: var(--status-attention-text);
+}
+/* The wedge escalation — high pressure AND busy AND no turn boundary for a
+   long time reads louder than the quiet reading above, so it borrows
+   .sess-warn's own --status-dead-text rather than minting a new ink. An
+   ATTRIBUTE variant, not a class, so `session-line.test.tsx`'s automated
+   "every coloured class is answered on the selected slab" census (which
+   scans literal `className` strings only) never has to know this state
+   exists — same idiom `.sess-spawn[data-spawn]`'s own variants already use,
+   and the same reason: this file states the achromatic answer for the BASE
+   class below, and this rule's own higher specificity — not source order —
+   is what keeps the selected+wedged row from losing that answer to this
+   variant (mirrors `.sess-line--active .sess-spawn[data-spawn]` a few
+   screens down; see fleet-css.test.ts's dedicated specificity proof on that
+   cell for the failure mode this avoids). */
+.sess-ctxpressure[data-wedge] {
+  color: var(--status-dead-text);
+  font-weight: var(--weight-medium);
+}
+
 .sess-warn { color: var(--status-dead-text); flex: none; }
 
 /* The spawn chip (§1.6b) — how the LAST spawn attempt ended, beside the state
@@ -1238,6 +1306,9 @@
    separate rule would be a new colour pair for design/contrast-check.mjs to
    price for no gain. If either ever needs its own ink it needs its own
    audited pair first: do not fork the declarations and keep the token.
+   .sess-ask-state (Task 19, the ask pre-emption lane's chip) joins them for
+   the same reason — a short, verbatim, ink-tertiary fact with its full text
+   in `title`.
 
    The `color` below is UNSELECTED ink only. Setting a colour here at all is
    what takes these cells out of .sess-meta's inheritance, so each one also
@@ -1245,7 +1316,8 @@
    comment on that rule for the ratios this cost while they were not. */
 .sess-held,
 .sess-lifecycle,
-.sess-swapblocked {
+.sess-swapblocked,
+.sess-ask-state {
   font-family: var(--font-mono);
   white-space: nowrap;
   overflow: hidden;

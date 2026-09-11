@@ -16,10 +16,10 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: 'ws/quiet-basin', tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
+  ultracode: false, branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 const view = (over: Partial<PrView> = {}): PrView => ({
@@ -90,6 +90,14 @@ const mergedUnarchived = (): FleetSession => {
   fetched = view({ pr: merged, draft: null });
   return sess({ pr: merged, archivedAt: null });
 };
+
+/** The merged note with no hold and no claiming run — the ordinary case, and
+ *  the one the two guarded arms degrade to. Spelled in full, not matched by a
+ *  fragment: the whole point of this sentence is that it reads as a resting
+ *  state, so a test that accepted "Not archived" alone would survive the rest
+ *  of it being deleted. */
+const PLAIN_NOTE =
+  'Not archived — ccrc does not archive on merge. This workspace stays live until you archive it below.';
 
 describe('opening the sheet refreshes', () => {
   it('fires one GET and shows the cached value meanwhile', async () => {
@@ -208,10 +216,10 @@ describe('open and draft', () => {
     expect(screen.queryByRole('button', { name: /merge/i })).not.toBeInTheDocument();
   });
 
-  it('says merging happens on GitHub, and what will follow', async () => {
+  it('says merging happens on GitHub — and that it archives nothing', async () => {
     fetched = view({ pr: pr({ phase: 'open', number: 42, url: 'u' }), draft: null });
     open(sess({ pr: fetched.pr }));
-    expect(await screen.findByText(/Merging happens on GitHub\. When it merges, ccrc archives this workspace automatically\./))
+    expect(await screen.findByText(/Merging happens on GitHub\. It does not archive this workspace — ccrc leaves it running, and archiving it is yours to do\./))
       .toBeInTheDocument();
   });
 
@@ -246,48 +254,55 @@ describe('merged', () => {
     expect(screen.getByRole('button', { name: /clean up/i })).toBeInTheDocument();
   });
 
-  it('says NOT archived yet and offers Archive now when archivedAt is null', async () => {
+  it('says the workspace RESTS unarchived, and offers Archive now, when archivedAt is null', async () => {
     fetched = view({ pr: merged, draft: null });
     open(sess({ pr: merged, archivedAt: null }));
-    expect(await screen.findByText(/Not archived yet \(session busy\)/)).toBeInTheDocument();
+    expect(await screen.findByText(PLAIN_NOTE)).toBeInTheDocument();
+    // No "yet", and no cause named for a wait that is not happening.
+    expect(screen.queryByText(/Not archived yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/session busy/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /clean up/i })).not.toBeInTheDocument();
   });
 
-  // Fix round, finding 1. `archiveMerged` skips a held workspace on
-  // `r.held !== null` BEFORE `archiveSafety` runs, so for a held session the
-  // hold is the ONLY cause and the pane is usually idle — the sheet said
-  // "session busy" and pointed at a wait that can never end. The reason is
-  // rendered verbatim, and "Archive now" survives because `ccd ws-archive`
-  // has no held rung (only ws-rm/ws-reap do).
-  it('names the hold — not a busy session — when a merged workspace is held', async () => {
+  // A hold no longer explains why the workspace is unarchived — nothing
+  // archives it either way — so the note names what the hold DOES cost: the
+  // archive goes through and cleanup is what refuses. The reason is rendered
+  // verbatim, and "Archive now" survives because `ccd ws-archive` has no held
+  // rung (only ws-rm/ws-reap do).
+  it('names what a hold costs — cleanup, not the archive — on a merged workspace', async () => {
     fetched = view({ pr: merged, draft: null });
     open(sess({ pr: merged, archivedAt: null, held: 'program:agent-evals wave:2/4' }));
-    expect(await screen.findByText(/held: program:agent-evals wave:2\/4/)).toBeInTheDocument();
-    expect(screen.queryByText(/session busy/i)).not.toBeInTheDocument();
+    // `Held: ` is this note's own word; what must survive verbatim is the
+    // reason after it (shared/api.ts's no-parsing rule).
+    const note = (await screen.findByText(/Held: program:agent-evals wave:2\/4/)).textContent ?? '';
+    expect(note).toMatch(/cleanup will refuse until the hold is released/);
+    expect(note).not.toMatch(/session busy/i);
+    // Not a reason the archive is blocked: the button below still works.
+    expect(note).toMatch(/archiving it below still works/);
     expect(screen.getByRole('button', { name: /archive now/i })).toBeInTheDocument();
   });
 
-  // FIX-WAVE FINDING 6. The fix round above corrected the MERGED branch and
-  // left the open/draft one saying "When it merges, ccrc archives this
-  // workspace automatically" — and that branch is the one an operator reads
-  // for the WHOLE of a wave, since a PR sits open for hours before it merges.
-  // For a held session the promise is simply false: `archiveMerged` hits the
-  // held rung before `archiveSafety` and skips for as long as the hold stands.
-  it('an OPEN PR on a held workspace does not promise an automatic archive', async () => {
-    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
-    fetched = view({ pr: openPr, draft: null });
-    open(sess({ pr: openPr, held: 'program:agent-evals wave:1/4' }));
-    expect(await screen.findByText(/held — program:agent-evals wave:1\/4/)).toBeInTheDocument();
-    expect(screen.queryByText(/archives this workspace automatically/i)).not.toBeInTheDocument();
-  });
-
-  it('an OPEN PR on an UNHELD workspace still promises it — the sentence is not simply gone', async () => {
-    const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
-    fetched = view({ pr: openPr, draft: null });
-    open(sess({ pr: openPr }));
-    expect(await screen.findByText(/archives this workspace automatically/i)).toBeInTheDocument();
-  });
+  // The open/draft note is the one an operator reads for the WHOLE of a wave,
+  // since a PR sits open for hours before it merges — and it used to promise
+  // that the merge archives the workspace, with the held session as the one
+  // exception. `sweepMerged` archives nothing now, held or not, so the
+  // exception is gone with the promise: ONE sentence, the same for both, and a
+  // hold arm that reappeared here would be inventing a difference the merge no
+  // longer makes. Both fixtures, so the ternary cannot come back on either
+  // side without turning this red.
+  for (const held of [null, 'program:agent-evals wave:1/4']) {
+    it(`an OPEN PR promises no archive — held: ${held ?? 'no'}`, async () => {
+      const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
+      fetched = view({ pr: openPr, draft: null });
+      open(sess({ pr: openPr, held }));
+      expect(await screen.findByText(/It does not archive this workspace — ccrc leaves it running/))
+        .toBeInTheDocument();
+      expect(screen.queryByText(/archives this workspace automatically/i)).not.toBeInTheDocument();
+      // No release path offered here either: releasing leads to no archive.
+      expect(screen.queryByText(/Release it/)).not.toBeInTheDocument();
+    });
+  }
 
   it('hands cleanup to the caller rather than deleting anything itself', async () => {
     const onReap = vi.fn();
@@ -561,20 +576,22 @@ describe('mutation-sweep closures', () => {
     await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
   });
 
-  // Task 215 — the note enumerated TWO reasons a merged workspace sits
-  // unarchived (a hold, a busy session) and Wave 2's `archiveMerged` rung
-  // created a third: an OPEN RUN. Zero wire change; the fleet store already
-  // carries the active run list.
-  it('names an OPEN RUN as the third reason a merged workspace is unarchived', () => {
+  // An OPEN RUN is not why the workspace is unarchived — nothing archives it
+  // — but it is the one arm where "Archive now" really is obstructed:
+  // `POST /api/sessions/:id/archive` answers `409 run-open` and the operator
+  // has to confirm past it in ArchiveConflictSheet. Zero wire change; the
+  // fleet store already carries the active run list.
+  it('names an OPEN RUN as what stands between Archive now and the archive', () => {
     open(mergedUnarchived(), () => {},                       // held === null
          { fleet: storeWith({ runsFrameSeen: true, runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
-    const note = screen.getByText(/Not archived/).textContent ?? '';
-    expect(note).toMatch(/run 17/);
+    const note = screen.getByText(/does not archive on merge/).textContent ?? '';
+    expect(note).toMatch(/Run 17/);
     expect(note).toMatch(/build4/);
+    expect(note).toMatch(/ask you to confirm/);
     expect(note).not.toMatch(/session busy/);
   });
 
-  it('degrades to the shipped two-reason sentence before the first runs frame', () => {
+  it('degrades to the plain sentence before the first runs frame', () => {
     // A run list that has not been confirmed by a frame is not evidence of
     // anything — the store's own idiom, and the reason this reads
     // `runsFrameSeen` rather than asserting from whatever is in the array.
@@ -589,27 +606,27 @@ describe('mutation-sweep closures', () => {
     // `runs` the way `RunsScreen` already fills its own `cold` slice.
     open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: false,
       runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
-    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+    expect(screen.getByText(PLAIN_NOTE)).toBeTruthy();
   });
 
-  it('a CLOSED run is not a reason', () => {
+  it('a CLOSED run is not a claim', () => {
     open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: true,
       runs: [{ ...runFor('demo-quiet-basin', 17, 'build4', 2, 3), state: 'done' }] }) });
-    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+    expect(screen.getByText(PLAIN_NOTE)).toBeTruthy();
   });
 
-  it('a run on ANOTHER session is not a reason either', () => {
+  it('a run on ANOTHER session is not a claim either', () => {
     open(mergedUnarchived(), () => {}, { fleet: storeWith({ runsFrameSeen: true,
       runs: [runFor('demo-far-mesa', 17, 'build4', 2, 3)] }) });
-    expect(screen.getByText('Not archived yet (session busy)')).toBeTruthy();
+    expect(screen.getByText(PLAIN_NOTE)).toBeTruthy();
   });
 
   it('the HOLD still wins when both are present — one sentence, never two', () => {
     open({ ...mergedUnarchived(), held: 'program:build4 wave:2/3 run:17' }, () => {},
          { fleet: storeWith({ runsFrameSeen: true, runs: [runFor('demo-quiet-basin', 17, 'build4', 2, 3)] }) });
-    const note = screen.getByText(/Not archived/).textContent ?? '';
-    expect(note).toMatch(/held: program:build4 wave:2\/3 run:17/);
-    expect(screen.queryAllByText(/Not archived/)).toHaveLength(1);
+    const note = screen.getByText(/does not archive on merge/).textContent ?? '';
+    expect(note).toMatch(/Held: program:build4 wave:2\/3 run:17/);
+    expect(screen.queryAllByText(/does not archive on merge/)).toHaveLength(1);
   });
 
   // svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported`

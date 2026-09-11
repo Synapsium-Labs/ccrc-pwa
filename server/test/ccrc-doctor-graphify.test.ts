@@ -356,6 +356,71 @@ describe('ccrc doctor: graphify', () => {
     expect(line).toMatch(/^WARN graphify:/);
   });
 
+  // D-1454 — A REFUSED TREE IS A FINDING FOR AN OPERATOR, NOT A ROW NOBODY READS.
+  // Measured on the reference fleet 2026-09-04: 11 of 51 trees `refused-by-guard`
+  // and 2 `failed` on every pass, while doctor printed `PASS graphify: … census
+  // ok` — the pass STATUS was `ok` (the pass ran; it is the per-tree rows that
+  // did not) and nothing in the check ever looked at `trees[]`. The census is
+  // the only place those rows exist and no verb prints it, so this line is the
+  // only way an operator learns a tree has had no graph for a fortnight. WARN,
+  // never FAIL: a refused tree is the corpus guard doing its job.
+  it('WARNs, naming both counts, when the last pass carries refused-by-guard and failed rows (D-1454)', () => {
+    const home = healthy('ccrc-doctor-gfx-rows-'); graphifyHealthy(home);
+    const now = new Date().toISOString();
+    // TWO passes, and the older one is dirty in a way that would CHANGE every
+    // number on the line if the check read `.passes[]` instead of `.passes[-1]`
+    // (7 refused, of 10 trees). The census keeps ten passes
+    // (`ccd-graph-sweep`: `.passes = ((.passes // []) + $p | .[-10:])`), so
+    // reading them all would name repositories fixed nine passes ago while
+    // still saying "in the last graph-sweep pass" — a false sentence with an
+    // inflated count. One fixture pass cannot tell the two filters apart.
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/p', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: p.py', duration_ms: 3 },
+        { path: '/h/projects/q', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: q.py', duration_ms: 3 },
+        { path: '/h/projects/r', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: r.py', duration_ms: 3 },
+        { path: '/h/projects/s', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: s.py', duration_ms: 3 },
+      ] }, {
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: x.py', duration_ms: 3 },
+        { path: '/h/projects/b', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: y.py', duration_ms: 3 },
+        { path: '/h/projects/c', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: z.py', duration_ms: 3 },
+        { path: '/h/projects/d', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+        { path: '/h/projects/e', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+        { path: '/h/projects/f', outcome: 'fresh', reason: '', duration_ms: 1 },
+      ] }] }));
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line, 'a refused tree is the guard working — never a FAIL').toMatch(/^WARN graphify:/);
+    expect(line, 'the refused count is not the LAST pass\'s three').toContain('3 refused');
+    expect(line, 'the failed count is not named').toContain('2 failed');
+    expect(line, 'the total counts trees the last pass never saw').toContain('of 6 tree(s)');
+    expect(line, 'the remedy an operator can act on is not on the line').toContain('graph-noise');
+  });
+
+  // …and the other half: a pass whose rows are all clean leaves the PASS text
+  // exactly as it was. A bucket that fires on a healthy census is a bucket an
+  // operator learns to ignore (D-139's own reasoning, applied to rows).
+  it('says nothing new when every row of the last pass is clean (D-1454)', () => {
+    const home = healthy('ccrc-doctor-gfx-rows-clean-'); graphifyHealthy(home);
+    const now = new Date().toISOString();
+    // …and an EARLIER pass that was dirty, since the repair that clears a
+    // refusal is a commit in the repository: the pass after it is clean while
+    // the census still carries the old rows. Reading every pass would keep
+    // warning about a tree fixed an hour ago — so this fixture pins the
+    // window as well as the silence.
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: a.py', duration_ms: 3 },
+        { path: '/h/projects/b', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+      ] }, {
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'fresh', reason: '', duration_ms: 1 },
+        { path: '/h/projects/b', outcome: 'stale-rebuilt', reason: '', duration_ms: 40 },
+        { path: '/h/projects/c', outcome: 'skipped-budget', reason: 'budget spent', duration_ms: 0 },
+      ] }] }));
+    expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
+  });
+
   it('WARNs when a tracked tree has not been given the graphify-out/ exclude', () => {
     const home = healthy('ccrc-doctor-gfx-excl-'); graphifyHealthy(home);
     const repo = join(home, 'projects', 'demo');
@@ -394,6 +459,66 @@ describe('ccrc doctor: graphify', () => {
   // present, measurement FAILED" (a real defect) — the overloaded-null shape
   // this codebase bans by name. `_check_disk` WARNs on the identical shape
   // for $HOME; this is that same measurement over $HOME/worktrees.
+  // ── R5 (D-1613): THE SEARCH GATE'S STATE IS ON THE LINE, NOT ONLY IN THE SHELL ─
+  // The gate denies a session's first `Grep`/`Glob`/head-search until it has
+  // queried the tree's graph, and its kill-switch is a FILE the operator
+  // touches by hand (`ccd/session-hook.sh`'s own `GRAPH_GATE_OFF`) — nothing
+  // in this tree writes it and no verb reports it, so an operator who turned
+  // the gate off in a hurry has nowhere to read that back except the shell.
+  // `ccrc doctor` is the only surface that measures this box's graphify
+  // condition at all, so the gate state rides EVERY verdict line this check
+  // prints: it is a fact about the box, not a finding about it (an operator
+  // switch deliberately set is REPORTED, never warned about — the same way
+  // `$REG/coordinator-paused` reaches the wire rather than a doctor bucket),
+  // and the class the rest of the measurement lands in must not decide
+  // whether the fact is said.
+  //
+  // HARVESTED, not remembered (the D-1363 idiom, this file's first use of it):
+  // the kill-switch path comes off the hook's own assignment rather than being
+  // typed here a second time, so the day the hook moves the file this suite
+  // plants the fixture where the hook now looks — and throws, naming the
+  // rename, if the assignment is gone — instead of passing against a path
+  // nothing reads.
+  const GATE_OFF = ((): string => {
+    const hook = readFileSync(join(REPO, 'ccd', 'session-hook.sh'), 'utf8');
+    const m = hook.match(/^GRAPH_GATE_OFF="\$HOME\/(.+)"$/m);
+    if (!m) throw new Error('ccd/session-hook.sh no longer assigns GRAPH_GATE_OFF under $HOME — ' +
+      "the doctor line that names the operator file has to be re-derived against the hook's " +
+      'new spelling, not left pointing at the old one');
+    return m[1]!;
+  })();
+
+  it('says the search gate is armed, on the PASS line (R5, D-1613)', () => {
+    const home = healthy('ccrc-doctor-gfx-gate-on-'); graphifyHealthy(home);
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^PASS graphify:/);
+    expect(line, 'the graphify line says nothing at all about the search gate').toContain('gate on');
+  });
+
+  it('says the gate is off and NAMES the operator file to remove (R5, D-1613)', () => {
+    const home = healthy('ccrc-doctor-gfx-gate-off-'); graphifyHealthy(home);
+    writeFileSync(join(home, GATE_OFF), '');
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^PASS graphify:/);
+    expect(line, 'the off state is invisible, or the line does not say which file to remove')
+      .toContain(`gate off (operator file $HOME/${GATE_OFF})`);
+  });
+
+  it('carries the gate state on a WARN line too — the verdict class does not decide the fact', () => {
+    // The excludes WARN from above, with the kill-switch on top of it: a box
+    // with something to fix is exactly the box whose operator is reading this
+    // line, and it is the one that used to lose the gate state entirely.
+    const home = healthy('ccrc-doctor-gfx-gate-warn-'); graphifyHealthy(home);
+    writeFileSync(join(home, GATE_OFF), '');
+    const repo = join(home, 'projects', 'demo');
+    mkdirSync(repo, { recursive: true });
+    execFileSync(realPath('git'), ['init', '-q'], { cwd: repo });
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^WARN graphify:/);
+    expect(line, 'a WARN drops the gate state the PASS line carries').toContain('gate off');
+    expect(line, 'the WARN lost the finding it is actually about').toContain('graphify-out/');
+  });
+
   it('D-995: WARNs (not silent) when df cannot read the worktrees root — a stale/dead mount', () => {
     const home = healthy('ccrc-doctor-gfx-disk-unread-'); graphifyHealthy(home);
     mkdirSync(join(home, 'worktrees'), { recursive: true });
