@@ -11,6 +11,7 @@ import {
 } from '../../../shared/schedule.js';
 import {
   AUTOMATION_FAILURE_CEILING, AUTOMATION_MAX_INTERVAL_MINUTES, AUTOMATION_MIN_INTERVAL_MINUTES,
+  AUTOMATION_PUNCTUAL_MS,
   type AutomationOutcome, type AutomationRefusal, type AutomationState,
   type AutomationTrigger, type ScheduleError,
 } from '../../../shared/api.js';
@@ -67,21 +68,13 @@ export type FireDecision =
       readonly advance: SchedulePlan }
   | { readonly act: 'unschedulable'; readonly error: ScheduleError };
 
-/**
- * How late a firing may be and still count as "on time" rather than a catch-
- * up — spec §3's finest granularity (one minute), so "late" cannot mean less
- * than the cadence's own resolution, and the lane's own jitter cannot spend
- * an automation's once-per-boot catch-up budget on an ordinary firing
- * (task-6-decisions.md C2.4).
- *
- * DEVIATION (see task-6-report.md, ledger number pending Task 12): the
- * contract imports this from `shared/api.js` alongside
- * `AUTOMATION_FAILURE_CEILING`/`AUTOMATION_MIN_INTERVAL_MINUTES`, on the
- * theory it belongs in that file's Task-2 cap block. It is not there yet —
- * `shared/api.ts` is not in this task's file list, so it stays local to the
- * one function that reads it, rather than adding a second home for it or
- * hand-editing a file another task owns mid-flight. */
-export const AUTOMATION_PUNCTUAL_MS = 60_000;
+// D-2525: `AUTOMATION_PUNCTUAL_MS` LIVES IN `shared/api.ts` NOW, in the Task-2
+// cap block where task-6-decisions.md C2.4 always said it belonged. It stood here
+// for one reason only — that file was not on this task's file list while a
+// parallel agent might be editing it — and that reason expired with the
+// parallel tasks. Re-exported below so this file's own consumers (and its
+// suite, which imports it from here) keep one import site.
+export { AUTOMATION_PUNCTUAL_MS } from '../../../shared/api.js';
 
 // The local-tuple and gap-shift arithmetic this file needs lives in
 // `shared/schedule.ts` and is imported above. It was briefly duplicated here

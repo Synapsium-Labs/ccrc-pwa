@@ -6006,6 +6006,36 @@ export const AUTOMATION_MIN_INTERVAL_MINUTES = 60;
  *  the other, mechanical half of the same question. */
 export const AUTOMATION_MAX_INTERVAL_MINUTES = 366 * 24 * 60;
 
+/* The four that arrived late, and why they are here NOW (D-2525, D-2526).
+ * Task 6's and Task 7's contracts both placed these in this block,
+ * and both tasks left them local — `shared/api.ts` was on neither task's file
+ * list, and a parallel agent owned files that might touch it, so each wrote a
+ * DEVIATION note saying so rather than hand-editing a file mid-flight. That
+ * reason expired with the parallel tasks. Two homes for one cap is what this
+ * tree forbids, and the contract's placement was right, so they moved here
+ * rather than being ledgered as permanent deviations. */
+
+/** How late a firing may still be and count as "on time" rather than a
+ *  catch-up (spec §3's finest granularity, one minute) — so "late" cannot
+ *  mean less than the cadence's own resolution, and the sweep lane's own
+ *  jitter cannot spend an automation's once-per-boot catch-up budget on an
+ *  ordinary firing. */
+export const AUTOMATION_PUNCTUAL_MS = 60_000;
+
+/** The prompt ladder (spec §6 step 9, task-6-decisions.md C2.7): how many
+ *  attempts a run may make to land its prompt in the session it created
+ *  before the run settles `failed:prompt-refused`, and the doubling backoff
+ *  between them (`min(BASE * 2 ** (attempt - 1), MAX)`).
+ *
+ *  AN ARITHMETIC FACT WORTH KNOWING BEFORE CHANGING THESE: six attempts at
+ *  this backoff span 690 s, against `AUTOMATION_LEASE_HARD_MS`'s 600 s — so
+ *  the last attempt is unreachable inside one lease, and a run that spends
+ *  the clock settles `lost` rather than `failed:prompt-refused`. Both are
+ *  honest records; they are different facts. */
+export const AUTOMATION_PROMPT_MAX_ATTEMPTS = 6;
+export const AUTOMATION_PROMPT_BACKOFF_BASE_MS = 30_000;
+export const AUTOMATION_PROMPT_BACKOFF_MAX_MS = 240_000;
+
 /* --- Automations: the wire shapes (spec §10, §11). -------------------------- */
 
 /**

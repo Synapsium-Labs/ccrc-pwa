@@ -1023,3 +1023,39 @@ Nine more were found while executing, and each is already closed in the tree:
   tree after this"; `server/src/auto/routes.ts` awaited `fireAutomation` regardless, giving two
   callers and a false document. With ccd's `SPAWN_SETTLE_S` at 240 s a phone tap could block four
   minutes and time out at the proxy while the run succeeded.
+
+Five more were carried as DEVIATION notes in the source itself, each written by the task that
+made it and each promising a ledger number ("pending Task 12"). They were issued as a second
+block on 2026-09-11 (D-2525..D-2529) and defined here in the same act — because a comment that
+promises a number for nine days and never names one is the invented-number failure mode
+(`bb47c9e`) arriving by a slower route.
+
+- **D-2525 — `AUTOMATION_PUNCTUAL_MS` lived outside the cap block it was contracted into.**
+  task-6-decisions.md C2.4 places it in `shared/api.ts`'s Task-2 cap block beside
+  `AUTOMATION_FAILURE_CEILING`; Task 6 left it local to `schedulepolicy.ts` for one stated
+  reason — that file was not on its file list while a parallel agent might be editing it, and
+  hand-editing another task's file mid-flight is worse than a note. CLOSED by moving it, once
+  that reason expired with the parallel tasks; `schedulepolicy.ts` re-exports it so its own
+  suite keeps one import site.
+- **D-2526 — the prompt ladder's three caps, the same deviation for the same reason.**
+  `AUTOMATION_PROMPT_MAX_ATTEMPTS`/`_BACKOFF_BASE_MS`/`_BACKOFF_MAX_MS` were contracted into the
+  same block by C2.7 and stayed in `fire.ts`. CLOSED by the same move — and the move is what put
+  the arithmetic where a reader will meet it: six attempts at this backoff span 690 s against a
+  600 s hard lease, so the last attempt is unreachable inside one lease by construction.
+- **D-2527 — the ring note read STRICTLY enough to force a second definition.** Task 6's port
+  note claimed `auto/fire.ts` must import "nothing from `coord/store.js` at all, typed or
+  otherwise", so it re-declared three store shapes locally — and guessed both of them wrong
+  before Task 4 landed (D-2528, D-2529 below are those guesses). The ring rule's own example
+  imports `CoordStore` itself, a far larger surface, the same way; a type-only import erases at
+  runtime and holds no handle. Closed by importing the store's own types.
+- **D-2528 — `inFlightAutomationRuns()` did not exist; `inFlightAutomationRunCount(now)` did.**
+  The contract snippet named a method with no clock, while the store's already-committed method
+  JOINS the parent and counts only LIVE leases, which needs one. A structural port that does not
+  match the store's own method by name could never be satisfied by `coord: store` at the real
+  wiring site, so the port was corrected to the shipped shape rather than the guessed one.
+- **D-2529 — `automationsPaused()` answers `{paused, updatedAt}`, not a bare boolean.** The
+  same class as D-2528 and found the same way: the contract guessed at a shape Task 4 had not
+  landed yet. Every caller reads `.paused`, so the collapse would have been invisible until the
+  first caller wanted the timestamp — and `updatedAt` is what tells an operator's own pause from
+  one set minutes ago.
+
