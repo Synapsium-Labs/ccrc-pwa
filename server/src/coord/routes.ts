@@ -1012,7 +1012,14 @@ export function registerCoordRoutes(
 
     const q = req.query as { to?: unknown; program?: unknown; limit?: unknown; all?: unknown };
     const to = typeof q.to === 'string' && q.to.trim() !== '' ? q.to : null;
-    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
     // EXACTLY ONE, and neither is a default for the other: `to` is a MAILBOX
     // (what one session was actually sent) and `program` is a THREAD (what one
     // programme has said), and a request that named both would be asking two
@@ -1609,7 +1616,7 @@ export function registerCoordRoutes(
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
    * so the coordinator CANNOT unpause itself — "no verb, no route, no way"
-   * (`rundefs.ts:47-52`). A pause route gated by that token would hand the
+   * (`rundefs.ts`'s `MAIL_DISABLED_MARKER`). A pause route gated by that token would hand the
    * coordinator its own unpause: the same key, both sides of a boundary that
    * only means anything because the two callers are different. So this rides
    * the PWA's existing unauthenticated surface, the same perimeter
@@ -1949,7 +1956,14 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { limit?: string; program?: string };
     const limit = Number(q.limit);
-    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
     return { events: program === null
       ? deps.coord.feedEvents(limit)
       : deps.coord.feedEventsForProgram(program, limit) };

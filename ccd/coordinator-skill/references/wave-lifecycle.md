@@ -24,8 +24,9 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
 | `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
-| `error:'hold-oversize'` (413) | the complete session-card hold — programme, wave, denominator and SQLite's exact new or reused run id — exceeds the hook's 127-character display window | shorten the programme slug before retrying. A fresh open rolls both programme and run inserts back, an idempotent retry creates no duplicate, and no `ws-hold` runs |
-| `error:'hold-invalid'` (400) | the complete hold does not satisfy the hook grammar: its persisted programme is not hook-safe, or wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the persisted/input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
+| `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
+| `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
+| `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
 
 **Why `project-mismatch` exists.** A session's workspace is a git worktree in
 exactly one repository. Reusing its id for a wave in another project queues the
@@ -154,9 +155,9 @@ wave's brief — that is what waves are for.
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
 someone already dispatched it, or it is further along than you think.
 
-**Answers that do NOT ride `refused`.** The table above is what SKILL.md
+**Answers that do NOT ride `refused`.** The table below is what SKILL.md
 calls "the refusals you will actually meet" — but this route (and `POST
-/api/runs/:id/close`) can answer four other shapes, and blindly retrying any
+/api/runs/:id/close`) can answer six other shapes, and blindly retrying any
 of them is how a workspace gets orphaned:
 
 | shape | meaning | what you do |

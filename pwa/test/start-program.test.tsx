@@ -651,6 +651,34 @@ describe('StartProgramSheet', () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it('a whitespace-only title cannot start a program, and is not SHOUTED at while being typed', async () => {
+    // Two claims about one guard, because the sheet depends on it alone now.
+    // BLOCKS: the button stays disabled and no coordinator is created, so a
+    // program can never be started without a title. DOES NOT SHOUT: a missing
+    // title is not an error to show someone mid-keystroke, which is the whole
+    // reason the verdict carries a `field` — this used to be decided by string
+    // -matching L0 copy, so rewording that sentence changed this behaviour
+    // silently.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build9-demo', '   \t  ');
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(screen.queryByText(/must not be blank/i)).not.toBeInTheDocument();
+
+    // …while a slug refusal at the same moment IS shown, which is what proves
+    // the silence above is the field discriminator and not a mute error slot.
+    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'bad slug' } });
+    expect(await screen.findByText(/letters, numbers, underscores, and hyphens/i))
+      .toBeInTheDocument();
+  });
+
   it('previews the ledger from the SHAPED slug, so a traversal spelling never renders as a path', async () => {
     // D-2508 made `ledgerPath` a pure interpolator whose callers shape first;
     // this preview was the last reader still handing it raw input, so a slug the

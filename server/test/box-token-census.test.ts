@@ -427,10 +427,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // whole-branch review (M5 of that pass). It is a NOTE, not an assertion —
     // the loop below derives its own set, and this sentence only says which
     // lanes that set deliberately leaves out. What IS derived for this family
-    // is `EXEMPT_BUT_AUTHENTICATED` above, a SUPERSET of these seven (it also
-    // carries `POST /api/runs`, which hard-requires the token rather than
-    // accepting a cookie), and the README sentence it feeds is where a route
-    // added to the class without a mention reds the build.
+    // is `EXEMPT_BUT_AUTHENTICATED` above, and it is NOT a superset of these
+    // seven: it is derived by filtering the EXEMPT table for the
+    // `EXEMPT-BUT-AUTHENTICATED` marker, and `POST /api/runs` carries no such
+    // marker — its EXEMPT reason reads "the coordinator opens a run — box-token
+    // gated". So that route is exempt from the SESSION gate while hard-requiring
+    // the box token, which is a different arrangement from the dual-credential
+    // reads this set collects, and it is absent from the set rather than an
+    // extra member of it. The README sentence the set feeds is where a route
+    // added to the dual-credential class without a mention reds the build.
     const requireSites = ((): string[] => {
       const starts = [...COORD_SRC.matchAll(/app\.(get|post)\('([^']+)'/g)]
         .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, path: m[2]!, at: m.index! }));

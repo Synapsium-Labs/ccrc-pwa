@@ -3972,10 +3972,19 @@ export interface ProgramKickoffResumeInput { runId: unknown; wave: unknown }
  *  The input pair stays `unknown` until this verdict validates both members.
  *  Its success arm carries the normalized pair so an HTTP adapter never has to
  *  repeat the numeric decision merely to call the authoritative queue seam. */
+/** WHICH input a `bad-request` verdict is about. A field, not a sentence: all
+ *  three causes share one `kind`, and a consumer that needs to tell them apart
+ *  (the start sheet shows a slug refusal while the operator is still typing the
+ *  title, and must not show a title refusal then) would otherwise have to
+ *  compare `detail` against L0 prose — narrowing a distinction it received by
+ *  string-matching copy, so rewording a sentence here would silently change
+ *  which errors an operator sees with nothing red. */
+export type ProgramKickoffField = 'slug' | 'title' | 'resume';
+
 export type ProgramKickoffVerdict =
   | { ok: true; slug: string; title: string; body: string; bytes: number;
       resume?: ProgramKickoffResume }
-  | { ok: false; kind: 'bad-request'; detail: string }
+  | { ok: false; kind: 'bad-request'; field: ProgramKickoffField; detail: string }
   | { ok: false; kind: 'oversize'; limit: number; bytes: number; detail: string };
 
 export const programKickoffVerdict = (
@@ -3984,10 +3993,13 @@ export const programKickoffVerdict = (
   resumeInput?: ProgramKickoffResumeInput,
 ): ProgramKickoffVerdict => {
   const shaped = shapeProgramSlug(rawSlug);
-  if (!shaped.ok) return { ok: false, kind: 'bad-request', detail: shaped.detail };
+  if (!shaped.ok) return { ok: false, kind: 'bad-request', field: 'slug', detail: shaped.detail };
   const title = rawTitle.trim();
   if (title === '') {
-    return { ok: false, kind: 'bad-request', detail: 'program title must not be blank' };
+    return {
+      ok: false, kind: 'bad-request', field: 'title',
+      detail: 'program title must not be blank',
+    };
   }
   let resume: ProgramKickoffResume | undefined;
   if (resumeInput !== undefined) {
@@ -3996,6 +4008,7 @@ export const programKickoffVerdict = (
       return {
         ok: false,
         kind: 'bad-request',
+        field: 'resume',
         detail: 'resume runId and wave must be positive safe integers',
       };
     }

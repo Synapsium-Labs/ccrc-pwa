@@ -17,6 +17,7 @@ import {
   PROGRAM_KICKOFF_SUBJECT,
   PROGRAM_SLUG_MAX_CHARS,
   programKickoff,
+  programKickoffVerdict,
   programResumeKickoff,
 } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -399,4 +400,37 @@ describe('the kickoff seam has no way to type', () => {
   // draft of this file DID carry one, and its regex matched this module's own
   // PROSE about the rule — a pin that fails on a docstring is not a pin, it is a
   // second implementation of someone else's, done worse.
+});
+
+
+describe('programKickoffVerdict refuses each input by NAME, not by sentence', () => {
+  // The `field` discriminator exists because all three causes share
+  // `kind:'bad-request'`, and the start sheet must tell a slug refusal (shout it)
+  // from a blank title (the operator is still typing). Before it existed that
+  // sheet compared `detail` against the prose below, so rewording this file
+  // changed the PWA's behaviour with nothing red.
+  it.each([
+    ['a malformed slug', 'bad slug', 'T', 'slug'],
+    ['an over-budget slug', 'x'.repeat(PROGRAM_SLUG_MAX_CHARS + 1), 'T', 'slug'],
+    ['a blank title', 'build9-demo', '', 'title'],
+    ['a whitespace-only title', 'build9-demo', '   \t  ', 'title'],
+  ] as const)('names %s', (_label, slug, title, field) => {
+    const v = programKickoffVerdict(slug, title);
+    expect(v.ok).toBe(false);
+    if (v.ok) throw new Error('unreachable — narrowed above');
+    expect(v.kind).toBe('bad-request');
+    expect(v).toMatchObject({ field });
+  });
+
+  it('names a malformed resume pair, which is neither the slug nor the title', () => {
+    const v = programKickoffVerdict('build9-demo', 'T', { runId: 0, wave: 5 });
+    expect(v).toMatchObject({ ok: false, kind: 'bad-request', field: 'resume' });
+  });
+
+  it('composes the body only once every named input is good', () => {
+    const v = programKickoffVerdict('  build9-demo  ', '  Build 9 demo  ');
+    expect(v).toMatchObject({ ok: true, slug: 'build9-demo', title: 'Build 9 demo' });
+    if (!v.ok) throw new Error('unreachable — narrowed above');
+    expect(v.body).toBe(programKickoff('build9-demo', 'Build 9 demo'));
+  });
 });

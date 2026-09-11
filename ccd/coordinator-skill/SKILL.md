@@ -192,12 +192,15 @@ the run is untouched) are in the dispatch table, `references/wave-lifecycle.md`
 §2 — not repeated here, so there is exactly one place this code's dispatch-side
 meaning lives.
 
-**`hold-oversize` is different:** `POST /api/runs`, `/dispatch`, and `/:id/close`
-answer `error:'hold-oversize'` (413) when the complete session-card reason —
-programme, wave, optional denominator, and exact run id — cannot fit the hook's
+**`hold-oversize` is different:** `/dispatch` and `/:id/close` answer
+`error:'hold-oversize'` (413) when the complete session-card reason — programme,
+wave, optional denominator, and exact run id — cannot fit the hook's
 127-character display window. Stop and shorten the programme slug; the refusing
-boundary performs no fleet act, and a fresh open also rolls back its run and
-programme inserts. The route-specific tables in `references/wave-lifecycle.md`
+boundary performs no fleet act. `POST /api/runs` is NOT in that list: its slug
+cap is derived so the widest hold it can compose is 124 of 127, so an
+over-long slug is refused there as `bad-request` (400) with a `detail` naming
+the budget, before any row exists. The two routes that CAN emit it read
+persisted or reconstructed rows that never passed that door. The route-specific tables in `references/wave-lifecycle.md`
 name exactly what remains untouched. `hold-invalid` (400) is its grammar/domain
 sibling: a persisted programme or an included wave, denominator, or run id cannot
 be represented as the session hook's positive-decimal hold grammar. Stop and

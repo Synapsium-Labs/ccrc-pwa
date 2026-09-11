@@ -507,7 +507,7 @@ describe('POST /api/runs', () => {
     ]);
   });
 
-  it('accepts the derived 59-character slug cap and passes the complete hold to ccd', async () => {
+  it('accepts a slug at exactly the derived budget and passes the complete hold to ccd', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
     const { run, calls } = makeRunner(home);
@@ -528,7 +528,7 @@ describe('POST /api/runs', () => {
     ]);
   });
 
-  it('refuses a 60-character slug before opening a row or calling ccd', async () => {
+  it('refuses a slug one character past the budget before opening a row or calling ccd', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
     const { run, calls } = makeRunner(home);
@@ -3162,6 +3162,29 @@ describe('the programme filters on the two GET routes', () => {
       headers: tokenHeaders(TOKEN) });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('both GET filters TRIM the programme, so a padded query names the stored programme', async () => {
+    // The write side trims (`POST /api/runs` shapes the slug before storing), so
+    // a filter binding the raw query value tested non-empty, bound `'build4 '`
+    // and matched nothing — rendering as "this programme has no mail" rather
+    // than as the typo it is. Both GET routes, because they had the same line.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+
+    const mail = await app.inject({ method: 'GET', url: '/api/mail?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(mail.statusCode).toBe(200);
+    expect((mail.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject))
+      .toEqual(['ours']);
+
+    const feed = await app.inject({ method: 'GET', url: '/api/feed?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(feed.statusCode).toBe(200);
+    expect((feed.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
   });
 
   it('GET /api/mail?to= is unchanged, and still sees the programless mail', async () => {

@@ -1160,8 +1160,10 @@ export class CoordStore {
    *     `(m.fromId, m.runId, d.toId, m.subject)`; `m.toId`, the column THIS
    *     query selects on, is not in it at all. What protects the slot is that a
    *     re-queued row is the opposite of a system mail on BOTH keyed axes.
-   *     RECIPIENT: `queueSystemMail`'s four call sites (`dispatch.ts:661`,
-   *     `close.ts:248`, `routes.ts:1235`, `kickoff.ts:156`) each pass a WORKER
+   *     RECIPIENT: `queueSystemMail`'s four call sites (`dispatch.ts:783`,
+   *     `close.ts:261`, `routes.ts:1554`, `kickoff.ts:157` — re-measured; the
+   *     census is the FOUR, and the line numbers drift with every edit above
+   *     them) each pass a WORKER
    *     session id — `run.sessionId`, or the id the kickoff route was given —
    *     never the chair, while `d.toId` here is `to`, the heir CHAIR. SENDER:
    *     the probe's `fromId` is a `SystemMailSender`, the role pair, whereas

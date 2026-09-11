@@ -582,8 +582,13 @@ export function StartProgramSheet({
   // shared shape decision, taken at the granularity this line needs.
   const slugPreview = shapeProgramSlug(slug);
   const kickoffOversize = !kickoffVerdict.ok && kickoffVerdict.kind === 'oversize';
+  // Branch on the verdict's own FIELD, never on its prose. A blank title is not
+  // an error to shout while the operator is still typing one, but the two causes
+  // share `kind:'bad-request'` — comparing `detail` against the L0 sentence made
+  // this sheet's behaviour depend on that sentence's wording, with no test
+  // between a reword and a silently changed error.
   const showKickoffError = slug !== '' && !kickoffVerdict.ok
-    && (kickoffOversize || kickoffVerdict.detail !== 'program title must not be blank');
+    && (kickoffOversize || kickoffVerdict.field !== 'title');
 
   const start = async (): Promise<void> => {
     // The button independently disables on this verdict, but a disabled control
