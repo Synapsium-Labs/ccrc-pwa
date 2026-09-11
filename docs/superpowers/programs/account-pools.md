@@ -2688,3 +2688,23 @@ corrections have introduced fresh documentation errors of the same class.
 That is a real decision point, not a gate result, and it is the operator's: keep gating prose to
 convergence, or merge a PR whose code has been finished for two rounds and carry the remaining
 ledger corrections as follow-up. I am not going to decide it by continuing to send rounds.
+
+### Amendment, same morning — I passed on five citations I had not measured
+
+D-2510 named seven drifted citations. I had measured two; the other five came from a reviewer and I
+relayed them. Content-verifying all six sites afterwards found two errors of my own:
+
+- One citation I listed does not exist — I relayed a `:159-160` that is in no plan.
+- `account-health-probe.md:106` cites `roster.ts:88` for `telemetry`, and my "this round's +2 hunk"
+  explanation is wrong for it. Measured across the PR: telemetry sat at `:88` at both `c833746b` and
+  `9736a70e`, so that citation was **correct until this PR touched it**; `d978afc6`'s roster.ts hunk
+  was net **−1** and moved it to `:87`; `e0a0c4cd`'s was **+2** and moved it to `:89`. Two commits,
+  opposite directions. Applying `+2` to `:88` yields `:90` — a fresh wrong number.
+
+That is the hazard the repo already knows about, stated in project memory as *verify every corrected
+citation by CONTENT, never by arithmetic* — and I reproduced it while writing the finding that names
+it. Sent as an amendment with all six current values measured by content, plus anchor quotes.
+
+The general rule this keeps proving: **relaying a reviewer's measurement makes it my claim.** A gate
+that verifies its own load-bearing findings and relays the rest has not raised its evidence standard,
+it has only moved where the unverified claims enter.
