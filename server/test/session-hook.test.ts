@@ -40,22 +40,37 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
   });
 /** `run`, plus stderr: the hook's contract is silence on BOTH streams, and a
  *  bare `find` over a directory that does not exist would break it on stderr
- *  while stdout stays clean. */
-const runFull = (payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string } => {
+ *  while stdout stays clean. EXIT 0 IS ASSERTED HERE, ONCE (fix-round I5):
+ *  `run`'s `execFileSync` throws on a non-zero exit, so every test using it
+ *  implicitly checked the hook's own header contract ("exit 0 on every
+ *  path") — but that throw fires on ANY non-zero exit, including one after a
+ *  card printed clean, so a caller that discarded `r.status` (as this file's
+ *  callers of `runFull` did until this fix) had a blind spot exactly where
+ *  the compact-serve arm's own `exit 0`/`exit 1` sits, after the print. One
+ *  assertion, here, covers every existing and future call site instead of
+ *  being sprinkled at each one (the same single-definition argument fix
+ *  round 1 applied to the emitter's clip). `allowNonZeroExit` is the escape
+ *  hatch for a test that deliberately drives one. */
+const runFull = (payload: object, env: Record<string, string> = {}, opts: { allowNonZeroExit?: boolean } = {}): { stdout: string; stderr: string } => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify(payload), encoding: 'utf8',
     env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', ...env },
   });
+  if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
 };
 /** `n` real hook PROCESSES started as close together as `spawn` (async,
  *  non-blocking) allows, all against the same fixture HOME/id — the shape
  *  M1's concurrency regression needs: `execFileSync`/`spawnSync` block, so a
  *  loop of them can never overlap in wall time and would never race. Captures
- *  stderr per racer too (M2's stderr-silence check, extended to N processes). */
-const runConcurrent = (payload: object, n: number): Promise<{ stdout: string; stderr: string }[]> =>
-  Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve) => {
+ *  stderr per racer too (M2's stderr-silence check, extended to N processes),
+ *  and asserts exit 0 per racer (fix-round I5, same reasoning as `runFull`'s
+ *  own comment) — a failing `expect` inside the `close` handler is caught and
+ *  turned into a rejection, so `Promise.all` surfaces it as a real test
+ *  failure rather than a silently unresolved promise. */
+const runConcurrent = (payload: object, n: number, opts: { allowNonZeroExit?: boolean } = {}): Promise<{ stdout: string; stderr: string }[]> =>
+  Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn('bash', [HOOK], {
       env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
@@ -63,7 +78,12 @@ const runConcurrent = (payload: object, n: number): Promise<{ stdout: string; st
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
-    child.on('close', () => resolve({ stdout, stderr }));
+    child.on('close', (code) => {
+      try {
+        if (!opts.allowNonZeroExit) expect(code, 'the hook contract: exit 0 on every path, every racer').toBe(0);
+        resolve({ stdout, stderr });
+      } catch (e) { reject(e as Error); }
+    });
     child.stdin.end(JSON.stringify(payload));
   })));
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
