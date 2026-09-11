@@ -389,6 +389,127 @@ describe('POST /api/mail — the rejection table', () => {
   });
 });
 
+describe("POST /api/mail — the 'worker' role", () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** One dispatched run with a bound worker, the shape a wave brief answers into. */
+  const withRun = (coord: CoordStore, sessionId: string | null): number => {
+    const r = coord.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if ('refused' in r) throw new Error('open refused');
+    if (sessionId !== null) coord.setSession(r.id, sessionId);
+    return r.id;
+  };
+
+  it("resolves 'worker' to the run's own session and delivers there", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-worker']);
+    // Resolution happens at SEND time and is stored on the delivery; the
+    // envelope names the resolved session, exactly as the coordinator role's
+    // own envelope does.
+    expect(due[0]!.envelope).toContain('to: demo-worker');
+  });
+
+  it("keeps the ROLE on the mail row and the SESSION on the delivery — the join key the worker re-bind selects on", async () => {
+    // WIRE-2 (PR #75 review round 1). `insertMail` stores the PRE-resolution
+    // literal and `queueDelivery` the resolved session, on purpose:
+    // `requeueAbandonedMail` selects `m.toId = 'worker'` (and the coordinator
+    // arm `'coordinator'`) to find what a replacement occupant inherits. A
+    // "tidy" `toId: resolvedToId` at the insert leaves every suite green while
+    // no re-bind and no reclaim ever finds a row again.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const mailId = (res.json() as { id: number }).id;
+    const row = w.coord.db.prepare('SELECT toId FROM mail WHERE id = ?').get(mailId) as { toId: string };
+    expect(row.toId).toBe('worker');
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-worker']);
+  });
+
+  it("a worker-addressed mail sent through the route reaches the heir when the run is re-bound — the route's write and the store's read, pinned by one case", async () => {
+    // The two halves together: every store-side test seeds `insertMail`
+    // directly, every route-side test reads only the delivery. This one POSTs
+    // through the door and then re-binds, so the literal the route writes is
+    // the literal the re-bind selects on.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker'); seed(home, 'demo-heir');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId, subject: 'the wave brief' });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-heir']);
+    expect(due[0]!.envelope).toContain('to: demo-heir');
+    expect(w.coord.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it("refuses 'worker' with no runId — a worker is per run and there is nothing to fall back to, EVEN WHEN the coordinator fallback would resolve", async () => {
+    // THE GUARD, pinned against the mutant that matters (PR #75 review round
+    // 1, WIRE-1/MUT-1): give 'worker' the coordinator role's single-active-
+    // programme fallback and this send is ACCEPTED and delivered to the
+    // COORDINATOR — the wrong session, which the route's own comment calls
+    // worse than a refusal. The fixture therefore seeds exactly the world in
+    // which that fallback resolves (one active claimed programme, a bound
+    // worker), so a 404 here is the guard and not an accident of emptiness.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId: null });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain('needs a runId');
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+  });
+
+  it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, null);
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain(`run ${runId} has no worker`);
+    // Recorded, like every refusal on this route.
+    expect(w.coord.rejections().map((r) => r.code)).toContain('unknown-recipient');
+  });
+
+  it("leaves 'coordinator''s single-active-programme fallback exactly as it was", async () => {
+    // THE PIN. `worker` requires a runId; `coordinator` does not, and its
+    // no-runId arm is the documented recovery for an already-retired programme.
+    // A "tidy" change that required a runId for both roles would break that and
+    // nothing else in this file would notice.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'coordinator', runId: null });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-coordinator']);
+  });
+
+  it('still refuses a toId that is neither role nor a registry row', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app, { ...GOOD, toId: 'demo-nobody' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+  });
+});
+
 describe('the rejection table is total, in both directions', () => {
   // The linkage discipline `wsaudit.test.ts:52-100` established: the union and
   // the emitters are one set, and neither may grow alone. A code nobody emits
@@ -538,6 +659,30 @@ describe('the rejection table is total, in both directions', () => {
                               // wire vocabulary to do it. Its siblings `absent`
                               // and `parked` are one word each and never reach
                               // this scan at all.
+      'home-project-backfilled', // coord/routes.ts run_events.detail (cross-repo
+                                  // programmes §3 F2, Task 4) — recorded when a
+                                  // stored NULL homeProject is backfilled from
+                                  // the body on a later open. Not a wire code:
+                                  // no `refused`/`reject.code` ever carries it,
+                                  // and nothing switches on it over the wire —
+                                  // it is forensic history on the run, read
+                                  // back only through GET /api/runs/:id events.
+      'legacy-home-project',     // coord/routes.ts run_events.detail (§3 F2, §9
+                                  // wave 3) — recorded when an open omits
+                                  // `homeProject` while
+                                  // `HOME_PROJECT_LEGACY_ACCEPTED` is true. This
+                                  // is the row wave 3's flip counts to zero over
+                                  // seven consecutive days; same reasoning as
+                                  // its sibling above, not a wire code.
+      'session-rebound',         // coord/routes.ts run_events.detail (PR #75 review
+                                  // round 1, store-2) — recorded when a second open
+                                  // of a still-`planned` wave names a DIFFERENT
+                                  // sessionId and `bindSession` re-binds the run:
+                                  // the detail names predecessor, heir and how many
+                                  // deliveries moved. Forensic history on the run,
+                                  // exactly like its two siblings above — no
+                                  // `refused`/`reject.code` ever carries it, nothing
+                                  // switches on it over the wire.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

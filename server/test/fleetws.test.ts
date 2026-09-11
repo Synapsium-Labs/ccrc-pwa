@@ -912,7 +912,8 @@ describe('fleet REST + WS', () => {
       // depend on the notify lanes' own triggering mechanism to prove the
       // route reads the table honestly.
       for (let i = 1; i <= 3; i++) {
-        coord.recordFeedEvent('epoch-1', { seq: i, at: 1000 + i, kind: 'done', sessionId: 'cc-a', title: `t${i}`, body: '' });
+        coord.recordFeedEvent('epoch-1', { seq: i, at: 1000 + i, kind: 'done', sessionId: 'cc-a',
+          title: `t${i}`, body: '', runId: null });
       }
       app = await buildServer({ ...testDeps(home), coord });
 
@@ -936,7 +937,7 @@ describe('fleet REST + WS', () => {
       const logA = new NotifyLog(logPath);
       await logA.load();
       const coordA = new CoordStore(openCoordDb(dbPath));
-      const recorded = logA.record({ kind: 'mail', sessionId: 'cc-a', title: 'm1', body: 'b1' });
+      const recorded = logA.record({ kind: 'mail', sessionId: 'cc-a', title: 'm1', body: 'b1', runId: null });
       await logA.flush();
       coordA.recordFeedEvent(logA.epoch, recorded);
 

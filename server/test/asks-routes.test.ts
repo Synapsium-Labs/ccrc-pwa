@@ -120,7 +120,7 @@ describe('POST /api/asks/:id/answer', () => {
    *  waiting hookstate for the child at `now`, and an ask row minted
    *  against that exact `askAt` — the ordinary, non-moved case every test
    *  below starts from unless it deliberately diverges. */
-  const setup = async (now: number, panes: (string | null)[] = [ASK_PANE]) => {
+  const setup = async (now: number, panes: (string | null)[] = [ASK_PANE], runId: number | null = null) => {
     const home = mkTmp('ccrc-asks-');
     seed(home, CHILD, CHILD_UUID);
     seed(home, PARENT, PARENT_UUID);
@@ -132,7 +132,7 @@ describe('POST /api/asks/:id/answer', () => {
     const w = await openApp(home, run, { notifyLog });
     app = w.app;
     const id = w.coord.insertAsk({
-      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      childId: CHILD, parentId: PARENT, runId, askKey: ASK_KEY,
       askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
       options: QUESTION.options.map((o) => o.label), now,
     });
@@ -244,8 +244,11 @@ describe('POST /api/asks/:id/answer', () => {
     expect(coord.askById(id)!.state).toBe('answering');
   });
 
-  it('presses the digit and records a second event on success', async () => {
-    const { coord, id, calls } = await setup(Date.now());
+  it('presses the digit and records a programless second event on success', async () => {
+    // The ask row's runId is provenance for parent derivation only. Feed `ask`
+    // events stay session events, so even a numeric provenance never enters a
+    // programme-filtered feed.
+    const { coord, id, calls } = await setup(Date.now(), [ASK_PANE], 42);
     const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -262,6 +265,7 @@ describe('POST /api/asks/:id/answer', () => {
     const ev = coord.feedEvents(10).at(-1)!;
     expect(ev.kind).toBe('ask');
     expect(ev.sessionId).toBe(CHILD);
+    expect(ev.runId).toBeNull();
     expect(ev.body).toContain(PARENT);
     expect(ev.body).toContain('Blue');
   });
@@ -670,7 +674,12 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
    *  hookstate for the child at `now`, and — the one difference — the
    *  caller decides whether to mint a `held` row at all, since this route's
    *  whole point is to behave identically whether one exists or not. */
-  const setup = async (now: number, mintRow: boolean, panes: (string | null)[] = [ASK_PANE]) => {
+  const setup = async (
+    now: number,
+    mintRow: boolean,
+    panes: (string | null)[] = [ASK_PANE],
+    runId: number | null = null,
+  ) => {
     const home = mkTmp('ccrc-asks-');
     seed(home, CHILD, CHILD_UUID);
     seed(home, PARENT, PARENT_UUID);
@@ -681,15 +690,15 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const w = await openApp(home, run, { notifyLog });
     app = w.app;
     const id = mintRow ? w.coord.insertAsk({
-      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      childId: CHILD, parentId: PARENT, runId, askKey: ASK_KEY,
       askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
       options: QUESTION.options.map((o) => o.label), now,
     }) : null;
     return { coord: w.coord, id, now, calls };
   };
 
-  it('records the operator as the answerer and locks the parent out', async () => {
-    const { coord, id } = await setup(Date.now(), true);
+  it('records the operator as the answerer, keeps the event programless, and locks the parent out', async () => {
+    const { coord, id } = await setup(Date.now(), true, [ASK_PANE], 42);
     const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
@@ -713,6 +722,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const ev = coord.feedEvents(10).at(-1)!;
     expect(ev.kind).toBe('ask');
     expect(ev.sessionId).toBe(CHILD);
+    expect(ev.runId).toBeNull();
     expect(ev.body).toContain('operator');
     expect(ev.body).toContain('Blue');
   });

@@ -5,7 +5,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
@@ -110,8 +110,22 @@ export type DispatchOutcome =
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable'>;
-      limit?: number; running?: number; used?: number; candidates?: number }
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
+      limit?: number; running?: number; used?: number; candidates?: number;
+      /** WHICH project the measured party belongs to — `project-mismatch`'s
+       *  own field, and the only refusal on this union that carries a string.
+       *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
+       *  that differs from the run's — never `record.project`, whose
+       *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
+       *  session id on an absent or unreadable field and name a project
+       *  nobody measured, which is why the guard below reads `<id>.project`
+       *  through `fieldMeasured` itself instead. Unreadable answers
+       *  `registry-unmeasurable` instead; absent answers nothing at all; an
+       *  empty string is never sent, because presence is the distinction and
+       *  `''` would collapse "no comparison was made" into "the project is
+       *  nothing". The open route's own refusal already carries a `by`
+       *  (`routes.ts`), so the two sites of one code answer one shape. */
+      by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
    *  fresh-spawn path once §1.5 moved the `!res.ok` return PAST the AFTER read —
@@ -487,6 +501,58 @@ export async function dispatchRun(
     const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
     if (record !== undefined && recordIdentity === null) {
       return { ok: false, kind: 'registry-unmeasurable' };
+    }
+    // F1's registry rung (design 2026-09-08 §3 F1) — MEASURED at the decision
+    // point, not read off `record.project`. `SessionRecord.project` is built
+    // `project ?? id` over `field()`'s collapsing read (`registry.ts`), so an
+    // absent or unreadable `.project` file would arrive here as the SESSION
+    // ID and compare unequal to every run's project: a false, non-retryable
+    // `project-mismatch` naming a session id as the offending repository, on
+    // a fact nobody measured. The design's own sentence forbids exactly that
+    // ("refusing on a fact not measured would be the same error in the other
+    // direction"), so this rung reads the one field it decides on through the
+    // D-114 ladder and tells three answers apart:
+    //   unreadable — the registry could not be measured for THIS row, which is
+    //     what `registry-unmeasurable` already means a few lines up: transient,
+    //     retryable, nothing spent.
+    //   absent, or present and empty — a PROVEN ENOENT, or a field with no
+    //     name in it. The row predates the field (ccd writes `.project` at
+    //     `ws-add`; rows from before 2026-07-28 carry none, as ccd's own
+    //     `_project_pool_state` says) and its repository is unknown to the
+    //     registry. Absence PERMITS, exactly as the open route's
+    //     `sessionProject` null does: nothing is measured, nothing is refused,
+    //     and the dispatch proceeds as it did before this wave existed.
+    //   measured — the file's content, compared to the run's project. Unequal
+    //     is the crossing this build refuses, and `by` names what was READ.
+    // `record.project` keeps its `project ?? id` default for every display
+    // consumer; only the DECISION reads measured. Putting `project` on the
+    // measured ladder inside `readRegistryMeasured` itself is the fuller
+    // remedy and reaches every consumer of `SessionRecord.project` — it is
+    // recorded as D-2342 in this wave's deviation ledger, with the fuller
+    // remedy as the follow-up, not done here.
+    //
+    // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
+    // and its identity measured, and BEFORE the hold, the injected `/clear` and
+    // `markDispatched`. Moved past the hold, a crossing costs a claim on a
+    // workspace this run is not going to use; moved past the `/clear`, it costs
+    // a live worker's context. Nothing has been spawned at this point — the
+    // resume arm only ran `ensure` — so the run is untouched and still
+    // `planned`.
+    //
+    // `record !== undefined` is load-bearing and is NOT the same condition as
+    // the refusal above it: an undefined record on a LISTABLE registry is the
+    // tolerated honest-stale case, which keeps falling back to `run.workspace`
+    // below exactly as it always has. An unlistable registry never reaches here
+    // — `readRegistryMeasured` refused it with its own code. Refusing on a
+    // fact not measured would be the same error in the other direction.
+    if (record !== undefined) {
+      const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project');
+      if (!projectRead.ok && projectRead.reason === 'unreadable') {
+        return { ok: false, kind: 'registry-unmeasurable' };
+      }
+      if (projectRead.ok && projectRead.content !== '' && projectRead.content !== run.project) {
+        return { ok: false, kind: 'refused', code: 'project-mismatch', by: projectRead.content };
+      }
     }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;

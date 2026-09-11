@@ -19,14 +19,13 @@ import { ack, FEED_ACK_KEY, acksSnapshot, resetAcks } from '../src/lib/seen';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); resetAcks(); });
 
-// NOTE: `NotifyEvent` carries no `runId` (shared/api.ts) — the plan's own
-// Interfaces-assumed-from-PR-I reconciliation (item 2) records that the field
-// was never shipped, so a feed row cannot link back to its run without a
-// second lookup. This fixture omits it rather than asserting a field that
-// does not typecheck.
+// NOTE: `NotifyEvent` now carries `runId` (cross-repo programmes, design
+// 2026-09-08 §4 — superseding the earlier "no second lookup" call the plan's
+// PR I reconciliation item 2 made). This fixture builds a run-less event.
 const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
   seq: 1, at: Date.now() - 60_000, kind: 'mail', sessionId: 'ccrc-pwa-clear-cove',
   title: '✉ finding › clear-cove', body: 'The hold gate re-reads at the decision point.',
+  runId: null,
   ...over,
 });
 

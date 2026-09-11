@@ -361,8 +361,15 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * itself trims rather than leaving it to each of the ladder's ~9 call
  * sites to remember. A `reason` (`absent`/`unreadable`) carries no content
  * to trim and passes through unchanged.
+ *
+ * EXPORTED for exactly one out-of-file caller: `coord/dispatch.ts`'s
+ * `project-mismatch` rung, which decides on `.project` and therefore must
+ * read it MEASURED rather than through `SessionRecord.project`'s `?? id`
+ * default — a display default that would otherwise reach a decision as if it
+ * were a measurement (cross-repo programmes wave 1, D-2342). Every other
+ * caller stays in this file.
  */
-async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
+export async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
   const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));
   return r.ok ? { ok: true, content: r.content.trim() } : r;
 }

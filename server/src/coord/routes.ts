@@ -27,7 +27,8 @@ import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
@@ -142,7 +143,13 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       if (r.running !== undefined) extra.running = r.running;
       if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
-      return reply.code(409).send({ ok: false, refused: r.code, ...extra });
+      // The `by` spread, not `by: r.by` — the same discipline the
+      // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
+      // not narrow a distinction it received, and this field distinguishes by
+      // PRESENCE. Its own spread rather than a member of `extra`, whose value
+      // type is `number` and must stay so: `by` is the project's NAME.
+      return reply.code(409).send({ ok: false, refused: r.code, ...extra,
+        ...(r.by === undefined ? {} : { by: r.by }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
     // distinction it received, and this member's `stderr` distinguishes by
@@ -230,6 +237,96 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
       return reply.code(500).send({ ok: false, error: 'internal', why: (_exhaustive as { why: string }).why });
     }
   }
+}
+
+/**
+ * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
+ * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
+ * live coordinator has redeployed and the field is required.
+ *
+ * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
+ * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
+ * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
+ * one generation (`coord/token.ts`, `server.ts`), then removed.
+ *
+ * Read ONCE, at the single call site below, and passed as an argument to
+ * `homeProjectVerdict` rather than read inside it — which is what makes the
+ * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ */
+export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+
+/** What the open route must DO about the body's `homeProject` and the
+ *  programme's stored one. SIX answers, none folded into another: `write` and
+ *  `agrees` both mean "nothing extra to do" but for different reasons and at
+ *  different moments (a first insert versus a later open), and collapsing them
+ *  would make the backfill event impossible to place correctly. */
+export type HomeProjectVerdict =
+  | { kind: 'write' }
+  | { kind: 'agrees' }
+  | { kind: 'backfill'; home: string }
+  | { kind: 'legacy' }
+  | { kind: 'required' }
+  | { kind: 'mismatch'; by: string };
+
+/**
+ * The home decision, pure and independently testable — no store, no reply, no
+ * clock — even though it is DEFINED here, in `server/src/coord/routes.ts`,
+ * which is L4 delivery and by the ring's own rule (`CLAUDE.md`) is NOT allowed
+ * to decide. It lives here anyway because the cross-wave contract fixes this
+ * exact file as both the constant's home and this function's, so that wave
+ * 3's flip stays the one-constant change the spec promises; moving the
+ * function to an L1 module would break that promise for a ring compliance
+ * this file's own text cannot buy back. Recorded as a further ring
+ * compromise, not argued away (a deviation beside the other six). The only
+ * L4 thing anywhere near this decision is the reply at the route's two call
+ * sites below, which this function never touches.
+ *
+ * `known` and `stored` are TWO INPUTS and not one, because `programHome`
+ * answers `null` both for a programme row with a NULL home and for a slug with
+ * no row, and this function's caller acts on those differently: the first is a
+ * BACKFILL that records an event, the second is a first insert that records
+ * nothing. Establishing existence is the caller's job (`coord.programs()`), and
+ * passing the answer in is what keeps that overloaded null out of the decision.
+ *
+ * An ABSENT body home is decided by `legacyAccepted` alone — never by `known`
+ * or `stored` — because the column stays NULL either way: nothing is guessed
+ * into it, so a later explicit home can backfill it instead of colliding.
+ */
+export function homeProjectVerdict(input: {
+  body: string | undefined; known: boolean; stored: string | null; legacyAccepted: boolean;
+}): HomeProjectVerdict {
+  if (input.body === undefined) {
+    return input.legacyAccepted ? { kind: 'legacy' } : { kind: 'required' };
+  }
+  if (!input.known) return { kind: 'write' };
+  if (input.stored === null) return { kind: 'backfill', home: input.body };
+  return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
+}
+
+/** What `POST /api/runs` accepts as a `homeProject`, decided ONCE at the door
+ *  (PR #75 review round 1, F2 + F4). Two answers, never folded: an accepted
+ *  value is TRIMMED — the same fold `fieldMeasured` applies to a registry
+ *  field — and a refused one carries the sentence the caller is told. */
+export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
+
+/**
+ * A home is a single path segment under `projectsRoot`, and nothing else
+ * (D-2349):
+ * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
+ * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
+ * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
+ * ever — every later open sending the clean spelling refused `home-mismatch`
+ * against a value that RENDERS the same — and a `..` segment would name a
+ * file outside the projects root. Pure, so `home-project.test.ts` drives
+ * every branch; the route reads `detail` onto its 400 verbatim.
+ */
+export function shapeHomeProject(raw: string): HomeProjectShape {
+  const home = raw.trim();
+  if (home === '') return { ok: false, detail: 'homeProject is empty' };
+  if (home === '.' || home === '..' || home.includes('/')) {
+    return { ok: false, detail: `homeProject must be a single path segment, not ${JSON.stringify(home)}` };
+  }
+  return { ok: true, home };
 }
 
 /**
@@ -626,12 +723,15 @@ export function registerCoordRoutes(
         'fromUuid does not match the registry — stale sender');
     }
 
-    // 7: recipient shape — the literal role 'coordinator', or an existing
-    // registry row. Resolving the ROLE to a concrete session id happens below,
-    // after runId (check 8) is known to be real. Same transient-vs-terminal
-    // split as check 5, reusing the same `names`/`registry` reads rather than
-    // a second round trip.
-    if (toId !== 'coordinator' && !registry.some((r) => r.id === toId)) {
+    // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
+    // existing registry row. Resolving a role to a concrete session id happens
+    // below, after runId (check 8) is known to be real. Same
+    // transient-vs-terminal split as check 5, reusing the same
+    // `names`/`registry` reads rather than a second round trip.
+    //
+    // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
+    // follows the chair, a session id names a session.
+    if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
@@ -649,15 +749,30 @@ export function registerCoordRoutes(
         `no run ${runId}`);
     }
 
-    // Resolving 'coordinator'. It is a ROLE, not a session id: the store
-    // resolves it to the claimedBy of the run named in runId; with no runId,
-    // to the claimedBy of the single active program. Ambiguous or absent →
-    // unknown-recipient, recorded — no guessing: an agent-to-agent message
-    // delivered to the wrong session is worse than one refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId) : toId;
+    // Resolving a ROLE. Neither literal is a session id: 'coordinator' resolves
+    // to the claimedBy of the run named in runId — with no runId, to the
+    // claimedBy of the single active program, UNCHANGED and deliberately so,
+    // because that arm is the documented recovery for an already-retired
+    // programme. 'worker' resolves to that run's own `sessionId` and REQUIRES a
+    // runId: a worker is per run and there is nothing to fall back to.
+    // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
+    // agent-to-agent message delivered to the wrong session is worse than one
+    // refused with a reason.
+    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId)
+      : toId === 'worker' ? (runId === null ? null : coord.resolveWorker(runId))
+      : toId;
     if (resolvedToId === null) {
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
-        "the 'coordinator' role has no single claimed active program to resolve to");
+      // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
+      // role's exactly — from the server's side an unresolvable role is an
+      // unresolvable role — but the detail names which condition, because the
+      // sender's remedy differs: send the runId, versus wait for the wave to be
+      // dispatched.
+      const why = toId !== 'worker'
+        ? "the 'coordinator' role has no single claimed active program to resolve to"
+        : runId === null
+          ? "the 'worker' role needs a runId — a worker is per run, and there is nothing to fall back to"
+          : `run ${runId} has no worker`;
+      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
@@ -835,7 +950,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/mail?to=<id>` (fix, review findings 1/15: this route fell in
+   * `GET /api/mail?to=<id>` OR `GET /api/mail?program=<slug>` (cross-repo
+   * programmes wave 1, Task 7) — EXACTLY ONE of `to`/`program` is required;
+   * both or neither is a 400 (D-2057). `to` is a MAILBOX (what one session
+   * was actually sent); `program` is a THREAD (what one programme has said,
+   * joined on `mail.runId` → `runs.program` — a mail with no `runId` matches
+   * neither and appears only under `to`). `all`/`limit` apply to either arm
+   * identically, below.
+   *
+   * (fix, review findings 1/15: this route fell in
    * the seam between the two Build 7 plans, each naming the other as its
    * author — PR I's own D-9 pointed at PR J for `POST /api/runs/:id/advance`
    * and PR J's own "Interfaces assumed from PR I" contract item 6 pointed
@@ -878,13 +1001,22 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'GET /api/mail')) return;
     const coord = deps.coord;
 
-    const q = req.query as { to?: unknown; limit?: unknown; all?: unknown };
-    if (typeof q.to !== 'string' || q.to.trim() === '') {
+    const q = req.query as { to?: unknown; program?: unknown; limit?: unknown; all?: unknown };
+    const to = typeof q.to === 'string' && q.to.trim() !== '' ? q.to : null;
+    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    // EXACTLY ONE, and neither is a default for the other: `to` is a MAILBOX
+    // (what one session was actually sent) and `program` is a THREAD (what one
+    // programme has said), and a request that named both would be asking two
+    // different questions in one call. Neither is still a bad request, exactly
+    // as it was before `program` existed.
+    if ((to === null) === (program === null)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const limit = typeof q.limit === 'string' ? Number(q.limit) : undefined;
     const all = q.all === '1' || q.all === 'true';
-    const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
+    const mail = program !== null
+      ? coord.mailForProgram(program, { limit, all })
+      : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
     return reply.code(200).send({ ok: true, mail });
   });
 
@@ -973,35 +1105,119 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId } = body;
+    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
     if (typeof program !== 'string' || program.trim() === '' ||
         typeof title !== 'string' || title.trim() === '' ||
         typeof project !== 'string' || project.trim() === '' ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
         typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
         !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
-        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== ''))) {
+        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
+        // Present-and-not-a-string is a malformed body. The VALUE is shaped
+        // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
+        // is a single path segment — because the first non-NULL home a
+        // programme stores is permanent and `ledgerAbsPath` joins it under
+        // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
+        !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // THE ONE SHAPING. Every consumer below — the verdict, `openRun`,
+    // `setProgramHome` (through the verdict's own `home`), the response —
+    // reads `home`, never the raw body field.
+    let home: string | undefined;
+    if (typeof homeProject === 'string') {
+      const shaped = shapeHomeProject(homeProject);
+      if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
+      home = shaped.home;
+    }
     const waveOfVal = (waveOf ?? null) as number | null;
+
+    // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
+    // repository, and reusing it for a wave in another is the one crossing this
+    // build refuses. Measured from this store's own history, no I/O at all.
+    //
+    // HERE, AND NOT INSIDE `openRun`: the refusal must leave no `planned`
+    // orphan, so it runs after body validation and BEFORE the row exists. A
+    // null answer refuses nothing — absence permits, and `sessionProject`'s own
+    // docstring says which population that is.
+    if (typeof sessionId === 'string') {
+      const bound = coord.sessionProject(sessionId);
+      if (bound !== null && bound !== project) {
+        return reply.code(409).send({ ok: false, refused: 'project-mismatch', by: bound });
+      }
+    }
+
+    // F2 (design §3 F2) — the programme's home, decided BEFORE the row exists so
+    // a refusal leaves no `planned` orphan, exactly like the check above.
+    //
+    // `known` is measured separately from `stored` on purpose: `programHome`
+    // answers null for two conditions this route handles differently, and asking
+    // it only about a programme this box has proven exists is what keeps them
+    // apart. `programs()` is one read of a table with one row per programme.
+    const known = coord.programs().some((p) => p.slug === program);
+    const homeVerdict = homeProjectVerdict({
+      body: home,
+      known, stored: known ? coord.programHome(program) : null,
+      legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+    });
+    if (homeVerdict.kind === 'mismatch') {
+      return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
+    }
+    if (homeVerdict.kind === 'required') {
+      // Its OWN sentence (D-2349), not the body-shape guard's bare
+      // `bad-request` 36 lines up: two conditions whose remedies differ —
+      // "your JSON is
+      // malformed" versus "this build requires a home" — must not reach the
+      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
+      // true; the day wave 3 flips the constant, this is the one refusal the
+      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
+    }
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy });
+    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy,
+      ...(home !== undefined ? { homeProject: home } : {}) });
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
 
+    // The backfill and the legacy acceptance are RECORDED, not merely done:
+    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
+    // rows over seven consecutive days, and a fact nothing wrote down cannot
+    // date anything. `recordRunEvent` writes `fromState === toState`, so the
+    // notify lane skips it and no push impersonates a transition.
+    if (homeVerdict.kind === 'backfill') {
+      coord.setProgramHome(program, homeVerdict.home);
+      coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
+    }
+    if (homeVerdict.kind === 'legacy') {
+      coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
+    }
+
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the hold immediately, and persist the id onto the
-    // row (`CoordStore.setSession`, this task's own deviation D-45) so the
-    // dispatch route can later read `run.sessionId` back and know to `ensure`
-    // rather than `ws-add` (deviation D-1).
+    // wave 1 held): place the hold FIRST, and bind the id onto the row only
+    // once the hold stands (D-2350; PR #75 review round 1, store-1).
+    // `setSession`
+    // funnels into `bindSession`, which on a RE-bind re-issues the
+    // predecessor's outstanding worker mail to the heir and parks the
+    // predecessor's rows — writes that run in autocommit, outside any `tx()`
+    // — so a refused hold (501/502) must not have moved the occupant: the
+    // coordinator is told the open FAILED, and the row, the predecessor's
+    // delivery and the heir's queue all read exactly as they did before. The
+    // dispatch route later reads `run.sessionId` back to choose `ensure`
+    // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
+    //
+    // A re-bind is RECORDED on the run's own trail, naming both occupants and
+    // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
+    // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
+    // a retried open naming a different session reaches this line with a
+    // predecessor — a live path, not a store-test-only one — and an occupant
+    // change must be attributable like every other run write.
     if (typeof sessionId === 'string') {
-      coord.setSession(opened.id, sessionId);
       const argv = CCD_ARGV.wsHold(sessionId,
         holdReason(program, wave, waveOfVal, opened.id),
         sweepDec(deps.fleetState, `run:${opened.id} open`));
@@ -1010,11 +1226,38 @@ export function registerCoordRoutes(
       }
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+      const predecessor = coord.resolveWorker(opened.id);
+      const bound = coord.setSession(opened.id, sessionId);
+      if (bound.rebound) {
+        // `bindSession` reports a rebound only when its pre-read found a
+        // non-null predecessor distinct from `sessionId`; keep that invariant
+        // visible rather than interpolating the impossible `null` silently.
+        if (predecessor === null) throw new Error('rebound reported without a predecessor');
+        coord.recordRunEvent(opened.id, 'coordinator',
+          'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+      }
     }
 
+    // Re-read rather than reasoned about: `openRun`'s first insert and the
+    // backfill above are two different writers of this column, and the response
+    // must say what the row now HOLDS, not what this request happened to send.
+    const ledgerRepo = coord.programHome(program);
     return reply.code(200).send({
       ok: true, id: opened.id, program: opened.program, state: opened.state,
-      ledgerPath: `docs/superpowers/programs/${program}.md`,
+      // UNCHANGED for the caller, now DERIVED: `shared/api.ts`'s `ledgerPath`
+      // is the one spelling of where a programme's ledger lives — the PWA and
+      // `coord/kickoff.ts` tell the operator where to commit it from the same
+      // helper — so a change there reaches this response too (PR #75 review
+      // round 1, WIRE-3; `single-definition.test.ts`'s census could not see the
+      // segmented join this replaces).
+      ledgerPath: ledgerPath(program),
+      // Both null while the stored home is null, and never derived from the
+      // registry or the claimant (design §3 F2's rejected alternative): a fact
+      // the programme carries forever must not depend on a live read that can
+      // degrade. `ledgerRepo` is the SHAPED home the row holds (F2/F4 above).
+      ledgerRepo,
+      ledgerAbsPath: ledgerRepo === null ? null
+        : path.join(deps.cfg.projectsRoot, ledgerRepo, ledgerPath(program)),
     });
     });
   });
@@ -1482,6 +1725,7 @@ export function registerCoordRoutes(
           title: 'caps changed',
           body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
                 `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+          runId: null,
         });
         coord.recordFeedEvent(log.epoch, ev);
       } catch (err) {
@@ -1639,19 +1883,28 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/feed?limit=<n>` (Task 10, orchestrator-added scope: PR J
-   * interface 5) — the durable archive behind `NotifyLog`'s in-memory ring,
+   * `GET /api/feed?limit=<n>[&program=<slug>]` (Task 10, orchestrator-added
+   * scope: PR J interface 5; the programme filter is cross-repo programmes' —
+   * design §4) — the durable archive behind `NotifyLog`'s in-memory ring,
    * oldest-first. Survives both a ring eviction (the ring keeps only the
    * newest 200, `notifylog.ts`'s `RING`) and a restart (a fresh `NotifyLog`
    * mints a new epoch and an empty ring; this table is untouched by either).
    * `limit` clamping is `CoordStore.feedEvents`'s own job, not repeated here
    * — same division of labour as `GET /api/runs`'s `closed` flag above.
+   *
+   * `program` filters through `feed_events.runId` (migration 10). An event that
+   * names no run is PROGRAMLESS and appears only in the unfiltered read, which
+   * is this route without the parameter — a `done` or an `ask` is about a
+   * session, not about a programme.
    */
   app.get('/api/feed', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const q = req.query as { limit?: string };
+    const q = req.query as { limit?: string; program?: string };
     const limit = Number(q.limit);
-    return { events: deps.coord.feedEvents(limit) };
+    const program = typeof q.program === 'string' && q.program.trim() !== '' ? q.program : null;
+    return { events: program === null
+      ? deps.coord.feedEvents(limit)
+      : deps.coord.feedEventsForProgram(program, limit) };
   });
 
   /**
@@ -2443,7 +2696,7 @@ export function registerCoordRoutes(
     if (log) {
       try {
         const ev = log.record({
-          kind: 'ask', sessionId: ask.childId,
+          kind: 'ask', sessionId: ask.childId, runId: null,
           title: 'question answered',
           body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
                 `${ask.options[optionIndexes[0]!] ?? '?'}`,

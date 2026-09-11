@@ -380,7 +380,7 @@ const FROZEN = 1_800_000_000_499;
 
 const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'demo', sessionId: null, workspace: null, branch: null,
+  project: 'demo', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },

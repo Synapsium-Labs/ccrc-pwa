@@ -263,6 +263,15 @@ describe('the reconstruction drill', () => {
                                          // names the session that opened the run, and the registry has no
                                          // field for it at all. So a DB loss forgets who owned the
                                          // programme, and the recovery is a human saying so, not a parse.
+      'homeProject',                     // D-2352: the programme's home repo (cross-repo §3 F2). The
+                                         // ledger TEMPLATE has no home line and neither the
+                                         // registry nor `.prhistory` names one, so `reconstruct`
+                                         // rebuilds every programme with a NULL home — and the
+                                         // NEXT open backfills whatever it is told
+                                         // (`setProgramHome` is `WHERE homeProject IS NULL`),
+                                         // so `home-mismatch` cannot fire until then. A DB loss
+                                         // forgets the home; the recovery is the coordinator
+                                         // sending the right one on the next open, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'health',                          // F7's per-run health facts. Every one of the eight is a
@@ -304,20 +313,20 @@ describe('the reconstruction drill', () => {
     // production module" survives this, since `import type` is erased.)
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
-      project: true, sessionId: true, workspace: true, branch: true, state: true,
+      project: true, homeProject: true, sessionId: true, workspace: true, branch: true, state: true,
       claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(21);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(22);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(16);
+    expect(UNRECOVERABLE.length).toBe(17);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {
