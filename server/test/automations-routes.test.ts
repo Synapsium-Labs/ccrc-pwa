@@ -242,6 +242,89 @@ describe('POST /api/automations — create', () => {
   });
 });
 
+describe('a row this build cannot model is not a wedge, and not a spawn', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { await app?.close(); app = undefined; });
+
+  /** The rollback shape `schema.ts` argues is real: a newer build writes a
+   *  fourth `state` token and is rolled back, so `hydrateAutomation` degrades
+   *  it to `'unknown'`. Written by SQL because the type system is what stops
+   *  any shipped producer from writing it. */
+  const seedUnreadableState = (w: { coord: CoordStore }, id: number): void => {
+    w.coord.db.prepare("UPDATE automations SET state = 'quarantined' WHERE id = ?").run(id);
+  };
+
+  it('refuses to FIRE it — the one door that spawns a session was the only fail-open one', async () => {
+    // Every state door was fail-CLOSED on `unknown` (the transition table
+    // gives it no outgoing edge) and the run door was fail-OPEN: it refuses
+    // the literal `'retired'` and nothing else. So the single door that
+    // issues `ccd ws-add` would spawn a real fleet session for a row in a
+    // state this build cannot model, while Pause, Retire and Arm all
+    // answered `409 bad-transition` — an automation the operator could only
+    // fire and never stop. `dueAutomations` already takes the opposite
+    // stance for an unreadable CADENCE ("a row this build cannot schedule
+    // must never be selected for firing even by a caller that bypassed a
+    // route"); this is the same rule for an unreadable STATE.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const id = (await create(app, validBody())).json().automation.id as number;
+    seedUnreadableState(w, id);
+
+    const res = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'unknown' });
+    expect(w.coord.automation(id)!.leaseRunId, 'and no lease was taken').toBeNull();
+  });
+
+  it('gives it a door OUT — retire and pause are reachable, arming is not', async () => {
+    // The wedge: with no outgoing edge at all, the only remedy for a
+    // degraded row was hand-editing coord.db, which is the "wedge with no
+    // door" `armAutomation`'s own docstring calls a defect. Retire and pause
+    // are safe to permit — neither models the row, both only stop it. Arming
+    // stays shut, because arming a row this build cannot read WOULD model it.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const idA = (await create(app, validBody())).json().automation.id as number;
+    const idB = (await create(app, validBody({ name: 'b' }))).json().automation.id as number;
+    seedUnreadableState(w, idA);
+    seedUnreadableState(w, idB);
+
+    const paused = await app.inject({
+      method: 'POST', url: `/api/automations/${idA}/state`, payload: { state: 'paused' },
+    });
+    expect(paused.statusCode, paused.body).toBe(200);
+    expect(w.coord.automation(idA)!.state).toBe('paused');
+
+    const retired = await app.inject({
+      method: 'POST', url: `/api/automations/${idB}/state`, payload: { state: 'retired' },
+    });
+    expect(retired.statusCode, retired.body).toBe(200);
+
+    // And arming is still refused — it needs a state this build can model.
+    const idC = (await create(app, validBody({ name: 'c' }))).json().automation.id as number;
+    seedUnreadableState(w, idC);
+    const armed = await app.inject({ method: 'POST', url: `/api/automations/${idC}/arm` });
+    expect(armed.statusCode).toBe(409);
+    expect(armed.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'unknown' });
+  });
+
+  it('counts it, so the buckets still add up to the total', async () => {
+    // `automationStats()` had three buckets and a total, so a degraded row
+    // made `armed + paused + retired < total` with nothing saying why — the
+    // same silence `runsEvicted` exists to refuse.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const id = (await create(app, validBody())).json().automation.id as number;
+    seedUnreadableState(w, id);
+    const st = w.coord.automationStats();
+    expect(st.unreadable).toBe(1);
+    expect(st.armed + st.paused + st.retired + st.unreadable).toBe(st.total);
+  });
+});
+
 describe('an edit changes what it was asked to change', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { await app?.close(); app = undefined; });

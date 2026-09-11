@@ -13,10 +13,20 @@
 // (`auth-gate.test.ts`). The box token authenticates the FLEET HOST, and
 // every session on that single-uid box holds it; a schedule the fleet could
 // write is a schedule any session could install for itself, standing and
-// unattended — strictly wider than the path `gh` was refused. Never add a
-// fourth ungated door here: the three that exist (`POST /api/coord/pause`,
-// `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`) are pinned
-// shut at exactly three by `coord-pause-route.test.ts`'s `UNGATED` set.
+// unattended — strictly wider than the path `gh` was refused.
+//
+// ADD NO UNGATED DOOR HERE. The ungated doors this tree has are named, not
+// counted — `POST /api/coord/pause`, `POST /api/runs/:id/abandon`, `POST
+// /api/claims/:id/break` and `POST /api/runs/:id/reclaim` — each with its own
+// D-282 argument, which is that the party a gate would lock out is the one
+// holding the token. No automations route has that argument. This banner
+// stated a CARDINAL for one wave — a smaller one than `coord-pause-route
+// .test.ts`'s `UNGATED` set held — which is worse than saying nothing: it
+// told the next author that reclaim's slot was free.
+// `box-token-census.test.ts` scans this file now and requires the doors to be
+// named with no count stated at all; a cardinal is unspellable here,
+// deliberately, because that scan reads any number word in this passage as a
+// claim about this surface.
 //
 // D-280 — RUN-NOW CONSTRUCTS ITS DANGEROUS FIELDS AS LITERALS AT THE CALL
 // SITE. `POST /:id/run` reads NOTHING off the request body: `project`,
@@ -312,7 +322,13 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const row = coord.automation(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'unknown-automation' });
-    if (row.state === 'retired') {
+    // `retired` (terminal) AND `unknown` — a row whose stored state token this
+    // build cannot read. This door was the only fail-OPEN one: every state
+    // door refuses `unknown` through the transition table, so a degraded row
+    // could be FIRED — a real `ccd ws-add` for a row this build cannot model
+    // — and not stopped. `dueAutomations` already takes this stance for an
+    // unreadable CADENCE; this is the same rule for an unreadable STATE.
+    if (row.state === 'retired' || row.state === 'unknown') {
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: row.state });
     }
     const now = Date.now();

@@ -171,13 +171,19 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
   `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
   argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
-  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
-  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
-  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
-  `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
-  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
-  Don't assume — read the guards.
+  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4), `POST /api/coord/caps` (wave 6),
+  and every WRITE in the automations file — `POST /api/automations`, `POST /api/automations/:id`, `POST
+  /api/automations/:id/arm`, `POST /api/automations/:id/state`, `POST /api/automations/:id/run` and `POST
+  /api/automations/pause` — are session-gated only; armed, they all sit behind the auth gate like every
+  other PWA-surface write. The kickoff route needs prose because no scanner can see it:
+  `coord-pause-route.test.ts` reads `server/src/coord/routes.ts` alone, and that route is registered in
+  `server.ts`, so a door opened outside that one file is invisible to the set that pins the doors. Caps IS
+  in that file's `SESSION_ONLY` set. The automations writes are in neither, and are not typed here either:
+  `box-token-census.test.ts` DERIVES them from `server/src/auto/routes.ts` (every `app.post` in a file it
+  separately proves consults no token) and checks this sentence against all three sources in both
+  directions (D-1231). Read them as the widest session-cookie-only capability in the tree: `/:id/run`
+  issues a real `ccd ws-add`, and `POST /api/automations` installs a STANDING unattended schedule that
+  will do so on the clock. Don't assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).

@@ -6143,6 +6143,10 @@ export interface AutomationStats {
   armed: number;
   paused: number;
   retired: number;
+  /** Rows whose stored `state` token this build cannot read (the deploy-
+   *  rollback shape). Present so the buckets ADD UP to `total`: with three
+   *  buckets and a total, a degraded row was a silent difference. */
+  unreadable: number;
   runsTotal: number;
   runsEvictedTotal: number;
   oldestRunAt: number | null;

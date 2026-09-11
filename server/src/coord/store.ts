@@ -645,10 +645,24 @@ interface AutomationRunRowDb {
 }
 
 /** The state machine, a derived total table — `RUN_TRANSITIONS`'s idiom.
- *  `retired` is terminal by having no outgoing edge; `unknown` (a row this
- *  build cannot read) has none either. */
+ *  `retired` is terminal by having no outgoing edge.
+ *
+ *  `unknown` — a row whose stored token this build cannot read, the deploy-
+ *  rollback shape `schema.ts:41-45` argues is real — HAS two: pause and
+ *  retire. It had none, and that made it a wedge with no door, which
+ *  `armAutomation`'s own docstring names as a defect: every state door was
+ *  fail-CLOSED on it while `POST /:id/run` (which refuses the literal
+ *  `'retired'` and nothing else) was fail-OPEN, so the operator could FIRE a
+ *  row this build cannot model and could not stop it, with hand-editing
+ *  coord.db as the only remedy. Pause and retire are the two transitions that
+ *  do not MODEL the row — they only stop it — so they are exactly the pair a
+ *  degraded row may take. Arming stays shut in both directions: `armAutomation`
+ *  asks this table for an `'armed'` edge and there is none. */
 const AUTOMATION_TRANSITIONS: Readonly<Record<AutomationState, readonly AutomationState[]>> =
-  Object.freeze({ armed: ['paused', 'retired'], paused: ['armed', 'retired'], retired: [], unknown: [] });
+  Object.freeze({
+    armed: ['paused', 'retired'], paused: ['armed', 'retired'], retired: [],
+    unknown: ['paused', 'retired'],
+  });
 
 /** Whether an outcome moves `consecutiveFailures`, and how — a TOTAL map
  *  over the outcome union (spec §8): `ok` resets it, `skipped`/`missed` are
@@ -4676,15 +4690,21 @@ export class CoordStore {
       "SUM(CASE WHEN state = 'armed' THEN 1 ELSE 0 END) AS armedN, " +
       "SUM(CASE WHEN state = 'paused' THEN 1 ELSE 0 END) AS pausedN, " +
       "SUM(CASE WHEN state = 'retired' THEN 1 ELSE 0 END) AS retiredN, " +
+      // THE FOURTH BUCKET, so the three add up to the total. Anything that is
+      // not one of the three live tokens is a row this build cannot read, and
+      // counting only the three made `armed + paused + retired < total` with
+      // nothing saying why — the same silence `runsEvicted` exists to refuse.
+      "SUM(CASE WHEN state NOT IN ('armed', 'paused', 'retired') THEN 1 ELSE 0 END) AS unreadableN, " +
       'COALESCE(SUM(runsEvicted), 0) AS evictedN FROM automations',
     ).get() as { n: number; armedN: number | null; pausedN: number | null; retiredN: number | null;
-                 evictedN: number };
+                 unreadableN: number | null; evictedN: number };
     const r = this.db.prepare(
       'SELECT count(*) AS n, MIN(startedAt) AS oldestRunAt, MAX(startedAt) AS newestRunAt ' +
       'FROM automation_runs',
     ).get() as { n: number; oldestRunAt: number | null; newestRunAt: number | null };
     return {
       total: a.n, armed: a.armedN ?? 0, paused: a.pausedN ?? 0, retired: a.retiredN ?? 0,
+      unreadable: a.unreadableN ?? 0,
       runsTotal: r.n, runsEvictedTotal: a.evictedN,
       oldestRunAt: r.oldestRunAt, newestRunAt: r.newestRunAt,
     };

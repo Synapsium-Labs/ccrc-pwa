@@ -238,10 +238,14 @@ describe('the wire shapes (spec §10/§11)', () => {
 
   it('AutomationStats reports totals and the growth, never a silence', () => {
     const stats: AutomationStats = {
-      total: 3, armed: 1, paused: 1, retired: 1,
+      total: 4, armed: 1, paused: 1, retired: 1, unreadable: 1,
       runsTotal: 50, runsEvictedTotal: 12, oldestRunAt: 1, newestRunAt: 2,
     };
     expect(stats.runsEvictedTotal).toBe(12);
+    // THE BUCKETS ADD UP, which is the whole reason `unreadable` exists: with
+    // three buckets and a total, a row whose stored `state` this build cannot
+    // read was a silent difference between them.
+    expect(stats.armed + stats.paused + stats.retired + stats.unreadable).toBe(stats.total);
   });
 
   it('FleetMsg gains an additive {type:\'automations\'} arm', () => {

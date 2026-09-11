@@ -881,8 +881,17 @@ the `runsEvicted` gap row and the `adopted` chip.
 - [ ] Deploy: **server lane only** — `bash deploy/deploy.sh`. Deliberately **not** agent-first:
       nothing under `ccd/`, `session-hook.sh` or `ccd/coordinator-skill/` is touched, and
       `agent/` is byte-identical. The final gate is `/health` reporting the shipped sha. Then
-      confirm on the box that `coord.db` reached `user_version 7` and that the first
+      confirm on the box that `coord.db` reached **`user_version 9`** and that the first
       `sweepAutomations` tick logged nothing — an empty table must be silent, not warn.
+      **Nine, not the seven this step said while the plan was being written.** This entry was
+      drafted when `MIGRATIONS[6]` was the free slot; by the time the branch merged, `main` had
+      taken 7 and 8, so the automations migration was renumbered to index 8 / version 9 (the
+      merge commit says so in its subject, and `schema.ts`'s own migration-9 banner records
+      both renumbers). Read the number off `COORD_SCHEMA_VERSION`, which is DERIVED
+      (`MIGRATIONS.length`) — the design paragraphs earlier in this plan are snapshots of what
+      the slot was when they were written and are left as history, but this one is an
+      instruction someone executes, and "it reads 9, not 7" gives them no way to tell a
+      renumber from a wrong build or a migration that never ran.
 
 ---
 

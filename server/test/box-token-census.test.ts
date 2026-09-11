@@ -67,6 +67,13 @@ const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
+/** THE THIRD ROUTE FILE, added to the corpus because this branch put a census
+ *  claim in it and nothing could see the claim. Its banner said "the three
+ *  that exist … pinned shut at exactly three" while `UNGATED` had four — an
+ *  already-false cardinal in exactly the file a future author reads before
+ *  adding a door here, and the sweep that corrects the number in the five
+ *  scanned sites would not have touched this sixth. */
+const AUTO_SRC = read('server/src/auto/routes.ts');
 
 /** The two mechanisms that count as "this handler consulted the box token" —
  *  the same pair `coord-pause-route.test.ts` and `auth-gate.test.ts` already
@@ -93,6 +100,14 @@ const lanesIn = (src: string): string[] => {
 
 const COORD_LANES = lanesIn(COORD_SRC);
 const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC)];
+
+/** THE AUTOMATIONS WRITES, DERIVED. `auto/routes.ts` consults no box token at
+ *  all — asserted below, not assumed — so every `app.post` it registers is a
+ *  coordination WRITE that carries none, which is the class CLAUDE.md's bullet
+ *  promises to name in full. Derived rather than listed for the reason D-1231
+ *  records about the hand-kept member: this branch added six at once, and a
+ *  seventh would have to be typed here to be checked. */
+const AUTO_WRITES = [...AUTO_SRC.matchAll(/app\.post\('([^']+)'/g)].map((m) => m[1]!);
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -121,8 +136,11 @@ const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
  *  this literal comes out and the harvest covers it. */
 const KICKOFF = '/api/sessions/:id/kickoff';
 
-/** Every coordination write the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF];
+/** Every coordination write the bullet must describe as carrying no box token.
+ *  The automations writes join by DERIVATION rather than by being typed — see
+ *  `AUTO_WRITES`, and see the pair of assertions that keep that derivation
+ *  honest (the file consults no token; the list is not empty). */
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ...AUTO_WRITES];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -246,6 +264,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(ALL_LANES, 'the server.ts lane is missing').toContain('POST /api/notify');
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 1);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
+    // The automations file's two properties, both load-bearing for the bullet
+    // check below: it registers writes, and NONE of them consults the token.
+    // The second is what makes every `app.post` in it a member of the
+    // session-only class rather than something this scan has to classify.
+    expect(AUTO_WRITES.length, 'the automations write scan collapsed').toBeGreaterThan(4);
+    expect(lanesIn(AUTO_SRC),
+      'an automations route grew a box-token check — it is no longer session-only, and the ' +
+      'derivation that feeds the bullet check is now wrong').toEqual([]);
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {
@@ -354,6 +380,22 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(numeralsIn(p), 'the caps paragraph grew a hand-kept count').toEqual([]);
     for (const door of UNGATED_DOORS) {
       expect(p, `the caps paragraph no longer names the ungated ${door}`).toContain(door);
+    }
+  });
+
+  it('the automations route banner ENUMERATES the ungated doors instead of counting them', () => {
+    // The class README's caps paragraph is already held to, applied to the
+    // file that stated the count wrong. A cardinal about `UNGATED.size` has
+    // gone two → three → four in this tree's history and left a stale number
+    // behind every time, so this banner names the doors and states no count —
+    // and a fifth door reds this rather than silently falsifying a sentence
+    // that tells the next author their slot is free.
+    const p = passage('auto/routes.ts, the gating banner', AUTO_SRC,
+      '// GATING (spec §10 "Gating")', '// D-280');
+    expect(numeralsIn(p), 'the automations banner grew a hand-kept count').toEqual([]);
+    for (const door of UNGATED_DOORS) {
+      expect(p, `the automations banner does not name the ungated ${door} — it tells the next ` +
+        'author which doors exist, so a missing one reads as a free slot').toContain(door);
     }
   });
 
