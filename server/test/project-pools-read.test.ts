@@ -1,6 +1,7 @@
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`server/src/io.ts:103` — the one read
-// with no measured sibling). This reader splits them ONE LEVEL UP, off the
+// is not there" into "the directory would not list" (the `FleetIO.readdir`
+// member in `server/src/io.ts` is the one read with no measured sibling). This
+// reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
 // direction silently LIFTS every project's pool constraint, which is the whole

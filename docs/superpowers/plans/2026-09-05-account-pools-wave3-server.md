@@ -476,7 +476,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 - Row 20 — `project-pools-read.test.ts`. Goes RED when the `rootNames.includes(POOLS_DIR_NAME)` gate is deleted (absent directory would answer `unreadable` instead of `untagged`), when the null-`readdir` arm returns an empty map instead of `{listed:false}` (unlistable would answer `untagged` — the tag silently lifted), when the dot-leading skip is removed, or when a mid-read `absent` is treated as anything but a skip.
 - Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. **The `\0` arm is NOT pinned and cannot be** — measured, and recorded as D-2017 rather than dressed up: delete `.includes('\0')` and all 14 cases stay green, because `POOL_NAME_RE` is anchored and its class excludes `\0`, so every NUL-bearing content is already `malformed` by the grammar. Four mutations measured red for this row (delete the cap, `> 64`, `>= 63`, cap below the strip); the fifth is a documented no-op with a void condition, not a row.
 
-**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:103`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
+**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:105`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -484,8 +484,9 @@ Create `server/test/project-pools-read.test.ts`:
 
 ```ts
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`server/src/io.ts:103` — the one read
-// with no measured sibling). This reader splits them ONE LEVEL UP, off the
+// is not there" into "the directory would not list" (the `FleetIO.readdir`
+// member in `server/src/io.ts` is the one read with no measured sibling). This
+// reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
 // direction silently LIFTS every project's pool constraint, which is the whole
@@ -823,8 +824,8 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * only after the aggregate deadline exists. `readProjectPoolsWithRoot` is the
  * variant for a route that also consumes that root answer.
  * The parent listing is what splits "the directory is not there" from "the
- * directory would not list": `io.readdir` cannot say (`server/src/io.ts:103` —
- * the one read in that file with no measured sibling), and the parent can.
+ * directory would not list": the `FleetIO.readdir` member in `server/src/io.ts`
+ * cannot say (it is the one read with no measured sibling), and the parent can.
  *
  * `budgetMs` belongs to that caller too: a watcher supplies a slice of its poll
  * cadence and request routes supply their request-oriented budget. One shared
@@ -3625,7 +3626,7 @@ is never a ledger number.
   `ccd` unvalidated as `/workspaces` does, and `poolFor` is a Map lookup against names a LISTING returned,
   so no request-supplied name is ever joined into a path — recorded for alignment. (spec §12 P-16)
 - **D-1680** (Task 2) — `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling
-  (`:103`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
+  (`:105`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
   listing the caller already holds. One residual is disclosed rather than closed: a regular file or an
   EACCES directory at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` —
   the correct polarity (nobody decides, nothing crosses) but fleet-wide, and the only `pools/` failure
@@ -4154,7 +4155,7 @@ block above.
 
 - **D-2483 (2026-09-10)** (the #81 coordinator acceptance review of exact head
   `4470ea21`) — **The first deadline correction falsified its own inventories and local-behavior claim.**
-  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:103`, not
+  `listed:false` can also mean the caller's budget elapsed before the listing; `readdir` is at `server/src/io.ts:105`, not
   the now-measured `readFileB64Measured`; and an aggregate race bounds local reads even though localIO ignores
   the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
   made D-2465's “several never-resolving markers” literal by splitting rejection into a separate case; the
@@ -4227,8 +4228,9 @@ block above.
   the interface inventory names required `budgetMs` plus both root-source forms, and the deviation entries state
   the finite watcher/request policies, callback-started route roots, best-effort cancellation boundary,
   `setImmediate` overlap sentinel, fake-timer deadline tests and coherent whole-population degradation.
-  Positional `FleetIO.readdir` citations were re-measured at `server/src/io.ts:103`. **When a correction rejects
-  a plan's mechanism, amend the executable task block and its historical claims in the same change.**
+  Positional `FleetIO.readdir` citations were re-measured at `server/src/io.ts:105`; D-2498 records that this
+  measurement preceded a same-commit docstring edit and therefore did not describe the published tree. **When a
+  correction rejects a plan's mechanism, amend the executable task block and its historical claims in the same change.**
 
 - **D-2490 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A rollout correction must sweep
   the shared contract imported by both ends, not only the server source that implements it.** `shared/api.ts`
@@ -4276,14 +4278,17 @@ block above.
   a caller can treat stale bytes as proof of revival. **When one measurement feeds two decisions, pin the
   normalized value at their shared seam.**
 
-- **D-2495 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Removing a pending-table row
-  is not complete request cancellation if its timer or AbortSignal listener survives.** The real-WebSocket abort
-  test now freezes timers only around request registration, observes one request timer, aborts, and requires zero
-  timers plus one `removeEventListener` call before accepting a late response. A separate already-aborted case
-  asserts synchronously that no pending entry, timer, listener, or request frame is registered before checking
-  the rejection. Deleting abort-path `clearTimeout`, deleting `entry.dispose`, or deleting the pre-aborted guard
-  each makes its corresponding assertion red. **Cancellation owns every resource registered for the request,
-  including the resources that do not appear in the pending map.**
+- **D-2495 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`, corrected by D-2503) — **Removing
+  a pending-table row is not complete request cancellation if its timer or AbortSignal listener survives.** The
+  real-WebSocket abort test freezes timers only around request registration, observes one request timer, aborts,
+  and requires zero timers before accepting a late response. A separate already-
+  aborted case asserts synchronously that no pending entry, timer, listener, or request frame is registered before
+  checking the rejection. Deleting abort-path `clearTimeout` or deleting the pre-aborted guard makes its
+  corresponding assertion red. D-2503 narrows this evidence: a `{ once:true }` listener has already been removed
+  by the event target when the abort callback runs, so the redundant abort-path disposer is removed and timeout
+  and response settlement carry
+  the load-bearing listener-detachment tests. **Every settlement path must release the resources still registered
+  for that request; do not infer another path's effect from the same helper call.**
 
 - **D-2496 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **An aggregate deadline's strict
   decision bound must not be described as universal syscall cancellation.** `FleetIO` and the pool reader now
@@ -4294,9 +4299,11 @@ block above.
   `fs.promises.readFile` makes it return the bytes and reds. **Name strict decision timing and best-effort work
   cancellation as separate guarantees.**
 
-- **D-2497 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **A semantic sweep is evidence
-  only when its corpus, query class, and classifications are reproducible.** D-1680's positional citation is
-  re-measured at `server/src/io.ts:103`; D-2490 now admits its false exhaustive conclusion; the wave input no
+- **D-2497 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`, corrected by D-2498 and D-2504) —
+  **A semantic sweep is evidence only when its corpus, query class, and classifications are reproducible.**
+  D-1680's positional citation was re-measured at `server/src/io.ts:105` before the same commit inserted two lines
+  above it, so that claim did not describe the published tree; D-2498 replaces shipped offsets with symbol citations.
+  D-2490 now admits its false exhaustive conclusion; the wave input no
   longer says a live wave-2b strand producer has not shipped; and `shared/generate.mjs` now says the supervisor's
   live five-second loop calls `_ccrc_pool`, rather than that a new `ccd` will call it later. The class search was
   case-insensitive over every `shared/**/*.{ts,mjs,mts}`, every `server/src/**/*.ts`, and this complete plan,
@@ -4311,5 +4318,55 @@ block above.
   renderer remain wave-4 PWA work (no current PWA pool consumer), and `shared/roster.ts`'s possible future grammar
   divergence is conditional. The unrelated `shared/api.ts` lifecycle paragraph was another stale rollout claim,
   so it now describes the live journal contract; other `when`/`once` hits state runtime conditions, not rollout
-  status. **A negative search proves only its query; publish the query, follow named symbols to current consumers,
-  and classify every surviving semantic match before calling the class closed.**
+  status. D-2504 rules that this method was still too narrow: its corpus omitted shipped `ccd/` and deploy-side
+  consumers, and pairing pool terms with rollout verbs could never find a present-tense consumer census such as
+  "their one consumer is X". The relevant class is a sentence asserting who consumes something, or when something
+  lands, that the current tree has since falsified. **A negative search proves only its query; neither a published
+  query nor classified survivors makes an omitted corpus or unreachable sentence class complete.**
+
+- **D-2498 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A citation measured
+  before the same commit's edits is not evidence for that commit.** The D-2497 correction inserted two lines into
+  `FleetIO`'s docstring after measuring `readdir` at `server/src/io.ts:103`, moving the member to `:105` while six
+  live plan/source/test citations continued to point at `readFileB64Measured`, the exact counterexample to their
+  claim. The two shipped citations now name the `FleetIO.readdir` symbol rather than an offset; plan snapshots use
+  the corrected `:105`, and D-2489/D-2497 disclose that their re-measurement preceded the invalidating edit.
+  **Apply every hunk before measuring a positional citation, and use a symbol where position carries no meaning.**
+
+- **D-2499 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A public constant's
+  rationale must name its measured production consumer, not tests that do not import it.** `HUES` is exported for
+  `pwa/src/lib/offline.ts`, which validates cached roster entries against it. `shared/roster-json.mjs` and
+  `ccd/ccrc-adopt` currently repeat the six-value order, so the comment retains the warning that consolidation must
+  reuse this sequence rather than add another copy. **Follow the export to its importer before explaining why it is public.**
+
+- **D-2500 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A consumer census
+  cannot stop at the first familiar reader.** The generated `_ccrc_dir_id`, `_ccrc_label`, and `_ccrc_hue` helpers
+  feed `ccd/statusline-command.sh`, while `CCRC_MEASURED` also gates and drives `ccd/ccd-telemetry-keepalive`.
+  `shared/generate.mjs` now names both consumers instead of calling the statusline the sole one.
+  **Search each emitted symbol independently before claiming one consumer for a group.**
+
+- **D-2501 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **Landed installer
+  behavior must not remain future tense in a shipped executable.** `ccd/ccrc` calls `_inst_accounts_sh` on every
+  install run, so `ccd/ccd` now says both `deploy/deploy.sh` and `ccrc install` generate `accounts.sh`; it no longer
+  says that install support will land later. **A sentence about when a verb lands must be checked against that verb's tree.**
+
+- **D-2502 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **"Both directions"
+  requires two assertions.** `ccd-refusal-scan.test.ts` already rejected producer tokens absent from the combined
+  L0/SENTENCES vocabulary; it now also rejects each journal-only `LC_REFUSAL_TOKENS` member with no `ccd` producer.
+  `wsaudit.test.ts` separately keeps SENTENCES set-equal to its stdout producers. Removing a journal token's final
+  call site now reds as `declared journal-only tokens with no ccd producer`.
+  **State vocabulary equality only when stale declarations and unknown emissions both fail.**
+
+- **D-2503 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A disposer call on
+  an abort callback registered `{ once:true }` does not prove listener cleanup on paths where the listener never
+  fires.** The event target has already detached that listener before the callback invokes `entry.dispose()`, so
+  the prior abort assertion measured a no-op. Real-WebSocket cases now settle through timeout and a normal response
+  while retaining the caller's signal, and each requires `removeEventListener`; removing either path's disposer
+  reds its own case. The behavior-preserving abort-path disposer is removed rather than retained as ceremonial cleanup.
+  **Pin cleanup on the settlement paths where the resource remains registered.**
+
+- **D-2504 (2026-09-11)** (the #81 coordinator round-six ruling on exact head `d978afc6`) — **The repeated defect
+  class is not "staged pool prose"; it is a sentence asserting who consumes something, or when something lands,
+  that the current tree has since falsified.** D-2497's corpus omitted shipped `ccd/` and deploy-side consumers, and
+  its pool-term-plus-rollout-verb query could not reach D-2500's present-tense "one consumer" census. Per the ruling,
+  this correction fixes D-2498 through D-2503 and records the class without running another sweep.
+  **A search method that structurally cannot match a known counterexample cannot close that counterexample's class.**

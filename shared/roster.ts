@@ -23,8 +23,10 @@
  * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
- * auto-assignment walk below needs an actual sequence to walk; exported so
- * parser and generator tests can pin that sequence without re-deriving it.
+ * auto-assignment walk below needs an actual sequence to walk; exported because
+ * `pwa/src/lib/offline.ts` uses it to validate cached roster entries. The
+ * deploy-side parser and `ccd/ccrc-adopt` currently repeat the literal; any
+ * consolidation must reuse this order rather than introduce another copy.
  */
 export const HUES = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as const;
 export type Hue = (typeof HUES)[number];

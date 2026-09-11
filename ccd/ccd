@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=af79434f87772bfad73848aad1b602a946ca84e22ebab9b353ed27219fa02ea5
+# ccrc:generated 1 sha256=ceb1b13c89f69eed4b7ff27d17312a1fa5ef0f1bb0da1618d2f256673cc543d5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1043,8 +1043,8 @@ fi
 die() { echo "ccd: $*" >&2; exit 1; }
 
 # ── the account roster ──────────────────────────────────────────────────
-# Generated from ~/.ccrc/accounts.json (deploy/deploy.sh today, `ccrc install`
-# once that verb lands). Derived from HOME with NO env override, exactly as REG,
+# Generated from ~/.ccrc/accounts.json by deploy/deploy.sh and by every
+# `ccrc install` run. Derived from HOME with NO env override, exactly as REG,
 # WRAPPER_DIR, PROJECTS_ROOT and WORKTREES_ROOT are: HOME is the single
 # isolation boundary the test harness sets, and an override here would let a
 # stray Environment= run a live box against somebody else's account list.

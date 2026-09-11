@@ -186,7 +186,7 @@ export class FleetClient {
         if (entry === undefined) return;
         clearTimeout(entry.timer);
         this.pending.delete(id);
-        entry.dispose();
+        // `{ once: true }` has already detached the listener before this runs.
         reject(new Error('aborted'));
       };
       const dispose = (): void => signal?.removeEventListener('abort', abort);
@@ -196,14 +196,8 @@ export class FleetClient {
         reject(new Error('timeout'));
       }, wait);
       this.pending.set(id, {
-        resolve: (value) => {
-          dispose();
-          resolve(value);
-        },
-        reject: (error) => {
-          dispose();
-          reject(error);
-        },
+        resolve,
+        reject,
         timer,
         dispose,
       });

@@ -128,8 +128,9 @@ function idArray(ids) {
  *
  * ── `_ccrc_dir_id`, `_ccrc_label`, `_ccrc_hue`, `CCRC_MEASURED` ──
  *
- * The four emissions that finished what stage 2a started. Their one consumer
- * is `ccd/statusline-command.sh`, which until they existed held the LAST
+ * The four emissions that finished what stage 2a started. Their consumers are
+ * `ccd/statusline-command.sh` and, for `CCRC_MEASURED`,
+ * `ccd/ccd-telemetry-keepalive`; the statusline until then held the LAST
  * hand-written copy of the roster in the tree — four literal `case` arms
  * mapping a config dir to an account, and four more mapping it to a label and
  * a colour. An account those arms did not name got no `~/.cc-limits/<id>.json`

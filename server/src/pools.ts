@@ -116,8 +116,8 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
  * only after the aggregate deadline exists. `readProjectPoolsWithRoot` is the
  * variant for a route that also consumes that root answer.
  * The parent listing is what splits "the directory is not there" from "the
- * directory would not list": `io.readdir` cannot say (`server/src/io.ts:103` —
- * the one read in that file with no measured sibling), and the parent can.
+ * directory would not list": the `FleetIO.readdir` member in `server/src/io.ts`
+ * cannot say (it is the one read with no measured sibling), and the parent can.
  *
  * `budgetMs` belongs to that caller too: a watcher supplies a slice of its poll
  * cadence and request routes supply their request-oriented budget. One shared

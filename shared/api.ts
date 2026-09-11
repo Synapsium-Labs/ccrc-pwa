@@ -5900,8 +5900,10 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  *
  * THE CONTRACT THE LIFECYCLE JOURNAL HONOURS, AND WHAT ENFORCES IT: every token
  * handed to `_lc_refuse` / `_lc_fail` is a member of this union OR already a
- * SENTENCES key, and the cross-language scan over `ccd/ccd` asserts it in both
- * directions with a coverage floor. Adding a tenth token is a two-line edit;
+ * SENTENCES key. The cross-language scan over `ccd/ccd` asserts that every
+ * emitted token is known and that every member of this journal-only union has a
+ * producer, with a coverage floor; `wsaudit.test.ts` separately holds the
+ * SENTENCES vocabulary set-equal to its stdout producers. Adding a tenth token is a two-line edit;
  * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
  */
 export type LcRefusalToken =
