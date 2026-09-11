@@ -1,4 +1,4 @@
-import { NO_RESPONSE_TEXT, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL, type ChatEvent } from '../../../shared/api.js';
+import { NO_RESPONSE_TEXT, RATE_LIMIT_ERROR, RESUME_PROMPT_PREFIX, SYNTHETIC_MODEL, type ChatEvent } from '../../../shared/api.js';
 
 const TOOL_RESULT_MAX = 20_000;
 const TOOL_INPUT_MAX = 4_000;
@@ -61,6 +61,9 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     isSidechain?: unknown;
     isMeta?: unknown;
     message?: { content?: unknown; model?: unknown } | null;
+    isApiErrorMessage?: unknown;
+    error?: unknown;
+    quotaLimits?: unknown;
   };
   if (env.isSidechain === true) return [];
   if (env.type !== 'user' && env.type !== 'assistant') return [];
@@ -105,6 +108,18 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
       }
     }
     return out;
+  }
+
+  // D-2365: the row Claude Code appends on a 429 is a harness event, not the
+  // model. The FIELDS decide (`error`, not the sentence); `resetsAt` is copied
+  // in the unit Claude Code wrote it (epoch seconds) and dropped when it is not
+  // a number — an adapter may not coerce a distinction it received.
+  if (env.isApiErrorMessage === true && env.error === RATE_LIMIT_ERROR) {
+    const q = env.quotaLimits;
+    const resetsAt = q !== null && typeof q === 'object' && typeof (q as { resetsAt?: unknown }).resetsAt === 'number'
+      ? (q as { resetsAt: number }).resetsAt : undefined;
+    const text = flattenContent(content).trim() || 'usage limit reached';
+    return [{ kind: 'system', uuid, ts, text, origin: 'limit', ...(resetsAt !== undefined ? { resetsAt } : {}) }];
   }
 
   // D-2228: the padding Claude Code writes after an unsubmitted resume prompt.

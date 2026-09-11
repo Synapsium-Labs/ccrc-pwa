@@ -958,6 +958,33 @@ line, `message.model === '<synthetic>'` for the padding — each narrowed by the
 (`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
 starting with that prefix, and nothing scans for it.
 
+### A limit is measured on the transcript, and Claude Code's own recovery is left alone (D-2360–D-2370)
+
+The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
+(`docs/superpowers/specs/2026-09-10-limit-recovery-followups-design.md`):
+
+- **A stale auto-continue gets its Enter.** When Claude Code slept through its own reset
+  (`Your usage limit has reset · press enter to continue`), `_auto_stale_check` presses Enter
+  once per `STALE_PRESS_COOLDOWN` — never with a running turn, never over a non-empty box —
+  and logs `stale-resume` / `stale-skip` in `swap.log`. An armed auto-continue is never
+  touched (D-2229).
+- **The transcript is a second limit detector.** `_transcript_limit_banner` reads the row
+  Claude Code appends on a 429 (`isApiErrorMessage:true`, `error:"rate_limit"`, `resetsAt`).
+  `_session_hard_blocked` always asks the pane first; only its transcript arm stands down for a
+  running turn, a non-empty input box, or a fresh `$REG/<id>.stalepress` stamp inside
+  `STALE_RESUME_GRACE=30` (D-2443). Its positive or negative transcript verdict is cached in
+  `$REG/<id>.tscan` for `TRANSCRIPT_ARM_INTERVAL=30` seconds (D-2444), while the draft guard is
+  still re-measured on every positive verdict. The rescue arm and the strand verdict both use
+  this classifier; a blank pane no longer blinds the rescue, and the `auto-rescue` line says
+  ` via=transcript` when the pane alone would not have fired. The pane regex is deliberately not
+  widened (D-2364).
+- **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
+  Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
+- **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
+  `auto-continue-armed` for the mail lane only; the sweep holds the delivery five minutes
+  without counting an attempt and tells the sender once. Your own send from the PWA is not
+  held: typing is Claude Code's documented cancel and the pane is on your screen.
+- Both transcript readers pair `-f` with `-r` (D-2370, closing D-2347).
 ### One memory store per project: `ccrc memory`
 
 **A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between

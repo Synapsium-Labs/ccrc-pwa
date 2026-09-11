@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { hasMenu, parseDialog } from '../pane/dialog.js';
+import { autoContinueArmed, hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
 
@@ -15,7 +15,11 @@ export interface SendDeps {
 export type SendResult =
   | { ok: true }
   | { ok: false;
-      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored';
+      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'
+        // D-2368. The pane's own status line says Claude Code will continue on
+        // its own; nothing was pressed. Only reachable when the caller opted
+        // in via `holdIfAutoContinueArmed` — see that option's own docstring.
+        | 'auto-continue-armed';
       draft?: string;
       pane?: string;
       /**
@@ -460,13 +464,21 @@ const isStrandedClear = (ansiPane: string): boolean =>
  * event — and a caller with nothing to read passes nothing and gets the
  * ordinary refusal. Same rung as `clearMailResidue`, and both still lose to
  * `resumeIfOwn`.
+ *
+ * `holdIfAutoContinueArmed` (D-2368): a caller that sets this is stating "if
+ * Claude Code's own limit recovery is armed on this pane, refuse rather than
+ * type" — ONLY the mail lane sets it. A human's send from the PWA is exactly
+ * the documented cancel (any keystroke discards the continuation), and
+ * `dispatch.ts`'s `/clear` ends the conversation on purpose, so neither of
+ * those callers may opt in: this defaults OFF, and the ordinary path types
+ * over an armed pane exactly as it always has.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
   opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
-          clearMailResidue?: boolean; ownStrandedClear?: boolean } = {},
+          clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -486,13 +498,26 @@ export function sendPrompt(
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
+    const plain = pane.replace(SGR, '');
+    // D-2368: before the menu check — on an armed screen the limit is the reason
+    // nothing may be typed, whatever else is drawn.
+    //
+    // DECIDED ON THE LAST 8 LINES, matching ccd's own window (`_pane_auto_continue_armed`
+    // is fed `tail -8` at both its call sites, ccd/ccd), not the whole `plain` capture
+    // (final review finding 2, 2026-09-10). `AUTO_CONTINUE_RE`'s phrases ("continuing
+    // automatically", "continuing shortly") are ordinary English a ccrc session routinely
+    // has scrolled into its 220x50 pane — swap.log, this file, an earlier limit episode —
+    // and testing the WHOLE capture against them held mail on a false positive that could
+    // never expire (the sweep's back-off counts no attempt for this error, by design).
+    const armWindow = plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');
+    if (opts.holdIfAutoContinueArmed && autoContinueArmed(armWindow)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
     // A menu owns the keyboard and there is no input box to type into — the only
     // `❯` on screen is the cursor resting on the selected OPTION. draftOf would
     // read that row ("1. Forward-fill per class ┌────…") as a half-typed draft
     // and report draft-present, and answering "replace" would fire C-u and then
     // type the message as raw keystrokes into a live menu. Refuse instead; the
     // caller's job is to answer the question.
-    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' };
+    if (hasMenu(plain)) return { ok: false, error: 'dialog-open' };
 
     const draft = draftOf(pane);
     // THE BOX HOLDS ANYTHING — not "the marker row is non-blank". A wedge whose

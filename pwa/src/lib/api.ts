@@ -45,6 +45,10 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   'verify-failed': 'Typed it, but the session never echoed it back.',
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
   'not-alive': 'That session is not running.',
+  // D-2368/D-2369: the recipient's OWN limit recovery is armed (any keystroke
+  // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
+  // produces this code (dialog.ts's `autoContinueArmed`, send.ts's own doc).
+  'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
 };
 
 export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
