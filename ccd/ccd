@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=beae276933b89255a6f5ab350de9541d21e1afe254ffcee3100fac3202ed419e
+# ccrc:generated 1 sha256=f70dacff29d13d1d5d3b361dcccfc8f46de0b3e0ce0b8eb7feb9e516f2d56a41
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1201,7 +1201,31 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   t=$(cat "$f" 2>/dev/null); t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]]
 }
-_pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
+# THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
+# in bash's `=~` is a COLLATION range, not a codepoint range: under
+# `en_US.UTF-8` it ACCEPTS U+00E9, U+00E5, U+00FC and U+00F1 — measured, not
+# reasoned — while the TypeScript `POOL_NAME_RE` this is pinned BYTE-EQUAL to
+# (`shared/roster.ts`, D-2480, enforced by `pool-name-parity.test.ts`) is
+# codepoint-based and rejects all four. The pin held the STRING while the two
+# engines disagreed about what it MEANS, which is the one thing a text pin
+# cannot see.
+# BOTH CALL SITES NEED IT AND THE WRITER IS THE ONE THAT BITES: `cmd_project_pool`
+# validates through here before writing the tag, so without this shadow
+# `ccd project-pool <p> pool-<U+00E9>` is ACCEPTED and WRITTEN, and the server
+# then reads that same file `malformed` — a tag the supported verb creates and
+# the console cannot decide. The reader's call (`_project_pool_state`) is
+# already covered by that function's own shadow; this one is what covers the
+# writer.
+# `local` is sufficient and is deliberately not `export`: bash re-reads the
+# locale on assignment, the shadow reaches a function called from here by
+# dynamic scoping, and it does not leak back to the caller. All three were
+# MEASURED on bash 5.2.21 / glibc 2.39, which is what this fleet runs — and that
+# is the honest scope of the claim, not "every bash". The behaviour rests on bash
+# calling `setlocale` when `LC_ALL` is assigned; if some supported bash ever did
+# not, the failure is LOUD rather than silent, because `pool-tag-parity.test.ts`
+# drives these same inputs through the real binary in more than one locale and
+# reds when the two answers differ.
+_pool_name_valid() { local LC_ALL=C; [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # NO PROJECT ON THIS BOX CAN BE IN ANY POOL — the one question whose answer does
 # not depend on reading a project's name (#69 review round 3, R3). `$POOLS_DIR`
 # has exactly one `mkdir` in the tree, inside `cmd_project_pool`, so until an
@@ -1268,6 +1292,22 @@ _pool_untaggable() {   # rc 0 = no project can be in any pool, whatever its name
 # as empty, i.e. as untagged. There is nothing to forget here.
 _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | malformed ; always rc 0
   local f v
+  # ONE LINE, THREE LOCALE-DEPENDENT DECISIONS BELOW (D-2520). The trailing
+  # strip (`[[:space:]]`), the `-n 64` cap, and `_pool_name_valid` — reached
+  # from here by dynamic scoping — are all meant to be ASCII rules about a file
+  # whose only legal content is ASCII. Without this shadow all three follow
+  # whatever locale the CALLER happened to be running under, and `ccd` sets none.
+  # Measured on this box: `pool-a` + U+3000 answers `malformed` under `LC_ALL=C`
+  # and `named pool-a` under `en_US.UTF-8`. The SAME BYTES, two verdicts, from
+  # the function spec 5.1 makes the AUTHORITY — and nothing anywhere can report
+  # which one you got. A systemd unit's minimal environment and an interactive
+  # shell are enough to disagree.
+  # `ccd` already owns this idiom and says why: `_lc_dec_ok` shadows `LC_ALL=C`
+  # to make `${#1}` count BYTES. This is the same move for the same reason.
+  # It also makes `-n 64` a BYTE cap, which is what `ccd-project-pool.test.ts`
+  # has always claimed it was (D-2521) and what lets it agree with the server's
+  # `.length >= 64`: UTF-8 never spends fewer bytes than UTF-16 spends units.
+  local LC_ALL=C
   # A registry row with no `.project` field (pre-2026-07-28 rows have none)
   # must never resolve to the DIRECTORY: `$POOLS_DIR/` would trip the `-f`
   # check below (a directory is never a regular file) and read `unreadable`
@@ -1490,6 +1530,30 @@ _is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w"
 # session is never PLACED on and never seeded with as HOME. It may still be
 # rotated onto as overflow — that is `_default_pool`'s question, not this one.
 _is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+
+# WHERE WORK MAY GO is not WHAT THE LANE SPEAKS. `_is_home_able` answers the
+# first; until a Codex lane became placeable, it accidentally answered the
+# second too, because every home-able account was an Anthropic one. Four callers
+# below want the SECOND question — Remote Control, the spawn-time effort
+# injection, the cross-backend transcript sanitiser, and the 429 exclusion
+# writer — and each states a BACKEND reason in its own comment while testing
+# placement. Give them the question they mean.
+#
+# FALLS BACK TO `_is_home_able` when the array is absent, which is exactly the
+# behaviour every one of those four had before this existed: a box whose
+# `accounts.sh` predates this field keeps working unchanged until the next
+# `ccrc wrappers` regenerates it.
+_is_anthropic_backend() {
+  local w="$1" v
+  # `declare -p`, not `${CCRC_ANTHROPIC_BACKEND+x}`: for an ARRAY the latter tests
+  # ELEMENT 0, so a declared-but-empty array would read as absent and take the
+  # fallback. A roster that declares no Anthropic account at all must answer "no"
+  # for every lane — the fallback is for an accounts.sh that predates the field,
+  # which is a different thing from a roster that has nothing to put in it.
+  declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 || { _is_home_able "$w"; return $?; }
+  for v in "${CCRC_ANTHROPIC_BACKEND[@]}"; do [[ "$w" == "$v" ]] && return 0; done
+  return 1
+}
 # THE ACCOUNT SIDE of the pool rule. `_ccrc_pool` is generated into
 # `~/.ccrc/accounts.sh` (shared/generate.mjs) with one `case` arm per TAGGED
 # account, so its contract is "empty stdout, rc 0, for an untagged or unknown
@@ -4177,6 +4241,19 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # ever existing in the first place, so the read side does not need to
 # police it too.
 _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE under
+  # SAME SHADOW, SAME REASON AS `_pool_name_valid` (D-2542, and D-2522 is the
+  # argument). `[A-Za-z0-9._-]` is TWO collation ranges, so under `en_US.UTF-8`
+  # this accepts the same non-ASCII letters that one did. `cmd_project_pool`
+  # calls BOTH — this for the project and `_pool_name_valid` for the pool — so
+  # shadowing only the pool half would leave the verb half-fixed.
+  # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
+  # locale-independent; this gate was not. A project tagged from an interactive
+  # shell (`LANG=en_US.UTF-8`) could then not be CLEARED from the fleet's own
+  # `claude-session@*` environment, which carries no `LANG` at all: the tag
+  # keeps constraining placement and `ccd project-pool --clear` refuses the very
+  # name that created it. A constraint you can create and cannot remove with the
+  # supported verb is worse than either locale's behaviour on its own.
+  local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
 }
@@ -12479,8 +12556,39 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH
   # lane of its only exclusion — measured: with `_avail` still reading this
   # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
   # "enabled, available" and three _gpt_status assertions went red.
-  local five seven
+  #
+  # A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The guard above
+  # is right that one KNOWN half bounds a max() only from below — but that
+  # reasoning assumes the other half exists and nobody has looked at it yet. A
+  # ChatGPT/Codex Pro lane has NO 5h window at all: the backend reports
+  # `x-codex-secondary-window-minutes: 0`, and ccgpt-usage carries that through
+  # as `fiveWindowMinutes` so the two cases stop looking alike in the row (both
+  # are `five: null`). When the 5h window does not exist, the weekly figure is
+  # not half the truth — it is the WHOLE truth, and max() over the one window
+  # that exists is a real score, not a lower bound.
+  #
+  # Read the marker RAW, not through `_limit_field`: it is the row's SHAPE, not a
+  # measurement, so the rollover and age rules must not touch it.
+  #
+  # ABSENT MEANS APPLICABLE, and that is load-bearing rather than merely tidy.
+  # ccd writes a SECOND shape into this very file — the 429 exclusion
+  # `{"five":100,"seven":0,"ts":N}` — and that row carries no marker, so it falls
+  # through to the pair rule below and still scores 100. Inferring "weekly-only"
+  # per-ACCOUNT instead would score that row `seven` = 0, i.e. the emptiest
+  # account on the fleet, which is the unknown-is-zero magnet this file has
+  # already had to remove three times (_ws_least_loaded, this function's old
+  # `:="0"`, and _limit_field's inferred 0). The marker is per-ROW for that reason.
+  local five seven fivewin
   five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
+  # 2>/dev/null like the sibling read at the top of this file: a lane whose row
+  # does not exist yet (a fresh box, a newly added lane before its first poll) is
+  # an ordinary state here, and `_limit_field` above answers it with a -f guard
+  # rather than a grep error on the operator's terminal.
+  fivewin=$(_limit_json_num "$LIMITS_DIR/$1.json" fiveWindowMinutes 2>/dev/null)
+  if [[ "$fivewin" == 0 ]]; then
+    [[ -z "$seven" ]] && return 0        # the one applicable window is unknown
+    printf '%s' "$seven"; return 0
+  fi
   [[ -z "$five" || -z "$seven" ]] && return 0
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
@@ -13499,7 +13607,9 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   if [[ -n "$hard_blocked" ]]; then
     # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
     # dropped from the roster — cannot name the file this writes.
-    _is_valid_wrapper "$wrapper" && ! _is_home_able "$wrapper" \
+    # BACKEND, not placement: this row is the Codex lane's only "pool is full"
+    # signal, and it must survive that lane becoming placeable.
+    _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
     echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$(_pane_hard_blocked "$pane" || printf ' via=transcript')" >> "$REG/swap.log"
@@ -14263,7 +14373,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # absent or garbled field follows the box (D-99's fail-safe direction, per
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
-  _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  # BACKEND, not placement: Remote Control is Claude Code's own protocol and a
+  # Codex lane cannot answer it.
+  _is_anthropic_backend "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
   # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
   # non-home-able lane the vars `_resume_env` composes are simply inert (the
   # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
@@ -14409,7 +14521,8 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # type a slash command at a session that does not exist. `== 0` means inject only into a TUI
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
-  _is_home_able "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  # BACKEND, not placement: this types Claude-specific input into the TUI.
+  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
   # D-2231 — after the effort injection, so its local-command chatter is already
   # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
   # (a keystroke there is the swap's job), rc 2 is a login screen.
@@ -16612,7 +16725,9 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # `if` rather than the old `[[ … ]] && sanitize=1` one-liner: `!` binds to the
   # PIPELINE it precedes, not to the `&&` list, so the inline form's precedence
   # is a thing a reader has to know rather than see. Behaviour verified below.
-  if ! _is_home_able "$cur" && _is_home_able "$target"; then sanitize=1; fi
+  # BACKEND, not placement: the sanitiser exists for the CROSS-BACKEND hop, so
+  # it must keep firing on Codex -> Anthropic even once the Codex lane is placeable.
+  if ! _is_anthropic_backend "$cur" && _is_anthropic_backend "$target"; then sanitize=1; fi
   local carry_rc=0
   _swap_carry_jsonl "$srccfg" "$dstcfg" "$uuid" "$mdir" "$sanitize" || carry_rc=$?
   if (( carry_rc != 0 )); then

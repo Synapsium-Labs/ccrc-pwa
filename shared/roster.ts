@@ -86,7 +86,14 @@ export interface AccountDef {
    *  with "measured zero" (design spec §3) — `'none'` opts an account like
    *  `gpt` out of that scoring entirely, rather than letting a permanent
    *  zero win it every placement. */
-  telemetry: 'anthropic' | 'none';
+  /** `'codex'` is an account that DOES report usage, but in the Codex shape: a
+   *  weekly window and no 5h window at all. It is deliberately its own member
+   *  rather than `'anthropic'`, because `CCRC_MEASURED` (shared/generate.mjs) is
+   *  `telemetry === 'anthropic'` and drives the STATUSLINE writer — calling a
+   *  Codex lane 'anthropic' would enlist a second writer racing ccgpt-usage on
+   *  the same `~/.cc-limits/<id>.json`. It scores like a real account (it is not
+   *  `'none'`) and is written by its own publisher. */
+  telemetry: 'anthropic' | 'codex' | 'none';
   /** The operator's declaration that this entry is roster PLUMBING rather than
    *  one of their accounts.
    *
@@ -537,11 +544,11 @@ function parseAccount(raw: unknown, index: number): Draft {
   const pool = poolRaw === undefined ? null : poolRaw;
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'none') {
+  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
     throw new RosterError(
       `account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}: it must be ` +
-        '"anthropic" or "none".',
-      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic" or "none".`,
+        '"anthropic", "codex" or "none".',
+      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex" or "none".`,
     );
   }
 

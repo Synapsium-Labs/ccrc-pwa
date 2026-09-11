@@ -2802,6 +2802,15 @@ _check_pools() {
   # directory that constant names. Renaming the directory in the two files that
   # already had pins, and not here, is red twice over.
   local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
+  # SAME SHADOW AS THE READER, FOR THE SAME THREE DECISIONS (D-2520/D-2522).
+  # This check is the THIRD reader of the tag — it repeats `ccd`'s `-n 64` cap,
+  # its `[[:space:]]` strip and its `POOL_NAME_RE`, and it is pinned byte-equal
+  # to both other spellings. Byte-equal is not behaviour-equal while the locale
+  # is free, so a doctor run under one environment could pass a tag that the
+  # reader under another calls `malformed` — the check disagreeing with the
+  # thing it exists to check. Shadow it here too, or the parity this file
+  # asserts is textual only.
+  local LC_ALL=C
   # `$REG` UNSEARCHABLE IS NOT `$REG` ABSENT, and the absence branch below
   # cannot tell them apart — checked FIRST, ahead of it, because that branch
   # is the one that answers. `-e "$dir"` and `-L "$dir"` are BOTH false when

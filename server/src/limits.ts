@@ -21,6 +21,23 @@ export interface AccountLimits {
    *
    *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
+  /** The WIDTH of the 5h window, straight from the producer
+   *  (`x-codex-secondary-window-minutes`, carried by infra/handoff/ccgpt-usage).
+   *  `0` means THE PLAN HAS NO 5h WINDOW AT ALL — which is a different fact from
+   *  "nobody has measured the 5h window yet", though both look like `five: null`
+   *  in the row. `measured()` needs the difference: with no 5h window the weekly
+   *  figure is not half the truth, it is the whole of it, so the row ranks.
+   *
+   *  OPTIONAL, AND ABSENT MEANS APPLICABLE. Only a producer that KNOWS the width
+   *  states it; every Anthropic row omits it, and so does ccd's own 429 exclusion
+   *  row (`{"five":100,"seven":0,"ts":N}`) — which must keep scoring 100 rather
+   *  than collapsing to `seven` = 0, the emptiest account on the fleet. The key is
+   *  therefore emitted only when the raw row carried it, so a row that says
+   *  nothing keeps byte-for-byte the shape it has today.
+   *
+   *  ccd's `_limit_score` reads the same field by the same rule; the two are the
+   *  same predicate and must not drift. */
+  fiveWindowMinutes?: number | null;
   /** ccd's per-lane kill-switch (`~/.cc-sessions/<wrapper>-disabled`) is
    *  present, so this account cannot take work. A FLAG rather than omitting
    *  the account: the server knows the difference between "no telemetry" and
@@ -104,10 +121,25 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  only exclusion. Two languages, one fact, half-rolled rows included;
  *  `projected-home.test.ts` runs both over the same bytes and
  *  `half-rolled-window` is the case that says so. */
-const measured = (l: AccountLimits | undefined): number | null =>
-  !l || l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
+/** EXPORTED for the shared-fixture parity harness only (server/test/fixtures/
+ *  rollover.ts): this and ccd's `_limit_score` are one predicate in two
+ *  languages, and the only way to stop them drifting is to assert both against
+ *  the same rows. Production callers reach it through `projectHome`. */
+export const measured = (l: AccountLimits | undefined): number | null => {
+  if (!l) return null;
+  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The rule below
+  // is right that one known half bounds a max() only from below — but only when
+  // the other half EXISTS and nothing has read it. A ChatGPT/Codex Pro lane has
+  // no 5h window at all (`fiveWindowMinutes: 0`), so its weekly figure is the
+  // complete truth and ranks on its own. ccd's `_limit_score` is this, term for
+  // term; absent marker falls through to the pair rule on both sides.
+  if (l.fiveWindowMinutes === 0) {
+    return l.seven === null || l.sevenRolledOver ? null : l.seven;
+  }
+  return l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
     ? null
     : Math.max(l.five, l.seven);
+};
 
 /**
  * The account a new workspace would land on, and its pressure score.
@@ -315,7 +347,12 @@ export async function readLimits(
         if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) { seven = 0; sevenRolledOver = true; }
       }
 
+      // Emitted ONLY when the producer stated it, so a row that says nothing keeps
+      // exactly the shape it has today — the wire, the fixtures and every
+      // full-row assertion are untouched for all six Anthropic accounts.
+      const fiveWindowMinutes = numOrNull(raw.fiveWindowMinutes);
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
+                       ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
                        disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
