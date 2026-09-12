@@ -4066,3 +4066,46 @@ to cite it rather than invent a fresh justification.
 **D-2608/2609/2610 issued** (floor 2611), mail 768, question 767 acked.
 
 **Six findings, six times the plan was the defective party.** Posture unchanged.
+
+---
+
+## 2026-09-12 12:11Z — D-2615: a mutant that crashes before the assertions run
+
+Mail 789. Task 3 is implemented and green (67/67, clean tsc) but stopped before commit. Confirmed and
+**reproduced** at `origin/main`.
+
+**The mechanism.** `pwa/src/stores/fleet.ts:436` is `export const useFleetStore = createFleetStore();` —
+MODULE SCOPE, so it runs at import. Line 215's `loadFleetSnapshot()` returns `FleetSnapshot | null` with
+**eight** `return null` paths, and a fresh jsdom has no snapshot. The prescribed mutant writes
+`(snapshot as unknown as { pools?: ProjectPoolsWire }).pools ?? null` — a **bare dot**. Measured: it
+throws `Cannot read properties of null (reading 'pools')`; the chained form returns `null`.
+
+**The tell was sitting next to it.** The two neighbouring lines read `snapshot?.sessions ?? []` and
+`snapshot?.roster ?? []` — optional chaining, both. The mutant breaks the idiom its own neighbours follow.
+
+### Why it is a deviation and not a typo — the part written into the entry
+
+**A mutant must change exactly ONE thing.** This changes the persistence widening (under test) *and*
+removes null-safety (not under test); the second fires first and masks the first entirely.
+
+**And an import-time crash is a FALSE red, not a weak one.** A mutation table exists to prove a guard is
+pinned BY AN ASSERTION. A mutant dying during module evaluation reds the suite for a reason unrelated to
+the guard — vitest reports a failed file with **zero registered tests**. Had the plan written "expected
+red: TypeError", a future executor would have ticked the box having never exercised the persistence
+assertion once. **It is the mirror image of a mutation that stays green: both prove nothing, and the
+crash is the more dangerous because it looks like success.**
+
+**Ruled:** the smaller null-safe form, which needs no new import and matches the siblings exactly —
+`(snapshot as unknown as { pools?: ProjectPoolsWire } | null)?.pools ?? null`. Typechecked all three
+candidate forms (plan's, the worker's, mine); all three compile, but the worker's needs `FleetSnapshot`
+in scope, a wider edit than a mutation should require. Then confirm the NAMED red and record the ACTUAL
+failing assertion text, not the plan's predicted string.
+
+**Added to the standing posture:** before running any remaining mutation, ask (1) does it change exactly
+one thing, and (2) does the suite reach the assertion. Those two questions would have caught D-2597,
+D-2608 and D-2615 between them. Saved as [[an-import-time-crash-is-a-false-red]].
+
+**D-2615 issued** (floor 2616), mail 790, question 789 acked.
+
+**Seven findings, seven times the plan was the defective party** — and three of the seven are the plan
+predicting its own mutation reds wrongly (inert / backwards / crashes first).
