@@ -4716,3 +4716,54 @@ fixtures, or quietly doing something else and reporting success. It allocated no
 **Four of my rulings corrected today — two by an adversarial panel I convened, two by the worker.**
 Every one was a claim I could have measured and did not. The findings have held; my remedies are what
 keep failing.
+
+## 2026-09-12 16:20Z — D-2636 remedy specified: option 1 accepted, but the cadence was mispriced
+
+The worker measured the three data paths as ordered and recommended **option 1** (a direct
+`/api/projects` read scoped to `FleetScreen`). **Accepted** — and its option-3 objection is the best
+reasoning in the mail: the `pools` frame is emitted only when pool state changes, while placement moves
+with telemetry and account availability, so carrying placement on that frame would let it go stale
+unless the watcher cadence changed too. Right seam argument, unprompted. No new number; this is
+D-2636's remedy being specified.
+
+**Three constraints, two of which its measurement did not price.**
+
+**1. `/api/projects` is not a local GET.** The worker called it "one extra local GET". Measured:
+`listProjects` (`server/src/lifecycle.ts:126-148`) readdirs the projects root, then **one readdir per
+project directory**, an `isLinkedWorktree` per entry, and `readRegistry` — and the route adds
+`readProjectPools` on top. The server never touches the fleet box directly here, so every `io.readdir`
+is an **agent round-trip**: O(N) per request, against `/api/accounts`'s two small JSON files. The
+route's own comment says it uses the shared request-lane budget rather than the watcher's cadence
+(`server.ts:1913`). **Ruled: no timer.** Fetch on mount, refresh on the `pools` frame and on a
+workspace add; say so at the call site or the next reader "fixes" the missing poll into 20s and puts
+O(N) agent round-trips per client on the busiest screen. And told it to MEASURE the route's real
+latency before settling the cadence — I am reasoning from code shape, not a timing, which is precisely
+the kind of claim I got wrong twice today.
+
+**2. Named a trap I nearly walked into myself.** Refreshing the volatile score from `/api/accounts`
+looks free — `useProjectedHome` already polls it and DISCARDS `r.accounts`, which carries per-account
+rows. But `ProjectPlacement.score` is the SERVER's computed score, and deriving an equivalent
+client-side is a **third implementation of the routing rule** — refused outright by
+`useProjectedHome.ts:3-7` and impossible anyway since `RosterWire` withholds `telemetry`. Carry the
+server's number or carry none; the percentage is as stale as the last refresh and that must be written
+down.
+
+**3. The fallback rule — the part that needed care.** `placement` is OPTIONAL on `ProjectRow`, so
+`placements.get(project)` yields `ProjectPlacement | undefined` where `undefined` conflates **three**
+facts: no answer yet; the server answered but this project had no row; and the row omits `placement`
+because the server is older and absence-permits requires tolerating it. **Three conditions collapsing
+to one value, at the seam this wave exists to fix.** Ruled: one reader returning a literal, and —
+- older server + project pool UNTAGGED or unknown → use the fleet-wide `projected`, which IS
+  `projectHome(…, {state:'untagged'})` and therefore exactly right there; dropping it would regress
+  old servers for no honesty gain;
+- older server + project pool TAGGED → no per-account claim. **Tolerating an absent field must not
+  mean reinstating the defect.**
+- no answer yet / no row → no per-account claim, the card's existing bare copy.
+
+Also reminded it that `ProjectPlacement`'s three members must not be flattened — `unmeasurable` is a
+VALUE, not a null, because `none` there "would claim a measurement that nobody made", and `none`
+carries the pool it searched so the card can say WHICH pool is empty. Three members in, three sentences
+out. And flagged one stale citation: `useProjectedHome.ts:19` cites `FleetScreen.tsx:145`, now `:158`.
+
+Mail 857, status 855 acked. The worker is holding implementation until the deviation reconciliation is
+committed — D-2632's rule applied without being told.
