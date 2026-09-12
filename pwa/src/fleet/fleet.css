@@ -1608,6 +1608,50 @@ button.sess-held {
 }
 .proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
 
+/* The project's pool has the pin's quiet mono register. A button is interactive;
+   the shared class stays cursor-neutral so an inert span does not imitate one. */
+.proj-card-pool {
+  position: relative;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--ink-tertiary);
+}
+button.proj-card-pool { cursor: pointer; }
+button.proj-card-pool::before {
+  content: '';
+  position: absolute;
+  top: calc((var(--text-2xs) * var(--leading-tight) - var(--sp-6)) / 2);
+  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--sp-6)) / 2);
+  left: calc((100% - var(--tap-min)) / 2);
+  right: calc((100% - var(--tap-min)) / 2);
+}
+/* An untagged project is the worklist, not a fault. Malformed, unreadable and
+   unrecognised all need attention; the wording tells their distinct remedies. */
+.proj-card-pool[data-pool='untagged'],
+.proj-card-pool[data-pool='malformed'],
+.proj-card-pool[data-pool='unreadable'],
+.proj-card-pool[data-pool='unrecognised'] {
+  color: var(--status-attention-text);
+}
+/* Nothing on the fleet is enforcing these tags yet. The chip is already inert,
+   cursor-neutral, and titled with the reason. Keep its small text at full
+   strength: a perceptible element fade cannot clear contrast in both themes. */
+.proj-card-pool[data-dim] { cursor: default; }
+
+/* The loud card-level count for sessions with nowhere in their pool to go. */
+.proj-card-stranded {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--status-attention-text);
+}
+
 /* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
    r-md corner — the same treatment .sess-actions gives the ··· below, so
    the two read as one matched pair down the card's right edge. The 44px

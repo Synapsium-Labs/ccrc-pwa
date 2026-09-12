@@ -63,6 +63,7 @@ export function FleetScreen({
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
   const roster = useStore((s) => s.roster);
+  const pools = useStore((s) => s.pools);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -480,6 +481,7 @@ export function FleetScreen({
                 onToggle={toggleFold}
                 onActions={openActionsFor}
                 roster={roster}
+                pools={pools}
                 /* Task 4: THIS card's own runs. Scoped here rather than inside
                    the card because "which card does a run belong on" is a
                    question about the run's `project`, and a card handed one

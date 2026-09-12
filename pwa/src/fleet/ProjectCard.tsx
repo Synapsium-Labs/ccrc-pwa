@@ -14,8 +14,9 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, RosterWire, RunSummary } from '../../../shared/api';
-import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
+import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import { accountColorVar, accountLabel } from '../lib/accounts';
+import { poolLabelList, projectPoolOf } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
@@ -45,6 +46,66 @@ export const NEST_BRACKET = '└─';
  *  being spawned. And the wedge stops at "spawn never completed" here rather
  *  than adding the board's "a workspace may exist" — this card is the list of
  *  workspaces, so if one exists the operator is already looking at it. */
+/** What the chip says when the fleet host's `ccd` has no pool machinery yet
+ *  (`enforcement: 'unavailable'`). Hand-written tags still display, but nothing
+ *  on the fleet is enforcing them, so the chip stops being a control.
+ *
+ *  Exported so the suite pins the sentence rather than a paraphrase of it. */
+export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
+
+/** The project's pool as one chip. Absence is handled by the caller: no frame
+ *  means no claim. Unrecognised residue means this app is older than the fleet,
+ *  not a tag that can be diagnosed as unreadable or malformed. */
+function PoolChip({ pool, project, dim, onTap }: {
+  pool: ProjectPoolWire;
+  project: string;
+  dim: boolean;
+  onTap: ((project: string) => void) | undefined;
+}): ReactNode {
+  const path = `~/.cc-sessions/pools/${project}`;
+  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
+  const word =
+    pool.state === 'tagged' ? pool.name
+    : pool.state === 'untagged' ? 'no pool'
+    : pool.state === 'malformed' ? 'pool malformed'
+    : pool.state === 'unreadable' ? 'pool unreadable'
+    : 'app older than fleet; reload';
+  const label =
+    pool.state === 'tagged' ? `project pool ${pool.name}`
+    : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
+    : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
+    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
+    : 'app bundle is older than the fleet; reload to understand this project pool';
+  const dataPool = unrecognised ? 'unrecognised' : pool.state;
+  // A span when there is nowhere to go: no handler, a fleet whose ccd would
+  // answer 501, or a newer fleet state this app cannot safely edit.
+  if (dim || onTap === undefined || unrecognised) {
+    return (
+      <span
+        className="proj-card-pool"
+        data-pool={dataPool}
+        data-dim={dim || undefined}
+        aria-label={label}
+        title={dim ? POOL_UNAVAILABLE_TEXT : label}
+      >
+        {word}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="proj-card-pool"
+      data-pool={dataPool}
+      aria-label={label}
+      title={label}
+      onClick={() => onTap(project)}
+    >
+      {word}
+    </button>
+  );
+}
+
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
   const spawn = dispatchWindow(run, nowMs);
   // Unreachable by construction — `nestFleet` emits this row only for a run
@@ -79,6 +140,8 @@ export function ProjectCard({
   onActions,
   archivedOpen = false,
   roster = [],
+  pools = null,
+  onPool,
   runs = [],
   nowMs = Date.now(),
 }: {
@@ -115,6 +178,12 @@ export function ProjectCard({
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
    *  `accountLabel`/`accountColorVar` already carry for an unknown wrapper. */
   roster?: readonly RosterWire[];
+  /** The fleet-level pool frame. `null` means no frame arrived, so this card
+   *  makes no pool claim and keeps the `+` copy it already shipped. */
+  pools?: ProjectPoolsWire | null;
+  /** Open the pool sheet for this project. Without it, the chip remains an
+   *  inert statement rather than a control with nowhere to go. */
+  onPool?: (project: string) => void;
   /** THIS project's ACTIVE runs (Task 4) — the programme edges the body's tree
    *  is drawn from, scoped and filtered by `FleetScreen`, which owns the store
    *  read. Defaults to `[]` so a card rendered before any `{type:'runs'}` frame
@@ -135,32 +204,27 @@ export function ProjectCard({
   // least-loaded account even when every account is pinned.
   const headroom = projected ? 100 - projected.score : null;
 
-  // Three JS values, three distinct facts — collapsing any two would either
-  // invent a target (never happened here) or invent a diagnosis (the bug this
-  // task exists to fix). `undefined`: nothing is known yet (first poll still
-  // in flight, or every poll so far has failed) — the label says nothing it
-  // hasn't observed. `null`: the poll landed and the server itself found no
-  // home-able lane — that, and only that, earns this copy. It names the
-  // three HOME_ABLE lanes individually (homeAbleLabelList) rather than
-  // claiming "all accounts": gpt is never consulted for this fact, so a
-  // blanket "all" would overstate what the server actually knows. A value:
-  // name it. The button stays enabled in all three cases regardless, because
-  // ccd's die at ws-add time is the authority, not this forecast.
-  // The roster can genuinely land AFTER `projected === null` already has
-  // (they poll independently — ProjectCard's own `projected` prop comes from
-  // `useProjectedHome`, `roster` from the fleet store's separate poll), so
-  // `homeAbleLabelList` can legitimately still return `''` here (fix round 1,
-  // finding 7): `roster.filter((a) => a.homeAble)` over an empty array is
-  // empty. Naming zero accounts individually read as "New workspace on demo
-  // — all disabled" (single space, no phantom list) rather than a name
-  // list gone missing mid-sentence.
-  const homeAbleNames = homeAbleLabelList(roster);
+  // The project's pool is derived from the fleet-level frame by name, never
+  // carried per session. `null` means nobody has told this bundle anything.
+  const pool = projectPoolOf(pools, group.project);
+  const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
+  const poolDim = pools?.enforcement === 'unavailable';
+
+  // Three JS values still mean three placement facts. `poolLabelList` is the
+  // pooled form of the established account list and is byte-identical whenever
+  // no readable named project pool narrows the candidates. A known empty named
+  // pool has its own sentence instead of a missing list mid-clause.
+  const placeableNames = poolLabelList(roster, pool);
   const addLabel = projected
     ? `New workspace on ${group.project} — ${accountLabel(roster, projected.wrapper)}, ${headroom}% free`
     : projected === null
-      ? homeAbleNames === ''
-        ? `New workspace on ${group.project} — all disabled`
-        : `New workspace on ${group.project} — ${homeAbleNames} all disabled`
+      ? poolName === null
+        ? placeableNames === ''
+          ? `New workspace on ${group.project} — all disabled`
+          : `New workspace on ${group.project} — ${placeableNames} all disabled`
+        : placeableNames === ''
+          ? `New workspace on ${group.project} — nothing is in pool ${poolName}`
+          : `New workspace on ${group.project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`
       : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state
@@ -246,6 +310,10 @@ export function ProjectCard({
           >
             {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
           </span>
+          {/* A fold must not hide a session stranded with no valid destination. */}
+          {group.stranded > 0 && (
+            <span className="proj-card-stranded">{group.stranded} stranded</span>
+          )}
           {/* Collapsed or not: a fold must never be able to hide a pending
               dialog, which is the one thing this screen exists to surface. */}
           {group.attention && (
@@ -264,6 +332,12 @@ export function ProjectCard({
             </span>
           )}
         </button>
+
+        {/* A sibling, never a descendant of the project fold button: nested
+            controls are invalid and inaccessible to Safari/VoiceOver. */}
+        {pool !== null && (
+          <PoolChip pool={pool} project={group.project} dim={poolDim} onTap={onPool} />
+        )}
 
         {onAddWorkspace && (
           <button

@@ -880,3 +880,35 @@ describe('the hold composer', () => {
     expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color')).toBe('var(--ink-tertiary)');
   });
 });
+
+describe('the pool chip and the strand are real cells, and the chip is a real target', () => {
+  it('gives the tappable form the 44px overlay, not padding that would squeeze it', () => {
+    // The chip is narrow and unshrinkable, so `.sess-held`'s padding formula
+    // would shrink this target instead of growing it.
+    const rule = ruleFor('button.proj-card-pool::before');
+    expect(rule).toContain('position: absolute');
+    expect(norm(rule)).toContain('var(--tap-min)');
+  });
+
+  it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
+    expect(declValue(ruleFor('.proj-card-pool'), 'cursor')).toBeNull();
+    expect(declValue(ruleFor('button.proj-card-pool'), 'cursor')).toBe('pointer');
+  });
+
+  it('paints the worklist, both bad-tag states, and unrecognised residue in audited attention ink', () => {
+    const sel = ".proj-card-pool[data-pool='untagged']";
+    expect(declValue(ruleFor(sel), 'color')).toBe('var(--status-attention-text)');
+    const group = selectorsOf(css, sel).map(normSel);
+    for (const state of ['malformed', 'unreadable', 'unrecognised']) {
+      expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
+    }
+  });
+
+  it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
+    expect(declValue(ruleFor('.proj-card-pool[data-dim]'), 'opacity')).toBeNull();
+  });
+
+  it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {
+    expect(declValue(ruleFor('.proj-card-stranded'), 'color')).toBe('var(--status-attention-text)');
+  });
+});
