@@ -134,10 +134,13 @@ export function PoolSheet({ project, open, onClose, fleet = useFleetStore }: Poo
 
         if (stillRelevant()) {
           if (response.warning === 'unknown-pool' && pool !== null) {
-          toast(
-            `Tagged ${requestProject}, but no account on this box is in pool ${pool} — sessions there will strand rather than cross.`,
-            'error',
-          );
+            // The write succeeded, but stranding deserves an interruptive alert.
+            // State comes from the re-read; only the empty-pool name is request intent.
+            toast(
+              `${measuredToast(requestProject, response.pool)} `
+                + `No account on this box is in pool ${pool} — sessions there will strand rather than cross.`,
+              'error',
+            );
           } else {
             toast(measuredToast(requestProject, response.pool));
           }

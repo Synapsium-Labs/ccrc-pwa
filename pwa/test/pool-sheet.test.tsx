@@ -138,6 +138,25 @@ describe('PoolSheet writes', () => {
     })).toHaveTextContent(/no account on this box is in pool pool-b/i);
   });
 
+  it('keeps measured state distinct from submitted intent in an unknown-pool warning', async () => {
+    vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+      ok: true,
+      pool: { state: 'unreadable' },
+      warning: 'unknown-pool',
+    });
+    const store = storeWith(pooled({ claude: 'pool-a' }));
+    renderPoolSheet({ fleet: store });
+
+    fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+
+    const warning = await screen.findByText(/no account on this box is in pool pool-a/i, {
+      selector: '.toast',
+    });
+    expect(warning).toHaveTextContent("demo's pool tag could not be read.");
+    expect(warning).not.toHaveTextContent('Tagged demo');
+    expect(warning).toHaveAttribute('role', 'alert');
+  });
+
   it('toasts the refusal text and does not invent a measured result', async () => {
     vi.spyOn(api, 'setProjectPool').mockRejectedValue(new ApiError(502, {
       ok: false,
