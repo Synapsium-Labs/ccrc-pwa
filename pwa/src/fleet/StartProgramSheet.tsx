@@ -5,7 +5,8 @@
 // `server/src/coord/store.ts:363-371`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
 // `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
-// for the account name, composed here and nowhere else.
+// as the old-server and untagged-project placement fallback, composed here and
+// nowhere else. A present `ProjectRow.placement` owns the account name.
 //
 // D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both load-bearing for this file and
@@ -249,6 +250,38 @@ export function openRunVerdict(
   return openRunProjects.has(project) ? 'open-run' : 'clear';
 }
 
+type StartProgramPlacement =
+  | { kind: 'projected'; wrapper: string }
+  | { kind: 'pending' }
+  | { kind: 'none'; pool: string | null; source: 'project' | 'global' }
+  | { kind: 'unmeasurable' }
+  | { kind: 'pool-blind'; pool: NonNullable<ProjectRow['pool']> };
+
+/** Selects the route's project-specific forecast whenever it is present. The
+ * global forecast remains valid only for old servers and measured untagged
+ * projects, where the pool-aware and historical rules are the same. */
+function startProgramPlacement(
+  project: ProjectRow,
+  projected: ReturnType<typeof useProjectedHome>,
+): StartProgramPlacement {
+  if (project.placement !== undefined) {
+    if (project.placement.kind === 'projected') {
+      return { kind: 'projected', wrapper: project.placement.wrapper };
+    }
+    if (project.placement.kind === 'none') {
+      return { ...project.placement, source: 'project' };
+    }
+    return project.placement;
+  }
+
+  if (project.pool !== undefined && project.pool.state !== 'untagged') {
+    return { kind: 'pool-blind', pool: project.pool };
+  }
+  if (projected === undefined) return { kind: 'pending' };
+  if (projected === null) return { kind: 'none', pool: null, source: 'global' };
+  return { kind: 'projected', wrapper: projected.wrapper };
+}
+
 export interface StartProgramSheetProps {
   open: boolean;
   onClose: () => void;
@@ -448,9 +481,12 @@ export function StartProgramSheet({
   // touched here: the wait keeps watching for the session it really did start
   // (D-291, review fix round 1 Important 2) — only this SENTENCE, which has
   // stopped being true of what is on screen, is withdrawn.
+  const placement = project === null ? null : startProgramPlacement(project, projected);
+  const placementWrapper = placement?.kind === 'projected' ? placement.wrapper : undefined;
+
   useEffect(() => {
     setTimedOut(false);
-  }, [project?.workdir, projected?.wrapper]);
+  }, [project?.workdir, placementWrapper]);
 
   // Queues the kickoff and navigates — the ONLY place either happens. `w.mine`
   // is checked again after the queue call settles: a close during that
@@ -541,17 +577,13 @@ export function StartProgramSheet({
   const filtered =
     list === null ? [] : needle === '' ? list : list.filter((p) => p.name.toLowerCase().includes(needle));
 
-  // D-292: recomputed on every render from the reactive store selector —
-  // "whenever the target changes" (a different project picked, or the
-  // projection itself moving) falls out of React's own render cycle rather
-  // than a second piece of state tracking the same fact.
+  // D-292: recomputed on every render from the reactive store selector.
   // Wrapper-independent — see `liveMainCheckoutIn`'s own docstring for why a
-  // wrapper-scoped refusal misses a real `cmd_start` collision on any session
-  // that has been swapped. `projected != null` is still required, but only
-  // because there is no point refusing a start that has no wrapper to place
-  // with in the first place (the D-284 (was D-B4-11) arm below handles saying so).
+  // wrapper-scoped refusal misses a real `cmd_start` collision after a swap.
+  // D-2694: the PROJECT placement decides whether a target exists; the global
+  // untagged projection may be null or pending without erasing a route target.
   const existing =
-    project !== null && projected != null
+    project !== null && placement?.kind === 'projected'
       ? liveMainCheckoutIn(sessions, project.name)
       : null;
   // Review fix round 1, Important 2: `existing` alone cannot tell "someone
@@ -595,7 +627,7 @@ export function StartProgramSheet({
     // never invokes its handler. `start-program.test.tsx` therefore source-pins
     // this defensive return too: either boundary becoming permissive must red.
     if (starting || !kickoffVerdict.ok || project === null) return;
-    if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
+    if (placement?.kind !== 'projected') return;
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
     // …and the run-board arm above it in the same `? :` chain withholds the
     // button on the same terms, so `runVerdict` needs no return of its own here.
@@ -605,7 +637,7 @@ export function StartProgramSheet({
     // docstring refuses to ship. If a later change ever demotes either refusal
     // to a `disabled` term, BOTH need a return here.
 
-    const wrapper = projected.wrapper;
+    const wrapper = placement.wrapper;
     const projectName = project.name;
     const mine = (gen.current += 1);
     setStarting(true);
@@ -973,11 +1005,25 @@ export function StartProgramSheet({
               </p>
               {recovery}
             </>
-          ) : projected === null ? (
-            // D-284: the server's own "nothing is placeable" — refuse with
-            // copy rather than guessing a wrapper.
+          ) : placement?.kind === 'none' ? (
             <p className="program-start-refuse">
-              Nothing is placeable — every home-able account is disabled.
+              {placement.source === 'global'
+                ? 'Nothing is placeable — every home-able account is disabled.'
+                : placement.pool === null
+                  ? 'No eligible account can place this project.'
+                  : `No eligible account can place this project in pool ${placement.pool}.`}
+            </p>
+          ) : placement?.kind === 'unmeasurable' ? (
+            <p className="program-start-refuse">
+              This project's placement cannot be decided because its pool tag could not be measured.
+            </p>
+          ) : placement?.kind === 'pool-blind' ? (
+            <p className="program-start-refuse">
+              {placement.pool.state === 'tagged'
+                ? `This older placement answer cannot choose an eligible account for pool ${placement.pool.name}.`
+                : placement.pool.state === 'malformed'
+                  ? "This project's pool tag is malformed, so placement cannot be decided."
+                  : "This project's pool tag could not be read, so placement cannot be decided."}
             </p>
           ) : (
             <>
@@ -1048,7 +1094,7 @@ export function StartProgramSheet({
                 className="program-start-go"
                 disabled={
                   !kickoffVerdict.ok || starting
-                  || projected === undefined || existing !== null
+                  || placement?.kind !== 'projected' || existing !== null
                 }
                 onClick={() => void start()}
               >
@@ -1056,9 +1102,9 @@ export function StartProgramSheet({
                   ? 'Starting…'
                   : existing !== null
                     ? 'Started — opening it…'
-                    : projected === undefined
+                    : placement?.kind !== 'projected'
                       ? 'Checking placement…'
-                      : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, projected.wrapper)}`}
+                      : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, placement.wrapper)}`}
               </button>
             </>
           )
