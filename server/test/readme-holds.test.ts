@@ -23,6 +23,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
 const ccd = readFileSync(CCD, 'utf8');
 
+/** The lifecycle list alone. The ordering assertion below is deliberately
+ * scoped here: the README also discusses historical close/open mistakes, and
+ * those words must not satisfy the operator instruction. */
+const lifecycleSection = (): string => {
+  const start = readme.indexOf('**Run lifecycle**');
+  expect(start).toBeGreaterThan(-1);
+  const end = readme.indexOf('**The mail bus and its token.**', start);
+  expect(end).toBeGreaterThan(start);
+  return readme.slice(start, end);
+};
+
 /** The holds subsection alone — from its own `###` heading to the next
  *  top-level heading — so a match anywhere else in a 500-line README cannot
  *  satisfy an assertion about this paragraph. */
@@ -32,6 +43,25 @@ const holdsSection = (): string => {
   const end = readme.indexOf('\n## ', start);
   return readme.slice(start, end === -1 ? undefined : end);
 };
+
+describe('README: run lifecycle ordering (D-2680)', () => {
+  it('opens wave N+1 before it closes wave N, so the programme never retires between calls', () => {
+    const section = lifecycleSection();
+    const open = section.indexOf('open wave N+1');
+    const close = section.indexOf('close wave N');
+
+    expect(open, 'the lifecycle never instructs the coordinator to open wave N+1').toBeGreaterThan(-1);
+    expect(close, 'the lifecycle never instructs the coordinator to close wave N').toBeGreaterThan(-1);
+    expect(open, 'the lifecycle puts close before open and can permanently retire the programme')
+      .toBeLessThan(close);
+    expect(section).toMatch(/zero open runs/i);
+    expect(section).toMatch(/retires (?:the program|permanently)/i);
+    expect(section).toMatch(/cross-project successor opens first/i);
+    expect(section).toMatch(/`final:true`/);
+    expect(section).toMatch(/`released:true`/);
+    expect(section).toMatch(/producer PR is\s+merged/i);
+  });
+});
 
 describe('README: workspace holds', () => {
   it('names every consumer of the hold that ccd actually ships', () => {

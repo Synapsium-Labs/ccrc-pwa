@@ -1605,14 +1605,22 @@ buy.
    `state:'failed'`, skips this re-measurement entirely — there is no
    worktree left to re-measure an abandon against.)
 5. The coordinator reviews the handoff commit like any other diff — brief
-   *quality* stays discipline, not something this server enforces — then
-   closes **this** run non-finally (`POST /api/runs/:id/close`,
-   `final:false`, `state` defaulting to `'done'`): that re-holds the same
-   workspace under the wave-N+1 reason and drives *this* run row to a
-   terminal `done`/`failed` (`RUN_TRANSITIONS` gives `done`/`failed` no
-   edges out — the row itself never dispatches again). Wave N+1 is a **new**
-   run: a second `POST /api/runs`, naming the same `sessionId`, back to
-   step 1 — then step 2's dispatch again, on the new run's id.
+   *quality* stays discipline, not something this server enforces — then must
+   **open wave N+1 before it can close wave N**. A programme with zero open runs
+   retires permanently, so close-first would break role-addressed coordinator
+   mail between the two calls. For a same-project successor, the new
+   `POST /api/runs` names the same `sessionId`; that opens a new row and re-holds
+   the same workspace under the wave-N+1 reason. Only then does
+   `POST /api/runs/:id/close` with `final:false` close this run as `done` and
+   hand the hold to the already-open successor. After close succeeds, read the
+   producer through `runs list --closed 1`; require its state to be `done` and,
+   before dispatching a dependent interface consumer, prove the producer PR is
+   merged at the named producer SHA. A cross-project successor opens first
+   without the producer's `sessionId`; close the producer with `final:true` so
+   its now-distinct workspace is released, require `released:true`, then verify
+   the producer's closed row and merge provenance before dispatching the
+   consumer. Using `final:false` on that crossing would strand a synthetic
+   next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
    ws-release`); nothing archives the workspace on its own after that — the
    merged sweep only pushes its notification, so the workspace stays live and
