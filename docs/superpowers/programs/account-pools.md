@@ -3704,3 +3704,22 @@ verbatim too, and both copies are corrected.
 
 **PR #91** — https://github.com/Synapsium-Labs/ccrc-pwa/pull/91. Test-only; nothing here ships to a box.
 472 tests green across 9 files.
+
+### Two more of the same class, caught before CI could find them — and a tooling trap
+
+The delivery check added in the review round arrived carrying the very defect it was written to close:
+it looped over EVERY UTF-8 locale the box lists, calling the spawn with no `try`. **Linux lists three;
+macOS lists close to two hundred** — so on the one platform this change is riskiest for, a single locale
+that made bash exit non-zero would have leaked an unhandled exception and red a clean tree. Bounded to
+the locales the file actually makes claims about, and a throw now comes back as a `THREW:` value the
+assertion compares. Its failure message then said "did not arrive in the spawned shell", which does not
+fit the throw case — a cause the assertion cannot distinguish, for the third time in two days. Both
+fixed before push; a `probe made to exit non-zero` mutation now reds with one clean assertion.
+
+**`gh pr edit --body-file` can FAIL SILENTLY on this repo.** It exits non-zero with a GraphQL *Projects
+(classic) is being deprecated* error on `repository.pullRequest.projectCards`, and **the body is not
+written** — the error is about a field in the response, so it looks incidental and is not. Verified by
+reading the body back: zero matches for the new text. Use
+`gh api repos/<org>/<repo>/pulls/<n> -X PATCH --input <json>` instead, and always read the body back
+rather than trusting the command's output. This is the same shape as
+[[graph-sweep-exit-code-is-a-claim]]: the tool's exit path is a claim, the artifact is the fact.
