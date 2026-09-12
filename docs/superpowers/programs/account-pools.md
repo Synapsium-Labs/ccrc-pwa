@@ -4906,3 +4906,61 @@ Also told them to pass D-2652 to the fresh review already running against `5def5
 re-report a known defect as new.
 
 Mail 882, status 881 acked.
+
+## 2026-09-12 18:55Z — D-2663..D-2670: my no-timer ruling froze the number it was protecting
+
+Worker mail 903: Task 5's repair at `6a6476e3` plus D-2652 at `38aec982`. **Verified the cheap claims
+myself, then put my own finding to two skeptics before sending it.** It survived both — and both
+**refuted my REMEDY**, which is the third time today.
+
+**Verified correct and said so, so the running reviews do not re-litigate it:** D-2640's census
+genuinely moved (`uncovered` 258→255, `measured` 350→356, all three rules measured, zero uncovered,
+their ratios matching my independent numbers to three decimals); D-2644's rule deleted; D-2652 composed
+exactly as ruled with the channel reason recorded in a comment; and `legacySafe = pool === null ||
+pool.state === 'untagged'` **correctly excludes `malformed`/`unreadable`** — stricter than my wording
+and the right reading, since those are constraints nobody has read.
+
+**D-2663 (HIGH) — and it is MY ruling's fault.** I ruled no timer, invalidate on the `pools` frame and
+a workspace add. Measured: `placement` has **THREE** inputs (`server.ts:1920-1923` —
+`projectPlacement(roster, limits, pool)`) and the effect watches **one**. `limits` moves on every
+statusline write and every enable/disable and never touches that frame, so the account name and the
+`% free` are **frozen at mount-time values for the life of the screen** — a number the parent commit
+refreshed every 20 s. I wrote "as stale as the last refresh"; the honest phrasing was **never refreshed
+again**. The trade still favours D-2636 — a stale in-pool number beats a live out-of-pool name — but I
+under-described it. **Remedy is the app's own idiom, not a timer**: `stores/fleet.ts:434` and
+`stores/session.ts:515` already wire `visibilitychange`→visible, and `lib/ws.ts:4` names it as the
+pattern. A phone put down costs nothing; a phone picked up re-measures.
+
+**D-2664 — my finding held, my fix was wrong.** `placement.pool` has **zero readers tree-wide**. And
+the divergence is not a race but a **steady state**: the watcher reads pools at `intervalMs/2` = 1000 ms
+(`watch.ts:1210`) while the route reads at 10000 ms (`server.ts:97`), so under load they answer
+differently about an unchanged directory — and `watch.ts:1213-1214`'s byte-equality guard latches the
+degraded frame so no new frame ever triggers a refresh. Most reachable case is the MOUNT (`pools` starts
+null; a freshly started server sends no frame at socket open), and it is worse than I described:
+measured render *"New workspace on alpha — team·max, team·alt, team·b and team·d all disabled"* while
+the route said `{kind:'none', pool:'pool-b'}` and **no account was disabled**. Not merely the wrong
+pool — a per-account claim false of all four accounts named.
+**The remedy I was about to order is refuted**: reading `placement.placement.pool` changes 3 of 4 probe
+strings and makes NONE of them true, contradicts `PoolChip`, and cannot serve the `legacyNone` arm.
+**The server already hands over the right answer** — `/api/projects` returns `pool` AND `placement` from
+ONE `poolsRead`, and `placementFor` reads `row.placement` and throws `row.pool` away. Carry `row.pool`
+and derive everything from that single measurement. 151/151 stayed green under a carried-value mutation
+with a measured string change, so nothing pins this today.
+
+**D-2665 — two of the five read states are decorative.** I praised the five-member split and was half
+wrong: `pending`/`failed`/`missing` all render the same bare sentence, and mutating `missing` or
+`failed` to `pending` leaves 151/151 green while the docstring claims they "stay distinct".
+
+**D-2666..D-2670** — a test at `pool-sheet.test.tsx:413` whose title duplicates `:125` verbatim and
+whose body asserts its negation; **unknown-pool fixtures seeding a roster that CONTAINS the submitted
+pool, a body `server.ts:2064` cannot produce — D-2635 again**, and having refused a fabricated body
+there I will not wave one through here; a double `/api/projects` sweep on every cold load (measured
+`projectsCalls: 2`), paying the O(N) cost the no-timer comment invokes, twice, before the screen
+settles; a `GROUNDS` `why` naming the wrong DOM parent (the span is inside `.proj-card-toggle`, and
+`under` is right only because that button has `background: none`, which the `why` never states); and
+D-2644's orphaned header comment.
+
+**D-2663..D-2670 issued** (floor 2671), mails 912 and 913. D-2652's definition still outstanding (907).
+
+**Third remedy of mine refuted today, and the second where the tree already held the answer.** The
+findings keep holding; the fixes I reach for keep being the wrong shape.
