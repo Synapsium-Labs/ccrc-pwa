@@ -19496,7 +19496,22 @@ nothing and costs it the tty. But that is a behaviour change to a CREDENTIAL-MIN
 this box cannot run, verifiable only through a ~35-minute CI cycle, and it is outside the merge this
 commit is. It is booked, not buried.
 
-**What it does NOT threaten:** `login` and `paste` drive a plain pipe and touch no `script(1)` at all
-(measured 2026-09-07), so the account wave's DEFAULT path is unaffected on both userlands. What is
-broken on macOS is one of the two pane-bound methods. `test-macos` is not a required check on this repo,
-so nothing about this blocks the PR mechanically — which is exactly why it is written down here instead.
+**CORRECTED ON THE SECOND MACOS RUN: it is BOTH pane-bound methods, not one.** The first reading of the
+log saw only the setup-token describe and this entry said "one of the two". The run on `42e31622` shows
+**9 failures — 5 setup-token and 4 openai-login** — and `_auth_openai_login` has the identical shape:
+`_auth_script_argv` for the argv, then `<"$AUTH_RUN/in.child"` for stdin. Every method that goes through
+`script(1)` fails on macOS; every method that does not (`login`, `paste`, which drive a plain pipe with
+no pty at all — measured 2026-09-07) passes. That is a much stronger fit for the tcgetattr hypothesis
+than the first reading was: the common factor is exactly `script` + a FIFO on stdin, and nothing else.
+
+**What it does NOT threaten:** the wave's DEFAULT path. `login` is the method an operator reaches for
+first and it needs no pty; `paste` likewise. What is broken on macOS is the PAIR of pane-bound methods.
+`test-macos` is not a required check on this repo, so nothing about this blocks the PR mechanically —
+which is exactly why it is written down here instead.
+
+**WHY THE FIX IS NOT MECHANICAL, stated so nobody applies the obvious one blind.** "Drop the stdin
+redirect" is the shape of the answer, but `_auth_pump` calls `_auth_forward_code`, which writes into
+that same FIFO — so removing it unconditionally would take the code channel away from any pane method
+that can be asked for one, on Linux, where all of this currently works. Establishing which of the two
+actually needs that channel is the real task, and it is a credential path being changed on a platform
+no box here can run, verifiable only through a ~35-minute CI cycle.

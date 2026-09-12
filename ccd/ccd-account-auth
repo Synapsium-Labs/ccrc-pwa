@@ -349,13 +349,18 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
   # THE BSD ARM'S ORDER IS RIGHT AND RUNNING IT IS NOT (D-2614, OPEN). The
   # first macOS CI run this branch ever got — CI schedules nothing for a PR it
   # cannot compute a merge commit for, and this one conflicted until 2026-09-12
-  # — passes all three argv-contract pins and fails all five cases that
-  # EXECUTE, every one with `the mint exited 1`. Hypothesis, unmeasurable from
-  # a Linux box: BSD `script` calls `tcgetattr` on its own stdin and exits 1
-  # when that is not a terminal, and `_auth_setup_token` hands the child a FIFO
-  # on stdin, overriding the pane's tty. util-linux tolerates that; BSD does
-  # not. `login` and `paste` touch no `script(1)` at all, so the default path
-  # is unaffected on both userlands.
+  # — passes all three argv-contract pins and fails every case that EXECUTES:
+  # 9 of them, 5 in setup-token and 4 in openai-login, which are the TWO
+  # methods that come through here. Hypothesis, unmeasurable from a Linux box:
+  # BSD `script` calls `tcgetattr` on its own stdin and exits 1 when that is
+  # not a terminal, and both callers hand the child a FIFO on stdin
+  # (`<"$AUTH_RUN/in.child"`), overriding the pane's tty. util-linux tolerates
+  # that; BSD does not. The fit is exact — every method through `script` fails,
+  # and `login` and `paste`, which touch no `script(1)` at all, both pass, so
+  # the DEFAULT path is unaffected on either userland. The obvious fix is not
+  # mechanical: `_auth_pump` calls `_auth_forward_code`, which writes into that
+  # same FIFO, so removing the redirect unconditionally would take the code
+  # channel away from any pane method that can be asked for one.
   if [ "$CCD_OS" = darwin ]; then
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
   else
