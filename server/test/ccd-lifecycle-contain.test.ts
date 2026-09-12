@@ -1,7 +1,7 @@
 // D1's one rule, as a red suite. `$REG/swap.log` is the precedent AND the
 // counter-example: 141,762 B over 49 days with zero corruption from 13
 // concurrent `printf >>` sites, and ~30% of its lines untimestamped because
-// ccd:9060 and ccd:10956 redirect a CHILD'S stdout+stderr into it from inside a
+// ccd:10756 and ccd:12652 redirect a CHILD'S stdout+stderr into it from inside a
 // double-quoted `bash -c` string. That second shape is what this forbids.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ const BEGIN = '# ── lifecycle journal ';
 const END = '# ── end lifecycle journal ';
 
 /** Code lines only. The rule is "nothing outside the block WRITES", not
- *  "nothing outside the block MENTIONS": ccd:2348's dot-artifact inventory
+ *  "nothing outside the block MENTIONS": ccd:3252's dot-artifact inventory
  *  names `.lifecycle/` on purpose, and a scan that cannot tell a comment from a
  *  redirect punishes the documentation this design depends on. */
 const code = (s: string): string[] =>
@@ -33,7 +33,7 @@ describe('nothing but the _lc_* block writes into .lifecycle/', () => {
     // FIX ROUND 1 (CRITICAL, task 21 review): `indexOf` returns the FIRST
     // occurrence and nothing asserted uniqueness. The reviewer planted a
     // spurious duplicate `LC-BEGIN` line two lines above the real one
-    // (ccd:780), with a genuine `echo x >> "$REG/.lifecycle/probe-tight"` in
+    // (ccd:806), with a genuine `echo x >> "$REG/.lifecycle/probe-tight"` in
     // the gap between the two — and the suite reported 10/10 green: `from`
     // silently moved to the SPURIOUS marker, so the planted write landed
     // INSIDE the (wrongly widened) "protected" slice and every downstream
@@ -101,7 +101,7 @@ describe('nothing but the _lc_* block writes into .lifecycle/', () => {
 
   it('routes every journal write through exactly one printf, inside _lc_emit', () => {
     // FIX (Task 21): the brief's own regex anchored `printf` at line-start
-    // (`^\s*printf`), but `_lc_emit`'s real append site (ccd:1455) wraps the
+    // (`^\s*printf`), but `_lc_emit`'s real append site (ccd:2339) wraps the
     // redirect in a `{ …; } 2>/dev/null` compound — FIX ROUND 3 (task 15)'s
     // own comment explains why: a bare `>> "$live"` leaks bash's own
     // redirect-setup diagnostic to the caller's stderr when `$live` exists
@@ -116,7 +116,7 @@ describe('nothing but the _lc_* block writes into .lifecycle/', () => {
   it('forks python3 exactly twice in the block — the event encoder and the obs encoder', () => {
     // Mutant: add a third `python3 -c` -> this fails with `expected 3 to be 2`.
     // `_json_str`'s contract is "non-zero means python3 could not be RUN", and
-    // ccd:711-713 records what a third, unchecked encoder costs: `"reason":,`
+    // ccd:737-739 records what a third, unchecked encoder costs: `"reason":,`
     // inside a printf argument list that swallowed the status.
     const block = src.slice(from, to);
     expect.soft([...block.matchAll(/python3 -c/g)]).toHaveLength(2);
@@ -155,9 +155,9 @@ describe('the meas key vocabulary is ONE list', () => {
   // pinned their absence (see the second test below, then).
   //
   // FIX ROUND 1 (Task 24 fix round 1): wave 3 supplied the missing evidence.
-  // `cmd_ws_rm`'s attic pin now emits `meas.atticsrc` (`ccd:2983`) and
+  // `cmd_ws_rm`'s attic pin now emits `meas.atticsrc` (`ccd:3887`) and
   // `cmd_ws_restore`'s R4-2 supersede now emits `meas.manifestBytes`
-  // (`ccd:4493`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
+  // (`ccd:5699`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
   // distinct names, and the union with L0's now-twelve is the brief's
   // TWENTY-FIVE.
   //
@@ -202,7 +202,7 @@ describe('the meas key vocabulary is ONE list', () => {
     // `manifestBytes`/`atticsrc` through wave 2 and all of wave 3's first
     // pass — a guard specifically against re-adding either "on the brief's
     // say-so" with no wire evidence. Wave 3's fix round supplied that
-    // evidence (`ccd:2983`, `ccd:4493`), so the two are now real members of
+    // evidence (`ccd:3887`, `ccd:5699`), so the two are now real members of
     // `LifecycleMeas` (see above) and this guard is INVERTED, not deleted:
     // deleting it would let a future edit quietly remove either emitter with
     // nothing noticing, which is exactly the drift class this whole describe

@@ -706,7 +706,7 @@ describe('readSessionRecord', () => {
 // docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
 // DEGRADE-AND-HEAL for a listed-but-unreadable identity field, narrowed
 // (logged) DROP for a field that is neither readable nor listed, or reads
-// back measured-empty. `registry.ts:123`'s old blanket rule ("missing
+// back measured-empty. `registry.ts:125`'s old blanket rule ("missing
 // wrapper/workdir/uuid" -> drop) had NO pin before this file — these tests
 // are written FIRST and confirmed red against that old rule (a triple member
 // null+listed used to drop the whole row; here it must degrade it instead).

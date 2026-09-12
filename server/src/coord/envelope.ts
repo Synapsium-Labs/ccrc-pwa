@@ -41,7 +41,7 @@ function fenceFor(text: string): string {
  * everyone's care.
  *
  * COST, stated because it is real: `sendPrompt` types one `tmux send-keys` per
- * line plus an `M-Enter` between lines (`inject/send.ts:300-305`), each an
+ * line plus an `M-Enter` between lines (`inject/send.ts:304-309`), each an
  * agent round trip in remote mode. An 8KB body of short lines is a few hundred
  * round trips inside one KeyedQueue slot. That blocks ONLY this session — the
  * lane is `void`-dispatched and per-session — and it is the price of a message

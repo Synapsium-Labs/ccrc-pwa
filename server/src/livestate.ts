@@ -66,7 +66,7 @@ export function liveSessionStatus(status: string): SessionStatus {
  * a record naming no `sessionId`, so nothing says whose pane it is. Three
  * conditions, one arm, deliberately: every one of them means the same
  * actionable thing, and an arm no consumer branches on is a wider type, not a
- * finer measurement (`limits.ts:126` and `commands.ts:73` are the tree's own
+ * finer measurement (`limits.ts:310` and `commands.ts:73` are the tree's own
  * precedent for leaving an indifferent fold alone).
  *
  * `unmeasured` is the fourth condition and it is not a measurement at all:

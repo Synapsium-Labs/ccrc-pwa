@@ -165,9 +165,13 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  carries no provenance marker, so the scan's `verifyMarker(text) ===
  *  'foreign'` clause already skips it today — this entry is the defence that
  *  survives the day one of them gains a marker, exactly as this header
- *  already promised for the other two. */
+ *  already promised for the other two.
+ *
+ *  AND ONCE MORE, the account wave: `ccd-account-auth` is the SEVENTH, and
+ *  the only one `_inst_bins` places on BOTH platform arms — so on a macOS box
+ *  it is the one non-`ccd` toolchain name this scan will actually meet. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive']);
+  'ccd-telemetry-keepalive', 'ccd-account-auth']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

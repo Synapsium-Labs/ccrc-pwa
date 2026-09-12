@@ -95,7 +95,9 @@ function ccrcEnv(home: string): NodeJS.ProcessEnv {
   // would hand `status` a real address and turn the "leaves the box alone" test
   // below red — a flake that depends on who ran the suite. Every CCRC_* input
   // this CLI reads is removed by name, so the fixture decides, never the shell.
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+    'CCRC_ACCOUNT_AUTH_TIMEOUT',
+    'CCRC_ACCOUNT_PROBE_TIMEOUT']) delete env[k];
   return env;
 }
 
@@ -176,7 +178,9 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|memory\|models\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
+    expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
@@ -195,7 +199,7 @@ describe('ccrc: dispatch and usage', () => {
 
   // ── install's ARGUMENT surface ──────────────────────────────────────────
   // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
-  // ccd/ccrc:1040-1048), pinned here beside the other dispatch tests rather
+  // ccd/ccrc:1144-1152), pinned here beside the other dispatch tests rather
   // than in the install suite: neither of these reaches a step function, so
   // neither needs — or may have — a shipped tree to converge from. What they
   // are about is the DISPATCHER, which is this file's subject.

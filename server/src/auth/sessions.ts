@@ -334,8 +334,8 @@ export class SessionStore {
     if (this.dirty) await this.flush();
   }
 
-  /** Start the background sweep. Idempotent. Unref'd (like `watch.ts:475`,
-   *  `sessionws.ts:229`) so a pending sweep never keeps the process alive on its
+  /** Start the background sweep. Idempotent. Unref'd (like `watch.ts:553`,
+   *  `sessionws.ts:263`) so a pending sweep never keeps the process alive on its
    *  own. Task 5 calls this at boot. */
   startSweep(): void {
     if (this.sweepTimer) return;

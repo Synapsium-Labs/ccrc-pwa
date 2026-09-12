@@ -192,7 +192,7 @@ describe('the substrate axis reaches the wire — projected, not re-read (D-310 
   it('projects a seeded marker as {at: seconds*1000, text} — conversion at THIS seam only', async () => {
     // The exact-MS assertion is this task's mutation tooth: drop the `* 1000`
     // and the stamp is off by three orders of magnitude. Same seam, same
-    // timebase rule as `stoppedBy` (`fleet.ts:370`) — the registry is epoch
+    // timebase rule as `stoppedBy` (`fleet.ts:505`) — the registry is epoch
     // SECONDS, the wire is epoch MS, and the conversion happens here only.
     const s = await one({
       started: '1', supervised: String(NOW_SEC - 5),

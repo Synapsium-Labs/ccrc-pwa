@@ -19,7 +19,7 @@ const BADGED: ReadonlySet<FleetSession['bucket']> = new Set(['attention', 'done'
  * copy of this one, and the difference is deliberate. Presence collapses
  * across every connected client (`isVisible(id)` is true if ANY connection
  * token claims the session), is never persisted, and is read in exactly one
- * place — the push gate in `watch.ts`'s `pushOne` (watch.ts:237). It neither
+ * place — the push gate in `watch.ts`'s `pushOne` (watch.ts:254). It neither
  * reads nor writes this map, and nothing writes this map but this device.
  *
  * They therefore disagree, by design, and here is the shipped consequence: the
@@ -145,7 +145,7 @@ function save(acks: Acks): Acks {
 }
 
 /** The ack key for the fleet-wide notification feed (`/mail`). NAMESPACED
- *  with a colon, which ccd's own id regex (`^[A-Za-z0-9._-]+$`, ccd:1671)
+ *  with a colon, which ccd's own id regex (`^[A-Za-z0-9._-]+$`, ccd:1794)
  *  forbids in a session id — so this can never collide with one, and `prune`
  *  below can tell the two apart by SHAPE, never by an allowlist it would have
  *  to maintain by hand. */
