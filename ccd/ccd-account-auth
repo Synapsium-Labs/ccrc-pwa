@@ -346,6 +346,16 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
   # wrong program. `%q` is bash's own quoter and leaves ordinary tokens
   # untouched, so the common case reads exactly as it did.
   printf -v joined '%q ' "$@"; joined="${joined% }"
+  # THE BSD ARM'S ORDER IS RIGHT AND RUNNING IT IS NOT (D-2614, OPEN). The
+  # first macOS CI run this branch ever got — CI schedules nothing for a PR it
+  # cannot compute a merge commit for, and this one conflicted until 2026-09-12
+  # — passes all three argv-contract pins and fails all five cases that
+  # EXECUTE, every one with `the mint exited 1`. Hypothesis, unmeasurable from
+  # a Linux box: BSD `script` calls `tcgetattr` on its own stdin and exits 1
+  # when that is not a terminal, and `_auth_setup_token` hands the child a FIFO
+  # on stdin, overriding the pane's tty. util-linux tolerates that; BSD does
+  # not. `login` and `paste` touch no `script(1)` at all, so the default path
+  # is unaffected on both userlands.
   if [ "$CCD_OS" = darwin ]; then
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
   else

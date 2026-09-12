@@ -19452,3 +19452,51 @@ Two rules for the next sweep, both mechanical:
   not something this tool can report about itself.
 * **Verify with a different program than the one that decided.** The verifier here shares no code with
   the sweep — no `difflib`, no line map — which is the only reason its answer is worth anything.
+
+### D-2613 — the fixture measured a mode with a GNU-only flag, on the branch whose product code already knows better
+
+`ccrc-account.test.ts`'s window pin plants a `chmod` RECORDER first on PATH, so it can stat the temp file
+**at the moment chmod is called** rather than afterwards — the only way to see the window `umask 077`
+buys, because an end state is over-determined and pins neither line. The recorder read the mode with
+`stat -c %a`.
+
+`-c` is GNU coreutils. BSD stat wants `-f`. On macOS the recorder wrote an empty mode and the assertion
+read `mode-when-chmod-was-called=` — reported as a failure of the shipped `umask`, which is intact.
+
+The sharp part is that this repo already knew: `ccd/ccrc`'s `_plat_mode` branches on `CCD_OS` and argues
+the BSD spelling at length — `%Mp%Lp` not `%Lp` alone, with the leading-zero strip done in pure bash
+because a `sed` pipe there once failed the exposure check fleet-wide on the first macOS CI run. The
+PRODUCT side carries that knowledge and the FIXTURE did not, so a test written to prove a security
+property failed for a reason with nothing to do with security. Recorder now tries GNU, falls back to
+BSD, and normalises the same way `_plat_mode` does.
+
+### D-2614 — the BSD `script(1)` arm shipped labelled UNVERIFIED, and the first real Mac refutes it — OPEN
+
+`_auth_setup_token` mints under a pty because `claude setup-token` is an Ink full-screen TUI that
+produces ZERO BYTES without one. The two userlands spell that differently, so `_auth_script_argv`
+branches on `CCD_OS`: `script -qfc "<cmd>" /dev/null` for util-linux, `script -q /dev/null <cmd> <args>`
+for BSD. The test that pins the second one is named, in the branch's own words, **"spells the BSD script
+argument order — UNVERIFIED against a real Mac, shipped as a branch"**.
+
+A real Mac has now run it, for the first time in this branch's life, because CI does not schedule checks
+for a PR whose merge commit cannot be computed and this PR was CONFLICTING until today. **All five
+behavioural setup-token cases fail on macOS with `ccd-account-auth: the mint exited 1`**, while the
+three ARGV-CONTRACT cases — which assert the argv string and never run it — pass. So the argument ORDER
+is right and something about executing it is not.
+
+**Diagnosis, stated as a hypothesis because it cannot be measured from this box:** BSD `script` calls
+`tcgetattr` on its own stdin and exits 1 when that is not a terminal. `_auth_setup_token` runs the child
+with `<"$AUTH_RUN/in.child"` — a FIFO — which overrides the pane's tty. util-linux `script` tolerates a
+non-tty stdin; BSD does not. That fits every observation: only the executing cases fail, all of them,
+with rc 1, on one platform.
+
+**NOT FIXED HERE, deliberately.** The fix is almost certainly to stop redirecting stdin for this method —
+`setup-token` is a non-interactive mint and nothing forwards a code to it, so the FIFO on stdin buys it
+nothing and costs it the tty. But that is a behaviour change to a CREDENTIAL-MINTING path, on a platform
+this box cannot run, verifiable only through a ~35-minute CI cycle, and it is outside the merge this
+commit is. It is booked, not buried.
+
+**What it does NOT threaten:** `login` and `paste` drive a plain pipe and touch no `script(1)` at all
+(measured 2026-09-07), so the account wave's DEFAULT path is unaffected on both userlands. What is
+broken on macOS is one of the two pane-bound methods. `test-macos` is not a required check on this repo,
+so nothing about this blocks the PR mechanically — which is exactly why it is written down here instead.

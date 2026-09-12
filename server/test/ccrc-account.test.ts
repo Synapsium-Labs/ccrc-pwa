@@ -1141,10 +1141,23 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
     // `umask 077` deleted it records 644 while every other assertion in this
     // file stays green — which is the mutation this test exists to red.
     const home = box('ccrc-account-cred-window-');
+    // `stat -c %a` IS GNU-ONLY, and this recorder shipped with it — measured on
+    // the first macOS CI run this branch ever got (D-2613): BSD stat rejects
+    // `-c`, the recorder wrote an empty mode, and the assertion below read
+    // `mode-when-chmod-was-called=` as a defect in the shipped umask. The
+    // product side already knows this (`ccd/ccrc`'s `_plat_mode` branches on
+    // `CCD_OS` and argues `%Mp%Lp` at length); the fixture did not. Try GNU,
+    // fall back to BSD, and strip the special nibble's leading zero so both
+    // arms answer GNU's bare digits — the same normalisation `_plat_mode`
+    // performs, for the same reason.
     writeFileSync(join(home, '.local', 'bin', 'chmod'),
       '#!/bin/sh\n'
-      + '[ -e "$2" ] && printf \'mode-when-chmod-was-called=%s\\n\' '
-      + '"$(stat -c %a "$2")" >> "$HOME/chmod-record"\n'
+      + 'if [ -e "$2" ]; then\n'
+      + '  m=$(stat -c %a "$2" 2>/dev/null) || m=""\n'
+      + '  [ -n "$m" ] || m=$(stat -f%Mp%Lp "$2" 2>/dev/null) || m=""\n'
+      + '  while [ "${#m}" -gt 1 ]; do case "$m" in 0*) m="${m#0}" ;; *) break ;; esac; done\n'
+      + '  printf \'mode-when-chmod-was-called=%s\\n\' "$m" >> "$HOME/chmod-record"\n'
+      + 'fi\n'
       + 'for c in /usr/bin/chmod /bin/chmod; do [ -x "$c" ] && exec "$c" "$@"; done\n'
       + 'exit 127\n', { mode: 0o755 });
     const r = sourceCall(home,

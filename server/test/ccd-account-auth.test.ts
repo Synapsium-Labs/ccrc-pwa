@@ -779,7 +779,7 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
       .toBe(['script', '-qfc', '/bin/echo hi', '/dev/null'].join('\n'));
   });
 
-  it('spells the BSD script argument order — UNVERIFIED against a real Mac, shipped as a branch', () => {
+  it('spells the BSD script argument order — the ORDER is right; EXECUTING it fails on a real Mac (D-2614)', () => {
     // Decision 9: the BSD arm is written as a branch rather than asserted from
     // a box that cannot run the binary. THIS test pins the argv this tree
     // builds, which is a different claim from "BSD script accepts it" — and it
