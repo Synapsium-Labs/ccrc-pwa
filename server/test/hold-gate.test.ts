@@ -24,6 +24,7 @@ import type { PushPayload } from '../src/push.js';
 import type { PrState } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okRuns } from './coordReadHelpers.js';
 
 function seed(ids: string[]): string {
   const home = mkTmp('ccrc-');
@@ -449,10 +450,40 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
     // The whole clause, verbatim — id, program, wave and waveOf. A silent skip
     // would be the defect one door over, and a vague one ("a run is open") is
     // the defect two doors over: the operator has to know WHICH.
-    const runId = coord.runs()[0]!.id;
+    const runId = okRuns(coord.runs())[0]!.id;
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0].body)
       .toBe(`PR #42 merged — run ${runId} is still open — build4 wave 2/3; nothing archived.`);
+    w.stop();
+  });
+
+  it('falls back to a GENERIC reason, naming no row detail, when the run rows are ' +
+     'UNREADABLE (D-2545)', async () => {
+    // The test directly above says a vague sentence is "the defect two doors
+    // over: the operator has to know WHICH". That stands for a run this box
+    // CAN read. Here it cannot — the id, programme and wave are precisely what
+    // is missing — and asserting them off a read that did not happen would be
+    // a sentence about something unproven. So the clause goes generic, and
+    // the whole point is that it names nothing.
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const coord = coordWithOpenRun(home, 'demo-quiet-basin');
+    coord.db.prepare('UPDATE runs SET wave = ?').run(BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+    const deps = {
+      ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
+      push: { notify } as never,
+      coord,
+    };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
+    for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    const body = notify.mock.calls[0]![0].body;
+    expect(body).toBe('PR #42 merged — a run may still be open — the run rows could not be read; nothing archived.');
+    // NO ROW DETAIL: no id, no programme, no wave.
+    expect(body).not.toMatch(/build4|wave|run \d/);
     w.stop();
   });
 
@@ -477,7 +508,7 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
     };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick(); await sweepSettled(w);
-    const runId = coord.runs()[0]!.id;
+    const runId = okRuns(coord.runs())[0]!.id;
     await vi.waitFor(() => expect(mergedPushes(notify)).toHaveLength(1));
     expect(mergedPushes(notify)[0]!.body).toContain(`run ${runId} is still open`);
 
@@ -500,8 +531,11 @@ describe('sweepMerged — an OPEN RUN names the reason when no hold does', () =>
   it('a watcher with NO coord still announces — `deps.coord` is optional and that is load-bearing', async () => {
     // `testDeps` supplies no `coord`; most of the watchers in this file and
     // every merged-lane test in `pr-sweep.test.ts` are built from it, so
-    // `sweepMerged`'s `this.deps.coord?.openRunsForSession(...) ?? []` is what
-    // keeps them all running. This test exists so a future non-optional access
+    // `sweepMerged`'s `this.deps.coord?.openRunsForSession(...)` is what
+    // keeps them all running — the `?.`, not the `?? []` this sentence used to
+    // name: since D-2545 the call answers a RESULT, and an absent store is
+    // `undefined` rather than an empty list. This test exists so a future
+    // non-optional access
     // reds ONE named test instead of a dozen unrelated ones. No coord and no
     // hold is also the ORDINARY merge — nothing is in the way, and the sentence
     // carries no reason clause at all.

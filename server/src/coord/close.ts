@@ -5,7 +5,9 @@ import type { Deps } from '../server.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
+import {
+  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult,
+} from './store.js';
 import {
   HANDOFF_SHA,
   holdReasonVerdict,
@@ -97,14 +99,31 @@ export async function closeRun(
   causedBy: 'coordinator' | 'operator',
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
-  const run = coord.run(id);
+  const read = coord.run(id);
+  // D-2545. THE ROW IS THERE AND THIS PROCESS CANNOT REPRESENT ITS INTEGERS —
+  // a different condition from "no such run", answered before any fleet act
+  // and in words, never by throwing: `CoordMutex.run` is `try`/`finally` with
+  // no catch and there is no `app.setErrorHandler` anywhere in `server/src`,
+  // so a throw here became a bare Fastify 500 with no `CloseOutcome` shape at
+  // all. `hold-invalid` is the right existing code rather than a new one: the
+  // refusal is that a persisted number in the hold's own domain cannot be
+  // accepted, which is exactly what that code names — and it carries `detail`,
+  // which names the COLUMN and never the value.
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
   if (!run) return { ok: false, kind: 'unknown-run' };
 
   /** The OTHER open runs on this workspace. Read fresh at the decision point,
    *  never cached: a snapshot consulted at a destructive decision point is
    *  the shape `watch.ts` already had to fix once. The closing run excludes
-   *  itself — it has not transitioned yet (D-48 puts the fleet act first). */
-  const siblingsOf = (sessionId: string): OpenSibling[] => coord.openRunsForSession(sessionId, id);
+   *  itself — it has not transitioned yet (D-48 puts the fleet act first).
+   *
+   *  Returns the RESULT, not the list (D-2545): every caller below is one step
+   *  from an irreversible fleet act, and "the sibling rows could not be read"
+   *  must never arrive at one of them spelled `[]` — that is precisely how
+   *  "nothing else claims this workspace" gets asserted about a workspace
+   *  something else claims. */
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, id);
   /** The claim that survives this close: the MOST RECENTLY opened run, because
    *  the coordinator protocol opens wave N+1 before closing wave N. With the
    *  ordinary one-sibling case this is a distinction without a difference; it
@@ -165,7 +184,10 @@ export async function closeRun(
     // claimed. Never `wsArchive` on this arm (D-280).
     let released = false;
     if (run.sessionId !== null) {
-      const siblings = siblingsOf(run.sessionId);
+      const sibRead = siblingsOf(run.sessionId);
+      // Fail-shut ahead of the fleet act, for the reason `siblingsOf` states.
+      if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+      const siblings = sibRead.siblings;
       const survivor = survivorOf(siblings);
       // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
       // reported field used to come from two independent expressions —
@@ -267,7 +289,13 @@ export async function closeRun(
   // Decide and validate the hold before any close-path write. In particular,
   // `foldPrLineage` persists measured history, so it must not run when the
   // subsequent hold boundary is already known to be unrepresentable.
-  const siblings = siblingsOf(run.sessionId);
+  const sibRead = siblingsOf(run.sessionId);
+  // Fail-shut ahead of `foldPrLineage` and the fleet act alike, for the reason
+  // `siblingsOf` states. Placed exactly where the hold verdict already is: this
+  // block's own comment says the hold must be decided before any close-path
+  // write, and an unreadable sibling list is the same class of answer.
+  if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+  const siblings = sibRead.siblings;
   const survivor = survivorOf(siblings);
   const safe = releaseIsSafe(siblings);
   const needsHold = !((state === 'failed' && archive && safe) || (final && safe));

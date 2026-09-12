@@ -1280,7 +1280,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // and the next real transition's `FleetWatcher.emitRuns` broadcast
       // reaches it exactly as it would any other already-connected client.
       if (deps.coord) {
-        try { onRuns(deps.coord.runs().map(toRunSummary)); }
+        try {
+          const read = deps.coord.runs();
+          // D-2545: SKIP THE FRAME, same degrade as the throw arm below and for
+          // the same stated reason. A refusal here is not an empty fleet — an
+          // empty `runs` frame would tell this client every run had closed —
+          // so nothing is sent and the next successful broadcast reaches this
+          // socket exactly as it would any other already-connected client.
+          if (!read.ok) {
+            console.warn(`ccrc-server: /ws/fleet cold-start runs() refused (${read.detail}) — no runs frame for this socket`);
+          } else {
+            onRuns(read.runs.map(toRunSummary));
+          }
+        }
         catch (err) {
           console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
         }
@@ -1736,7 +1748,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // present but broken rather than absent.
     let held: AskRow | null;
     try {
-      held = coord.heldAskFor(id);
+      const read = coord.heldAskFor(id);
+      // D-2545: the SAME degrade as the throw arm just below, reached by a
+      // typed result. D-2169's promise is that the operator's own lock-screen
+      // press never becomes a 500, and a row this box cannot read is no more
+      // a reason to refuse the digit than a database it cannot open.
+      if (!read.ok) {
+        console.warn(`ccrc-server: heldAskFor(${id}) refused (${read.detail}) — answering the ` +
+          "operator's press unrecorded rather than refusing it");
+        return pressPlain();
+      }
+      held = read.ask;
     } catch (err) {
       console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
         `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
@@ -2393,7 +2415,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       //
       // `?.` — a server with coordination switched off archives exactly as it
       // did before this wave.
-      const runs = deps.coord?.openRunsForSession(id) ?? [];
+      const read = deps.coord?.openRunsForSession(id);
+      // D-2545, AND THE SUCCESS PATH IS UNCHANGED — the 409 still carries the
+      // full `OpenSibling[]` it has always carried, and the wave-1 ruling's
+      // "409 with no row detail" describes only the FAILURE arm below.
+      //
+      // On a refusal the archive is refused as CLAIMED with an EMPTY `runs`
+      // array: this box could not prove the workspace free, and the fail-shut
+      // direction at a destructive act is to refuse. The array is empty rather
+      // than absent because the field's shape must not change with the
+      // condition; the caller reads a refusal that names no row, which is the
+      // honest answer when no row was read.
+      //
+      // `?.` still means "coordination switched off archives exactly as before".
+      if (read !== undefined && !read.ok) {
+        return reply.code(409).send({ ok: false, error: 'run-open', runs: [] });
+      }
+      const runs = read?.siblings ?? [];
       if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
     }
     const argv = CCD_ARGV.wsArchive(id, pwaDec(req));

@@ -215,6 +215,9 @@ function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
   if (r.ok) return reply.code(200).send({ ok: true, id: r.id, items: r.items });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    // D-2545. 503, never the 404 above: the run exists.
+    case 'run-unreadable':
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused':
       return reply.code(r.code === 'unknown-item' ? 404 : 409)
@@ -752,7 +755,21 @@ export function registerCoordRoutes(
     // 8: runId, when given, must name a run that exists. One lookup, reused
     // below for the envelope's program/wave — a second `coord.run(runId)`
     // after this would be the same read twice for no reason.
-    const run = runId !== null ? coord.run(runId) : null;
+    const runRead = runId !== null ? coord.run(runId) : null;
+    // D-2545. UNREADABLE IS NOT ABSENT, and this is the one place on this route
+    // where the difference changes what the sender should do: `unknown-run`
+    // says "you named a run that does not exist — fix the id", while this says
+    // "the run is there and this box cannot read it — do not retry blindly".
+    //
+    // NOT through `refuse()`, deliberately: that helper RECORDS a rejection row
+    // in the very database that just failed a read, and its `code` parameter is
+    // a `MailRejectCode` — admitting a read failure to that vocabulary would
+    // put a word on the mail wire for a condition no mail was ever rejected
+    // for. A plain 503, recorded nowhere, in the `not-configured` family.
+    if (runRead !== null && !runRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: runRead.detail });
+    }
+    const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
       return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
@@ -1450,6 +1467,10 @@ export function registerCoordRoutes(
     }
     switch (r.kind) {
       case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      // D-2545. 503, never the 404 above: the run exists and this box cannot
+      // read it — the ungated release valve must say which.
+      case 'run-unreadable':
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
       // 502, the coord-route family's status for this condition
@@ -1532,7 +1553,16 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const run = coord.run(id);
+    const read = coord.run(id);
+    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
+    // the coordinator this run does not exist, which is a lie about a row
+    // sitting in the table with an integer this process cannot represent.
+    // 503, in the `not-configured` family — a fact about this box, not about
+    // the request. Before any `verifyDone` re-measurement or any advance.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
     if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
@@ -1559,7 +1589,18 @@ export function registerCoordRoutes(
 
     const adv = coord.advance(id, to, 'coordinator');
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    return reply.code(200).send({ ok: true, run: toRunSummary(coord.run(id)!) });
+    // Re-read after the advance for the fresh row. `!` is gone with the type
+    // (D-2545): an advance that succeeded and then read back absent or
+    // unreadable is a real condition, and answering it honestly is cheaper
+    // than a non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
+    }
+    if (after.run === null) {
+      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
+    }
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
     });
   });
 
@@ -1861,8 +1902,16 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
-    const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
-    const summaries: RunSummary[] = runs.map(toRunSummary);
+    const read = deps.coord.runs({ includeClosed: q.closed === '1' });
+    // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
+    // the WHOLE read rather than quietly shipping the others: a board silently
+    // missing the run an operator is looking for is worse than a board that
+    // says it could not be read. 503 and an honest error, never a partial list
+    // and never an empty one.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
+    }
+    const summaries: RunSummary[] = read.runs.map(toRunSummary);
     return { runs: summaries };
   });
 
@@ -1912,7 +1961,15 @@ export function registerCoordRoutes(
     // caller acts on differently: the first means the id is wrong, the second
     // means this wave declared none (the board renders `—`, not `0/0`). They
     // must not both come back as an empty array.
-    if (deps.coord.run(id) === null) {
+    const read = deps.coord.run(id);
+    // D-2545. The comment directly above says an unknown run and a run with no
+    // declared ledger are different answers a caller acts on differently; an
+    // UNREADABLE run is a third, and folding it into the 404 would tell the
+    // caller its id was wrong.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
     return { ok: true, items: deps.coord.workItems(id) };
@@ -2265,8 +2322,16 @@ export function registerCoordRoutes(
 
     if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
-    if (runId !== null && coord.run(runId) === null) {
-      return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+    if (runId !== null) {
+      const read = coord.run(runId);
+      // D-2545: the row is there and unreadable — not absent. 503, so the
+      // claimant does not go looking for a typo in an id that is correct.
+      if (!read.ok) {
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      }
+      if (read.run === null) {
+        return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+      }
     }
 
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
@@ -2692,7 +2757,15 @@ export function registerCoordRoutes(
     // throw a 500 out of a bound `NaN`.
     const id = Number((req.params as { id: string }).id);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    const askRead = coord.askById(id);
+    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
+    // for a row that is gone; this row is not gone, it is unreadable, and the
+    // two need different sentences for the same reason `child-unmeasurable`
+    // was split out of `ask-moved` below. 503, a fact about this box.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2859,7 +2932,12 @@ export function registerCoordRoutes(
     // `node:sqlite`, not throw a 500 out of a bound `NaN`.
     const id = Number((req.params as { id: string }).id);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    const askRead = coord.askById(id);
+    // D-2545, `/answer`'s arm exactly — see its comment.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2990,6 +3068,12 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    return reply.code(200).send({ ok: true, asks: coord.asksForParent(parent, state) });
+    const read = coord.asksForParent(parent, state);
+    // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
+    // list, so a partial one is worse than none — it looks complete.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
+    }
+    return reply.code(200).send({ ok: true, asks: read.asks });
   });
 }

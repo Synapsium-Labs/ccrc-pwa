@@ -31,6 +31,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { PushPayload } from '../src/push.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import { okAsk } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const TOK = { 'x-ccrc-mail-token': TOKEN };
@@ -180,7 +181,7 @@ describe('POST /api/asks/:id/answer', () => {
     expect(res.json()).toEqual({ ok: false, error: 'ask-moved' });
     // Fails shut BEFORE the keystroke — nothing was pressed into the pane.
     expect(sendKeysCalls(calls)).toEqual([]);
-    expect(w.coord.askById(id)!.state).toBe('held');
+    expect(okAsk(w.coord.askById(id))!.state).toBe('held');
   });
 
   /**
@@ -229,7 +230,7 @@ describe('POST /api/asks/:id/answer', () => {
       // Still FAIL-SHUT, and still before the keystroke: the only thing that
       // changed is which true sentence the parent is told.
       expect(sendKeysCalls(calls)).toEqual([]);
-      expect(w.coord.askById(id)!.state).toBe('held');
+      expect(okAsk(w.coord.askById(id))!.state).toBe('held');
     });
   }
 
@@ -241,7 +242,7 @@ describe('POST /api/asks/:id/answer', () => {
     const res = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'not-held' });
-    expect(coord.askById(id)!.state).toBe('answering');
+    expect(okAsk(coord.askById(id))!.state).toBe('answering');
   });
 
   it('presses the digit and records a programless second event on success', async () => {
@@ -255,7 +256,7 @@ describe('POST /api/asks/:id/answer', () => {
     // Single-select: the digit alone, no Enter — answerAsk's own contract.
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
 
-    const row = coord.askById(id)!;
+    const row = okAsk(coord.askById(id))!;
     expect(row.state).toBe('answered');
     expect(row.answeredBy).toBe(PARENT);
     expect(row.answer).toBe('Blue');
@@ -298,13 +299,13 @@ describe('POST /api/asks/:id/answer', () => {
 
     // Not stranded in 'answering' — back to 'held', exactly what the CAS
     // needs to be pre-emptible again.
-    expect(coord.askById(id)!.state).toBe('held');
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
 
     // And genuinely pre-emptible: a second, well-formed attempt succeeds.
     const good = await answer(app!, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
     expect(good.statusCode).toBe(200);
     expect(good.json()).toEqual({ ok: true });
-    expect(coord.askById(id)!.state).toBe('answered');
+    expect(okAsk(coord.askById(id))!.state).toBe('answered');
   });
 });
 
@@ -392,7 +393,7 @@ describe('POST /api/asks/:id/release', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
 
-    expect(coord.askById(id)!.state).toBe('released');
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
     // The deferred push fired NOW rather than waiting for `sweepAsks` to
     // notice the grace window lapse — the whole point of this route.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
@@ -411,7 +412,7 @@ describe('POST /api/asks/:id/release', () => {
       detail: 'only this child\'s derived parent may decline its question' });
     // Untouched: the store row is still held and the in-memory hold survives
     // for the actual parent to decline (or the grace window to lapse) later.
-    expect(coord.askById(id)!.state).toBe('held');
+    expect(okAsk(coord.askById(id))!.state).toBe('held');
     expect(heldMap(w).has(CHILD)).toBe(true);
     expect(sent).toEqual([]);
   });
@@ -427,7 +428,7 @@ describe('POST /api/asks/:id/release', () => {
     const second = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ ok: false, error: 'not-held' });
-    expect(coord.askById(id)!.state).toBe('released');
+    expect(okAsk(coord.askById(id))!.state).toBe('released');
     // No double push: the second decline never reached `releaseHeldAsk`.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
   });
@@ -464,7 +465,7 @@ describe('POST /api/asks/:id/release', () => {
     expect(res.json()).toEqual({ ok: true });
     // The decline is genuinely real — the row released — even with no
     // watcher to notify anyone about it.
-    expect(built.coord.askById(id)!.state).toBe('released');
+    expect(okAsk(built.coord.askById(id))!.state).toBe('released');
     expect(warn).toHaveBeenCalledTimes(1);
     const [msg] = warn.mock.calls[0]!;
     expect(msg).toContain(String(id));
@@ -703,7 +704,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
 
-    const row = coord.askById(id!)!;
+    const row = okAsk(coord.askById(id!))!;
     expect(row.state).toBe('answered');
     expect(row.answeredBy).toBe('operator');
     expect(row.answer).toBe('Blue');
@@ -735,8 +736,8 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'range' });
     expect(sendKeysCalls(calls)).toEqual([]);
-    expect(coord.askById(id!)!.state).toBe('held');
-    expect(coord.askById(id!)!.answeredBy).toBeNull();
+    expect(okAsk(coord.askById(id!))!.state).toBe('held');
+    expect(okAsk(coord.askById(id!))!.answeredBy).toBeNull();
   });
 
   it('a row already taken before the request arrives reads as nothing held — same branch as the parentless path', async () => {
@@ -761,7 +762,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
 
     // The row is untouched by this request — left exactly where the
     // pre-existing take put it, neither settled nor rolled back.
-    const row = coord.askById(id!)!;
+    const row = okAsk(coord.askById(id!))!;
     expect(row.state).toBe('answering');
     expect(row.answeredBy).toBeNull();
   });
@@ -826,7 +827,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
 
     // This request never held the row — left exactly where the competing
     // take put it, neither settled nor rolled back out from under it.
-    const row = coord.askById(id)!;
+    const row = okAsk(coord.askById(id))!;
     expect(row.state).toBe('answering');
     expect(row.answeredBy).toBeNull();
   });
@@ -876,6 +877,6 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'ask-mismatch' });
     expect(sendKeysCalls(calls)).toEqual([]);
-    expect(coord.askById(id!)!.state).toBe('held');
+    expect(okAsk(coord.askById(id!))!.state).toBe('held');
   });
 });

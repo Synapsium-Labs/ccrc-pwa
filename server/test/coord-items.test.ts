@@ -15,6 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const PROJECT = 'demo';
@@ -207,7 +208,7 @@ describe('POST /api/runs/:id/items', () => {
     expect(settled.statusCode).toBe(200);
     expect(settled.json()).toMatchObject({ items: { done: 3, total: 7 } });
     w.coord.advance(runId, 'failed', 'operator');            // planned -> failed, an abandon
-    expect(w.coord.run(runId)).toMatchObject({ state: 'failed', items: { done: 3, total: 7 } });
+    expect(okRun(w.coord.run(runId))).toMatchObject({ state: 'failed', items: { done: 3, total: 7 } });
   });
 });
 

@@ -15,6 +15,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
+import { okRun } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -575,6 +576,21 @@ describe('the rejection table is total, in both directions', () => {
     const NOT_CODES = new Set([
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
+      // D-2545 — the READ-FAILURE family, and the same family as
+      // `not-configured` directly above: a fact about THIS BOX, not about the
+      // request. Every one of them answers 503 and none is a refusal — nothing
+      // was declined, a row could not be read. They are deliberately NOT
+      // admitted to `RunRefuseCode`, whose own docstring scopes it to the typed
+      // refusals of `POST /api/runs*`, and whose membership `coordinator-skill.
+      // test.ts` requires to be documented as a recovery in the coordinator
+      // corpus — there is no recovery to document for "this box cannot
+      // represent a persisted integer", only a report. `store.ts`'s
+      // `RunReadResult`/`AskReadResult` kinds and the route spellings are the
+      // same three words on purpose, so a reader can follow one condition from
+      // the SELECT to the status.
+      'run-unreadable',      // one run row; `store.ts` kind + five route spellings
+      'runs-unreadable',     // the list read's own word: GET /api/runs, all-or-failure
+      'ask-unreadable',      // the ask half of the same family, /answer//release//asks
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).

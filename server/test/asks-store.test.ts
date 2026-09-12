@@ -6,6 +6,7 @@ import path from 'node:path';
 import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okAsk, okAsksByChild } from './coordReadHelpers.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
@@ -122,7 +123,7 @@ describe('ask store methods', () => {
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
     expect(s.untakeAsk(id)).toBe(true);
-    expect(s.askById(id)!.state).toBe('held');
+    expect(okAsk(s.askById(id))!.state).toBe('held');
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
   });
 
@@ -137,7 +138,7 @@ describe('ask store methods', () => {
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
     expect(s.releaseAsk(id, 2000)).toBe(true);
     s.settleAsk(id, 'operator', 'a', 3000);
-    const row = s.askById(id)!;
+    const row = okAsk(s.askById(id))!;
     expect(row.state).toBe('released');
     expect(row.answeredBy).toBeNull();
   });
@@ -156,9 +157,9 @@ describe('ask store methods', () => {
     const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
     expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);      // held -> answering
-    expect(s.askById(id)!.state).toBe('answering');
+    expect(okAsk(s.askById(id))!.state).toBe('answering');
     expect(s.staleAsk('d', 'c', 4000)).toBe(true);
-    const row = s.askById(id)!;
+    const row = okAsk(s.askById(id))!;
     expect(row.state).toBe('stale');
     expect(row.releasedAt).toBe(4000);
   });
@@ -178,9 +179,9 @@ describe('ask store methods', () => {
       const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
         askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
       settle(id);
-      const before = s.askById(id)!.state;
+      const before = okAsk(s.askById(id))!.state;
       expect(s.staleAsk('d', 'c', 9000)).toBe(false);
-      expect(s.askById(id)!.state).toBe(before);
+      expect(okAsk(s.askById(id))!.state).toBe(before);
     }
   });
 
@@ -189,15 +190,15 @@ describe('ask store methods', () => {
   describe('currentAskFor — the newest row for a child, in ANY state', () => {
     it('is null when the child has never had an ask row', () => {
       const s = mk();
-      expect(s.currentAskFor('nobody')).toBeNull();
+      expect(okAsk(s.currentAskFor('nobody'))).toBeNull();
     });
 
     it('answers the live held row', () => {
       const s = mk();
       const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
         askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
-      expect(s.currentAskFor('c')).toEqual(s.askById(id));
-      expect(s.currentAskFor('c')!.state).toBe('held');
+      expect(okAsk(s.currentAskFor('c'))).toEqual(okAsk(s.askById(id)));
+      expect(okAsk(s.currentAskFor('c'))!.state).toBe('held');
     });
 
     it('answers a row that has moved past held — answering, answered, released, stale', () => {
@@ -205,9 +206,9 @@ describe('ask store methods', () => {
       const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
         askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
       s.takeAskForAnswer(id, 1000);
-      expect(s.currentAskFor('c')!.state).toBe('answering'); // heldAskFor would answer null here
+      expect(okAsk(s.currentAskFor('c'))!.state).toBe('answering'); // heldAskFor would answer null here
       s.settleAsk(id, 'p', 'a', 2000);
-      expect(s.currentAskFor('c')!.state).toBe('answered');
+      expect(okAsk(s.currentAskFor('c'))!.state).toBe('answered');
     });
 
     it('answers the NEWEST row once a second ask is minted for the same child', () => {
@@ -222,7 +223,7 @@ describe('ask store methods', () => {
       s.settleAsk(first, 'p', 'a', 2000);
       const second = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k2',
         askAt: 3000, dialogId: 'd2', question: 'second?', options: ['a'], now: 3 });
-      const current = s.currentAskFor('c')!;
+      const current = okAsk(s.currentAskFor('c'))!;
       expect(current.id).toBe(second);
       expect(current.state).toBe('held');
       expect(current.question).toBe('second?');
@@ -232,7 +233,7 @@ describe('ask store methods', () => {
       const s = mk();
       s.insertAsk({ childId: 'sibling', parentId: 'p', runId: null, askKey: 'k',
         askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
-      expect(s.currentAskFor('c')).toBeNull();
+      expect(okAsk(s.currentAskFor('c'))).toBeNull();
     });
   });
 
@@ -241,19 +242,19 @@ describe('ask store methods', () => {
   describe('currentAsksFor — the batched form, one query for many children', () => {
     it('answers an empty map for an empty id list, without touching the db', () => {
       const s = mk();
-      expect(s.currentAsksFor([])).toEqual(new Map());
+      expect(okAsksByChild(s.currentAsksFor([]))).toEqual(new Map());
     });
 
     it('answers an empty map when none of the named children has ever had a row', () => {
       const s = mk();
-      expect(s.currentAsksFor(['nobody', 'nobody-else'])).toEqual(new Map());
+      expect(okAsksByChild(s.currentAsksFor(['nobody', 'nobody-else']))).toEqual(new Map());
     });
 
     it('is keyed by childId, one entry per child that has a row, absent entirely for one that does not', () => {
       const s = mk();
       s.insertAsk({ childId: 'a', parentId: 'p', runId: null, askKey: 'k',
         askAt: 1000, dialogId: 'd', question: 'q', options: ['x'], now: 1 });
-      const out = s.currentAsksFor(['a', 'b']);
+      const out = okAsksByChild(s.currentAsksFor(['a', 'b']));
       expect(out.size).toBe(1);
       expect(out.get('a')!.state).toBe('held');
       expect(out.has('b')).toBe(false);
@@ -271,8 +272,8 @@ describe('ask store methods', () => {
       s.takeAskForAnswer(answered, 1000);
       s.settleAsk(answered, 'p', 'a', 2000);
       const children = ['held-child', 'answering-child', 'answered-child'];
-      const batch = s.currentAsksFor(children);
-      for (const c of children) expect(batch.get(c)).toEqual(s.currentAskFor(c));
+      const batch = okAsksByChild(s.currentAsksFor(children));
+      for (const c of children) expect(batch.get(c)).toEqual(okAsk(s.currentAskFor(c)));
     });
 
     it('answers the NEWEST row per child, the same precedence currentAskFor gives one child', () => {
@@ -283,9 +284,93 @@ describe('ask store methods', () => {
       s.settleAsk(first, 'p', 'a', 2000);
       const second = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k2',
         askAt: 3000, dialogId: 'd2', question: 'second?', options: ['a'], now: 3 });
-      const out = s.currentAsksFor(['c']);
+      const out = okAsksByChild(s.currentAsksFor(['c']));
       expect(out.get('c')!.id).toBe(second);
       expect(out.get('c')!.question).toBe('second?');
     });
+  });
+});
+
+// ── D-2545: the ASK half of the persisted-integer read surface ──────────────
+//
+// `hydrateAsk` guards `state` and nothing else; `id` and `runId` coerced
+// straight into numbers, so a row wider than the JavaScript safe domain crashed
+// every ask reader with a bare `RangeError`. The two in-domain columns are now
+// CAST to TEXT and proven; the four epoch-millisecond columns deliberately are
+// NOT (see `ASK_COLS`'s own comment — that wider surface is D-2560's).
+describe('the ask read surface refuses an unrepresentable row, and tells absent from unreadable', () => {
+  const mk = (): CoordStore => new CoordStore(openCoordDb(dbPathIn(mkTmp('ccrc-coord-'))));
+  const UNSAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+  /** Plant an `asks` row whose named column is outside the safe domain. */
+  const plantUnsafe = (s: CoordStore, column: 'id' | 'runId', childId = 'c', parentId = 'p'): void => {
+    s.db.prepare(
+      'INSERT INTO asks (id, at, childId, parentId, runId, askKey, askAt, dialogId, ' +
+      "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
+    ).run(
+      column === 'id' ? UNSAFE : 9,
+      1, childId, parentId,
+      column === 'runId' ? UNSAFE : null,
+      'k', 1000, 'd', 'q', JSON.stringify(['a']),
+    );
+  };
+
+  it.each([
+    ['id', 'ask id is not a positive safe integer'],
+    ['runId', 'ask runId is not a positive safe integer'],
+  ] as const)('askById refuses an unrepresentable %s, naming the COLUMN and no value', (column, detail) => {
+    const s = mk();
+    plantUnsafe(s, column);
+    const id = column === 'id' ? Number(UNSAFE) : 9;
+    expect(s.askById(id)).toEqual({ ok: false, kind: 'ask-unreadable', detail });
+    expect(detail).not.toMatch(/[0-9]/);
+  });
+
+  it('askById answers {ok:true, ask:null} for a genuinely ABSENT row', () => {
+    expect(mk().askById(4242)).toEqual({ ok: true, ask: null });
+  });
+
+  it('every ask reader refuses the same row, and answers absent as absent', () => {
+    const s = mk();
+    plantUnsafe(s, 'runId', 'c1', 'p1');
+    const refusal = { ok: false, kind: 'ask-unreadable',
+                      detail: 'ask runId is not a positive safe integer' };
+    expect(s.heldAskFor('c1')).toEqual(refusal);
+    expect(s.currentAskFor('c1')).toEqual(refusal);
+    expect(s.asksForParent('p1')).toEqual(refusal);
+    expect(s.currentAsksFor(['c1'])).toEqual(refusal);
+    // …and the absent answers stay positively absent.
+    expect(s.heldAskFor('nobody')).toEqual({ ok: true, ask: null });
+    expect(s.currentAskFor('nobody')).toEqual({ ok: true, ask: null });
+    expect(s.asksForParent('nobody')).toEqual({ ok: true, asks: [] });
+    expect(okAsksByChild(s.currentAsksFor(['nobody'])).size).toBe(0);
+    expect(okAsksByChild(s.currentAsksFor([])).size).toBe(0);
+  });
+
+  it('currentAsksFor fails the WHOLE frame on one unreadable row, never a partial map', () => {
+    const s = mk();
+    s.insertAsk({ childId: 'good', parentId: 'p', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+    plantUnsafe(s, 'id', 'bad', 'p');
+    expect(s.currentAsksFor(['good', 'bad'])).toMatchObject({ ok: false, kind: 'ask-unreadable' });
+    expect(s.asksForParent('p')).toMatchObject({ ok: false, kind: 'ask-unreadable' });
+  });
+
+  // The DEFENSIVE write-side guard. Unreachable by construction today — its one
+  // production call site takes `runId` off `openRunsForSession`, which now
+  // proves it — so this is the mechanism that keeps it from being deleted as
+  // dead code, and the second half is the one that matters: null stays LEGAL.
+  it('insertAsk refuses a non-null out-of-domain runId, and still accepts null', () => {
+    const s = mk();
+    const mint = (runId: number | null) => s.insertAsk({ childId: 'c', parentId: 'p', runId,
+      askKey: 'k', askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+    expect(() => mint(Number.MAX_SAFE_INTEGER + 1))
+      .toThrow(/ask runId is not a positive safe integer/);
+    expect(() => mint(0)).toThrow(/ask runId is not a positive safe integer/);
+    expect(() => mint(-1)).toThrow(/ask runId is not a positive safe integer/);
+    // REFUSED, NOT COERCED: nothing was written by any of the three.
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n).toBe(0);
+    expect(typeof mint(null)).toBe('number');
+    expect(okAsk(s.currentAskFor('c'))!.runId).toBeNull();
   });
 });

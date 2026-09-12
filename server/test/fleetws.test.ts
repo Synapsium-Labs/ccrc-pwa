@@ -18,6 +18,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { okRuns } from './coordReadHelpers.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -606,6 +607,52 @@ describe('fleet REST + WS', () => {
       const pushed = await next();
       expect(pushed.type).toBe('runs');
       expect(pushed.runs[0].state).toBe('dispatched');
+
+      ws.close();
+    });
+
+    // D-2545. Both `runs` emitters — the cold-start push in `server.ts` and
+    // `FleetWatcher.emitRuns` — SKIP THE FRAME on an unreadable row. Emitting
+    // `[]` would tell every client that every run had closed, which is the one
+    // thing the refusal does not mean; and `lastRunsJson` is left untouched, so
+    // the previously-sent frame stands and a later healthy tick still diffs
+    // correctly against what was last actually broadcast.
+    it('skips the frame when a run row is UNREADABLE, and resumes once it is not', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const opened = coord.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      // The row a newer build wrote and a rollback left behind.
+      coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?')
+        .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
+      const deps = { ...testDeps(home), coord };
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      // `coord` arrives NEXT, with no `runs` frame sitting in between — the
+      // idiom this file already uses to assert a frame's absence positively.
+      expect((await next()).type).toBe('coord');
+
+      // Repair the row: the emitter resumes, which is what proves the skip left
+      // no poisoned byte-equality memory behind.
+      coord.db.prepare('UPDATE runs SET wave = 1 WHERE id = ?').run(opened.id);
+      await watcher.tick();
+      const runs = await next();
+      expect(runs.type).toBe('runs');
+      expect(runs.runs.map((r: { id: number; wave: number }) => [r.id, r.wave]))
+        .toEqual([[opened.id, 1]]);
 
       ws.close();
     });

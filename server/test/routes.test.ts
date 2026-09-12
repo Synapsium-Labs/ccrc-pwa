@@ -1123,6 +1123,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     return { code: 0, stdout: '', stderr: '' };
   };
 
+  // D-2545 REGRESSION PIN, and the reason it is called out by name: the
+  // wave-1 ruling described this 409 as carrying "no row detail", which was a
+  // premise about the FAILURE arm read as a description of today's behaviour.
+  // The success path carries FULL row detail and must stay byte-identical —
+  // narrowing it would be the unauthorised regression that change was most
+  // likely to cause. This test is that byte-for-byte assertion.
   it('refuses 409 run-open, NAMING the run ids — never a bare slug', async () => {
     const home = seededHome('demo-claimed');
     const calls: string[][] = [];
@@ -1133,6 +1139,28 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
       ok: false, error: 'run-open',
       runs: [{ id: runId, program: 'build4', wave: 2, waveOf: 3 }],
     });
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await app.close();
+  });
+
+  it('refuses 409 run-open with an EMPTY runs array when the sibling rows are ' +
+     'UNREADABLE — refused as claimed, and still not archived (D-2545)', async () => {
+    const home = seededHome('demo-claimed');
+    const calls: string[][] = [];
+    const { app, coord } = await withCoord(home, recording(calls), 'demo-claimed');
+    // A second open run on the same workspace whose `wave` is wider than the
+    // JavaScript safe domain — the shape a newer build writes and a rollback
+    // leaves behind.
+    coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'build4', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'demo', 'demo-claimed',
+      'planned', 'ccrc-pwa-coordinator', Date.now());
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
+    expect(res.statusCode).toBe(409);
+    // The SHAPE does not change with the condition — `runs` is present and
+    // empty, because no row was read. Fail-shut at a destructive act.
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

@@ -29,6 +29,7 @@ import {
   WORK_ITEM_TITLE_MAX,
   isSkillState,
 } from '../../shared/api.js';
+import { okRun, okRuns } from './coordReadHelpers.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -195,7 +196,7 @@ describe('POST /api/runs', () => {
       ok: true, program: 'build4', state: 'planned', ledgerPath: 'docs/superpowers/programs/build4.md',
     });
     const id = (res.json() as { id: number }).id;
-    expect(w.coord.run(id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
   it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
@@ -214,7 +215,7 @@ describe('POST /api/runs', () => {
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
     });
     expect(w.coord.programs()).toEqual([]);
-    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
 
@@ -233,7 +234,7 @@ describe('POST /api/runs', () => {
       detail: 'generated run id is not a positive safe integer',
     });
     expect(w.coord.programs()).toEqual([]);
-    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);
     expect(calls).toEqual([]);
   });
 
@@ -257,7 +258,7 @@ describe('POST /api/runs', () => {
     const w = await openApp(home, run); app = w.app;
     const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
     expect(first.statusCode).toBe(200);
-    const runsBefore = w.coord.runs().length;
+    const runsBefore = okRuns(w.coord.runs()).length;
     const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
 
     const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Another repo',
@@ -266,7 +267,7 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: PROJECT });
     // BEFORE `coord.openRun`, so a refusal leaves no `planned` orphan…
-    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
     // …and no hold was placed on a workspace this run was never going to get.
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
   });
@@ -302,7 +303,7 @@ describe('POST /api/runs', () => {
       expect(res.statusCode, bad).toBe(400);
       expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringContaining('homeProject') });
     }
-    expect(w.coord.runs()).toHaveLength(0);
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
     expect(w.coord.programs()).toHaveLength(0);
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
@@ -324,7 +325,7 @@ describe('POST /api/runs', () => {
     const res = await postOpen(app, { ...OPEN_BODY, program });
     expect(res.statusCode, program).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
-    expect(w.coord.runs()).toEqual([]);
+    expect(okRuns(w.coord.runs())).toEqual([]);
     expect(w.coord.programs()).toEqual([]);
     expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
   });
@@ -346,7 +347,7 @@ describe('POST /api/runs', () => {
       ledgerPath: 'docs/superpowers/programs/build_4-name.md',
       ledgerRepo: 'demo',
     });
-    expect(w.coord.run(body.id)?.program).toBe('build_4-name');
+    expect(okRun(w.coord.run(body.id))?.program).toBe('build_4-name');
     expect(w.coord.programs().map((p) => p.slug)).toEqual(['build_4-name']);
     expect(w.coord.programHome('build_4-name')).toBe('demo');
     const homeRoot = path.join(projectsRoot, 'demo');
@@ -373,7 +374,7 @@ describe('POST /api/runs', () => {
     const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
     expect(second.statusCode).toBe(200);
     expect((second.json() as { id: number }).id).toBe(id);
-    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe('demo-second');
     // The heir holds a freshly rendered copy; the predecessor's row is parked.
     const heir = w.coord.outstandingMailFor('demo-second');
     expect(heir.map((m) => m.subject)).toEqual(['the wave brief']);
@@ -404,7 +405,7 @@ describe('POST /api/runs', () => {
     `);
     const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
     expect(failed.statusCode).toBe(500);
-    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe('demo-existing');
     expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
     expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
     expect(w.coord.mailForRecipient('demo-second')).toEqual([]);
@@ -413,7 +414,7 @@ describe('POST /api/runs', () => {
     w.coord.db.exec('DROP TRIGGER fail_session_rebound');
     const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
     expect(retried.statusCode).toBe(200);
-    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe('demo-second');
     expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
     expect(w.coord.outstandingMailFor('demo-existing')).toEqual([]);
     expect(w.coord.outstandingMailFor('demo-second').map((m) => m.subject)).toEqual(['the wave brief']);
@@ -447,7 +448,7 @@ describe('POST /api/runs', () => {
     expect(second.statusCode).toBe(502);
     expect(second.json()).toEqual({ ok: false, stderr: 'ws-hold failed' });
     expect(holds, 'the initial and refused re-bind holds were not both attempted').toBe(2);
-    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe('demo-existing');
     expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
     expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
     expect(w.coord.mailForRecipient('demo-second')).toHaveLength(0);
@@ -485,7 +486,7 @@ describe('POST /api/runs', () => {
     const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(res.statusCode).toBe(200);
     const id = (res.json() as { id: number }).id;
-    expect(w.coord.run(id)?.sessionId).toBe('demo-existing');
+    expect(okRun(w.coord.run(id))?.sessionId).toBe('demo-existing');
     expect(calls).toContainEqual(
       ['ws-hold', '--session', 'demo-existing', '--reason', `program:build4 wave:2/3 run:${id}`]);
   });
@@ -544,7 +545,7 @@ describe('POST /api/runs', () => {
       error: 'bad-request',
       detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
     });
-    expect(w.coord.runs()).toEqual([]);
+    expect(okRuns(w.coord.runs())).toEqual([]);
     expect(w.coord.programs()).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -571,7 +572,7 @@ describe('POST /api/runs', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
-    expect(w.coord.runs()).toEqual([]);
+    expect(okRuns(w.coord.runs())).toEqual([]);
     expect(w.coord.programs()).toEqual([]);
     expect(calls).toEqual([]);
   });
@@ -632,7 +633,7 @@ describe('POST /api/runs', () => {
     `);
     const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
     expect(failed.statusCode).toBe(500);
-    const failedRun = w.coord.runs().find((r) => r.wave === 2);
+    const failedRun = okRuns(w.coord.runs()).find((r) => r.wave === 2);
     expect(failedRun).toBeDefined();
     expect(w.coord.programHome('build4')).toBeNull();
     expect(w.coord.runEvents(failedRun!.id).filter((e) => e.detail === 'home-project-backfilled')).toEqual([]);
@@ -651,13 +652,13 @@ describe('POST /api/runs', () => {
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     expect((await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).statusCode).toBe(200);
-    const runsBefore = w.coord.runs().length;
+    const runsBefore = okRuns(w.coord.runs()).length;
     const res = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'other-project' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, refused: 'home-mismatch', by: 'demo' });
     // A SECOND code, not `project-mismatch`: the two conditions are handled
     // differently by the caller, and a seam may not collapse them.
-    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
   });
 
   it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
@@ -680,7 +681,7 @@ describe('POST /api/runs', () => {
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, homeProject: '   ' });
     expect(res.statusCode).toBe(400);
-    expect(w.coord.runs()).toHaveLength(0);
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
     expect(w.coord.programs()).toHaveLength(0);
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
@@ -691,7 +692,7 @@ describe('POST /api/runs', () => {
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, homeProject: 7 });
     expect(res.statusCode).toBe(400);
-    expect(w.coord.runs()).toHaveLength(0);
+    expect(okRuns(w.coord.runs())).toHaveLength(0);
     expect(w.coord.programs()).toHaveLength(0);
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
@@ -745,7 +746,7 @@ describe('POST /api/runs/:id/dispatch', () => {
         detail: expect.any(String),
       });
       expect(calls).toEqual([]);
-      expect(w.coord.run(reconstructed.id)!.state).toBe('planned');
+      expect(okRun(w.coord.run(reconstructed.id))!.state).toBe('planned');
     });
 
   it('refuses while $REG/coordinator-paused exists, before counting anything', async () => {
@@ -758,7 +759,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
     expect(calls).toEqual([]);   // nothing spawned, nothing counted
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 
   it('refuses paused even when BOTH caps are also exhausted — pause is the answer, not a cap', async () => {
@@ -779,7 +780,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'paused' });
     expect(calls).toEqual([]);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 
   it('refuses when the registry cannot be listed — an unreadable pause file is a PAUSE', async () => {
@@ -857,7 +858,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     // the registry-diff id learning, not the flag.
     expect(calls.some((c) => c[0] === 'ws-add' && c.includes(PROJECT))).toBe(true);
     expect(calls.some((c) => c[0] === 'ensure')).toBe(false);
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row).toMatchObject({ sessionId: 'demo-fresh1', workspace: 'demo-fresh1', branch: 'ws/demo-fresh1',
       resumed: false, clearedAt: null, state: 'dispatched' });
   });
@@ -1012,7 +1013,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       expect(res.statusCode).toBe(502);
       expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
       expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
-      const row = w.coord.run(opened.id);
+      const row = okRun(w.coord.run(opened.id));
       expect(row?.state).toBe('planned');
       expect(row?.sessionId).toBeNull();
     });
@@ -1039,7 +1040,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
       expect(calls.some((c) => c[0] === 'ws-add')).toBe(true);   // the spawn itself was never in question
       expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
-      const row = w.coord.run(opened.id);
+      const row = okRun(w.coord.run(opened.id));
       expect(row?.state).toBe('planned');
       expect(row?.sessionId).toBeNull();
       // ccd is NOT the failing party here, so the body says nothing on its
@@ -1077,7 +1078,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       });
       // Still binds and holds NOTHING — carrying ccd's words is not adoption.
       expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
-      expect(w.coord.run(opened.id)?.sessionId).toBeNull();
+      expect(okRun(w.coord.run(opened.id))?.sessionId).toBeNull();
     });
   });
 
@@ -1090,7 +1091,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'ambiguous-dispatch', candidates: 2 });
     expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row?.state).toBe('planned');
     expect(row?.sessionId).toBeNull();
   });
@@ -1118,7 +1119,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     // fired, and dispatch never committed.
     expect(calls.some((c) => c[0] === 'ensure' && c[1] === 'demo-existing')).toBe(true);
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row?.state).toBe('planned');
     expect(row?.workspace).toBeNull();
     expect(row?.branch).toBeNull();
@@ -1158,7 +1159,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     // and `/clear` must never be reached, and dispatch must never commit.
     expect(calls.some((c) => c[0] === 'ensure' && c[1] === 'demo-existing')).toBe(true);
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row?.state).toBe('planned');
     expect(row?.workspace).toBeNull();
     expect(row?.branch).toBeNull();
@@ -1186,8 +1187,8 @@ describe('POST /api/runs/:id/dispatch', () => {
       'the crossing was refused only AFTER the hold was placed').toHaveLength(holdsAfterOpen);
     expect(calls.some((c) => c[0] === 'send-keys'),
       'a /clear was typed into a session this dispatch had no business clearing').toBe(false);
-    expect(w.coord.run(id)?.state).toBe('planned');
-    expect(w.coord.run(id)?.dispatchedAt).toBeNull();
+    expect(okRun(w.coord.run(id))?.state).toBe('planned');
+    expect(okRun(w.coord.run(id))?.dispatchedAt).toBeNull();
   });
 
   it("answers registry-unmeasurable — not project-mismatch — when the session's .project cannot be read", async () => {
@@ -1211,7 +1212,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing spent: no second hold, no /clear, the run untouched.
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsAfterOpen);
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
-    expect(w.coord.run(id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
   it('permits a session whose registry row carries no .project at all — absence is not a crossing', async () => {
@@ -1229,7 +1230,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const id = (opened.json() as { id: number }).id;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(200);
-    expect(w.coord.run(id)?.state).toBe('dispatched');
+    expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
   it('permits a session whose .project reads back whitespace-only — trimmed empty is not a crossing', async () => {
@@ -1251,7 +1252,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const id = (opened.json() as { id: number }).id;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(200);
-    expect(w.coord.run(id)?.state).toBe('dispatched');
+    expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
   it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
@@ -1267,7 +1268,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     const id = (opened.json() as { id: number }).id;
     const res = await postDispatch(app, id);
     expect(res.statusCode).toBe(200);
-    expect(w.coord.run(id)?.state).toBe('dispatched');
+    expect(okRun(w.coord.run(id))?.state).toBe('dispatched');
   });
 
   it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {
@@ -1304,7 +1305,7 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.some((c) => c[0] === 'ws-add')).toBe(false);
     // The injected /clear, through sendPrompt's own proof discipline.
     expect(calls.some((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'))).toBe(true);
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row?.resumed).toBe(true);
     expect(row?.clearedAt).toEqual(expect.any(Number));
     expect(row?.workspace).toBe('demo-existing');
@@ -1374,9 +1375,9 @@ describe('POST /api/runs/:id/dispatch', () => {
     const w = await openApp(home, run); app = w.app;
     const opened = (await postOpen(app,
       { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing-resume' })).json() as { id: number };
-    expect(w.coord.run(opened.id)?.dispatchStartedAt).toBeNull();   // nothing has dispatched it yet
+    expect(okRun(w.coord.run(opened.id))?.dispatchStartedAt).toBeNull();   // nothing has dispatched it yet
     expect((await postDispatch(app, opened.id)).json()).toMatchObject({ ok: true, resumed: true });
-    const row = w.coord.run(opened.id)!;
+    const row = okRun(w.coord.run(opened.id))!;
     expect(row.state).toBe('dispatched');                 // it WAS dispatched …
     expect(row.dispatchedAt).toEqual(expect.any(Number));
     expect(row.dispatchStartedAt).toBeNull();             // … and no spawn window was measured
@@ -1406,8 +1407,8 @@ describe('POST /api/runs/:id/dispatch', () => {
       ok: true, resumed: true, clearedAt: null, briefQueued: false, clearError: 'dialog-open',
     });
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);   // refused before any keystroke
-    expect(w.coord.run(opened.id)?.clearedAt).toBeNull();
-    expect(w.coord.run(opened.id)?.state).toBe('dispatched');   // dispatch itself still lands
+    expect(okRun(w.coord.run(opened.id))?.clearedAt).toBeNull();
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('dispatched');   // dispatch itself still lands
     // F7 / D-1298: the DECISION is durable now, not only the run-event string.
     // Before migration 7 this branch left nothing a reader could reach: the
     // `clear-refused:` detail sits on `run_events`, which no HTTP route serves,
@@ -1471,7 +1472,7 @@ describe('POST /api/runs/:id/dispatch', () => {
       ['ws-hold', '--session', 'demo-fresh2', '--reason', `program:build4 wave:1/3 run:${opened.id}`]);
     // The run's own program/wave columns carry this — nothing reads it back
     // out of the reason string.
-    expect(w.coord.run(opened.id)).toMatchObject({ program: 'build4', wave: 1, waveOf: 3 });
+    expect(okRun(w.coord.run(opened.id))).toMatchObject({ program: 'build4', wave: 1, waveOf: 3 });
   });
 
   it('queues the brief as mail rather than injecting it', async () => {
@@ -1645,11 +1646,11 @@ describe('POST /api/runs/:id/close', () => {
     const root = gitRoot(PROJECT, `ws/${sessionId}`, OTHER_TIP);   // the REAL tip has moved
     const { id, coord } = await dispatchedRun(sessionId, root,
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
-    const before = coord.run(id)!.state;
+    const before = okRun(coord.run(id))!.state;
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, error: 'stale-tip' });
-    expect(coord.run(id)!.state).toBe(before);   // UNCHANGED
+    expect(okRun(coord.run(id))!.state).toBe(before);   // UNCHANGED
     expect(coord.rejections().map((r) => r.code)).toContain('stale-tip');
     const due = coord.dueDeliveries(Date.now(), 60_000);
     expect(due.some((d) => d.toId === sessionId && d.envelope.includes('stale-tip'))).toBe(true);
@@ -1675,7 +1676,7 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app, opened.id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'prhistory-unreadable' });
-    expect(w.coord.run(opened.id)!.state).toBe('dispatched');   // nothing closes
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('dispatched');   // nothing closes
   });
 
   it('folds the PR lineage it CAN read, and [] is a measured answer', async () => {
@@ -1686,7 +1687,7 @@ describe('POST /api/runs/:id/close', () => {
     // No `.prhistory` file at all: ABSENT is a MEASURED [].
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
-    expect(coord.run(id)!.prLineage).toEqual([]);
+    expect(okRun(coord.run(id))!.prLineage).toEqual([]);
   });
 
   it('releases the hold on the final wave and archives NOTHING itself', async () => {
@@ -1697,8 +1698,8 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: true });
-    expect(coord.run(id)!.state).toBe('done');
-    expect(coord.run(id)!.handoffCommit).toBe(TIP);
+    expect(okRun(coord.run(id))!.state).toBe('done');
+    expect(okRun(coord.run(id))!.handoffCommit).toBe(TIP);
     expect(calls.some((c) => c[0] === 'ws-release' && c.includes(sessionId))).toBe(true);
     expect(calls.some((c) => c[0] === 'ws-archive')).toBe(false);
   });
@@ -1711,7 +1712,7 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: false });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ released: false });
-    expect(coord.run(id)!.state).toBe('done');
+    expect(okRun(coord.run(id))!.state).toBe('done');
     // NO ` run:` suffix, deliberately: this reason claims the workspace for
     // wave 2, whose run has not been opened yet. Stamping the CLOSING run's
     // id onto the successor's claim would name the wrong run.
@@ -1748,7 +1749,7 @@ describe('POST /api/runs/:id/close', () => {
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
     });
     expect(calls).toEqual([]);
-    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+    expect(okRun(w.coord.run(reconstructed.id))!.state).toBe('working');
   });
 
   it('refuses the next-wave hold when wave+1 leaves the safe-integer domain — the last wave a ' +
@@ -1787,7 +1788,7 @@ describe('POST /api/runs/:id/close', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
     expect(calls).toEqual([]);
-    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+    expect(okRun(w.coord.run(reconstructed.id))!.state).toBe('working');
   });
 
   it('final:true with a sibling open re-holds with the SIBLING reason and answers released:false', async () => {
@@ -1803,7 +1804,7 @@ describe('POST /api/runs/:id/close', () => {
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, state: 'done', released: false });
-    expect(coord.run(id)!.state).toBe('done');
+    expect(okRun(coord.run(id))!.state).toBe('done');
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
@@ -1833,9 +1834,9 @@ describe('POST /api/runs/:id/close', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
     expect(calls).toEqual([['pr-state', '--session', sessionId]]);
-    expect(coord.run(id)!.state).toBe('dispatched');
-    expect(coord.run(id)!.prLineage).toEqual(lineage);
-    expect(coord.run(survivor.id)!.state).toBe('working');
+    expect(okRun(coord.run(id))!.state).toBe('dispatched');
+    expect(okRun(coord.run(id))!.prLineage).toEqual(lineage);
+    expect(okRun(coord.run(survivor.id))!.state).toBe('working');
   });
 
   it('refuses an oversized ordinary-close survivor before lineage, fleet, or close writes', async () => {
@@ -1866,9 +1867,9 @@ describe('POST /api/runs/:id/close', () => {
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
     });
     expect(calls).toEqual([['pr-state', '--session', sessionId]]);
-    expect(coord.run(id)!.state).toBe('dispatched');
-    expect(coord.run(id)!.prLineage).toEqual(lineage);
-    expect(coord.run(survivor.id)!.state).toBe('working');
+    expect(okRun(coord.run(id))!.state).toBe('dispatched');
+    expect(okRun(coord.run(id))!.prLineage).toEqual(lineage);
+    expect(okRun(coord.run(survivor.id))!.state).toBe('working');
   });
 
   it('the non-final arm re-holds with the SURVIVING run, never with its own next wave', async () => {
@@ -1900,7 +1901,7 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed', archive: true });
     expect(res.statusCode).toBe(200);
-    expect(coord.run(id)!.state).toBe('failed');
+    expect(okRun(coord.run(id))!.state).toBe('failed');
     expect(calls.some((c) => c[0] === 'ws-archive' && c.includes(sessionId))).toBe(true);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
   });
@@ -1924,7 +1925,7 @@ describe('POST /api/runs/:id/close', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: false });
     // The run still transitions — the WORKSPACE is what is protected.
-    expect(coord.run(id)!.state).toBe('failed');
+    expect(okRun(coord.run(id))!.state).toBe('failed');
     expect(calls.some((c) => c[0] === 'ws-archive')).toBe(false);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
     expect(calls).toContainEqual(
@@ -1958,8 +1959,8 @@ describe('POST /api/runs/:id/close', () => {
     // D-48: the fleet act moved AHEAD of the transition commit — a 501 here
     // must leave the run exactly where it was, never terminally `done`
     // (`RUN_TRANSITIONS.done = []` would give no retry at all).
-    expect(coord.run(id)!.state).toBe('dispatched');
-    expect(coord.run(id)!.closedAt).toBeNull();
+    expect(okRun(coord.run(id))!.state).toBe('dispatched');
+    expect(okRun(coord.run(id))!.closedAt).toBeNull();
   });
 
   it('refuses a second close before touching the fleet again — the transition guard runs first (D-48)', async () => {
@@ -1976,7 +1977,7 @@ describe('POST /api/runs/:id/close', () => {
     expect(second.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'done', to: 'closing' });
     // The retry never touched the fleet a second time.
     expect(calls.filter((c) => c[0] === 'ws-release').length).toBe(releasesAfterFirst);
-    expect(coord.run(id)!.state).toBe('done');
+    expect(okRun(coord.run(id))!.state).toBe('done');
   });
 
   it('closes state:failed WITHOUT re-measuring the claim — an operator abandon is not a done claim (D-49)', async () => {
@@ -1990,7 +1991,7 @@ describe('POST /api/runs/:id/close', () => {
       { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' });
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(res.statusCode).toBe(200);
-    expect(coord.run(id)!.state).toBe('failed');
+    expect(okRun(coord.run(id))!.state).toBe('failed');
     // D-13's own wedge, reached through the DISPATCHED side instead of
     // `planned`: a terminal run must not keep pinning the concurrency cap.
     expect(coord.capsUsage().running).toBe(0);
@@ -2012,11 +2013,11 @@ describe('POST /api/runs/:id/close', () => {
     const toReview = await postAdvance(app!, id,
       { to: 'awaiting-review', fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP } });
     expect(toReview.statusCode).toBe(200);
-    expect(coord.run(id)!.state).toBe('awaiting-review');
+    expect(okRun(coord.run(id))!.state).toBe('awaiting-review');
 
     const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(res.statusCode).toBe(200);
-    expect(coord.run(id)!.state).toBe('failed');
+    expect(okRun(coord.run(id))!.state).toBe('failed');
   });
 
   it('folds real PR lineage read from a real .prhistory file — [] alone cannot discriminate ' +
@@ -2040,7 +2041,7 @@ describe('POST /api/runs/:id/close', () => {
     // would leave this answer `[]` too (`hydrateRun`'s own NULL-column
     // default) — the same `[]` an absent ledger genuinely means. Only a REAL
     // recorded entry discriminates the fold call from its own absence.
-    expect(w.coord.run(opened.id)!.prLineage).toEqual([
+    expect(okRun(w.coord.run(opened.id))!.prLineage).toEqual([
       { pr: 42, branch: `ws/${sessionId}`, phase: 'merged', recordedAt: 12345 },
     ]);
   });
@@ -2193,7 +2194,7 @@ describe('the coordinator write routes require the box token (review findings 3/
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
     expect(calls).toEqual([]);
-    expect(w.coord.runs({ includeClosed: true })).toEqual([]);   // nothing opened
+    expect(okRuns(w.coord.runs({ includeClosed: true }))).toEqual([]);   // nothing opened
   });
 
   it('refuses POST /api/runs/:id/dispatch with the WRONG token', async () => {
@@ -2204,7 +2205,7 @@ describe('the coordinator write routes require the box token (review findings 3/
     const res = await postDispatch(app, opened.id, { brief: 'x' }, 'wrong-token-wrong-length-000000000000000000000000');
     expect(res.statusCode).toBe(401);
     expect(calls).toEqual([]);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 
   it('refuses POST /api/runs/:id/close with no token', async () => {
@@ -2257,7 +2258,7 @@ describe('dispatch caps the brief the same as /api/mail (review finding 2)', () 
     expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
     expect(calls).toEqual([]);   // refused before ws-add, before anything is counted or spawned
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 
   it('caps what it actually SENDS, not what it was handed: a brief that fits the cap alone but ' +
@@ -2286,7 +2287,7 @@ describe('dispatch caps the brief the same as /api/mail (review finding 2)', () 
     expect(detail, 'the refusal never names what the prefix costs')
       .toContain(String(Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')));
     expect(calls).toEqual([]);   // still refused before ws-add, before anything is spawned
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 });
 
@@ -2314,7 +2315,7 @@ describe('dispatch refuses to /clear a session it can observe is mid-turn (revie
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'worker-busy' });
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);   // /clear never sent
-    expect(w.coord.run(opened.id)?.state).toBe('planned');   // dispatch never landed
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');   // dispatch never landed
   });
 
   // Renamed (D-115): this case only ever seeded an ABSENT file, and the old
@@ -2362,8 +2363,8 @@ describe('dispatch refuses to /clear a session it can observe is mid-turn (revie
     // The POINT of the guard, not merely its return value: no `/clear` left
     // the server, and nothing on the run row claims one did.
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');   // dispatch never landed
-    expect(w.coord.run(opened.id)?.clearedAt).toBeNull();
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');   // dispatch never landed
+    expect(okRun(w.coord.run(opened.id))?.clearedAt).toBeNull();
   });
 
   it('a hookstate that reads DONE still proceeds — the refusal is about the read, not about caution', async () => {
@@ -2397,7 +2398,7 @@ describe('dispatch honours $REG/mail-disabled, not only $REG/coordinator-paused 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'mail-disabled' });
     expect(calls).toEqual([]);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 });
 
@@ -2415,8 +2416,8 @@ describe('dispatch avoids orphaning a spawned workspace on a failed hold (review
     expect(first.statusCode).toBe(502);
     // The spawn is already persisted onto the row, even though the hold
     // failed and the transition never landed — the orphan-avoiding fix.
-    expect(w.coord.run(opened.id)?.sessionId).toBe('demo-orphan1');
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.sessionId).toBe('demo-orphan1');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
     expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);
 
     const second = await postDispatch(app, opened.id);
@@ -2439,7 +2440,7 @@ describe('POST /api/runs is idempotent under retry (review findings 19/32)', () 
     const first = (await postOpen(app)).json() as { id: number };
     const second = (await postOpen(app)).json() as { id: number };
     expect(second.id).toBe(first.id);
-    expect(w.coord.runs({ includeClosed: true }).length).toBe(1);   // never a second row
+    expect(okRuns(w.coord.runs({ includeClosed: true })).length).toBe(1);   // never a second row
   });
 
   it('does NOT reuse a run once it has moved past planned', async () => {
@@ -2467,7 +2468,7 @@ describe('dispatch/close serialise concurrent requests for the same run (review 
     const codes = [a.statusCode, b.statusCode].sort();
     expect(codes).toEqual([200, 409]);   // exactly one wins, one is refused — never ambiguous-dispatch
     expect(calls.filter((c) => c[0] === 'ws-add').length).toBe(1);
-    expect(w.coord.run(opened.id)?.state).toBe('dispatched');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('dispatched');
   });
 
   it('two dispatches for DIFFERENT runs racing a maxConcurrentWorkers=1 cap never both pass the check', async () => {
@@ -2549,8 +2550,8 @@ describe('close only writes a shape-valid handoffCommit (review findings 6/18)',
       final: true, state: 'failed',
     });
     expect(res.statusCode).toBe(200);
-    expect(w.coord.run(opened.id)?.state).toBe('failed');
-    expect(w.coord.run(opened.id)?.handoffCommit).toBeNull();   // never a fabricated value
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('failed');
+    expect(okRun(w.coord.run(opened.id))?.handoffCommit).toBeNull();   // never a fabricated value
   });
 
   it('an abandon with a genuinely SHA-shaped handoffCommit DOES record it', async () => {
@@ -2565,7 +2566,7 @@ describe('close only writes a shape-valid handoffCommit (review findings 6/18)',
       final: true, state: 'failed',
     });
     expect(res.statusCode).toBe(200);
-    expect(w.coord.run(opened.id)?.handoffCommit).toBe(TIP);
+    expect(okRun(w.coord.run(opened.id))?.handoffCommit).toBe(TIP);
   });
 });
 
@@ -2637,7 +2638,7 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(res.statusCode).toBe(200);
     expect((res.json() as { run: { state: string } }).run.state).toBe('working');
     expect(calls.slice(callsBefore).some((c) => c[0] === 'pr-state')).toBe(false);
-    expect(w.coord.run(opened.id)?.state).toBe('working');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('working');
   });
 
   it('working -> awaiting-review DOES re-measure, and a stale claim is refused (D-6)', async () => {
@@ -2658,12 +2659,12 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
       { to: 'awaiting-review', fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP } });
     expect(staleRes.statusCode).toBe(409);
     expect(staleRes.json()).toMatchObject({ ok: false, reject: { code: 'stale-tip' } });
-    expect(w.coord.run(opened.id)?.state).toBe('working');   // unchanged
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('working');   // unchanged
 
     const goodRes = await postAdvance(app, opened.id,
       { to: 'awaiting-review', fingerprint: { branchTip: OTHER_TIP, prNumber: 7, prPhase: 'open', handoffCommit: OTHER_TIP } });
     expect(goodRes.statusCode).toBe(200);
-    expect(w.coord.run(opened.id)?.state).toBe('awaiting-review');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('awaiting-review');
   });
 });
 
@@ -2818,7 +2819,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     // A malformed body is the cheapest refusal and D-46's ordering rule puts
     // it first: nothing spawned, nothing held, the run untouched.
     expect(calls).toEqual([]);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
     expect(itemRows(w.coord, opened.id)).toEqual([]);
   });
 
@@ -2907,7 +2908,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     } finally {
       w.coord.addWorkItem = real;
     }
-    const row = w.coord.run(opened.id);
+    const row = okRun(w.coord.run(opened.id));
     expect(row).toMatchObject({ state: 'planned', sessionId: null, workspace: null, branch: null,
       clearedAt: null });
     expect(itemRows(w.coord, opened.id)).toEqual([]);
@@ -2922,7 +2923,7 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const res = await postDispatch(app, opened.id, { brief: 'do the thing', items: ['one', 'two'] });
     expect(res.statusCode).toBe(502);
     expect(itemRows(w.coord, opened.id)).toEqual([]);
-    expect(w.coord.run(opened.id)?.state).toBe('planned');
+    expect(okRun(w.coord.run(opened.id))?.state).toBe('planned');
   });
 
   it('needs no dedupe key: RUN_TRANSITIONS.dispatched has no self-edge, so a second dispatch 409s', async () => {
@@ -3233,5 +3234,170 @@ describe('the programme filters on the two GET routes', () => {
     const all = await app.inject({ method: 'GET', url: '/api/feed' });
     expect((all.json() as { events: { title: string }[] }).events.map((e) => e.title))
       .toEqual(['ours', 'theirs', 'a question']);
+  });
+});
+
+// ── D-2545: the run routes fail SHUT on an unreadable row ───────────────────
+//
+// Before this, `coord.run(id)` threw `node:sqlite`'s bare `RangeError` on a row
+// wider than the JavaScript safe domain — and `CoordMutex.run` is try/finally
+// with no catch, with no `app.setErrorHandler` anywhere in `server/src`, so the
+// operator got Fastify's default 500 and no typed shape at all. What every test
+// here asserts is a REFUSAL IN WORDS and, where a fleet act was next, that it
+// did not happen.
+describe('the run routes refuse an unreadable run rather than acting on it (D-2545)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const UNSAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+  /** A `runs` row whose `wave` is outside the safe domain, with a small,
+   *  perfectly readable `id` — so `:id` routing is never itself the subject.
+   *  Returns the readable id. */
+  const plantWideWave = (coord: CoordStore, id: number, over: { sessionId?: string } = {}): number => {
+    const now = Date.now();
+    coord.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(slug) DO NOTHING',
+    ).run('wide', 'Wide', now, 'active', null);
+    coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, 'wide', UNSAFE, null, PROJECT, over.sessionId ?? null, 'planned', CLAIMED_BY, now);
+    return id;
+  };
+
+  const ccdCalls = (calls: string[][]): string[][] =>
+    calls.filter((c) => ['ws-add', 'ws-hold', 'ws-release', 'ws-archive', 'ensure'].includes(c[0] ?? ''));
+
+  it('POST /api/runs/:id/close refuses `hold-invalid` before any fleet act', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 5, { sessionId: `${PROJECT}-worker` });
+    seed(home, `${PROJECT}-worker`);
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/close`,
+      headers: tokenHeaders(TOKEN),
+      payload: { fingerprint: { branchTip: 'a'.repeat(40), handoffCommit: 'a'.repeat(40),
+        prPhase: 'merged', prNumber: 1 }, final: true } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'hold-invalid',
+      detail: 'run wave is not a positive safe integer' });
+    // THE POINT OF THE TEST: nothing on the fleet moved.
+    expect(ccdCalls(calls)).toEqual([]);
+  });
+
+  it('POST /api/runs/:id/dispatch refuses `hold-invalid` before spawning anything', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 6);
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`,
+      headers: tokenHeaders(TOKEN), payload: { brief: 'do the thing' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'hold-invalid',
+      detail: 'run wave is not a positive safe integer' });
+    expect(ccdCalls(calls)).toEqual([]);
+  });
+
+  it('POST /api/runs/:id/abandon refuses when the SIBLING list is unreadable — the ' +
+     'workspace could not be proven free', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const worker = `${PROJECT}-worker`;
+    seed(home, worker);
+    const opened = await postOpen(app, { ...OPEN_BODY, sessionId: worker });
+    const id = (opened.json() as { id: number }).id;
+    w.coord.setSession(id, worker);
+    // A SECOND open run on the same workspace, unreadable. `siblingsOf`
+    // excludes the closing run itself, so this row is the whole answer.
+    plantWideWave(w.coord, 99, { sessionId: worker });
+    // From HERE on — the open above legitimately places its own wave hold, and
+    // what this test is about is what the ABANDON does.
+    const before = calls.length;
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/abandon` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'hold-invalid',
+      detail: 'run wave is not a positive safe integer' });
+    // NOT RELEASED, NOT RE-HELD: a claim this box could not measure is a claim
+    // it must not end.
+    expect(ccdCalls(calls.slice(before))).toEqual([]);
+    expect(okRun(w.coord.run(id))!.state).toBe('planned');
+  });
+
+  it('GET /api/runs answers 503 `runs-unreadable` — an honest refusal, never a partial board', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app);
+    expect(opened.statusCode).toBe(200);
+    plantWideWave(w.coord, 77);
+    const res = await app.inject({ method: 'GET', url: '/api/runs', headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'runs-unreadable' });
+    // …and not an empty board either, which is what `{runs: []}` would have said.
+    expect((res.json() as { runs?: unknown }).runs).toBeUndefined();
+  });
+
+  it('GET /api/runs/:id/items answers 503, never the 404 that would say the id was wrong', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 8);
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${id}/items`,
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    // The CONTROL that makes the status meaningful: a genuinely absent run
+    // still answers 404, so the two conditions have not been folded together.
+    const absent = await app.inject({ method: 'GET', url: '/api/runs/4242/items',
+      headers: tokenHeaders(TOKEN) });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+  });
+
+  it('POST /api/runs/:id/items answers 503, and the absent run still answers 404', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 9);
+    const body = { items: [{ id: 1, state: 'done' }] };
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/items`,
+      headers: tokenHeaders(TOKEN), payload: body });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    const absent = await app.inject({ method: 'POST', url: '/api/runs/4242/items',
+      headers: tokenHeaders(TOKEN), payload: body });
+    expect(absent.statusCode).toBe(404);
+    expect(absent.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+  });
+
+  it('POST /api/runs/:id/advance answers 503 before it re-measures anything', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = plantWideWave(w.coord, 10, { sessionId: `${PROJECT}-worker` });
+    seed(home, `${PROJECT}-worker`);
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/advance`,
+      headers: tokenHeaders(TOKEN),
+      payload: { to: 'awaiting-review', fingerprint: { branchTip: 'a'.repeat(40),
+        handoffCommit: 'a'.repeat(40), prPhase: 'open', prNumber: 1 } } });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
+    // `verifyDone` shells out to `pr-state`; nothing was re-measured.
+    expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
+  });
+
+  it('POST /api/runs/:id/reclaim answers 503, never `unknown-run`', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seed(home, 'demo-new-coord');
+    const id = plantWideWave(w.coord, 11);
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${id}/reclaim`,
+      payload: { claimedBy: 'demo-new-coord' } });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
   });
 });
