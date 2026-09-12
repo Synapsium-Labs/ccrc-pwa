@@ -4242,3 +4242,84 @@ standing questions from D-2615 (exactly one thing changed, suite reaches the ass
 **Nine findings. The coordinator has now been wrong twice** — the stale-tree ruling, and this lean toward
 deferral — and both times the correction came from measuring rather than from being challenged. Worth
 keeping: a scope ruling is a claim about COST, and cost is measurable; I had guessed at it.
+
+---
+
+## 2026-09-12 14:11Z — D-2622/D-2623/D-2624. The High one is a PARITY REPAIR.
+
+Mail 810. Three-way adversarial design pass run on the High finding (one agent briefed to argue it OUT
+of the wave); every load-bearing citation verified by me afterwards.
+
+### D-2623 — `poolRule`'s tagged arm is a fallthrough. HIGH, and understated by the reviewer.
+
+They reported a false CROSSING. Measured, three wrong answers, and the one they did not name is the
+dangerous one:
+
+| input | verdict |
+|---|---|
+| `{state:'future-state'}` + tagged acct | `pool-mismatch`, `projectPool` ABSENT → renders "undefined" |
+| `{state:'archived',name:'pool-z'}` + tagged acct | `pool-mismatch` naming `pool-z` — plausible AND wrong |
+| ANY unrecognised state + **untagged** acct | **`ok:true` — a FALSE PERMIT** |
+
+**The file condemns itself.** `shared/poolrule.ts`'s precedence note: *"the constraint is unknown, not
+absent, and answering 'serve' there would lift a constraint nobody has read. This is the one ordering
+mistake that is invisible in every other row of the table."* An unrecognised state IS an unknown
+constraint.
+
+**And it is a PARITY REPAIR, not a new rule** — the framing that settles it. `ccd`'s `_pool_ok` residue
+arm is a CATCH-ALL, verified verbatim: `*) return 2 ;; # unreadable | malformed: nobody decides`. **Bash
+has fail-shut on any unrecognised word since wave 2a; TypeScript is the OUTLIER.** Two spellings of one
+rule disagreeing on identical input is precisely the class D-2519..D-2522 closed for the pool TAG.
+
+**The L0 edit alone is NOT enough** — the design pass's sharpest finding, and it refuted its own
+strongest draft. `PoolChip`'s `word` and `label` and `PoolSheet`'s `currentCopy` read `pool.state`
+DIRECTLY, not the verdict. After an L0-only fix an unrecognised state still renders "could not be read —
+check permissions", and `data-pool` emits a token matching none of the three attention-ink selectors — so
+**the chip would lie in words and go dark in colour at the same time.** Four sites, one polarity fix.
+
+**Normalise-at-the-boundary REJECTED**, and recorded so it is not re-proposed: writing `state:'unreadable'`
+onto a tag that read fine is forbidden in terms — `shared/api.ts:1759` *"FOUR states, and no reader may
+fold one into another"*; `pool-rule-core.test.ts:32-39` keeps WHICH state *"because the two have
+different remedies"*. It also leaves `poolRule`, the file whose whole purpose is to be the ONE spelling,
+still wrong.
+
+**Decision vs message is mandatory, not stylistic.** `ccd/ccd:1456`, verbatim: *"VOID if any decider ever
+gives `unreadable`/`malformed` different DECISIONS (different MESSAGES are fine)"*. So the DECISION
+collapses fail-shut; the MESSAGE is REQUIRED to differ, because the remedy is neither permissions nor
+rewrite — it is **this bundle is older than the fleet; reload**. The same separation the worker already
+landed in `7febd162`.
+
+**Taken in wave 4 on measured cost:** `PoolSheet.tsx` does not exist yet; `ProjectCard.tsx` and
+`NewSessionSheet.tsx` carry ZERO occurrences of "pool". Three copy chains written once against the right
+vocabulary, versus written/tested/reviewed then rewritten — D-2621's argument with three surfaces.
+Server behaviour change is **zero and unreachable by construction**: `ProjectPoolWire` is in no agent
+frame, no request body, no persisted cache; every instance is manufactured in `server/src/pools.ts`. No
+`FLEET_PROTO` question arises. **Sequenced onto the worker's branch**, not separately onto main while
+they hold `pwa/src/lib/pools.ts` — a semantic conflict there is one no merge would flag.
+
+**Two test traps passed on**, both measured: do NOT add a row to `POOL_RULE_CASES`
+(`pool-rule-core.test.ts:62` asserts the EXACT state set and would red; the cast it forces is policed by
+`typecheck-tests.test.ts`) — use a local describe, the idiom `ccd-pool-ok.test.ts` already uses. And the
+mutation is restore-the-fallthrough, with the six in-vocabulary rows as the live control.
+
+**Deferred and recorded:** the missing-`name` arm (`{state:'tagged'}` with no `name`). `ccd`'s `_pool_ok`
+has the IDENTICAL hole, so closing only the TypeScript side would make the two spellings DISAGREE — the
+very thing this fix repairs. That is a wave, not a task.
+
+### D-2622 — the pools frame's runtime shape
+
+Guard is `typeof msg.pools === 'object'`, which an OBJECT-VALUED malformed payload passes: `{listed:true}`
+with no `byProject` sets the store, overwrites good state, then `projectPoolOf` throws — a crash in a
+render path. The plan already discloses the fleet frame is *"CAST, not revived"*; that posture is fine
+for a session row where a bad field degrades a display, and not fine here. **The defect is not "there is
+no reviver" — it is that an accepted posture was extended to a field with a different failure mode.**
+
+### D-2624 — the inert chip's cursor. Low, and better than cosmetic.
+
+The component renders a `<span>` when there is nowhere to go and says why: *"a control that cannot act is
+worse than a plain statement of the fact."* `.proj-card-pool`'s `cursor: pointer` then makes it look like
+a control — undoing exactly what the span exists to do. The fix idiom is on the adjacent line
+(`button.proj-card-pool::before` already scopes by element).
+
+**D-2622..D-2624 issued** (floor 2625), mail 813, status 810 acked. Worker refuted two of their own
+review's findings and declined to record them — the posture applied to themselves, unprompted.
