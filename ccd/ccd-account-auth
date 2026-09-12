@@ -401,6 +401,17 @@ _auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set
   fi
   # `$!` after a backgrounded PIPELINE is its LAST element — `_auth_timeout`,
   # not `cat` — which is the one whose status the callers' `rc` branches read.
+  #
+  # THE `cat` OUTLIVES A KILLED RUN, and that is measured rather than assumed:
+  # the 2026-09-12 macOS run's cleanup reported `Terminate orphan process: …
+  # (cat)` twice. It blocks reading the FIFO until `_auth_close_pipes` drops
+  # fd 9, so a helper killed BEFORE that line leaves it parented to init. On a
+  # real pane the helper reaches `_auth_close_pipes` and the `cat` ends with it;
+  # under a test harness that kills the tree, it does not. Left as it is because
+  # the copier is what makes the pipe a pipe — `<&3` on the FIFO would be the
+  # same fd type and the same ENOTSUP — and because a trap that killed it would
+  # have to not fire on the ordinary path. Worth knowing before reading a stray
+  # `cat` on a fleet box as a leak in something else.
   AUTH_CHILD=$!
 }
 

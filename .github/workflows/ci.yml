@@ -216,7 +216,19 @@ jobs:
   # elides those for passing cases.
   probe-macos:
     runs-on: macos-latest
-    timeout-minutes: 10
+    # 25, not 10. The first run was cut at 10 with the auth suite still going,
+    # and the reason is D-2661 rather than the suite being big: several cases
+    # ran to the fixture's 60_000 ms `execFileSync` cap against deadlines of 6
+    # to 25 seconds, because `_plat_timeout`'s deadline intermittently does not
+    # fire on this runner. One of them (`runs the UPSTREAM launcher…`) still
+    # PASSED at 60078 ms, since its assertions read files rather than `rc` — so
+    # the symptom is silent cost, not a red.
+    #
+    # 25 is ~2x the observed worst case with several such stalls, and stays well
+    # under `oss-metadata.test.ts`'s 60-minute ceiling. It is a budget for a
+    # KNOWN defect, not headroom for an unknown one: when D-2661 closes this
+    # should come back down.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
