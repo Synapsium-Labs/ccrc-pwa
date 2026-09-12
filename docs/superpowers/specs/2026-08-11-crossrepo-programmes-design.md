@@ -448,7 +448,7 @@ ambiguity; the programme filter and role addressing are what make it *convenient
 
 **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Ruled with the orchestrator's
 reasoning adopted: `work_items.blockedBy` already demonstrated the dead-schema class; the
-discipline is checkable, not aspirational — the SKILL once gained the rule "before dispatching a
+discipline is checkable, not aspirational — the SKILL gains the rule "before dispatching a
 consumer wave, GET /api/runs and read the producer run's state; not `done` → do not dispatch";
 and the door stays open additively (an optional `dependsOn` + one typed refusal) to be walked
 through only when a measured incident of the phased-cutover class justifies it. Evidence
