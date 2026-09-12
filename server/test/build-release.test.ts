@@ -7,7 +7,7 @@
 // The script's two refusals are `git status --porcelain` and `git tag
 // --points-at HEAD`, and its staging step is `git archive HEAD` — all three
 // are questions only git itself can answer, so the fixture is a real
-// one-commit repo (ccrc-install.test.ts:676's idiom, copied here rather than
+// one-commit repo (ccrc-install.test.ts:510's idiom, copied here rather than
 // imported: importing a .test.ts module would register its 2,600 lines of
 // tests inside this file's run). The script under test is COPIED into the
 // fixture's `deploy/` (install-sh.test.ts's idiom) so its own
@@ -51,7 +51,7 @@ const TAR = realPath('tar');
 const SHA256SUM = realPath('sha256sum');
 
 /** Hermetic git env — identity from variables, ambient config unread — the
- *  `gitInit` idiom (ccrc-install.test.ts:676), plus this file's one addition:
+ *  `gitInit` idiom (ccrc-install.test.ts:510), plus this file's one addition:
  *  the same env is handed to the RUNNER below, so the script's own `git
  *  status`/`git archive` answer for the fixture and never for whatever
  *  templates or hooks this box's operator configured globally. */

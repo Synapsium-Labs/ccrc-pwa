@@ -144,7 +144,7 @@ export class Tmux {
     return (await this.run('tmux', ['send-keys', '-t', target(id), key])).code === 0;
   }
   /** Restore the canonical size ccd spawned with. Lived inline at
-   *  server.ts:218 as a `void deps.run(...)` — so a `forbidden` there was
+   *  server.ts:227 as a `void deps.run(...)` — so a `forbidden` there was
    *  swallowed in silence, which is the exact failure the argv enumeration
    *  exists to prevent. */
   async resizeWindow(id: string, cols: number, rows: number): Promise<boolean> {

@@ -699,7 +699,7 @@ export interface PrState {
  * "We have not looked yet", as ONE object.
  *
  * Integration finding 6. This literal existed three times — `PrKeycap.tsx:17`,
- * `watch.ts:38` and `prstate.ts:190` (as `UNCHECKED`) — and the first of them
+ * `watch.ts:48` and `prstate.ts:190` (as `UNCHECKED`) — and the first of them
  * carried the docstring "Exported because `PrSheet` needs the identical object
  * and a second copy would drift." Two more copies appeared anyway, which is the
  * finding: a comment saying "do not copy this" is not a mechanism, and the two
@@ -951,7 +951,7 @@ export interface WsAudit {
    *
    *  `bytes` is `number | null` and the `null` is the POINT (cross-lane seam
    *  round, the thirteenth measurement forgery). `_ws_clip_manifest`
-   *  (ccd:7258/6917) answered a failed `du`/`stat` with `0` for as long as this
+   *  (ccd:8631/6917) answered a failed `du`/`stat` with `0` for as long as this
    *  field was typed `number`, and that is not a coincidence: a producer that
    *  must emit a `number` has exactly two options for an unreadable clip, and
    *  one of them compiles. Typing the absence is what stops the next person
@@ -994,7 +994,7 @@ export interface WsAudit {
   /** `commitsAheadOfBase` is `null` when `$base` did not resolve, `$branch` was
    *  empty, or the `rev-list` failed — final-round destructive review F2, the
    *  last surviving `|| x=0` in ccd. 0 is the claim "this branch is level with
-   *  base", which is what `_pr_state_one` (ccd:4882) already refuses to
+   *  base", which is what `_pr_state_one` (ccd:5862) already refuses to
    *  fabricate for the identical figure on the PR sheet. */
   stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number | null;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
@@ -1059,7 +1059,7 @@ export interface ReapResult {
  *
  *  DECLARED HERE THOUGH NOTHING IMPORTS IT YET, which is the point and is the
  *  cross-lane seam pass's residual #1 closed: `clips[].bytes: null` reaches
- *  `_ws_tombstone` (ccd:7296) and is round-tripped by `_ws_tombstone_reclip`
+ *  `_ws_tombstone` (ccd:8669) and is round-tripped by `_ws_tombstone_reclip`
  *  through `python3 json` on every resume, both JSON-transparent and both
  *  exercised — but the tombstone had NO declared type at all, so the one
  *  document that survives the delete was the only place on this branch where
@@ -1213,9 +1213,9 @@ export type BucketInput = Pick<
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
  * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:4184`), but `ccd start`/`ccd ensure` clear `.stopped` and
+ * (`ccd:5164`), but `ccd start`/`ccd ensure` clear `.stopped` and
  * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:4724`). So a workspace
+ * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
  * archived on merge and later revived for more work carried a marker that
  * outranked every live rung below, for ever. MEASURED on the live fleet
  * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
@@ -3649,7 +3649,7 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
  *
  *  `'unknown'` is the designated we-do-not-know member (spec:77) and is NEVER
  *  WRITTEN: it is what a row from a newer build reads as, exactly the way
- *  `PrPhase`'s `'unchecked'` degrades (`server/src/registry.ts:133-140`). A
+ *  `PrPhase`'s `'unchecked'` degrades (`server/src/registry.ts:135-142`). A
  *  state this build does not know must never reach a `switch` as a raw string
  *  and render as nothing. */
 export type RunState =
@@ -3820,7 +3820,7 @@ export const MAIL_MAX_ATTEMPTS = 6;
  * finding 8 / D-44): `subject` renders as one envelope line and `artifacts`
  * renders one line PER ENTRY (`coord/envelope.ts`'s own `renderEnvelope`),
  * and `sendPrompt` costs one agent round trip PER LINE it types
- * (`inject/send.ts:300-305`). A message whose `body` is well under 8KB can
+ * (`inject/send.ts:304-309`). A message whose `body` is well under 8KB can
  * still carry tens of thousands of artifact-path lines and stay under
  * Fastify's default 1 MiB request-body ceiling — `coord/envelope.ts`'s own
  * COST paragraph names "a few hundred round trips" as the worst case the
@@ -5505,7 +5505,7 @@ export type LifecycleAct =
                     // absence-permits exists to survive.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
-                    // (ccd:9022, ccd:9135). A run-level line would need an
+                    // (ccd:10395, ccd:10508). A run-level line would need an
                     // identity `_lc_emit` cannot express: it takes a session
                     // id, and a prune RUN sweeps many. Kept rather than
                     // removed because this vocabulary is wire-facing and
@@ -5625,7 +5625,7 @@ export function isActorClass(v: unknown): v is ActorClass {
 
 /**
  * What the CALLER said (D2, wire `dec.surface`, seam `decSurface`): ccd's own
- * closed set (`ccd:1641`) plus `'none'`, which is what the journal writes when
+ * closed set (`ccd:2407`) plus `'none'`, which is what the journal writes when
  * no `--surface` flag was passed at all.
  *
  * `StopSurface` IS UNCHANGED (spec §2) — no fifth surface word. `'none'` is a
@@ -5704,7 +5704,7 @@ const DEC_CORROBORATES: Record<ActorClass, readonly DecSurface[]> = {
  *   3. a word one side cannot name -> not-comparable
  *   4. `ccd` names a LAYER, not a host (ccd re-entering itself: `cmd_swap`'s
  *      `|| cmd_ensure "$id"` fallback at `ccd:11384`, `cmd_enable`'s
- *      `cmd_start "$@"` at `ccd:11428`), so it corroborates nothing about who
+ *      `cmd_start "$@"` at `ccd:12978`), so it corroborates nothing about who
  *      was at the keyboard
  *                                  -> not-comparable
  *   5. the table                   -> agrees | disagrees
@@ -5774,13 +5774,13 @@ export interface LifecycleDec {
    *  verbatim, PARSED NOWHERE — `cmd_ws_hold`'s standing rule for the same
    *  kind of value (`ccd:3757`). It is free text off the wire, so it must
    *  never reach an arithmetic context, an array subscript, an `eval` or an
-   *  unquoted expansion: `ccd:10260-10264` is the paid lesson.
+   *  unquoted expansion: `ccd:11633-11637` is the paid lesson.
    *
    *  THE CAP IS NOT UNIFORM ACROSS EVERY WRITER OF THIS FIELD (final review,
    *  F3, disclosed rather than fixed here): `cmd_ws_hold` journals its own
    *  mandatory hold reason into this SAME field UNCAPPED — bound at
-   *  `ccd:3815`, blank-checked at `ccd:3837`, but never passed through
-   *  `_lc_dec_ok` before it lands at `ccd:3876`. A hold therefore accepts and
+   *  `ccd:4737`, blank-checked at `ccd:4759`, but never passed through
+   *  `_lc_dec_ok` before it lands at `ccd:4798`. A hold therefore accepts and
    *  records a reason that `ws-release` would refuse verbatim as `--reason`.
    *  Unifying the two (capping the hold reason, or truncating instead of
    *  refusing) is a verb-contract change on a LIVE verb and is explicitly
@@ -5873,8 +5873,8 @@ export const LIFECYCLE_DEC_KEYS: readonly (keyof LifecycleDec)[] =
  * inverted, see there) was pinned specifically to stop either being re-added
  * "on the brief's say-so" without the wire evidence to back it. Wave 3
  * supplied that evidence: `cmd_ws_rm`'s attic pin now emits `meas.atticsrc`
- * (`ccd:3106`) and `cmd_ws_restore`'s supersede now emits
- * `meas.manifestBytes` (`ccd:4719`), so the union returns to the plan's
+ * (`ccd:3887`) and `cmd_ws_restore`'s supersede now emits
+ * `meas.manifestBytes` (`ccd:5699`), so the union returns to the plan's
  * original 25.
  *
  * `home`, `pool`, `reason` — ADDED, account pools wave 2b (Task 6 fix round
@@ -5906,20 +5906,20 @@ export interface LifecycleMeas {
   /** Where the attic pin's tip came from — `worktree` (read live off
    *  `$workdir`'s HEAD), `registry` (the worktree was already gone; read off
    *  the registry's own `branch` field instead), or `none` (neither had one
-   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:3106`); the local starts `none`
-   *  and only ever moves to `worktree` or `registry` (`ccd:3075,2954,2965`). */
+   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:3887`); the local starts `none`
+   *  and only ever moves to `worktree` or `registry` (`ccd:3856,2954,2965`). */
   readonly atticsrc: 'worktree' | 'registry' | 'none' | null;
   /** Epoch SECONDS as `_reg_set "$id" archived "$(date +%s)"` wrote it
-   *  (`ccd:4226`) — the registry's own unit, carried unconverted so the record
+   *  (`ccd:5206`) — the registry's own unit, carried unconverted so the record
    *  is what the file said. */
   readonly archivedAt: number | null;
-  /** `merged:#N | empty | manual` as `ccd:4001` wrote it, or null when the row
+  /** `merged:#N | empty | manual` as `ccd:4967` wrote it, or null when the row
    *  carries no reason. Not proven present by any guard — absent is a
    *  legitimate state. */
   readonly archivedReason: string | null;
   /** The byte total of the `.archivemanifest` file `ws-restore` is about to
    *  remove, read fresh with `stat` right before the removal (`cmd_ws_restore`
-   *  R4-2 supersede, `ccd:4719`) — null when `stat` could not measure it
+   *  R4-2 supersede, `ccd:5699`) — null when `stat` could not measure it
    *  (missing or unreadable), never a fabricated 0. Nothing in ccd reads the
    *  manifest back; this byte count is the one thing preserved of it. */
   readonly manifestBytes: number | null;
@@ -5931,15 +5931,15 @@ export interface LifecycleMeas {
   /** The base branch a new workspace was created from (`cmd_ws_create`). */
   readonly base: string | null;
   /** The name a rename REPLACED — `branch` carries what it became
-   *  (`cmd_ws_rename`, `ccd:3414`). */
+   *  (`cmd_ws_rename`, `ccd:4195`). */
   readonly old: string | null;
-  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:9867`).
+  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
   /** The start mode `cmd_start` resolved before spawning. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
-   *  unit or as an outside request for one (`ccd:10662`). */
+   *  unit or as an outside request for one (`ccd:12035`). */
   readonly inUnit: number | null;
   /** The account a `swap` OR a `rehome` moved AWAY from — two acts share this
    *  field, and their destinations ride different keys. A `swap`'s
@@ -6145,7 +6145,7 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  * no stdout and no exit contract — so it contributes no token to that scan. An
  * entry there for a journal-only token would red the stale-copy direction, and
  * the only fixes would be deleting copy or weakening an approved mechanism
- * (`ccd:2244-2251` records that argument being had once already).
+ * (`ccd:3025-3032` records that argument being had once already).
  * `wsaudit.test.ts` must stay green WITH NO EDIT; that is itself an assertion
  * of this program. The shared rungs — `held`, `dirty-tree`, `no-such-session`,
  * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
@@ -6243,7 +6243,7 @@ export function lcRefusalWord(token: string): string | null {
  *  and ids never begin with a dot, so no id's purge glob matches it — and
  *  `rm -f` cannot take a directory regardless. Precedent already load-bearing:
  *  `$REG/.reaped/` has survived since Aug 6 with zero deleters in 9,815 lines.
- *  ccd's `$REG` inventory comment (`ccd:1654`) today says SEVEN dot-prefixed
+ *  ccd's `$REG` inventory comment (`ccd:2420`) today says SEVEN dot-prefixed
  *  artifacts live there; wave 2 amends it to EIGHT — not nine, because
  *  `.rotate.lock` and the generations live INSIDE `.lifecycle/` and are
  *  counted with it exactly as `.reaped/`'s contents are. An inventory a future
@@ -6266,7 +6266,7 @@ export const LC_ERRORS_NAME = 'errors';
 
 /** `_lc_rotate`'s lock. NEVER UNLINKED, not even as cleanup — "unlinking a
  *  lock file while another process holds it is exactly how two processes come
- *  to hold the lock on two different inodes" (`ccd:1212-1213`), and all four
+ *  to hold the lock on two different inodes" (`ccd:1746-1747`), and all four
  *  of ccd's existing lock paths already follow that rule. */
 export const LC_ROTATE_LOCK_NAME = '.rotate.lock';
 

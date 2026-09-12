@@ -19396,3 +19396,59 @@ typecheck, and on this repo that gate cannot see the directory where most of the
 Fixed by passing `{ state: 'untagged' }`, which is not merely what compiles: the bash half of each pair
 is `_ws_least_loaded` called with no project, so untagged is the only value that keeps the two sides
 being asked the same question.
+
+### D-2611 — the merge's own citation sweep: 502 repairs, each proven twice and by two different means
+
+The merge moved `ccd/ccd` by ~1400 lines and `ccd/ccrc` by ~700, which falsifies every line-number
+citation pointing into them — including the 435 D-2577 repaired against the pre-merge tree. Re-run here,
+scoped and proven the way D-2577 established, with one change to the METHOD that matters.
+
+**The scope is shipped source and tests only.** `docs/superpowers/{plans,specs}` carries 2887 shifted
+citations and none of them are repaired: this repo's own rule is that "anchors in plans are snapshots —
+trust shipped source's own comments over a plan document", so a plan's line numbers record what a tree
+looked like then. Repairing them would convert a dated record into a false claim about today.
+
+**The method changed from SEARCH to MAP.** D-2577's sweep found the cited line's bytes in the new file.
+That is wrong in a way that only shows up at scale: it proposes a repair even when the citation was
+ALREADY wrong (the bytes at the cited line were never the referent), and it goes ambiguous on every line
+that repeats. This sweep builds an old→new line map per target file with `difflib` and translates
+through it, so the answer comes from the EDIT; byte-equality is then a check on that answer rather than
+the search itself. A line the map drops is reported, never guessed.
+
+**The proof is a seven-line window, not one line.** Single-line equality confirms almost nothing for a
+citation pointing at `    #` or ` *` — such a line matches hundreds of others. Requiring three lines
+either side to move as a unit is what makes those provable, and it is what separates a shift from a
+coincidence. Adding the window moved 39 citations out of "repairable" and into "needs a human", which is
+the correct direction: 502 repaired, 81 reported.
+
+Verified independently afterwards, not merely computed: a second program re-read every repair, took the
+cited range at the baseline commit and the range the repair now names in the working tree, and required
+them equal — **502/502**. It has to normalise the numeric half of every `<file>:<n>` token out of both
+sides first, because a referent line may itself carry a citation this same sweep repaired; 24 repairs
+that look like mismatches under a raw byte comparison are that artefact and nothing else.
+
+The 81 left for a human are the real tail: 42 whose cited line no longer exists, 53 whose range spans an
+edit, and 2 that were ALREADY out of range at the baseline — pre-existing debt this merge did not create
+and this sweep does not close.
+
+### D-2612 — the sweep is NOT idempotent, and running it twice looks exactly like it working
+
+After applying the 502, I re-ran the same command against the same baseline to confirm convergence. It
+reported **409 more repairable citations** and I nearly applied them.
+
+They are all wrong. The sweep rewrites the very lines it maps, so on a second pass it reads
+`ccd:2377` — a number IT wrote — looks up line 2377 in the baseline, finds unrelated content, maps that
+forward and proposes `ccd:3158`. Every repair would have been shifted a second time, by the distance
+between two unrelated places in the file. The failure mode is silent and the output is indistinguishable
+from a first pass: same shape, same confident arithmetic, a smaller count that reads like convergence.
+
+What caught it was that the re-run also overwrote the findings file, so the verifier had nothing true to
+check against and reported `NOT-APPLIED 409` — a number that made no sense for repairs already on disk.
+Reproducing pass 1 in a clean worktree at the merge commit gave back the real 502 and proved them.
+
+Two rules for the next sweep, both mechanical:
+
+* **Compute once, apply once, and never re-run against the same baseline afterwards.** Convergence is
+  not something this tool can report about itself.
+* **Verify with a different program than the one that decided.** The verifier here shares no code with
+  the sweep — no `difflib`, no line map — which is the only reason its answer is worth anything.

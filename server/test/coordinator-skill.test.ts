@@ -1342,7 +1342,7 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 
   it('names the two id-preserving revives, and says whose act they are', () => {
     // The one-argument form is the whole point: the two-argument form mints a
-    // second id for a live session (ccd:12441-12446, and
+    // second id for a live session (ccd:15265-15270, and
     // SessionActionsSheet.tsx:287-289 names the same operator).
     expect(rb()).toContain('ccd start <id>');
     expect(rb()).toContain('/api/sessions/:id/ensure');

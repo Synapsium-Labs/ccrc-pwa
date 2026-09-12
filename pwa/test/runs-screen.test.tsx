@@ -1008,7 +1008,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     //    whose premise is "stop saying that" must not propagate it to a second
     //    surface.
     // 2. On THIS surface the word cannot even be true the way it is on the
-    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:2831)
+    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:3612)
     //    BEFORE the settle it then blocks in, and a run learns its `sessionId`
     //    only from the registry diff AFTER `ws-add` returns
     //    (`dispatch.ts`, the fresh-spawn arm) — so at the first instant a run

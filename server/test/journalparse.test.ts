@@ -225,7 +225,7 @@ describe('parseJournalLine: the vocabulary', () => {
   // FIX ROUND 1, F1: `badoutcome` was entirely dropped before this round —
   // no field on `JournalRow`, `o['badoutcome']` never read — even though
   // ccd writes it today (`ccd/ccd:1469`, `:1417-1422`) and
-  // `LifecycleEvent.badoutcome` (`shared/api.ts:4007-4010`) already declares
+  // `LifecycleEvent.badoutcome` (`shared/api.ts:4873-4876`) already declares
   // it with the identical invariant `badact` has. These two cases mirror the
   // two `badact` cases directly above, one per side of the pair.
   it('degrades an outcome this build does not declare to `unknown` AND KEEPS THE TOKEN', () => {
@@ -242,7 +242,7 @@ describe('parseJournalLine: the vocabulary', () => {
     expect(r.badoutcome).toBe('stalled');
   });
 
-  // FIX ROUND 1, F2 (a forging vector, closed): `shared/api.ts:4003-4005` /
+  // FIX ROUND 1, F2 (a forging vector, closed): `shared/api.ts:4869-4871` /
   // `:4007-4010` state the invariant in so many words — "null whenever `act`
   // [`outcome`] is not `LC_ACT_UNKNOWN` [`LC_OUTCOME_UNKNOWN`]. The two are
   // never both set." Before this round, `badact: badact ?? (act ===

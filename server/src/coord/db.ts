@@ -103,7 +103,7 @@ export function defaultCoordDbPath(home: string = homedir()): string {
  *   1. Forward-only, idempotent, at open, EACH IN A TRANSACTION.
  *   2. Cannot migrate -> refuse to start LOUDLY. Never start empty.
  *   3. A HIGHER user_version is not fatal: a rollback (`~/ccrc-backups/`, and
- *      `shared/api.ts:566-575` on why rollback is a real scenario) must be able
+ *      `shared/api.ts:808-817` on why rollback is a real scenario) must be able
  *      to READ. It may only refuse to MIGRATE. `user_version` is never written
  *      downward, and unknown columns are ignored because every read names its
  *      columns explicitly — `SELECT *` is banned in this directory.

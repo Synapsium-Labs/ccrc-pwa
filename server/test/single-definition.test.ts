@@ -328,12 +328,12 @@ describe('extraction finding — one path to the ccd script', () => {
 
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
+  // KeyedQueue inline (`server.ts:330` on origin/main, the tree this diverged
   // from), which FleetWatcher — built two lines EARLIER in index.ts (`:62` vs
   // `:64` on that same tree; `:69` vs `:71` on this one, now that the queue
   // itself hoisted one level further to `index.ts:37`) — had no way to reach.
   // A watcher that built its own would serialise its rename against nothing,
-  // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
+  // and `POST /workspace/reap` (`server.ts:727`) is exactly the write it must
   // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
   // the same bug with a green suite, which is why this scans for the
   // CONSTRUCTOR rather than for the field.
@@ -1945,7 +1945,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
     // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
-    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:184` holds
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:194` holds
     // a second literal ON PURPOSE (`sweepMail` uses it; importing the
     // `rundefs.ts` copy into that scope as well would be a redeclaration,
     // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
@@ -2339,7 +2339,7 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 // `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
-// `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
+// `registry.ts:21`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
 // symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.

@@ -20,7 +20,7 @@ const UUID = 'c'.repeat(36);
 const WORKDIR = '/w/demo/ctx-pressure';
 
 /** Registry row for a live workspace — same shape `name-sweep.test.ts` seeds,
- *  minimal fields `readRegistry` needs to keep the row (registry.ts:122). */
+ *  minimal fields `readRegistry` needs to keep the row (registry.ts:124). */
 const seed = (home: string): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });

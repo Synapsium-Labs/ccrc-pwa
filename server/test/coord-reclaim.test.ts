@@ -31,7 +31,7 @@ const ALIVE: SessionVerdict = { verdict: 'live' };
 
 /** The registry row ccd writes, minus whatever a fixture wants absent. `stopped`
  *  and `supervised` are epoch SECONDS here because that is what is on disk —
- *  `lifecycleInputFor` owns the one x1000 (fleet.ts:186-198). */
+ *  `lifecycleInputFor` owns the one x1000 (fleet.ts:299-311). */
 const seedRow = (home: string, id: string, extra: Record<string, string> = {}): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });

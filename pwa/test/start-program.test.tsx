@@ -7,7 +7,7 @@
 // controls.md`'s Deviations section) are both pinned here, alongside the
 // brief's own eleven cases. The sheet cannot know the new session's id from
 // `createSession`'s own response (`{ok:true}`, no id — `server/src/
-// server.ts:593-596`), so it matches on fields a `/ws/fleet` frame reports,
+// server.ts:602-605`), so it matches on fields a `/ws/fleet` frame reports,
 // never on a recomputed id — and the two arms match on DIFFERENT fields:
 //
 //   * D-291's WAIT ("has the session I asked for appeared?") is
@@ -206,7 +206,7 @@ describe('openRunVerdict — the run-board arm, directly (D-1130)', () => {
 
   // The join between `RunSummary.project` and `ProjectRow.name` is CONVENTION:
   // `POST /api/runs` validates the field as a non-empty string and nothing more
-  // (`server/src/coord/routes.ts:889-897`), so a run can name a string this
+  // (`server/src/coord/routes.ts:1077-1085`), so a run can name a string this
   // picker never lists. A prefix or case-folded match would refuse a real
   // project on the strength of a lookalike; an exact one means the sheet simply
   // has nothing to say about that run, which is the honest answer.
@@ -969,7 +969,7 @@ describe('StartProgramSheet', () => {
   // — Program-leverage wave 5, D-1130. The run board is a fact this sheet never
   // had. `POST /api/runs` will happily open a SECOND program in a project that
   // already has one: it validates `project` as a non-empty string and nothing
-  // else (`server/src/coord/routes.ts:889-897`), and `openRun`'s own refusal is
+  // else (`server/src/coord/routes.ts:1077-1085`), and `openRun`'s own refusal is
   // per-PROGRAM (its one-coordinator guard, `store.ts`), so it never fires for
   // a different slug. The sheet is the last place the operator can still be
   // told. —
@@ -1302,9 +1302,9 @@ describe('StartProgramSheet', () => {
   // armed only AFTER `await createSession(...)`. The window is seconds, not
   // milliseconds: `cmd_start` writes `$REG/<id>.uuid` and the other fields
   // then `_spawn`s (`ccd/ccd:7526-7531`), the server lists a session on its
-  // `.uuid` file ALONE (`registry.ts:375`) and reports `idle` as soon as tmux
-  // has the id (`fleet.ts:186-190`), and the watcher ticks every 2 s
-  // (`watch.ts:424`) while the HTTP call is still blocked in
+  // `.uuid` file ALONE (`registry.ts:427`) and reports `idle` as soon as tmux
+  // has the id (`fleet.ts:299-303`), and the watcher ticks every 2 s
+  // (`watch.ts:502`) while the HTTP call is still blocked in
   // `_accept_first_run_prompts`. Every OTHER test in this file uses
   // `mockResolvedValue` and pushes its frame after the create has already
   // resolved, which is exactly why this went unpinned. —

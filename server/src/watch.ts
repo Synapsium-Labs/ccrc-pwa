@@ -56,7 +56,7 @@ import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -141,7 +141,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  `registry-branch-drift` joins the set for the same "no title fixes it"
  *  reason as the worktree pair above: `cmd_ws_rename` now refuses when git's
  *  own worktree record disagrees with the registry's `branch` field — the
- *  corroboration `cmd_ws_reap` already requires (`ccd:6086`) — because
+ *  corroboration `cmd_ws_reap` already requires (`ccd:7459`) — because
  *  without it a hand `git branch -m` (which moves git's answer but never
  *  updates the registry) leaves this sweep's own condition 2 believing the
  *  branch is still at its born name while `ws-rename` would act on whatever
@@ -508,7 +508,7 @@ export class FleetWatcher {
    *  to be forgotten.
    *
    *  KEYED ON `<id>#<uuid>`, not `<id>` alone: `<project>-<slug>` is a SLUG,
-   *  recycled by `ws-reap` (`ccd:2532`), and nothing in this map is ever
+   *  recycled by `ws-reap` (`ccd:3313`), and nothing in this map is ever
    *  pruned when a row disappears — so a bare `<id>` key would let a reaped
    *  workspace's stale pairs shadow an unrelated LATER workspace that drew the
    *  same recycled slug. `r.uuid` is minted fresh by every `ws-add`, so the
@@ -517,7 +517,7 @@ export class FleetWatcher {
    *  changes with the uuid.
    *
    *  THE SAME KEY CHANGE ALSO HAPPENS WITHOUT A REAP: `ccd`'s `_sync_uuid`
-   *  (`ccd:9327`) rewrites the registry's `uuid` field in place, on the SAME
+   *  (`ccd:10700`) rewrites the registry's `uuid` field in place, on the SAME
    *  live session, whenever Claude Code rotates its own session uuid (a
    *  `/clear`, a compaction) — no `ws-reap`/`ws-add` cycle required. So "a
    *  server restart earns one retry", above, is not the only way a pair earns
@@ -879,7 +879,7 @@ export class FleetWatcher {
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
-      // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
+      // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepMail` immediately above — the
@@ -1615,7 +1615,7 @@ export class FleetWatcher {
    * design:
    *
    *   1. it is a workspace, not a main checkout, and not archived — `ccd
-   *      ws-archive` "DESTROYS NOTHING" (`ccd:4059`), so an archived row keeps
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:5039`), so an archived row keeps
    *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
    *      fully in scope for conditions 2-4 unless excluded here; same guard,
    *      same shape, as the skip right below this one in the file
@@ -1637,7 +1637,7 @@ export class FleetWatcher {
    *      uuid too.
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
-   * has advertised `ws-rename` since long before it took flags (`ccd:3619`), so
+   * has advertised `ws-rename` since long before it took flags (`ccd:4413`), so
    * a fleet on an older ccd passes the verb gate. The old body binds the verb's
    * two arguments positionally — `local id="${1:?usage: …}"; local
    * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
@@ -1667,7 +1667,7 @@ export class FleetWatcher {
     if (this.lastNameSweep !== 0 && now - this.lastNameSweep < NAME_SWEEP_MS) return;
     this.lastNameSweep = now;
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
-    // is `sl?.branch ?? r.branch` (fleet.ts:155) and the statusline wins, so it
+    // is `sl?.branch ?? r.branch` (fleet.ts:268) and the statusline wins, so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
@@ -1711,7 +1711,7 @@ export class FleetWatcher {
       // whole test and must not grow an emptiness clause.
       if (r.held !== null || (this.deps.coord?.openRunsForSession(r.id).length ?? 0) > 0) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
-      // recycled by ws-reap (`ccd:2532`'s "144 per project, recycled") —
+      // recycled by ws-reap (`ccd:3313`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
       // deletes on reap, so nothing stops a later `ws-add` drawing the same
       // slug for an unrelated workspace. `identity.uuid` is the Claude Code
@@ -1974,7 +1974,7 @@ export class FleetWatcher {
         id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
         // OFF THE RECORDS THIS SWEEP WAS HANDED, never a second read. The tick
-        // already measured `.supervised` for every row (`registry.ts:185`), and
+        // already measured `.supervised` for every row (`registry.ts:187`), and
         // a re-read here would be a whole-fleet field sweep a minute for a
         // number sitting in scope.
         // D-1157. `r.supervisedAt` is epoch SECONDS and this seam is compared
@@ -2417,7 +2417,7 @@ export class FleetWatcher {
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
-   * that `draftOf` strips (`inject/send.ts:61`, pinned against a live capture
+   * that `draftOf` strips (`inject/send.ts:65`, pinned against a live capture
    * at `send.test.ts:642`). So "the box reads empty" is not "nothing is
    * pending", and the gate above is what keeps the lane away from a busy
    * session in the first place — not the send path, which would happily
@@ -3412,7 +3412,7 @@ export class FleetWatcher {
       // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
       // 'busy' here and this sweep would suppress the parse forever. hasMenu is
       // deliberately independent of the busy check for exactly that reason
-      // (pane/dialog.ts:33-45); it's the same idiom send.ts:320 uses to decide
+      // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
       // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().

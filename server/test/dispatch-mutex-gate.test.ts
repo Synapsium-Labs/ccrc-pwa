@@ -67,7 +67,7 @@ interface Site { file: string; line: number; name: string; guarded: boolean }
 // what already makes `coord.closeRun` a non-match for the bare `closeRun`
 // target. The reason it belongs here is the same D-46 reason: `dispatchRun`
 // reads `caps()` and `capsUsage()` across await boundaries
-// (`coord/dispatch.ts:236-237`), so a caps write landing between those two
+// (`coord/dispatch.ts:269-270`), so a caps write landing between those two
 // reads is the identical un-serialised-decision hazard, and `POST
 // /api/coord/caps` is the first and only writer (D-1240/D-1164).
 const TARGETS = new Set(['dispatchRun', 'closeRun', 'coord.setCaps']);

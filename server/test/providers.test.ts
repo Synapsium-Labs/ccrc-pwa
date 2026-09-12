@@ -7,7 +7,7 @@
 //
 //     `shared/roster.ts` has been import-free since Stage 2a and nothing ever asserted it
 //     (measured 2026-09-07: `grep -c '^import' shared/roster.ts` -> 0, over 653
-//     lines; the only two L0 pins in the tree are lifecycle.test.ts:840-844 and
+//     lines; the only two L0 pins in the tree are lifecycle.test.ts:962-966 and
 //     peers-claims-l0.test.ts:156-161, and neither covers this file). The rule
 //     is real rather than decorative because `pwa/src/lib/offline.ts:10` is a
 //     VALUE import of it — `import { HUES } from '../../../shared/roster';` —
@@ -22,7 +22,7 @@
 //
 //  2. THE DERIVATIONS. `PROVIDER_IDS` and `GENERATABLE` must be computed from
 //     the table, never re-listed beside it — the `PR_REASONS = Object.keys(…)`
-//     rule (shared/api.ts:409), applied to the second table in the tree that
+//     rule (shared/api.ts:651), applied to the second table in the tree that
 //     has a runtime list and a type saying the same thing.
 //
 //  3. THE `.mjs` HALF OF §4.2's SINGLE-DEFINITION PROMISE. `single-definition.

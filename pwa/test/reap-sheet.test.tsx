@@ -255,8 +255,8 @@ describe('the manifest', () => {
   // is not changed — the human ruling on it is open. What is fixed is that the
   // count of filtered matches used to sit next to a list capped at three,
   // while a filtered entry is exactly the one that sorts last: ccd orders
-  // `ignored` sensitive-first then bytes-descending (ccd:2684) and a
-  // noise-filtered match leaves the entry non-sensitive (ccd:2119-2123). The
+  // `ignored` sensitive-first then bytes-descending (ccd:3465) and a
+  // noise-filtered match leaves the entry non-sensitive (ccd:2885-2889). The
   // number was on screen; the name it counted was not.
   describe('the filtered count and the names it counts (F8 residual)', () => {
     const manyIgnored = [
@@ -309,8 +309,8 @@ describe('the manifest', () => {
     // It matters here more than on most screens: this is the sheet whose
     // primary button is an irreversible `rm -rf`, and the entry a stale
     // `showAll = false` hides is precisely the noise-filtered secret-shaped
-    // one — ccd sorts it last (non-sensitive, ccd:2119-2123; sensitive-first
-    // then bytes-descending, ccd:2684), so it is the first thing the cap eats.
+    // one — ccd sorts it last (non-sensitive, ccd:2885-2889; sensitive-first
+    // then bytes-descending, ccd:3465), so it is the first thing the cap eats.
     it('lets a new target choose its own default instead of inheriting the last one', async () => {
       const first = audit({ ignored: manyIgnored, ignoredCount: 5, ignoredBytes: 408_003_020,
         sensitiveFiltered: 1 });
@@ -600,8 +600,8 @@ describe('mutation-sweep closures', () => {
   });
 
   // Verifier round 3, P3 — the twelfth measurement-forgery instance. ccd
-  // answers a failed `du` on an ignored entry with `bytes=0` (ccd:2113) and
-  // folds it into `ignoredBytes` (ccd:2682-2683), so an unreadable tree of
+  // answers a failed `du` on an ignored entry with `bytes=0` (ccd:2879) and
+  // folds it into `ignoredBytes` (ccd:3463-3464), so an unreadable tree of
   // gigabytes was printed as "1 entries, 0 B" as the sole size figure above an
   // irreversible Remove. The producer half is the ccd lane's and the wire type
   // (`ignoredBytes: number`) is svc's; THIS is the display half, and it lands
@@ -691,7 +691,7 @@ describe('mutation-sweep closures', () => {
   // `clips[].bytes` was still `number` on the wire and ccd still fabricated a
   // `0`, so they had to assign through `auditBody: unknown` to get past the
   // compile-time type, and were disclosed as such. `_ws_clip_manifest` now
-  // emits `null` (ccd:3285/3171) and `WsAudit` declares `number | null`, so
+  // emits `null` (ccd:4066/3171) and `WsAudit` declares `number | null`, so
   // they go through `audit()` — which is `Partial<WsAudit>` and therefore
   // TYPE-CHECKED. That conversion is itself the check that the two halves
   // agree: if the producer had landed as `-1`, or as an omitted field, or if

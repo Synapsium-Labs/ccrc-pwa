@@ -504,7 +504,7 @@ describe('verifyDone — prPhase/prNumber are validated, not merely typed (findi
 describe('verifyDone — the branch to re-measure comes from the live registry (finding 1)', () => {
   /** Registry row for `SESSION`, the same field shape `name-sweep.test.ts`'s
    *  own `seed()` writes — `readRegistry` needs wrapper+workdir+uuid or it
-   *  skips the row entirely (`registry.ts:122`). `branch: null` (the default)
+   *  skips the row entirely (`registry.ts:124`). `branch: null` (the default)
    *  seeds no row at all, so `readRegistry` never lists this id. */
   const seedRegistry = (home: string, branch: string | null): void => {
     const reg = path.join(home, '.cc-sessions');

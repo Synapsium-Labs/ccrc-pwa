@@ -388,7 +388,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
           // ccd echoes the REQUESTED session id back as the audit's own
-          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:2634), and the
+          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:3415), and the
           // sheet refuses to render an audit that does not name the session
           // it is describing (final-round F2), so the two must agree.
           //
@@ -396,7 +396,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           // change by calling the old `id: 'demo'` "a response ccd cannot
           // produce" — while substituting 'claude:OpenClawHetzner', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
-          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:2635)
+          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`
@@ -441,7 +441,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
       if (String(url).includes('/workspace/audit')) {
         return new Response(JSON.stringify({
           // ccd echoes the REQUESTED session id back as the audit's own
-          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:2634), and the
+          // first field (`cmd_ws_audit`'s `local id=$2`, ccd:3415), and the
           // sheet refuses to render an audit that does not name the session
           // it is describing (final-round F2), so the two must agree.
           //
@@ -449,7 +449,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
           // change by calling the old `id: 'demo'` "a response ccd cannot
           // produce" — while substituting 'claude:OpenClawHetzner', which ccd
           // cannot produce either. `cmd_ws_audit` validates the id BEFORE
-          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:2635)
+          // doing anything (`[[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die`, ccd:3416)
           // and a colon is not in that class, so that request dies and the
           // route 502s. Both this fixture and the session it describes now use
           // a real workspace session id: ccd builds them as `$project-$slug`

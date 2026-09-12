@@ -1,8 +1,8 @@
 // The run board's own door onto a NEW program (Task 13, spec §4.4). This is
 // a COMPOSITION, not a compound route: `POST /api/runs` is the coordinator's
 // own (it demands a live `claimedBy` and refuses a second claimant,
-// `server/src/coord/routes.ts:872`, refusing a second claimant in
-// `server/src/coord/store.ts:363-371`) and this build does not add a route that both spawns
+// `server/src/coord/routes.ts:1060`, refusing a second claimant in
+// `server/src/coord/store.ts:443-451`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
 // `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
 // for the account name, composed here and nowhere else.
@@ -157,7 +157,7 @@ function liveMainCheckoutIn(
  *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
  *  refusal (`status !== 'dead'`), so Start is offered; the projection says
  *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
- *  carries both in registry-id sort order (`registry.ts:793`), where
+ *  carries both in registry-id sort order (`registry.ts:869`), where
  *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
  *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
  *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
@@ -233,7 +233,7 @@ function startErrorText(err: unknown): string {
  *
  *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
  *  passed to `POST /api/runs`, which validates it as a non-empty string and
- *  nothing more (`server/src/coord/routes.ts:889-897`); `ProjectRow.name` comes
+ *  nothing more (`server/src/coord/routes.ts:1077-1085`); `ProjectRow.name` comes
  *  from the projects listing. Nothing joins the two but convention, so a run
  *  naming a project this picker never lists is a run this sheet cannot speak
  *  about — loosening to a prefix would refuse real projects over a lookalike.
@@ -634,10 +634,10 @@ export function StartProgramSheet({
     // window it has to cover starts the moment `ccd` is asked, not the moment
     // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
     // fields, THEN `_spawn`s (`ccd/ccd:12532-12534`); the server lists a session
-    // on its `.uuid` file alone (`registry.ts:793` — `started` does not gate
+    // on its `.uuid` file alone (`registry.ts:869` — `started` does not gate
     // listing, and is written after `_spawn` anyway) and reports `status:
     // 'idle'` as soon as tmux has the id (`fleet.ts:236-237`); the watcher
-    // ticks every 2 s (`watch.ts:533`) while the HTTP call is still blocked in
+    // ticks every 2 s (`watch.ts:614`) while the HTTP call is still blocked in
     // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
     // the new session arrives MANY SECONDS before `createSession` resolves.
     // Armed after the await, `isOwnAttempt` was false for that entire window
@@ -938,7 +938,7 @@ export function StartProgramSheet({
             // "no single active program: ambiguous or absent" guard), so a second
             // program in a DIFFERENT project wedges run-less coordinator mail just
             // as hard and this arm cannot see it; and `POST /api/runs` applies no
-            // project predicate at all (`server/src/coord/routes.ts:889-897`), so
+            // project predicate at all (`server/src/coord/routes.ts:1077-1085`), so
             // nothing behind this catches what it misses. The sentence claims a
             // consequence of THIS start and never that the fleet is otherwise
             // clean.

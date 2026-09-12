@@ -97,7 +97,7 @@ describe('_lc_ppid_of — ALWAYS rc 0, even for a pid that does not exist', () =
     // `sed`'s failure to open a gone pid's /proc entry (rc 2) outranks
     // `head`'s own 0, so the pipeline's status becomes 2 — a lie against this
     // function's own documented "on stdout, or nothing. rc 0" contract, and
-    // exactly the pid a stale ancestor walk (`_lc_obs`, ccd:971) would meet.
+    // exactly the pid a stale ancestor walk (`_lc_obs`, ccd:1093) would meet.
     const out = h.sh('_lc_ppid_of 999999999; printf "rc=%s" "$?"');
     expect(out).toBe('rc=0');
   });
@@ -466,7 +466,7 @@ describe('_lc_err', () => {
   it('restarts at 1 on a corrupt counter rather than reaching arithmetic', () => {
     // Mutant: delete the `[[ "$n" =~ ^[0-9]+$ ]] || n=0` rung -> `n=$(( n + 1 ))`
     // evaluates the FILE'S CONTENTS as arithmetic, where a command substitution
-    // inside an array subscript executes (ccd:1369-1370).
+    // inside an array subscript executes (ccd:1903-1904).
     const p = path.join(lcDir(h.home), 'errors');
     h.sh('_lc_err');
     fs.writeFileSync(p, 'a[$(touch $HOME/PWNED)]');
@@ -574,7 +574,7 @@ describe('_lc_surface_norm and _lc_dec_ok — declaration, validated once', () =
   // pair at runtime so no such literal appears in this file's own text.
   const SAME = (w: string): [string, string] => [w, w];
   it.each([SAME('cli'), SAME('pwa'), SAME('agent'), SAME('ccd'), ['wharf', 'unknown']])(
-    'normalises %s to %s, exactly as ccd:1523 does', (word, want) => {
+    'normalises %s to %s, exactly as ccd:2289 does', (word, want) => {
       expect(h.sh(`_lc_surface_norm ${word}`)).toBe(want);
     });
 

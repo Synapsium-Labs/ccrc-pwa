@@ -387,7 +387,7 @@ function hueAndLabelClass(a) {
   // `server/src/pane/statusline.ts` then parses back out of a tmux capture. A
   // newline there splits the status line in two and the fleet view quietly
   // disagrees with the session; an escape byte is worse, because the label
-  // recolours everything printed after it. `shared/roster.ts:610-627` carries
+  // recolours everything printed after it. `shared/roster.ts:679-696` carries
   // the argument and REFUSES rather than stripping, for the reason this file
   // refuses everywhere else: silently rewriting an operator's value is an
   // adapter narrowing a distinction it received.
@@ -1267,7 +1267,7 @@ function main(argv) {
     // disk:
     //
     //   1. `--models '{"opus":"x"}'` — `rosterFromJson` requires ALL FOUR
-    //      aliases (shared/roster-json.mjs:305-312) and this block required
+    //      aliases (shared/roster-json.mjs:362-369) and this block required
     //      none of them.
     //   2. `--models '{"opus":"a b", …}'` — every value must match
     //      `MODEL_ID_RE` (:150) and this block asked only for a non-empty
@@ -1507,7 +1507,7 @@ function main(argv) {
     // Only the second and third are names of files that exist: every anthropic
     // lane on this fleet carries the `-oauth` spelling today
     // (`server/test/helpers.ts:69` is `.cc-secrets/claude-a-oauth.env`), and the
-    // two illustrative remedies in the tree — `shared/roster.ts:499` and
+    // two illustrative remedies in the tree — `shared/roster.ts:568` and
     // `shared/wrapper.mjs:132-133` — spell it that way too.
     //
     // It has to be ONE rule, because three writers derive this path and a
@@ -1978,7 +1978,7 @@ function main(argv) {
     // `json['accounts']` UNGUARDED, `declared`'s spelling and not this task's
     // plan snippet's `Array.isArray(json?.accounts) ? … : []`. `readRoster`
     // returns only after `rosterFromJson` has refused a non-array `accounts`
-    // (shared/roster-json.mjs:437), so the guard could never be false — an
+    // (shared/roster-json.mjs:520), so the guard could never be false — an
     // unmeasurable branch, and a second spelling of a read this file already
     // has one spelling of.
     const acct = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);

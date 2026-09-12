@@ -499,7 +499,7 @@ describe('the manifest grammar cannot grow a column in silence', () => {
     // here — a scan that never sees an `orphan` line asserts nothing about it.
     // A foreign file could not contribute a record even if one were added:
     // `foreign` is a `<classify>` VALUE carried inside a `wrapper` record, not
-    // a manifest record type of its own, and `deploy/gen-wrappers.mjs:366`
+    // a manifest record type of its own, and `deploy/gen-wrappers.mjs:380`
     // (`if (verifyMarker(text) === 'foreign') continue;`) drops foreign files
     // from the orphan scan before they could become one anyway.
     writeFileSync(path.join(binDir, 'leftover'), markGenerated(generateWrapperBody(

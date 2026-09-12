@@ -71,7 +71,7 @@ export interface ReclaimDeps {
  *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or the
  *                     re-listing that tells those two apart failed; or tmux did not answer.
  *                     Doubt is not evidence, in either direction: the identical line
- *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:1666-1668),
+ *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */
 export type ClaimantVerdict =
   | { state: 'dead'; why: string }
@@ -82,30 +82,30 @@ export type ClaimantVerdict =
  * Is the session that owns this program still there?
  *
  * THE LADDER IS `watch.ts`'s MAIL SWEEP, rung for rung, deliberately: that loop
- * (`sweepMail`, watch.ts:2205+) already answers this exact question about a mail
+ * (`sweepMail`, watch.ts:2373+) already answers this exact question about a mail
  * recipient, it was corrected twice on live evidence (D-309 for the tmux
  * collapse, D-1066 for the lifecycle rung), and a second, subtly different ladder
  * deciding a strictly MORE destructive act is the drift this repo files as a
- * defect. Its own words, at watch.ts:2476-2481: "`gone` — tmux itself said the
+ * defect. Its own words, at watch.ts:2646-2651: "`gone` — tmux itself said the
  * recipient's pane does not exist — stays the ordinary silent gate … `unknown` —
  * tmux DID NOT ANSWER — must not wear the same bare `continue`". And at
- * watch.ts:2501-2507: "The question is NOT 'is the pane gone' … but 'is it
+ * watch.ts:2671-2677: "The question is NOT 'is the pane gone' … but 'is it
  * coming back'".
  *
  * WHY `readSessionRecord` AND NOT `readRegistry`. `readRegistry`
- * (registry.ts:853-856) is two lines over `readRegistryMeasured` ending
+ * (registry.ts:929-932) is two lines over `readRegistryMeasured` ending
  * `r.listed ? r.records : []` — an unlistable directory arrives wearing the exact
  * shape "nobody is in the registry" wears. Fed to this ladder it reports a
  * fleet-wide outage as proof the coordinator is gone: the fail-open `dispatchRun`
  * already had to close on its own registry read (dispatch.ts:462-480, blocking
- * review finding 7). `readSessionRecord` (registry.ts:895) answers `unlistable`
+ * review finding 7). `readSessionRecord` (registry.ts:973) answers `unlistable`
  * and `absent` separately (`SingleRead`, registry.ts:863-866), and nothing below
  * re-collapses them — but `absent` is ITSELF a fold, of three conditions that do
  * not all mean the claimant is gone, so rung 1 re-splits it at the consumer
  * rather than trusting the word. The argument is D-1144 in the body; the debt
  * that split leaves unpaid is D-1145 beside it.
  *
- * `nowMs` IS MILLISECONDS, and the parameter name is the guard (fleet.ts:175-185).
+ * `nowMs` IS MILLISECONDS, and the parameter name is the guard (fleet.ts:288-298).
  * Every registry stamp is epoch seconds, `lifecycleInputFor` owns the one x1000,
  * and a caller that hands it seconds places every stamp ~55 years in the future —
  * which `sessionLifecycle`'s `>= 0` freshness guard reads as NOT fresh. The
@@ -124,7 +124,7 @@ export async function measureClaimant(
     }
     // D-1144 — RUNG 1 ANSWERS THREE WAYS, AND THE THIRD IS THE ONE THAT MATTERS.
     // `SingleRead`'s `absent` is THREE conditions wearing one shape
-    // (registry.ts:895, three `reason: 'absent'` returns): the listing did not
+    // (registry.ts:973, three `reason: 'absent'` returns): the listing did not
     // name `<id>.uuid` at all — a PROVEN absence; `buildRecord` came back null
     // for a row the listing DID name — its own docstring's "a session mid-write
     // or mid-teardown", a triple member that is empty or not yet written; and
@@ -154,8 +154,8 @@ export async function measureClaimant(
     // conditions AT THE SOURCE, and this is the SECOND consumer to re-split them
     // by hand; the mail ingress cited above was the first. Widening the type was
     // considered for this fix and declined on scope, not on merit: `SingleRead`
-    // has ~8 consumers (sessionws.ts:466, skillstate.ts:82, server.ts:1532 and
-    // 1699, fleet.ts:116, watch.ts:2911, this file's own rung 3 below, and the
+    // has ~8 consumers (sessionws.ts:500, skillstate.ts:82, server.ts:1532 and
+    // 1699, fleet.ts:116, watch.ts:3104, this file's own rung 3 below, and the
     // readiness/hookstate/livestate analogues), each of which needs a deliberate
     // direction rather than a mechanical one, and the ruling that produced this
     // arm is scoped to the one rung that stands in front of a destructive act.

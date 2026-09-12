@@ -282,7 +282,7 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
 
 # Idle gate (spec §C.5 + R2). READ-ONLY against $REG. Authority is the live
 # status file; hookstate is the pointer to it plus a freshness guard — gating
-# on hookstate.state alone is bug F6b, already fixed once (watch.ts:2029-2041).
+# on hookstate.state alone is bug F6b, already fixed once (watch.ts:2197-2209).
 # O5: ws-audit persists no artifact (Task 0); reap's own state-changed refusal
 # is the fail-safe (ledger R-1).
 : "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"

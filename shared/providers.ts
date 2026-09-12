@@ -11,7 +11,7 @@
 // WHY A TABLE AND NOT A UNION. `ProviderId` is `keyof typeof PROVIDERS`, so the
 // type cannot name a provider the table does not describe and the table cannot
 // hold a row no type admits. That is the `PR_REASON_MAP`/`PR_REASONS` shape
-// (`shared/api.ts:409`) applied here, and it is what lets `PROVIDER_IDS` and
+// (`shared/api.ts:651`) applied here, and it is what lets `PROVIDER_IDS` and
 // `GENERATABLE` be `Object.keys` and a `filter` rather than two more lists to
 // keep in step.
 //
@@ -169,7 +169,7 @@ export const PROVIDERS = {
 export type ProviderId = keyof typeof PROVIDERS;
 
 /** The runtime list, in table order. `Object.keys`, exactly as
- *  `shared/api.ts:409`'s `PR_REASONS` is — a hand-written second list is the
+ *  `shared/api.ts:651`'s `PR_REASONS` is — a hand-written second list is the
  *  drift this file exists to prevent. */
 export const PROVIDER_IDS: readonly ProviderId[] = Object.keys(PROVIDERS) as ProviderId[];
 
@@ -181,7 +181,7 @@ export const GENERATABLE: readonly ProviderId[] =
 /** The only way to narrow an untrusted value to a `ProviderId` — the CONSTANT
  *  is cast, never the input, so this is a real type guard rather than an
  *  assertion dressed as one. Same shape as `isHue` (`shared/roster.ts:39`) and
- *  `isPrReason` (`shared/api.ts:426`). */
+ *  `isPrReason` (`shared/api.ts:668`). */
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === 'string' && (PROVIDER_IDS as readonly string[]).includes(v);
 }

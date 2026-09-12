@@ -1942,7 +1942,7 @@ _box_role() {
 }
 
 # How many ccd sessions this box holds, counted the way ccd itself counts them:
-# one `<id>.uuid` file per session in the flat-file registry (ccd:8822). No
+# one `<id>.uuid` file per session in the flat-file registry (ccd:10195). No
 # `ls`, no `find` — a glob and an array length, so this answers on a box with no
 # coreutils on PATH.
 _box_sessions() {
@@ -2059,7 +2059,7 @@ cmd_status() {
   # be wrong (round-2 review, Important): `[ "$connected" = false ]` alone made
   # `?` — the classifier's token for absent-or-unrecognised — take the `true`
   # branch, so a body with no `connected`, or with `"yes"`, or with the STRING
-  # `"false"`, printed `agreed` beside `connected: ?`. `shared/api.ts:1484`
+  # `"false"`, printed `agreed` beside `connected: ?`. `shared/api.ts:1926`
   # declares `connected` REQUIRED, so its absence is a malformed answer and not
   # the absence-permits rule that `roster?`/`build?` carry; and either way an
   # answer this tool did not understand must not become a claim that the
@@ -5253,7 +5253,7 @@ _acct_add_parse() {
 #     converged" (:5569) or "… generated from $HOME/.ccrc/accounts.json"
 #     (:5575); `cmd_wrappers` prints a line per written account and a
 #     `summary: …` line (:2904). Read that off the SOURCE, not off a suite:
-#     `ccrc-install.test.ts:2818-2819` pins only `cmd_wrappers`' summary onto
+#     `ccrc-install.test.ts:2687-2688` pins only `cmd_wrappers`' summary onto
 #     `install`'s stdout, and nothing in server/test/ pins the accounts.sh
 #     lines at all. For `install` that transcript IS the answer. Here it is
 #     the REMEDY, and this verb's stdout is one JSON object — so it goes to
@@ -5430,7 +5430,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # (install-session-hooks.sh:63, and the identical line at
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
   # install-graphify-skill.sh:77). So the scripts are called directly,
-  # `ccrc-install.test.ts:1966-2047`'s 23-entry `_inst_*` spine is untouched, and no
+  # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
   # THIS RUN'S ARRAY, NOT THE SHELL'S (D-2127). It becomes `provisioned:[…]` on stdout
@@ -6810,7 +6810,7 @@ _acct_credential() {
   # external lane whether or not it happens to name a `secretsFile`, and routing
   # one fact to two codes on a field that has nothing to do with it is the same
   # defect wearing the other hat. `rosterFromJson` admits `secretsFile` on all
-  # three exec kinds (shared/roster-json.mjs:231-250), so before this gate a
+  # three exec kinds (shared/roster-json.mjs:288-307), so before this gate a
   # HAND-WRITTEN `external` entry naming provider `openrouter` and a matching
   # secretsFile was ACCEPTED AND ROTATED — measured, exit 0, `{"ok":true,…}`,
   # a live token in a 0600 file ccrc had promised never to write.
@@ -9406,7 +9406,7 @@ _inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before repl
 # generators of one artifact is a drift waiting to happen — a box whose
 # launcher came from the older of them fails in a way neither generator's own
 # tests can see — so the agreement is a pin rather than a convention. It also
-# means the BEHAVIOUR tests `agent/test/deploy-verify.test.ts:1479-1512` already
+# means the BEHAVIOUR tests `agent/test/deploy-verify.test.ts:1758-1791` already
 # run against those bytes (argv forwarded, exit code passed through, a by-name
 # refusal when `~/ccrc/ccd/ccrc` is gone) hold for this copy without being
 # written twice.
@@ -10007,7 +10007,7 @@ _inst_enable() {
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccrc-models.timer \
     || echo "install: models: could not enable ccrc-models.timer — run: systemctl --user enable --now ccrc-models.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
-  # `deploy.sh:724-726` has this line between the enable and the verify, and
+  # `deploy.sh:808-810` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
   # path this verb's own promise ("re-running converges") points every operator
   # at: `enable --now` on an already-active unit is a no-op, and
@@ -11722,7 +11722,7 @@ _uninst_purge() {
 # at :13487). Both corrected by READING THE TARGET LINE — the step the round-1
 # fix skipped, and the only one that distinguishes a correction from a
 # reroll. `ccd-clip.test.ts:32` was re-read and HOLDS. The same wrong `:394`
-# survives in server/test/ccrc-cli.test.ts:590, deliberately out of scope here.
+# survives in server/test/ccrc-cli.test.ts:592, deliberately out of scope here.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
 # ── top-level argument parsing ──────────────────────────────────────────

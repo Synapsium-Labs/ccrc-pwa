@@ -550,9 +550,9 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
 // `shared/generate.mjs` is the one file in the roster chain this wave does not
 // edit, and the reason to PROVE that rather than inspect it is that three
 // mechanisms turn on the exact bytes it emits: `ownRosterFp`
-// (server/src/server.ts:1028, compared at :1054 against the fleet host's copy
+// (server/src/server.ts:1056, compared at :1054 against the fleet host's copy
 // and answered as `roster: 'divergent'` on GET /api/fleet/health), `ccd`
-// sourcing the file on every invocation (ccd:971), and
+// sourcing the file on every invocation (ccd:1093), and
 // `wrapper-roster-fixture.test.ts`'s two-directional comparison of ccd's parsed
 // answer space against the roster. On an AGENT-FIRST wave the fleet box gets
 // new code first, so an emitter change shows up as an amber banner over a green

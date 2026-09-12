@@ -66,7 +66,7 @@ const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
 /** bash's absolute path, resolved ONCE under this process's real PATH. Every
  *  spawn below hands the child a PATH built only from fixture directories, and
  *  libuv resolves the executable against the CHILD's environment — so spawning
- *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:229 uses. */
+ *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:231 uses. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 const realPath = (name: string): string => {
@@ -817,7 +817,7 @@ function stubHostname(home: string): void {
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
- *  file each (ccd:8849). */
+ *  file each (ccd:10222). */
 function writeSessions(home: string, n: number): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -1103,7 +1103,7 @@ function tableNames(): string[] {
   if (r.status !== 0) throw new Error(`could not read the check table: ${r.stderr}`);
   const names = (r.stdout ?? '').split('\n').filter(Boolean);
   // A scan over an empty list passes everything (the discipline
-  // single-definition.test.ts:51-56 states outright). `"${arr[@]}"` on an
+  // single-definition.test.ts:52-57 states outright). `"${arr[@]}"` on an
   // UNSET array is not an error under `set -u` in bash 4.4+, so a missing or
   // renamed table would otherwise return [] and quietly disarm every caller —
   // measured: it did, in this suite's own red run.
@@ -4656,7 +4656,7 @@ describe('ccrc doctor: fleet', () => {
   });
 
   // AN ANSWER THIS CHECK DID NOT UNDERSTAND MUST NOT BECOME A CLAIM THAT THE
-  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1484),
+  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1926),
   // so each of these is a malformed answer — and each used to PASS with the
   // words "in remote mode, connected", which is the strongest claim this check
   // can make, made about the one field the answer did not state. The

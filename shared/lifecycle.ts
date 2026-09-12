@@ -16,7 +16,7 @@ export interface LifecycleClass {
 export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'workspace-graph-store', root: '<workdir>/graphify-out/', pattern: 'W',
     creators: ['ccd-graph-sweep'],
-    collector: 'git worktree remove via cmd_ws_rm / reap tail / ws-gc orphan arm (ccd:3444-3451, :9298, :9989)',
+    collector: 'git worktree remove via cmd_ws_rm / reap tail / ws-gc orphan arm (ccd:4225-4232, :9298, :9989)',
     bound: 'workspace lifetime', tier: '~11 MB/tree measured (ccrc, 763 files)', ruling: null },
   { name: 'project-graph-store', root: '<projects-root>/<repo>/graphify-out/', pattern: 'O',
     creators: ['ccd-graph-sweep'], collector: null, bound: 'repo lifetime',

@@ -174,7 +174,7 @@ describe('the coord banner', () => {
 
   // Whole-branch review, M1: the 502 arm used to extract `body.stderr` itself
   // and fall back to `apiErrorText(err)` — but `apiErrorText` is ALREADY
-  // stderr-first (`lib/api.ts:149-160`), so the whole branch was byte-
+  // stderr-first (`lib/api.ts:153-164`), so the whole branch was byte-
   // equivalent to `return apiErrorText(err)`. The stderr case above is the
   // only one the suite exercised, which is why the redundancy could not be
   // seen from the tests. This is the OTHER half of the branch: what makes a

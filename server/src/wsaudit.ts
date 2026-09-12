@@ -20,7 +20,7 @@ export const SENTENCES: Record<string, string> = {
   'not-archived': 'This workspace has not been archived. Archiving is the staging step; it stops the session and destroys nothing.',
   'incomplete-registry': 'This session’s registry entry is missing its branch or workdir, so ccrc cannot tell what removing it would delete.',
   'worktree-missing': 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.',
-  // The three rungs of `_ws_wt_branch` (ccd:2890-2900), which is where every
+  // The three rungs of `_ws_wt_branch` (ccd:3671-3681), which is where every
   // branch name in ccd comes from. These three sentences and ccd's three
   // refusals move together: renaming a token without moving its copy leaves the
   // fallback below printing a bash identifier on a phone screen, which is the

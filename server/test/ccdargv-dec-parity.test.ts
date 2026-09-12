@@ -105,7 +105,7 @@ function decAppendingVerbs(): string[] {
  * assumed: point it at an ABSENT PROJECT and both arms die
  * `ccd: not a git repo: <home>/projects/__no-such-session__` at rc 1,
  * byte-identical — with the flag loop AND without it, because `cmd_ws_add`
- * validates the project (`ccd:2734-2737`) a dozen lines before anything looks
+ * validates the project (`ccd:3515-3518`) a dozen lines before anything looks
  * at the slug. An absent-project probe here would have gone green on the very
  * tree D-410 was found in, which makes it worse than no probe: it would read
  * like a measurement. So `ws-add`'s probe names a REAL project, `setup` builds

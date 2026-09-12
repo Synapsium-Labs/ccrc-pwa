@@ -49,7 +49,7 @@ describe('session call sites', () => {
     expect(decOf(readJournal(h.home)[0]!)['surface']).toBe('pwa');
   });
 
-  it('records an unrecognised declared word as `unknown`, exactly as ccd:1523 does', () => {
+  it('records an unrecognised declared word as `unknown`, exactly as ccd:2289 does', () => {
     h.sh('systemctl() { :; }; _ws_unsupervise sess unknown wharf');
     expect(readJournal(h.home)).toHaveLength(1);
     expect(decOf(readJournal(h.home)[0]!)['surface']).toBe('unknown');
@@ -79,7 +79,7 @@ describe('session call sites', () => {
     const stub = (rc: number): string => `_accept_first_run_prompts() { return ${rc}; }; _tmux() { echo t; };
       tmux() { :; }; date() { echo 1787000000; };`;
     h.sh(`${stub(0)} _spawn_settle sess 0`);
-    // `_spawn_settle` legitimately `return`s the prompt rc (ccd:10225) — a real,
+    // `_spawn_settle` legitimately `return`s the prompt rc (ccd:11598) — a real,
     // documented non-zero exit, not a bug — so a bash -c whose LAST command is
     // the rc=3 case must not let that become the harness's own exit code.
     h.sh(`${stub(3)} _spawn_settle sess 0 || true`);
@@ -121,8 +121,8 @@ describe('session call sites', () => {
   it('cmd_enable and cmd_start write TWO independent events, not one folded pair', () => {
     // The ruling: a re-entrant verb records two acts because two acts happened.
     // `wrapper` and `workdir` are seeded because cmd_start's ladder dies at
-    // ccd:10489 and ccd:10501 without them; `claude-b` is in the harness's
-    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-b" ]]` (ccd:10490) holds.
+    // ccd:11862 and ccd:11874 without them; `claude-b` is in the harness's
+    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-b" ]]` (ccd:11863) holds.
     h.sh(`_reg_set sess uuid u; _reg_set sess project demo
       _reg_set sess wrapper claude-b; _reg_set sess workdir "$HOME"
       _supervised_start() { return 0; }; _reg_claim() { :; }; _spawn_settle() { :; }
@@ -209,7 +209,7 @@ describe('workspace call sites', () => {
   });
 
   it('cmd_ws_hold records the reason verbatim, parsed nowhere', () => {
-    // FIX (brief defect): cmd_ws_hold refuses `id is not a workspace` (ccd:3839)
+    // FIX (brief defect): cmd_ws_hold refuses `id is not a workspace` (ccd:4761)
     // unless the `workspace` field is set — the brief's own snippet omitted it
     // and the verb died before ever reaching the emit, in RED as much as GREEN.
     h.sh(`_reg_set w uuid u; _reg_set w workspace w
@@ -234,8 +234,8 @@ describe('workspace call sites', () => {
   });
 
   it('cmd_ws_archive records the closed reason vocabulary, through the VERB', () => {
-    // Mutant: emit before ccd:4233 -> this fails with `expected undefined
-    // to be 'manual'`, because `$reason` is not decided until ccd:4223-4225.
+    // Mutant: emit before ccd:5213 -> this fails with `expected undefined
+    // to be 'manual'`, because `$reason` is not decided until ccd:5203-4225.
     const main = h.makeRepo('demo');
     h.git(main, 'commit', '--allow-empty', '-m', 'base');
     const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
@@ -260,7 +260,7 @@ describe('workspace call sites', () => {
     // above the `while … done` loop, right after `local n=0 ref` -> this
     // fails with `expected 0 to be greater than or equal to 2`, NOT `NaN`.
     // `local n=0` initialises before the loop runs, so an emit placed there
-    // captures a REAL `"0"`, and `Number("0")` is `0` — the loop at ccd:4247
+    // captures a REAL `"0"`, and `Number("0")` is `0` — the loop at ccd:5227
     // is what turns that 0 into the true count of 2, and a fabricated zero on
     // a destructive verb is a false record either way, but the failure text
     // is the measured one above, not a guessed `NaN`.
@@ -271,7 +271,7 @@ describe('workspace call sites', () => {
     const two = h.git(repo, 'rev-parse', 'HEAD').trim();
     h.git(repo, 'update-ref', `refs/ccrc/attic/w/${one}`, one);
     h.git(repo, 'update-ref', `refs/ccrc/attic/w/${two}`, two);
-    // `_attic_project` reads the registry FIRST (ccd:4789-4797); with no row and
+    // `_attic_project` reads the registry FIRST (ccd:5769-5777); with no row and
     // no tombstone the verb dies `no such session` at ccd:4805.
     h.sh(`_reg_set w project demo; cmd_ws_attic --drop w`);
     const [e] = eventsOf(h.home, 'attic-drop');
@@ -308,13 +308,13 @@ describe('workspace call sites', () => {
   it('cmd_ws_add completes with its normal success line even when the journal directory cannot be written at all', () => {
     // THE WORST FAILURE AVAILABLE IN THIS TASK: a wrong variable name under
     // `set -uo pipefail` would EXIT the shell between the lock (already
-    // released, ccd:2768) and the spawn, leaving a worktree on disk with no
+    // released, ccd:3549) and the spawn, leaving a worktree on disk with no
     // registry entry and no session — a half-created workspace. This test
     // covers the OTHER half of that same worry: a journal that cannot be
     // WRITTEN AT ALL must not abort the verb either. Mirrors
     // ccd-lifecycle-purge.test.ts's identical proof for `_reg_purge`
     // ("purges even when the journal cannot record it — D7, never gate the
-    // act"): `_lc_emit` is documented "Always 0" (ccd:1519), and every one of
+    // act"): `_lc_emit` is documented "Always 0" (ccd:2285), and every one of
     // its failure branches is `|| { _lc_err; return 0; }` — this is the
     // creation-path analogue of that destruction-path proof.
     const dir = lcDir(h.home);
@@ -430,7 +430,7 @@ describe('ws-add declares its actor (D-410)', () => {
   });
 
   it('refuses a blank --actor, and refuses it before anything is created', () => {
-    // `cmd_ws_hold`'s rule (ccd:3922-3925), for its reason: `_lc_dec_ok` is
+    // `cmd_ws_hold`'s rule (ccd:4888-4891), for its reason: `_lc_dec_ok` is
     // LENGTH-ONLY, so `_lc_dec_ok ''` returns 0 and cannot be the blank guard.
     // A declared-but-unsayable actor is not a declaration, and this verb
     // refuses one where it can still leave the box exactly as it found it.
@@ -478,7 +478,7 @@ describe('ws-add declares its actor (D-410)', () => {
   });
 
   it('a DECLARED surface that is blank or unmodelled reads `unknown`, never `none`', () => {
-    // THREE STATES, THREE ANSWERS (`_lc_surface_norm`, ccd:1631-1645, D-210):
+    // THREE STATES, THREE ANSWERS (`_lc_surface_norm`, ccd:2397-2411, D-210):
     // `none` means nobody declared one, `unknown` means a word arrived and this
     // build does not model it. `_lc_surface_norm ''` prints EMPTY rather than
     // `unknown` — it cannot tell "no argument" from "an explicit blank" — so
@@ -499,12 +499,12 @@ describe('ws-add declares its actor (D-410)', () => {
     // The whole `dec` object, not `not.toHaveProperty('actor')`: an ADDITION
     // is as visible as a change. `surface: 'none'` is the ENCODER's backfill
     // for a row that declared none (`dec.setdefault("surface","none")`,
-    // ccd:1465).
+    // ccd:2231).
     //
     // MEASURED, AND THE MEASUREMENT IS WORTH RECORDING: this case is defended
     // by TWO guards that are redundant with each other, so neither is
     // observable ALONE. `_lc_json` drops any pair whose value is `""`
-    // (ccd:1455-1456), which is why `cmd_ws_hold` can emit its three pairs
+    // (ccd:2221-2222), which is why `cmd_ws_hold` can emit its three pairs
     // unconditionally — so emitting `dec.actor ""` here reds nothing (28/28
     // still green), and dropping the `(( lc_gs ))` guard on the surface
     // normalisation reds nothing either (28/28), because the conditional

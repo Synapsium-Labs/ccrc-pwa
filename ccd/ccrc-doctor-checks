@@ -485,7 +485,7 @@ _check_python3() {
     "install it: sudo apt install python3"
 }
 _check_flock() {
-  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:2501-2502)" \
+  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:3282-3283)" \
     "install it: sudo apt install util-linux"
 }
 
@@ -2093,7 +2093,7 @@ _dr_wr_has() {
 
 # IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
 # every roster account of every kind must answer yes to, because that path is
-# literally what ccd runs (ccd:7684). Three distinguishable ways to answer no,
+# literally what ccd runs (ccd:9057). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
 # happened, and a present non-executable file is a `chmod`.
@@ -2368,7 +2368,7 @@ _check_wrappers() {
       continue
     fi
     # An id is not decoration: it is the FILENAME ccd executes
-    # ($HOME/.local/bin/<id>, ccd:7684), so the roster's ids are held to the
+    # ($HOME/.local/bin/<id>, ccd:9057), so the roster's ids are held to the
     # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
     # states. Nothing else in this check can be trusted about an entry whose id
     # is not an id, so it is reported and skipped rather than looked up on disk
@@ -3270,7 +3270,7 @@ _check_graphify() {
   # measured and WARN would report a problem there is none. Existence and
   # readability are checked BEFORE `_box_env_value` runs (its `< "$file"`
   # redirection is fatal to a missing file) — the same guard
-  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:7813-7816).
+  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:9243-9246).
   local role=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
     role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
@@ -4047,7 +4047,7 @@ _check_fleet() {
   # different bodies (no `connected` at all; `"yes"`; `null`; the STRING
   # `"false"`) each produced `PASS fleet: … in remote mode, connected` — a
   # verdict asserting the opposite of what the last one says. The justification
-  # written here was wrong as well as the code: `shared/api.ts:1484` declares
+  # written here was wrong as well as the code: `shared/api.ts:1926` declares
   # `connected` REQUIRED, so absence is a malformed answer, and the
   # absence-permits rule belongs to the optional pair `roster?`/`build?` and
   # licenses nothing here. `mode` and `build`/`roster` already WARN on a value
@@ -4121,7 +4121,7 @@ _check_fleet() {
 # ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
 # (this suite's own test harness does exactly that to read
 # `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
-# ccrc-install.test.ts:2547-2556) is this repo's standing ruling that
+# ccrc-install.test.ts:2416-2425) is this repo's standing ruling that
 # ccrc-doctor-checks must hold its own second spelling of anything it needs,
 # rather than lean on a scope accident. Don't "fix" this duplication by
 # reaching across a boundary that does not reliably exist.

@@ -53,9 +53,9 @@ const json = (o: Record<string, number>): string => JSON.stringify(o);
  *  second channel: stdout carries one token, and the ranking callers that
  *  consume it (`_limit_score`, and through it `_ws_least_loaded` and
  *  `_swap_target`) have exactly one spelling for "nobody measured this", which
- *  is "". Its two other direct readers take it raw: `_avail` (ccd:11838), which
+ *  is "". Its two other direct readers take it raw: `_avail` (ccd:14470), which
  *  refuses only a KNOWN half at the ceiling because eligibility needs a lower
- *  bound where rank needs a full measurement, and `_gpt_status` (ccd:1268),
+ *  bound where rank needs a full measurement, and `_gpt_status` (ccd:1802),
  *  which folds "" to 0 with `: "${five:=0}"`.
  *
  *  THAT FOLD IS REACHED, and the three `_gpt_status` cases below reach it: on
@@ -330,7 +330,7 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
     // The rescue lane's non-negotiable, and the thing `_swap_target`'s
     // rank-last comment exists to protect: a session that must leave must have
     // somewhere to go. cur == home == claude-b at the ceiling, so the one
-    // reachable "stay" shortcut (`_avail "$home"`, ccd:11843) declines and the
+    // reachable "stay" shortcut (`_avail "$home"`, ccd:14475) declines and the
     // must-leave loop runs over candidates that are measured today and
     // unmeasured after — eligible either way, ranked last after, never dropped.
     rolled('claude'); rolled('claude-a');

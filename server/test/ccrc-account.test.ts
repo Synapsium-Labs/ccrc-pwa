@@ -140,7 +140,7 @@ interface Result { code: number; stdout: string; stderr: string }
  *  purpose: `env()` DELETES every `CCRC_*` this CLI reads so the answer never
  *  depends on the developer's exported shell, so a knob a test wants to set is
  *  a knob that has just been deleted. `runDoctor`'s shape
- *  (`ccrc-doctor.test.ts:874`). */
+ *  (`ccrc-doctor.test.ts:884`). */
 function run(home: string, args: string[], stdin = '',
   extraEnv: NodeJS.ProcessEnv = {}): Result {
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
@@ -417,7 +417,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('roster-invalid');
-    // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
+    // `shared/roster-json.mjs:448` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
     // (ccd/ccrc:5559-5561): re-wording a fix into a shrug helps nobody.
@@ -943,7 +943,7 @@ function sourceCall(home: string, script: string, stdin = ''): Result {
  *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
  *  branch is the ONLY one a test can reach — and each pins the deletion of its
  *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
- *  `ccrc-install.test.ts:3352`). This gate INVERTS: it refuses the terminal. It
+ *  `ccrc-install.test.ts:3222`). This gate INVERTS: it refuses the terminal. It
  *  is pinned the same way anyway, because the inversion does not change the
  *  fact that a pipe-only test can never reach the branch, and a guard no test
  *  can reach is a guard nothing measures. Task 22's plan carried no test for
@@ -968,7 +968,7 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    // 19s, NOT 20s — `ccrc-install.test.ts:3377`'s number and its reason.
+    // 19s, NOT 20s — `ccrc-install.test.ts:3247`'s number and its reason.
     // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
     // 20s timer here TIES with the runner and loses: measured at review round
     // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
@@ -1316,7 +1316,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
   // exit 1 with the secret already on disk, and all three were re-measured
   // before the gates were written rather than taken from the note:
   // `--models '{"opus":"x"}'` (`rosterFromJson` requires ALL FOUR aliases,
-  // shared/roster-json.mjs:305-312), a model id carrying a space (`MODEL_ID_RE`,
+  // shared/roster-json.mjs:362-369), a model id carrying a space (`MODEL_ID_RE`,
   // :150 — this block only ever asked for a non-empty string), and a model map
   // on an `anthropic` lane (`exec.models` is refused outside
   // `API_KEY_PROVIDERS`, :296-300). Each now has its own code in `check-add`,
@@ -1341,7 +1341,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // A TAB, which is `\u0009` and therefore inside `LABEL_UNSAFE_RE`'s
     // `[\u0000-\u001f\u007f]`. It is the benign end of that class to print in a
     // test report; the class that motivates the gate is the escape byte, which
-    // recolours everything the status bar prints after it (shared/roster.ts:610-627).
+    // recolours everything the status bar prints after it (shared/roster.ts:679-696).
     ['a label carrying a control character', { '--label': 'lab\tdev0' }, 'bad-label', 2],
     ['a suffix outside the read root', { '--suffix': '.lab-dev0' },
       'suffix-outside-read-root', 2],
@@ -1411,7 +1411,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // before the secret write, as `models-invalid` saying it "is not a routing
     // alias" — a sentence about a key the roster format does not have, said
     // about one it does: `rosterFromJson` ACCEPTS `models.selectable` and
-    // validates it (shared/roster-json.mjs:313-339). What this gate changes is
+    // validates it (shared/roster-json.mjs:370-396). What this gate changes is
     // the code and the sentence, not the moment, so deleting it leaves the
     // secret absent either way and moves the row to `models-invalid`. It is
     // here because a refusal that misnames the operator's key sends them to fix
@@ -2228,7 +2228,7 @@ describe('ccrc account add: the ordered write', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
     // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5575)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
-    // Only the second is pinned there (ccrc-install.test.ts:2818-2819, the
+    // Only the second is pinned there (ccrc-install.test.ts:2687-2688, the
     // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:7148, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
@@ -5002,7 +5002,7 @@ function plantRow(home: string, sid: string, o: { wrapper: string; home?: string
  *  `env()` plants, which is why that one is conditional. Any argv other than
  *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
  *  than asking it could not pass unnoticed (stubTmux's rule,
- *  ccrc-doctor.test.ts:191-199). */
+ *  ccrc-doctor.test.ts:195-203). */
 function plantTmux(home: string, sessions: string[]): void {
   mkdirSync(join(home, '.local', 'bin'), { recursive: true });
   writeFileSync(join(home, '.local', 'bin', 'tmux'), [
@@ -8939,7 +8939,7 @@ describe('ccrc account check: the probe', () => {
 
   it('names ~/.cc-limits the way ccd does — one directory, two files', () => {
     // THROUGH THE SHARED CONSTANT, not a second spelling of the path.
-    // `single-definition.test.ts:296`'s NAMES_CCD scan pins that path to
+    // `single-definition.test.ts:297`'s NAMES_CCD scan pins that path to
     // `ccdWsHelpers.ts` alone; building it here from REPO and two segments reds
     // it — measured, D-2132's defect in the task that cites it. And the scan
     // reads comments too, so this sentence must not spell the shape either.

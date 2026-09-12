@@ -789,7 +789,7 @@ describe('notify ingestion', () => {
 // degrade — `stopPair` below RECOMPUTES a wrapper/project pair from these
 // very fields to kill a tmux session BY NAME, so an unmeasured field must
 // never silently fall through to a guessed value. Had NO pin before this
-// (`registry.ts:123`'s old drop behaviour had never been exercised through
+// (`registry.ts:125`'s old drop behaviour had never been exercised through
 // this route at all — no test here even named `/stop` until now). Written
 // FIRST and confirmed red against the pre-gate code, which would have
 // answered 404 unknown-session (a LIE: the row is right there, just

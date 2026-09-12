@@ -346,7 +346,7 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
  *
  * EVERY ROUTE HERE ANSWERS 501 `{ok:false,error:'not-configured'}` WITHOUT A
  * STORE, the same shape the push routes and `/api/notifications/catchup`
- * already use (`server.ts:186-215`): a box with no coordination database is
+ * already use (`server.ts:195-224`): a box with no coordination database is
  * not broken, it simply has none.
  *
  * MAIL LIVES HERE; RUN ROUTES ARE TASK 9's, in this same file — both share the
@@ -668,7 +668,7 @@ export function registerCoordRoutes(
     // `io.readdir` returning `null` (an ordinary transient failure in remote
     // mode: one dropped agent-WS round trip) is not evidence that no session
     // exists anywhere on the fleet, and `readRegistry` collapses exactly that
-    // failure to `[]` (`registry.ts:104`). Reading `[]` as "the sender does
+    // failure to `[]` (`registry.ts:106`). Reading `[]` as "the sender does
     // not exist" turns a transient hiccup into a PERMANENT, recorded
     // `unknown-sender` for a session that is plainly alive — the same
     // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
@@ -690,7 +690,7 @@ export function registerCoordRoutes(
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       // `readRegistry` also drops a row that WAS listed (its `.uuid` file
-      // exists in `names`) when a sibling field read fails (`registry.ts:123`,
+      // exists in `names`) when a sibling field read fails (`registry.ts:125`,
       // "incomplete registry entry — skip, don't crash") — ALSO transient,
       // not "this session does not exist". `names` proves presence
       // independently of whether every field could be read, the same
@@ -1075,7 +1075,7 @@ export function registerCoordRoutes(
   // the PWA sees everything." Four routes (dispatch/close's sibling
   // `POST /api/runs/:id/advance` joins them below, closing review finding 1),
   // ZERO NEW CCD VERBS — every argv below is one of the five already granted
-  // (`agent/src/whitelist.ts:310-336`): `wsAdd`/`ensure` are dispatch,
+  // (`agent/src/whitelist.ts:323-349`): `wsAdd`/`ensure` are dispatch,
   // `wsHold` is the claim, `wsRelease` the close, `wsArchive` the one
   // explicit-abandon escape hatch.
   //
@@ -1750,7 +1750,7 @@ export function registerCoordRoutes(
     //
     // A missing `NotifyLog` degrades the RECORD and never the write; and
     // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1225-1228` catches it. Refusing an
+    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
     // operator's write because the feed archive is unavailable would be the
     // collapse, not the safety.
     const log = deps.notifyLog;
@@ -1769,7 +1769,7 @@ export function registerCoordRoutes(
           `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
       } finally {
         // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
         // gives: `record()` bumps the in-memory seq, and a seq handed to a
         // client but never persisted lets a restart re-mint the same
         // `{epoch, seq}` pair for a different event — the stale-but-valid

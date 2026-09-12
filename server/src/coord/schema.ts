@@ -9,7 +9,7 @@
  * `MailKind`/`ProgramState`/`MailDeliveryState`), so a token written by a
  * newer build lands somewhere honest instead of being switched on and
  * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
- * (`server/src/registry.ts:133-140`). Deviation D-8 found that this plan's
+ * (`server/src/registry.ts:135-142`). Deviation D-8 found that this plan's
  * own draft left two of the five — `programs.state` and
  * `mail_deliveries.state` — uncovered on the wire (`programs()` returning a
  * raw `string`; `MailSummary.state` a closed union with no `unknown` arm).

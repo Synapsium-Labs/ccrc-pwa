@@ -70,7 +70,7 @@ function realPath(name: string): string {
 }
 
 /** bash's absolute path, resolved ONCE, for the same reason
- *  `ccrc-doctor.test.ts:62` resolves it: libuv looks the executable up in the
+ *  `ccrc-doctor.test.ts:66` resolves it: libuv looks the executable up in the
  *  CHILD's environment, and one runner below hands the child a PATH with no
  *  system directory on it at all — spawning bare `bash` there is ENOENT, which
  *  surfaces as a spawn failure (`status === null`) rather than as anything the
@@ -431,7 +431,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '    fi',
     '    exit 0 ;;',
     // `restart` is the line `_inst_enable` gained in fix round 1 — deploy's
-    // own (deploy.sh:724-726), and the one that makes a re-run replace the
+    // own (deploy.sh:808-810), and the one that makes a re-run replace the
     // RUNNING server rather than only the files it runs from. Contained the
     // same way as `enable`: recorded, answered, never a real systemctl.
     '  restart)',
@@ -1657,7 +1657,7 @@ describe('ccrc install: the executables and files it installs', () => {
     // box installing itself — and two generators of one artifact is a drift
     // waiting to happen: a box whose launcher came from the older of them
     // fails in a way neither generator's own tests can see. Extract deploy's
-    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1471-1497`
+    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1750-1776`
     // uses) and compare it to the bytes THIS verb actually installed.
     //
     // It also means the behaviour tests deploy-verify already runs against
@@ -2314,7 +2314,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
-      // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
+      // THE RESTART, in deploy's own position (deploy.sh:803-805): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
       // pinned to the dist it started with. Without this line the SECOND
@@ -3208,7 +3208,7 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     // 4. …except the stamp, which measures THIS run and must not be stale.
     //    MEASURED BY MTIME, not by content, and the difference is a real flake
     //    this assertion had: `builtAt` is `date -u +%Y-%m-%dT%H:%M:%SZ`
-    //    (ccrc:2274) — SECOND resolution — while `sha`, `ref` and `dirty` are
+    //    (ccrc:2381) — SECOND resolution — while `sha`, `ref` and `dirty` are
     //    identical across two runs of one checkout. Two installs completing
     //    inside the same wall-clock second therefore produce a byte-identical
     //    stamp, and a content comparison calls that a failure to rewrite. It is

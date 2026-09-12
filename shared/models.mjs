@@ -76,7 +76,7 @@ export const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
 /** A model id, as the account-connections branch defines it.
  *
  *  COPIED, not imported: that branch is not on `main` (ruling 280) and this
- *  design must not depend on it. Its origin is `shared/roster.ts:97` on branch
+ *  design must not depend on it. Its origin is `shared/roster.ts:99` on branch
  *  `ws/gemini-subscription-account-connection`, whose own comment records the
  *  reason for the charset — an account id becomes a filename and a bash `case`
  *  pattern and so cannot hold `/`, `.` or `:`, while an OpenRouter model id is

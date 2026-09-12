@@ -104,7 +104,7 @@ export type AdvanceResult =
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
  *  vocabularies behind one discriminant. `unknown-run` is spelled the way its
- *  `MailRejectCode` twin is (shared/api.ts:3446); `no-claimant` is this wave's
+ *  `MailRejectCode` twin is (shared/api.ts:4260); `no-claimant` is this wave's
  *  own word, admitted to `mail-routes.test.ts`'s scanner through the exported
  *  `isReclaimRefuseCode` guard rather than an allowlist entry — the standing
  *  remedy that file states for every union after the first. */
