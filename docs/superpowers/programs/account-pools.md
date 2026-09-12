@@ -3863,3 +3863,46 @@ empty-pool test needs its own roster; the claim about what stranding requires is
 (behind-count 0; the one add/add conflict was the `ccd-queue` plan, resolved to the copy carrying
 D-2475's correction of the stale twelve-site cardinal — main's copy still asserted twelve). **From here,
 ruling measurements are taken with `git show origin/main:<path>`, never from the checkout underfoot.**
+
+---
+
+## 2026-09-12 10:11Z — D-2597: the plan prescribed a REFACTOR and called it a mutation
+
+Mail 729, worker's second finding, again stopped before commit with a complete `D-TBD` entry. Measured
+at `origin/main` with the checkout verified current first (behind-count 0) — the discipline the previous
+ruling's failure bought.
+
+**Reproduced rather than reasoned.** Built all three variants and ran the PWA's own `tsc` over them:
+
+| variant | tsc |
+|---|---|
+| `return typeof p === 'string' ? p : null;` (original) | PASSES |
+| `return p ?? null;` (**the plan's mutation 4**) | **PASSES — no error** |
+| `return p;` (the worker's proposal) | `TS2322: Type 'string \| null \| undefined' is not assignable to type 'string \| null'` |
+
+The worker is right, and their replacement is better than they claimed: **`return p` emits the plan's
+own PREDICTED ERROR TEXT verbatim.** That is the tell for what happened — the author meant *delete the
+guard*, wrote a replacement that preserves its semantics (`??` folds `undefined` AND `null` to `null`,
+so the annotation stays `string | null`), and kept the error text the deletion would have produced.
+**A mutation that cannot change behaviour is a refactor, and a refactor can never red.**
+
+### The half the worker did not find, and it strengthens the guard
+
+Plan line 507 ends *"the compiler is the mechanism for this one; keep the runtime test as the reader's
+explanation."* **Measured false** for the corrected mutation: under `return p` the older-wire row
+returns `undefined`, and `expect(undefined).toBeNull()` fails — ran it, 1 failed / 1 total. Vitest does
+not typecheck, so the suite genuinely runs and genuinely reds.
+
+So **both** fire under `return p`. That matters beyond tidiness: a compiler complaint says a future edit
+would not COMPILE; a red test says something OBSERVES the behaviour. The second is the stronger guard,
+and the plan's sentence talks a reader out of it. D-2597 carries both halves — the prescribed mutation
+is inert, and the "compiler is the mechanism" note is wrong.
+
+**D-2597 issued** (floor 2598), mail 731, finding 729 acked. Also told the worker to say in the commit
+message that they stripped the stray leading `+` characters an implementation agent left in the plan
+body as diff residue — flagged by them rather than quietly fixed, which is the right instinct.
+
+**Both of this worker's findings so far were real, and in both the plan was the defective party** — once
+self-contradictory (D-2591), once prescribing an inert mutation with a correct prediction attached
+(D-2597). Worth noting for the wave: this plan's Task 1 has been wrong twice in its own verification
+apparatus, so the remaining mutation rows deserve the same skepticism rather than the benefit of the doubt.
