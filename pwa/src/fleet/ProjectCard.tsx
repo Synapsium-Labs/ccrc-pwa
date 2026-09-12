@@ -221,22 +221,22 @@ export function ProjectCard({
   // `parent === null` (no coordinator at all) and `parent === row.session.id`
   // (self-claimed) are two different reasons there is no OTHER coordinator to
   // call off-card, and collapsing either into "coordinator elsewhere" would be
-  // the overloaded silence this repo forbids at a seam. Only the FIRST half is
-  // independently load-bearing, though (D-2574(c), measured): a rendered
-  // row's own session is, by construction, always a member of
+  // the overloaded silence this repo forbids at a seam. Only the `parent ===
+  // null` clause is independently load-bearing, though (D-2574(c), measured):
+  // a rendered row's own session is, by construction, always a member of
   // `group.sessions` (rows are built from that exact array), so `parent ===
   // row.session.id` implies the `group.sessions.some(...)` guard one line
-  // down is already true — dropping the self-claim disjunct changes nothing
-  // for any reachable row. Kept for what it documents, not for what it
-  // guards.
+  // down is already true — dropping the self-claim clause changes nothing for
+  // any reachable row. Kept for what it documents, not for what it guards.
   //
   // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
   // and not every worker's: a child whose parent IS on this card is bracketed,
   // and the bracket already says what this sentence would say. It looks only
-  // at `group.sessions`, never `group.archived` — an archived coordinator is
-  // not a row on this card either, so a worker left behind by one still reads
-  // as an orphan (and still says nothing about home when that home is,
-  // measured, this card's own project).
+  // at `group.sessions`, never `group.archived` — an archived coordinator IS
+  // still a row on this card (`group.archived.map(...)` renders it under the
+  // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
+  // left behind by one still reads as an orphan (and still says nothing about
+  // home when that home is, measured, this card's own project).
   const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
     if (row.kind !== 'session' || row.depth !== 0) return null;
     const run = runForSession(runs, row.session.id);
@@ -247,10 +247,10 @@ export function ProjectCard({
     const crossing = crossingNote({ ...run, project: group.project });
     const label = `${run.program} ${waveLabel(run)}`;
     return crossing === null
-      ? { text: label, title: `this worker's coordinator is not on this card` }
+      ? { text: label, title: `this worker's coordinator is not among this card's live sessions` }
       : {
           text: `${label} · home ${crossing.home}`,
-          title: `this worker's coordinator is not on this card; the programme is homed in ${crossing.home}`,
+          title: `this worker's coordinator is not among this card's live sessions; the programme is homed in ${crossing.home}`,
         };
   };
 

@@ -729,8 +729,9 @@ describe('the orphan worker says which programme it belongs to', () => {
   });
 
   it('marks no row for a SELF-CLAIMED run — there is no separate coordinator to call off-card', () => {
-    // D-2574(c), first half. `claimedBy === sessionId`: a session that claimed
-    // its own run. There is no coordinator OTHER than this row to name.
+    // D-2574(c), the `parent === row.session.id` clause. `claimedBy ===
+    // sessionId`: a session that claimed its own run. There is no coordinator
+    // OTHER than this row to name.
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     const selfClaimed = runFor({ id: 13, sessionId: 'demo-still-cove', claimedBy: 'demo-still-cove' });
     const { container } = render(
@@ -740,14 +741,36 @@ describe('the orphan worker says which programme it belongs to', () => {
   });
 
   it('marks no row for an UNCLAIMED run — no coordinator is a different fact from a coordinator elsewhere', () => {
-    // D-2574(c), second half. `claimedBy: null` and "the coordinator is off
-    // this card" are two conditions the operator reads differently; collapsing
-    // them would be the overloaded-silence shape this repo forbids at a seam.
+    // D-2574(c), the `parent === null` clause. `claimedBy: null` and "the
+    // coordinator is off this card" are two conditions the operator reads
+    // differently; collapsing them would be the overloaded-silence shape this
+    // repo forbids at a seam.
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     const unclaimed = runFor({ id: 14, sessionId: 'demo-still-cove', claimedBy: null });
     const { container } = render(
       <ProjectCard group={g} runs={[unclaimed]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-crossing')).toBeNull();
+  });
+
+  it('compares the crossing against the CARD\'s own project, not the run\'s (D-2576)', () => {
+    // Every other fixture in this file sets `run.project` equal to
+    // `group.project`, which is why this comparison shipped unwitnessed —
+    // Task 7's `abroad` list is the reason it stops being safe to assume.
+    // Here the run's OWN project ('other') equals its `homeProject`, so a
+    // comparison against `run.project` would read this as measured sameness
+    // and stay silent; a comparison against `group.project` ('demo') reads it
+    // as a genuine crossing and names the home.
+    const g = grp({ project: 'demo', sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const abroadRun = runFor({
+      id: 15, sessionId: 'demo-still-cove', claimedBy: 'off-card-coordinator',
+      project: 'other', homeProject: 'other',
+    });
+    const { container } = render(
+      <ProjectCard group={g} runs={[abroadRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing');
+    expect(marker).not.toBeNull();
+    expect(marker!.textContent).toContain('home other');
   });
 });
