@@ -844,8 +844,9 @@ diverge from reported tests.
 6. **D-2619 state-preservation pin:** make the `state === 'malformed'` branch return `API_ERROR_TEXT['pool-unreadable']!`. Expected red only in the distinct-state test: unreadable copy does not match `/invalid pool name/i`. Restore by exact inverse.
 7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red in the absent-name fallback test because the static generic sentence changed. Restore by exact inverse.
 8. **D-2621 name-aware pin:** delete only the pre-map `code === 'pool-mismatch'` branch. Expected red only in `names both pools in a measured mismatch without promising a control`: the generic fallback does not match `/pool-b/`; all generic fallback assertions remain green. Restore the branch by exact inverse.
-9. **D-2621 string-type pin:** replace both `typeof ... === 'string'` checks with truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-b' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
-10. **D-2621 code-gate pin:** widen `if (code === 'pool-mismatch')` to `if (code)`. Expected red only in `does not interpolate pool fields for a different unmapped code`: `some-other-code` is replaced by the pool-name sentence. Restore by exact inverse.
+9. **D-2621 account-name type pin:** replace only `typeof accountPool === 'string'` with account-side truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-b' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
+10. **D-2621 project-name type pin:** replace only `typeof projectPool === 'string'` with project-side truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-a' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
+11. **D-2621 code-gate pin:** widen `if (code === 'pool-mismatch')` to `if (code)`. Expected red only in `does not interpolate pool fields for a different unmapped code`: `some-other-code` is replaced by the pool-name sentence. Restore by exact inverse.
 
 - [ ] **Step 7: Commit**
 
@@ -3427,11 +3428,12 @@ deviation found while executing this plan is allocated in its own call at the mo
   strings, return a sentence naming both and promising no control. If either
   field is absent or non-string, fall through unchanged to D-2620's static
   sentence so older servers permit rather than print `undefined` or crash.
-  Tests pin both paths, reject truthy non-string names, and prove other error
-  codes cannot enter this branch. Deleting only the name-aware branch must red
-  the with-names assertion while the static fallback remains green; widening
-  string checks to truthiness and widening the code gate must each red their own
-  new assertion. Restore every mutant by exact inverse.
+  Tests pin both paths, reject truthy non-string names independently on each
+  side, and prove other error codes cannot enter this branch. Deleting only the
+  name-aware branch must red the with-names assertion while the static fallback
+  remains green; widening either one string check to truthiness and widening the
+  code gate must each red their own assertion. Restore every mutant by exact
+  inverse.
 
 - **D-2615 — Task 3's combined persistence mutant must be null-safe at store
   bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown

@@ -922,6 +922,12 @@ describe('account pools', () => {
       accountPool: { name: 'pool-b' },
       projectPool: 'pool-a',
     }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+      projectPool: { name: 'pool-a' },
+    }))).toBe(generic);
   });
 
   it('does not interpolate pool fields for a different unmapped code', () => {
