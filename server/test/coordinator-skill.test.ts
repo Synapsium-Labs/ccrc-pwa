@@ -1695,7 +1695,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     const historical = flat(readFileSync(path.join(
       root, 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md'), 'utf8'));
     expect(historical).toContain(flat(
-      'the SKILL gains the rule "before dispatching a consumer wave, GET /api/runs and read the producer run\'s state; not `done` → do not dispatch"'));
+      'the SKILL once gained the rule "before dispatching a consumer wave, GET /api/runs and read the producer run\'s state; not `done` → do not dispatch"'));
     expect(historical).toContain(flat('**Operational correction, 2026-09-12.**'));
     expect(historical).toContain(flat(
       'open the consumer run, successfully close the producer, then run `ccrc-api runs list --closed 1`'));
