@@ -197,7 +197,7 @@ describe('ccrc: dispatch and usage', () => {
 
   // ── install's ARGUMENT surface ──────────────────────────────────────────
   // The two halves of the flag-ful-verb rule (`cmd_wrappers`' loop,
-  // ccd/ccrc:1040-1048), pinned here beside the other dispatch tests rather
+  // ccd/ccrc:1144-1152), pinned here beside the other dispatch tests rather
   // than in the install suite: neither of these reaches a step function, so
   // neither needs — or may have — a shipped tree to converge from. What they
   // are about is the DISPATCHER, which is this file's subject.

@@ -78,7 +78,7 @@ describe('ws-rm writes an intent/done pair sharing one tx', () => {
 
   // `branchDeleted` IS TOP-LEVEL, NEVER INSIDE `meas` — a second defect this
   // task's brief shipped with, caught the same way as the `gc-prune` one: by
-  // running it. `_lc_json`'s own `TOP` tuple (ccd:1331) is
+  // running it. `_lc_json`'s own `TOP` tuple (ccd:1449) is
   // `("detail", "refusal", "verb", "branchDeleted")` — the identical shape
   // `lifecycleHelpers.ts`'s `refusalsOf` already documents for `refusal` and
   // `detail` ("TOP-LEVEL on the wire, never inside `meas`"). Reading through
@@ -153,13 +153,13 @@ describe('forget writes an intent/done pair', () => {
 
 describe('ws-gc --prune writes a pair per destroyed row', () => {
   // ACT IS `destroy`, NOT `gc-prune` — a defect in this task's own brief,
-  // caught by running it: `_LC_ACTS` (ccd:842-844) and L0's `LifecycleAct`
+  // caught by running it: `_LC_ACTS` (ccd:868-870) and L0's `LifecycleAct`
   // (shared/api.ts:3396) are a CLOSED, cross-checked vocabulary with no
   // `gc-prune` member, and L0's own doc comment says why — `destroy` is
   // shared by `ws-rm` and `ws-gc --prune` on purpose ("a reader asking what
   // destroyed this must not have to know which ran"); `verb: ws-gc` is what
   // tells the two apart. Passing `gc-prune` silently degrades every event to
-  // `act: unknown, badact: gc-prune` (`_lc_emit`, ccd:1418-1419) — invisible
+  // `act: unknown, badact: gc-prune` (`_lc_emit`, ccd:1536-1537) — invisible
   // to `eventsOf`, which filters by `act`. `lifecycle-vocabulary.test.ts`'s
   // own instruction is explicit: "If it goes red on the SET, fix ccd — never
   // LIFECYCLE_ACTS." So ccd was fixed, not the vocabulary.
@@ -179,10 +179,10 @@ describe('ws-gc --prune writes a pair per destroyed row', () => {
   });
 
   // FIX ROUND 1(b). `cmd_ws_gc --prune`'s row loop (`while … done <<< "$rows"`,
-  // ccd:8448-8455) is NOT a subshell, so a real run calls `_ws_gc_prune_row` —
+  // ccd:8771-8778) is NOT a subshell, so a real run calls `_ws_gc_prune_row` —
   // and therefore `_lc_tx` — more than once in ONE process. `_lc_tx`'s own
   // uniqueness rests on a fresh `$BASHPID` per `$(...)` fork plus a
-  // nanosecond clock read (ccd:868-880), which is structurally safe, but this
+  // nanosecond clock read (ccd:894-906), which is structurally safe, but this
   // plan keeps disproving "structurally safe" claims by measurement. Two
   // rows, one process, two independent pairs, and neither pair may borrow the
   // other's tx.

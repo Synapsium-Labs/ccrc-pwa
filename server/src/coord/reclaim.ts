@@ -20,7 +20,7 @@ import { lifecycleIsDead, sessionLifecycle } from '../../../shared/api.js';
  * ever be tested through HTTP — at the granularity of the ANSWER, never of the
  * RUNG — and the rungs are the guard.
  *
- * HOLDS NO HANDLE. `single-definition.test.ts:402-437` licenses five files in
+ * HOLDS NO HANDLE. `single-definition.test.ts:403-438` licenses five files in
  * this directory to touch the coordination database; this is not one of them, so
  * the whole reclaim commit lives in `CoordStore.reclaimProgram` as one
  * transaction and this file only decides whether to call it.

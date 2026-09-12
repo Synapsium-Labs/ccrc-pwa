@@ -17,7 +17,7 @@
 //   * D-292 (was D-B4-19)'s REFUSAL ("is a live main checkout already running here?") is
 //     wrapper-INDEPENDENT — `project` + `workspace === null` + alive.
 //     `cmd_swap` rewrites a session's `wrapper` and keeps its id
-//     (`ccd/ccd:7307`) while `cmd_start` collides on the id, so a
+//     (`ccd/ccd:7630`) while `cmd_start` collides on the id, so a
 //     wrapper-scoped refusal misses a real collision and dead-ends the
 //     operator on "not shown yet". It only ever withholds a button, so
 //     over-refusing is the safe direction.
@@ -970,7 +970,7 @@ describe('StartProgramSheet', () => {
 
   // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
   // `cmd_start` would collide with. `cmd_ws_add` writes `project` AND a
-  // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1164+`),
+  // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1282+`),
   // and `useProjectedHome`'s wrapper is the server's own mirror of that same
   // `_ws_least_loaded` (`server/src/limits.ts:96`) — so the projected wrapper
   // is exactly the wrapper workspaces cluster on, and on a box running ~11
@@ -1072,7 +1072,7 @@ describe('StartProgramSheet', () => {
 
   it('never resolves the wait onto a STALE main checkout that pre-dated the create (B-2)', async () => {
     // The B-2 chain end to end: `claude-ccrc-pwa` was swapped to `claude2`
-    // (`ccd/ccd:7307` moves the wrapper, keeps the id) and has since died, so
+    // (`ccd/ccd:7630` moves the wrapper, keeps the id) and has since died, so
     // the refusal skips it and Start is offered. The projection is `claude2`,
     // so `cmd_start` spawns a NEW `claude2-ccrc-pwa` — and the next frame
     // carries both in registry-id sort order, where `'claude-'` sorts BEFORE
@@ -1138,7 +1138,7 @@ describe('StartProgramSheet', () => {
   // OWN just-started session on the ORDINARY path, because `myAttemptRef` was
   // armed only AFTER `await createSession(...)`. The window is seconds, not
   // milliseconds: `cmd_start` writes `$REG/<id>.uuid` and the other fields
-  // then `_spawn`s (`ccd/ccd:7203-7208`), the server lists a session on its
+  // then `_spawn`s (`ccd/ccd:7526-7531`), the server lists a session on its
   // `.uuid` file ALONE (`registry.ts:375`) and reports `idle` as soon as tmux
   // has the id (`fleet.ts:186-190`), and the watcher ticks every 2 s
   // (`watch.ts:424`) while the HTTP call is still blocked in
@@ -1203,8 +1203,8 @@ describe('StartProgramSheet', () => {
 
   // — Re-review of the C1 fix: `cmd_swap` breaks the wrapper↔id link, so the
   // REFUSAL arm cannot be wrapper-scoped. `_reg_set "$id" wrapper "$target"`
-  // (`ccd/ccd:7307`) moves the field and keeps the id; `cmd_start` collides on
-  // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7202-7203`), i.e. on the
+  // (`ccd/ccd:7630`) moves the field and keeps the id; `cmd_start` collides on
+  // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7525-7526`), i.e. on the
   // id. Measured on the live fleet: 5 of 10 main checkouts report a `wrapper`
   // that differs from their own id prefix (`claude-rp-llm` → `wrapper=
   // claude2`). —

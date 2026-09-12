@@ -1221,7 +1221,7 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     // is runId-scoped, and MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays,
     // which a row gated here never gets. Left unparked it stays due at the
     // 15-minute ceiling for ever, and `_ws_slug_new` recycles a purged slug
-    // ("144 per project, recycled by ws-reap", ccd/ccd:3489), so the id can be
+    // ("144 per project, recycled by ws-reap", ccd/ccd:3626), so the id can be
     // re-minted for an unrelated workspace and the lane will type THIS envelope
     // into it — `mail_deliveries` carries no recipient uuid, so nothing
     // downstream can tell the two recipients apart.

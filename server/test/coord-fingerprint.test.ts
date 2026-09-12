@@ -346,7 +346,7 @@ describe('verifyDone — the mismatch table', () => {
   it('rejects a claim naming the wrong PR number for a really-bound PR (finding 3)', async () => {
     // `FIXED_CLAIM.prNumber` is `null` in every row of the table above — this
     // re-measured fact has no row of its own there. `cmd_pr_state`'s own
-    // comment (`ccd/ccd:2389`) describes exactly this event: a worker whose
+    // comment (`ccd/ccd:2512`) describes exactly this event: a worker whose
     // claim still names an earlier PR number after the branch has rebound.
     const root = project(TIP, null);
     const deps = fingerprintDeps(runnerFor('open'), root); // the real, bound PR is #42

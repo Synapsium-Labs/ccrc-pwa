@@ -43,7 +43,7 @@ const measured = (l: AccountLimits | undefined): number | null =>
 /**
  * The account a new workspace would land on, and its pressure score.
  *
- * A mirror of ccd's `_ws_least_loaded` (ccd:2451), which is the authority
+ * A mirror of ccd's `_ws_least_loaded` (ccd:2574), which is the authority
  * — it runs at `ws-add` time and writes `home`. This only PREDICTS it, so the
  * `+` can name the account and its headroom before the tap rather than leave a
  * workspace to present as a stalled session on an exhausted account.

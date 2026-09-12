@@ -76,7 +76,7 @@ const sizeText = (bytes: number | null | undefined, unknown = 'unknown'): string
  *  half still fabricated `0` and `clips[].bytes` was `number` on the wire, so
  *  every branch below was reachable only from a fixture that went past the
  *  compile-time type — disclosed as such at the time. `_ws_clip_manifest`
- *  (ccd:3106/3109) now emits `null` for a clip it could not size, and
+ *  (ccd:3229/3109) now emits `null` for a clip it could not size, and
  *  `WsAudit['clips'][number]['bytes']` is `number | null`, so the unmeasured
  *  branches are reachable from a real audit and the fixtures no longer have to
  *  lie to reach them. The earlier disclosure worried the producer might land
@@ -191,7 +191,7 @@ export function ReapSheet({
   // Second, independent gate on the same finding, and the one that does not
   // depend on any reasoning about ordering: an audit is rendered ONLY if the
   // audit itself says it is about this session. `WsAudit.id` is ccd's own
-  // first field (`_ws_audit`, ccd:2541) and the first line of the
+  // first field (`_ws_audit`, ccd:2664) and the first line of the
   // fingerprint the token hashes, so it is the response's own statement of
   // what was measured — not a label this component attached to it.
   //
@@ -212,8 +212,8 @@ export function ReapSheet({
   // The residual: the count of noise-filtered secret-shaped matches was
   // rendered beside an ignored list capped at three, and a filtered entry is
   // precisely the one that sorts last. ccd emits `ignored` sorted
-  // sensitive-first then bytes-descending (ccd:2561) and a noise-filtered
-  // match leaves the entry's `sensitive` at 0 (ccd:1996-2000), so its NAME sat
+  // sensitive-first then bytes-descending (ccd:2684) and a noise-filtered
+  // match leaves the entry's `sensitive` at 0 (ccd:2119-2123), so its NAME sat
   // below the cap while the NUMBER claiming it sat above — "excluded must
   // never mean invisible" held for the count and failed for the name, which is
   // the only thing a human can actually judge a wrong filter by.

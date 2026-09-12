@@ -597,7 +597,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '    fi',
     '    exit 0 ;;',
     // `restart` is the line `_inst_enable` gained in fix round 1 — deploy's
-    // own (deploy.sh:719-721), and the one that makes a re-run replace the
+    // own (deploy.sh:724-726), and the one that makes a re-run replace the
     // RUNNING server rather than only the files it runs from. Contained the
     // same way as `enable`: recorded, answered, never a real systemctl.
     '  restart)',
@@ -1104,7 +1104,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // `deploy/ccrc-mail.token` are gitignored files carrying live tokens, and
     // rsync's `-a` would copy them at whatever mode the checkout has (0644
     // under a plain umask) into a second, unmanaged location — deploy.sh's own
-    // excludes exist for exactly that (`:319-326`).
+    // excludes exist for exactly that (`:335-342`).
     const home = freshBox('ccrc-install-excludes-');
     mkdirSync(treeFile(home, 'server/node_modules/leftpad'), { recursive: true });
     writeFileSync(treeFile(home, 'server/node_modules/leftpad/index.js'), 'module.exports = 1\n');
@@ -1515,7 +1515,7 @@ describe('ccrc install: a box with no node', () => {
   // interpreter's absence arrives as the generator "failing", i.e. as "your
   // config does not validate": a missing DEPENDENCY and a corrupt FILE
   // collapsed into one signal, which is the overloaded-seam mistake this
-  // file's own header bans and which `cmd_wrappers` (ccd/ccrc:1080-1086)
+  // file's own header bans and which `cmd_wrappers` (ccd/ccrc:1184-1190)
   // already refuses in exactly this shape, ten lines up.
   it('refuses by name, before touching anything, and does not blame the config', () => {
     const home = freshBox('ccrc-install-no-node-');
@@ -1811,7 +1811,7 @@ describe('ccrc install: the executables and files it installs', () => {
     // box installing itself — and two generators of one artifact is a drift
     // waiting to happen: a box whose launcher came from the older of them
     // fails in a way neither generator's own tests can see. Extract deploy's
-    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1470-1496`
+    // heredoc (the mechanics `agent/test/deploy-verify.test.ts:1471-1497`
     // uses) and compare it to the bytes THIS verb actually installed.
     //
     // It also means the behaviour tests deploy-verify already runs against
@@ -2445,7 +2445,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // idiom), which is why it is not folded into the `_ccrc_die`-guarded
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
-      // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
+      // THE RESTART, in deploy's own position (deploy.sh:724-726): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
       // pinned to the dist it started with. Without this line the SECOND
@@ -3338,7 +3338,7 @@ describe('ccrc install: running the WHOLE verb twice', () => {
     // 4. …except the stamp, which measures THIS run and must not be stale.
     //    MEASURED BY MTIME, not by content, and the difference is a real flake
     //    this assertion had: `builtAt` is `date -u +%Y-%m-%dT%H:%M:%SZ`
-    //    (ccrc:2163) — SECOND resolution — while `sha`, `ref` and `dirty` are
+    //    (ccrc:2274) — SECOND resolution — while `sha`, `ref` and `dirty` are
     //    identical across two runs of one checkout. Two installs completing
     //    inside the same wall-clock second therefore produce a byte-identical
     //    stamp, and a content comparison calls that a failure to rewrite. It is

@@ -243,7 +243,7 @@ export function parseJournalLine(line: string): JournalRow {
     // UNIX user — identity there is attribution, not authentication
     // (`CLAUDE.md`) — so any session can append a line, and this parser is
     // the boundary that has to re-establish the invariant the writer
-    // enforces (`ccd/ccd:1417-1422`'s `_lc_emit`, which only ever sets
+    // enforces (`ccd/ccd:1535-1540`'s `_lc_emit`, which only ever sets
     // `badact`/`badoutcome` for a token that FAILED its vocabulary match,
     // never alongside a matched one) rather than trust it off the wire.
     // ONE condition now: `badact` only exists to answer "what did `act`
@@ -254,7 +254,7 @@ export function parseJournalLine(line: string): JournalRow {
     outcome,
     // `badoutcome` — F1: previously dropped entirely (no field on
     // `JournalRow`, `o['badoutcome']` never read), even though ccd writes it
-    // today (`ccd/ccd:1351`, `:1417-1422`) and `LifecycleEvent.badoutcome`
+    // today (`ccd/ccd:1469`, `:1417-1422`) and `LifecycleEvent.badoutcome`
     // (`shared/api.ts:4007-4010`) already declares it with the identical
     // invariant `badact` has: "null whenever `outcome` is not
     // `LC_OUTCOME_UNKNOWN`... neither sends a reader to `raw` for it."

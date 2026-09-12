@@ -137,7 +137,7 @@ export function spawnVerdictChip(session: FleetSession): SpawnChip | null {
  *    an ordinary spawn currently spends up to four minutes wearing. Propagating
  *    it to a second surface works against the build that renders that window.
  *  - It could not be TRUE there in the way it is here. `cmd_ws_add` writes the
- *    claim (`_reg_claim`, `ccd/ccd:2708`) BEFORE the settle it then blocks in,
+ *    claim (`_reg_claim`, `ccd/ccd:2831`) BEFORE the settle it then blocks in,
  *    and a run learns its `sessionId` only from the registry diff AFTER
  *    `ws-add` returns (`coord/dispatch.ts`, the fresh-spawn arm) — so at the
  *    first instant a run row can look a session up the claim is already

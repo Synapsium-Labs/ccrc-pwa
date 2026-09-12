@@ -145,7 +145,7 @@ function save(acks: Acks): Acks {
 }
 
 /** The ack key for the fleet-wide notification feed (`/mail`). NAMESPACED
- *  with a colon, which ccd's own id regex (`^[A-Za-z0-9._-]+$`, ccd:1671)
+ *  with a colon, which ccd's own id regex (`^[A-Za-z0-9._-]+$`, ccd:1794)
  *  forbids in a session id — so this can never collide with one, and `prune`
  *  below can tell the two apart by SHAPE, never by an allowlist it would have
  *  to maintain by hand. */

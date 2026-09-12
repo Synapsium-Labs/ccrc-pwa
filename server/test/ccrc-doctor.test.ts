@@ -62,7 +62,7 @@ const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
 /** bash's absolute path, resolved ONCE under this process's real PATH. Every
  *  spawn below hands the child a PATH built only from fixture directories, and
  *  libuv resolves the executable against the CHILD's environment — so spawning
- *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:226 uses. */
+ *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:229 uses. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 const realPath = (name: string): string => {
@@ -563,7 +563,7 @@ function writeRcFlag(home: string, text: string): void {
  *  does for a unit that is not running. SYSTEM-scope `is-active <unit>` (no
  *  `--user`) answers from `<home>/fixture-system-unit-<unit>` — a SEPARATE
  *  namespace on purpose: the caddy check asks in system scope (caddy binds
- *  :80/:443 as root and is nobody's user unit), and a stub that answered both
+ *  :80/:471 as root and is nobody's user unit), and a stub that answered both
  *  scopes from one file could not catch a check asking in the wrong one (a
  *  `--user is-active caddy` reads the OTHER namespace, finds nothing, and the
  *  PASS case reds). Any other argv is a loud failure — a status verb that
@@ -741,7 +741,7 @@ function endDateFixture(days: number): string {
 
 /** openssl, answering the ONLY two argv shapes the cert check sends — both
  *  hops of its pipeline. `s_client` answers a handshake marker (or, with
- *  `<home>/fixture-tls-refused` planted, fails the way a closed :443 really
+ *  `<home>/fixture-tls-refused` planted, fails the way a closed :471 really
  *  does); `x509 -noout -enddate` answers `notAfter=` from
  *  `<home>/fixture-cert-enddate`. Every argv is logged to
  *  `<home>/openssl-calls`, so a test can prove the SNI host and the loopback
@@ -756,7 +756,7 @@ function stubOpenssl(home: string): void {
     '    echo "connect:errno=111" >&2; exit 1',
     '  fi',
     // Per-address refusal — the caddy-binds-one-interface topology (the live
-    // 2026-08-21 ceremony: tailscaled owns the tailnet IP's :443, caddy binds
+    // 2026-08-21 ceremony: tailscaled owns the tailnet IP's :471, caddy binds
     // the public IP only, loopback refuses).
     '  if [ -f "$HOME/fixture-tls-refused-addrs" ]; then',
     '    while IFS= read -r bad; do',
@@ -807,7 +807,7 @@ function stubHostname(home: string): void {
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
- *  file each (ccd:8526). */
+ *  file each (ccd:8849). */
 function writeSessions(home: string, n: number): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -1085,7 +1085,7 @@ function tableNames(): string[] {
   if (r.status !== 0) throw new Error(`could not read the check table: ${r.stderr}`);
   const names = (r.stdout ?? '').split('\n').filter(Boolean);
   // A scan over an empty list passes everything (the discipline
-  // single-definition.test.ts:50-55 states outright). `"${arr[@]}"` on an
+  // single-definition.test.ts:51-56 states outright). `"${arr[@]}"` on an
   // UNSET array is not an error under `set -u` in bash 4.4+, so a missing or
   // renamed table would otherwise return [] and quietly disarm every caller —
   // measured: it did, in this suite's own red run.
@@ -2835,7 +2835,7 @@ describe('ccrc doctor: wrappers', () => {
     expect(lines[hardIdx]).toContain('acct-a');
     expect(lines[hardIdx]).toMatch(/\.somewhere-else.*\.acct-a/);
     // The DISAGREEMENT remedy stays the verbatim roster sentence (the pin at
-    // ccrc-doctor-checks:1011 / the "keeps a soft finding OFF the FAIL line"
+    // ccrc-doctor-checks:1012 / the "keeps a soft finding OFF the FAIL line"
     // test above) — the split must not have touched wr_hard's own wording.
     expect(lines[hardIdx + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
     expect(r.code).toBe(1);
@@ -5067,7 +5067,7 @@ describe('ccrc doctor: cert', () => {
   });
 
   // Live finding, 2026-08-21 ceremony: caddy CAN bind one interface only —
-  // tailscaled held the tailnet IP's :443, so caddy took the public IP and
+  // tailscaled held the tailnet IP's :471, so caddy took the public IP and
   // loopback refused. A loopback-only probe FAILed a box that was serving a
   // perfectly good certificate. The probe now walks loopback first, then the
   // box's own addresses (`hostname -I`, the name check's source), and

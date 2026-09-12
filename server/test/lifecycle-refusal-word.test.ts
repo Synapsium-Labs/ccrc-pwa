@@ -9,7 +9,7 @@
 // no stdout and no exit contract — it produces no `verdict`/`refused` JSON for
 // those regexes to see. A SENTENCES entry for a journal-only token would
 // therefore red that test's stale-copy direction, and the only fixes would be
-// deleting copy or weakening an approved mechanism (`ccd:2121-2128` records
+// deleting copy or weakening an approved mechanism (`ccd:2244-2251` records
 // the same argument being had once already). D15 rules it: no SENTENCES entry;
 // journal-only tokens get their word here.
 import { describe, it, expect } from 'vitest';

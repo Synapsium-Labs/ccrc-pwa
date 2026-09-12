@@ -1275,7 +1275,7 @@ _ccrc_usage_die() { echo "$PROG: unknown argument: $1" >&2; usage >&2; exit 2; }
 
 # cmd_version / _box_build_fields — what THIS box is running, per its own build
 # stamp, never a guess. Same three-way discipline as `ccd version`
-# (ccd/ccd:1946-1969):
+# (ccd/ccd:2069-2092):
 #   - no ~/.ccrc/build.json  -> a dev checkout, or a box `ccrc install` never
 #     touched. "unstamped" at exit 0 is the honest ANSWER here, not an error.
 #   - a stamp that parses    -> print the facts.
@@ -1835,7 +1835,7 @@ _box_role() {
 }
 
 # How many ccd sessions this box holds, counted the way ccd itself counts them:
-# one `<id>.uuid` file per session in the flat-file registry (ccd:8499). No
+# one `<id>.uuid` file per session in the flat-file registry (ccd:8822). No
 # `ls`, no `find` — a glob and an array length, so this answers on a box with no
 # coreutils on PATH.
 _box_sessions() {
@@ -3145,7 +3145,7 @@ cmd_passwd() {
   local p1="" p2=""
   printf '%s\n' "$PROG: setting the PWA passphrase in $target (nothing is echoed; Ctrl-C aborts)" >&2
   # `IFS=` ON BOTH READS (D-142), exactly as every other `read` in this file has it
-  # (:473, :932, :2008) — and here it is the difference between a working box
+  # (:499, :996, :2119) — and here it is the difference between a working box
   # and a silent lockout. Without it bash splits on $IFS and hands back the
   # value with leading and trailing whitespace STRIPPED: measured,
   # `"  spaced pass  "` arrives as `"spaced pass"`. Both entries are trimmed
@@ -3369,8 +3369,8 @@ cmd_expose() {
   fi
 
   # ── the caddy bind address (D-163) ────────────────────────────────────
-  # Stock caddy binds :80/:443 on EVERY address. `tailscale serve` — a path
-  # ccrc's own README documents — already holds :443 on the tailnet address,
+  # Stock caddy binds :80/:469 on EVERY address. `tailscale serve` — a path
+  # ccrc's own README documents — already holds :469 on the tailnet address,
   # so on a box running both, caddy dies at start with EADDRINUSE. The cure is
   # one Caddyfile directive, and until now it was a HAND EDIT to a file this
   # verb regenerates: measured live 2026-08-21, added by hand, and standing
@@ -3413,7 +3413,7 @@ cmd_expose() {
   _exp_landing "$origin" "$sub"
 }
 
-# ── _exp_443_holders — who already owns :443, in the operator's words ─────
+# ── _exp_443_holders — who already owns :469, in the operator's words ─────
 # Read-only, best-effort, and SILENT when it cannot tell: `ss` is not on every
 # box, and a bind prompt that invented a holder would be worse than one that
 # admits it looked. Prints a comma-joined list of listening addresses, or
@@ -7284,7 +7284,7 @@ cmd_account() {
 # it destroys an operator's config, the other it leaves a stale bash roster
 # describing accounts the box no longer has.
 cmd_install() {
-  # `cmd_wrappers`' loop (:1040-1048), minus the three flags it has and this
+  # `cmd_wrappers`' loop (:1144-1152), minus the three flags it has and this
   # verb does not have yet. `-h`/`--help` prints usage at exit 0 rather than
   # being the usage error it is for `cmd_version`: this is a verb that CHANGES
   # THE BOX, so "what will this do to my box" must be answerable without
@@ -7976,7 +7976,7 @@ _inst_keep_aside() {   # <src> <dest> — copy a PERSONAL file aside before repl
 # generators of one artifact is a drift waiting to happen — a box whose
 # launcher came from the older of them fails in a way neither generator's own
 # tests can see — so the agreement is a pin rather than a convention. It also
-# means the BEHAVIOUR tests `agent/test/deploy-verify.test.ts:1478-1511` already
+# means the BEHAVIOUR tests `agent/test/deploy-verify.test.ts:1479-1512` already
 # run against those bytes (argv forwarded, exit code passed through, a by-name
 # refusal when `~/ccrc/ccd/ccrc` is gone) hold for this copy without being
 # written twice.
@@ -8527,7 +8527,7 @@ _inst_enable() {
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-graph-sweep.timer \
     || echo "install: graphify: could not enable ccd-graph-sweep.timer — run: systemctl --user enable --now ccd-graph-sweep.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
-  # `deploy.sh:719-721` has this line between the enable and the verify, and
+  # `deploy.sh:724-726` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
   # path this verb's own promise ("re-running converges") points every operator
   # at: `enable --now` on an already-active unit is a no-op, and
@@ -8948,7 +8948,7 @@ _inst_graphify_skill() {
 # the phrase — `_inst_graph_hooks_off`'s chained-content refusal, the one other
 # place the tree says it — not the spec's em-dashed one; D-1247 records the
 # divergence, and the half-block test asserts the semicolon. Cited BY NAME, not
-# by line (D-1343): the plan prescribed `:5411 and :5249` verbatim, but :5249
+# by line (D-1343): the plan prescribed `:9029 and :8867` verbatim, but :8867
 # was the converge's unmarked-`## graphify` refusal, which THIS step's commit
 # deletes, and every number in this file moves the moment a line is added above
 # it. This step stays in the tree afterwards exactly as that one does.
@@ -9346,7 +9346,7 @@ _upd_fetch() {   # $1 = pinned tag, or "" for the newest release
   echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"
 }
 
-# Deploy's backup set (deploy.sh:363-369 agent lane, :762-766 server lane),
+# Deploy's backup set (deploy.sh:363-369 agent lane, :788-792 server lane),
 # both lanes' union because a single box may be both, each entry guarded —
 # absence is the ordinary state of the role a box is not. coord.db goes
 # through the shipped backup-coord.mjs (VACUUM INTO — a cp of a WAL-mode db
@@ -9410,7 +9410,7 @@ _upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is or
 # the atomic install above, each live supervisor keeps executing the
 # PRE-update ccd (the old inode) until restarted, so auto-swap, auto-compact
 # and uuid-sync run yesterday's logic for days. deploy.sh's sweep
-# (deploy.sh:662-673) exists for exactly this, and this function is its
+# (deploy.sh:667-678) exists for exactly this, and this function is its
 # in-process twin — the operator ruling of 2026-08-21 (R1) grants BOTH the
 # one scoped exception to CLAUDE.md's never-touch rule, and a source pin in
 # `server/test/single-definition.test.ts` holds the two implementations to

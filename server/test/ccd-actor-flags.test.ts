@@ -12,7 +12,7 @@
 // prose turned out to be wrong):
 //
 //   1. GIVENNESS IS NOT SOMETHING `_lc_surface_norm` ITSELF DISTINGUISHES.
-//      Measured against wave 3 as shipped (`ccd:1511`) and against its own
+//      Measured against wave 3 as shipped (`ccd:1629`) and against its own
 //      authoring brief (task-16-brief.md's own pin: `_lc_surface_norm ""` ->
 //      `''`, `_lc_surface_norm` with no argument -> `''`): a call with NO
 //      argument and a call with an EXPLICIT empty-string argument both answer
@@ -34,13 +34,13 @@
 // this task's own Interfaces section describes `_lc_dec_ok` as "exit 0 iff
 // <value> is non-blank after a whitespace strip AND at most _LC_DEC_MAX
 // bytes" — but that is not what wave 3 shipped, and not what wave 3 was ever
-// asked to ship: `_lc_dec_ok`'s own doc comment (`ccd:1527`) is length-only
+// asked to ship: `_lc_dec_ok`'s own doc comment (`ccd:1645`) is length-only
 // ("0 iff it fits _LC_DEC_MAX *BYTES*. Prints nothing."), and its authoring
 // brief (task-16-brief.md line 26) specifies the same length-only contract,
 // with no blank guard. Measured: `_lc_dec_ok ''` and `_lc_dec_ok '   '` both
-// return 0 today. `cmd_ws_hold` (`ccd:3656`) has its OWN, separate
+// return 0 today. `cmd_ws_hold` (`ccd:3836`) has its OWN, separate
 // `[[ -n "${reason//[[:space:]]/}" ]] || die` guard that never routes through
-// `_lc_dec_ok` at all; `ws-rm`/`forget` (`ccd:2835`, `ccd:11208`) call ONLY
+// `_lc_dec_ok` at all; `ws-rm`/`forget` (`ccd:2958`, `ccd:11531`) call ONLY
 // `_lc_dec_ok`, so today `--reason ''` on either of those two verbs is
 // ACCEPTED, not refused. This is pinned below as what IS true — a future
 // change that adds a blank guard to `_lc_dec_ok` (or to each wave-5 verb,
@@ -78,7 +78,7 @@ const shFail = (snippet: string): { code: number; stderr: string; stdout: string
  *  session` / `not a workspace` and reach their own bodies — INCLUDING a real
  *  directory at `workdir` on disk, not just registry fields: fix-round-1
  *  finding 1 measured that `cmd_ws_archive` refuses "worktree is gone"
- *  (ccd:3912) before its own body when the directory is absent, which the
+ *  (ccd:4138) before its own body when the directory is absent, which the
  *  doc comment above already promised callers would not have to work around
  *  themselves.
  *
@@ -124,7 +124,7 @@ describe('_lc_surface_norm — ccd:1523 closed set, spelled once more and never 
   });
 
   it('never dies — it is called inside $( ), where a die kills only the subshell', () => {
-    // `ccd-die-containment.test.ts:350` is the standing guard; this is the
+    // `ccd-die-containment.test.ts:360` is the standing guard; this is the
     // behavioural half for the one helper wave 5 wraps in a substitution.
     expect(h.sh(`x=$(_lc_surface_norm zzz); printf 'AFTER:%s' "$x"`)).toBe('AFTER:unknown');
   });
@@ -252,7 +252,7 @@ describe('ws-archive accepts the dec flags in any position', () => {
 
   it('refuses a --surface with no value rather than looping forever', () => {
     // `shift 2` past the end of argv FAILS under `set -uo pipefail` with no
-    // `-e`: it shifts nothing and the loop never terminates (ccd:11154-11156 says
+    // `-e`: it shifts nothing and the loop never terminates (ccd:11477-11479 says
     // so about `cmd_stop`'s identical loop).
     const id = seedWorkspace();
     const r = shFail(`${ARCHIVE_STUBS} cmd_ws_archive --session ${id} --surface`);
@@ -280,7 +280,7 @@ describe('ws-archive accepts the dec flags in any position', () => {
 });
 
 /** Stubs enough of `cmd_ws_restore` for the flag-parsing/refusal cases below,
- *  none of which reach past the reap-lock acquisition (`ccd:4455`) — every
+ *  none of which reach past the reap-lock acquisition (`ccd:4681`) — every
  *  case here either refuses inside the wave-5 loop or refuses at the
  *  pre-existing `no-such-session` check a few lines later, both well above
  *  the lock. `flock` is stubbed because the real one needs a lock FILE this
@@ -304,10 +304,10 @@ describe('ws-restore takes the same three flags, and refuses through _lc_refuse'
   });
 
   it('refuses a blank --reason, naming the flag — the same non-blank check as --actor', () => {
-    // `_lc_dec_ok` is length-only (D-210, ccd:1527) and returns 0 for '', so
+    // `_lc_dec_ok` is length-only (D-210, ccd:1645) and returns 0 for '', so
     // it cannot be the blank guard on its own — this verb needs its OWN
     // non-blank check ahead of `_lc_dec_ok`, mirroring `--actor` above and
-    // `cmd_ws_hold` (ccd:3656). Not in the brief's own step-2 sample, added
+    // `cmd_ws_hold` (ccd:3836). Not in the brief's own step-2 sample, added
     // here because the brief's --actor check and this one are one guard
     // copied twice; a mutant on one without a test on the other would ship a
     // silent asymmetry between the two flags.
@@ -453,7 +453,7 @@ describe('ws-hold keeps ONE reason — its own', () => {
 
   it('still refuses a whitespace-only hold reason — ccd:3656 is untouched', () => {
     // Line re-measured against THIS task's own edit, not copied from the
-    // brief (its `ccd:2537` predates waves 2-3 and no longer points here —
+    // brief (its `ccd:2660` predates waves 2-3 and no longer points here —
     // RULE 2).
     const id = seedWorkspace();
     const r = shFail(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason '   ' --actor 'device:iPhone'`);
@@ -787,13 +787,13 @@ describe('the declared triple reaches the journal', () => {
 });
 
 // Fix round 1, finding MEDIUM: the omit-only-the-failed-field exception at
-// ccd:4350/ccd:4355 (`cmd_ws_restore`'s actor-length and reason-length
+// ccd:4576/ccd:4581 (`cmd_ws_restore`'s actor-length and reason-length
 // refusals) had ZERO coverage — the reviewer reintroduced `dec.actor` onto
 // the actor-length refusal and all 99 relevant tests stayed green. This
 // describe is the guard `_lc_json`'s cap-ladder comment alone could not be.
 describe("ws-restore's length refusals omit ONLY the field that failed its own cap", () => {
   const STUBS = `tmux() { return 1; };`;
-  // `_LC_DEC_MAX` is 512 BYTES (ccd:823); 513 plain-ASCII characters is 513
+  // `_LC_DEC_MAX` is 512 BYTES (ccd:849); 513 plain-ASCII characters is 513
   // bytes, one over — the same shape the `_lc_dec_ok` describe above uses.
   const OVER_CAP = 'a'.repeat(513);
 
@@ -868,7 +868,7 @@ describe("ws-restore's length/blank refusals hold for MULTIPLE offending fields,
     // The reverse combination, kept as a boundary check rather than a repeat
     // of the leak proof above: it already passes pre-fix, because `_lc_json`
     // drops any key whose value is the empty string ("AN EMPTY VALUE OMITS
-    // ITS KEY", ccd:1312) — a blank `lc_reason` was never something for a
+    // ITS KEY", ccd:1430) — a blank `lc_reason` was never something for a
     // sibling refusal to leak, only a NON-EMPTY unchecked value is. Kept so a
     // future change to that empty-omits rule cannot silently start leaking
     // this combination without a red test naming it.
@@ -887,7 +887,7 @@ describe("ws-restore's length/blank refusals hold for MULTIPLE offending fields,
 // prove the property on the POST-LOOP validation ladder only. `cmd_ws_restore`
 // has a SECOND family of refusals that can carry a `dec.*` field —
 // the ARITY ("needs a value") refusals inside the flag-parsing loop itself
-// (`ccd:4324` onward) — and they were leaking too: `lc_actor`/`lc_reason`
+// (`ccd:4550` onward) — and they were leaking too: `lc_actor`/`lc_reason`
 // hold whatever an EARLIER `--actor`/`--reason` occurrence already assigned,
 // UNVALIDATED, when a LATER flag's missing value triggers one of these mid-
 // loop. Measured pre-fix: `cmd_ws_restore --session <id> --actor <600B>

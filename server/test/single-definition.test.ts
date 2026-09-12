@@ -328,8 +328,8 @@ describe('extraction finding — one path to the ccd script', () => {
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
   // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
-  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:61` vs
-  // `:63` on that same tree; `:68` vs `:70` on this one, now that the queue
+  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:62` vs
+  // `:64` on that same tree; `:69` vs `:71` on this one, now that the queue
   // itself hoisted one level further to `index.ts:37`) — had no way to reach.
   // A watcher that built its own would serialise its rename against nothing,
   // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
@@ -458,7 +458,7 @@ describe('Build 7 nouns', () => {
   //
   // NO SELF-MATCH RISK, stated so the next author does not "fix" a hazard that
   // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
-  // and never itself, and `ROOTS` (:32-37) does not include `server/test`. The
+  // and never itself, and `ROOTS` (:33-38) does not include `server/test`. The
   // needles below can therefore be written whole.
   it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
@@ -699,7 +699,7 @@ describe('Build 7 nouns', () => {
 // Same corpus, same argument as the header above — "a comment is a request; a
 // red suite is a mechanism" — one level up from a duplicated VALUE to a
 // duplicated CLAIM. Both cases derive the fact from `server/src` and check the
-// prose against it; neither reads itself, and `ROOTS` (:32-37) contains no test
+// prose against it; neither reads itself, and `ROOTS` (:33-38) contains no test
 // directory, so no needle here can match its own source line.
 describe('store.ts docstrings that describe their own callers', () => {
   const STORE = path.join(ccrcRoot, 'server/src/coord/store.ts');
@@ -2159,7 +2159,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
   });
 
   it('keeps the NARROWING maps module-private, and the RENDERING map exported', () => {
-    // `STOP_SURFACES`' argument (:1140-1148), one level in: with the map
+    // `STOP_SURFACES`' argument (:1215-1223), one level in: with the map
     // unexported, `LIFECYCLE_ACT_MAP[raw]` cannot be written in another file
     // at all, so `isLifecycleAct` is the only narrowing route.
     //

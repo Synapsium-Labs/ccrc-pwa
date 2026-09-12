@@ -18,7 +18,7 @@
 //   * `POST /api/sessions`'s success body is the literal `{ok:true}`
 //     (`server/src/server.ts:1510-1513`, `runCcdOr502`; the route itself is
 //     `:1517-1530`) — no id. `ccd`
-//     computes the id as `${wrapper}-${project}` (`ccd/ccd:1091`, `_id()`)
+//     computes the id as `${wrapper}-${project}` (`ccd/ccd:1209`, `_id()`)
 //     and only echoes it to stdout, which that route discards. Recomputing
 //     the same formula here was REJECTED — a second implementation of a rule
 //     ccd owns is exactly what `useProjectedHome.ts`'s own docstring refuses
@@ -29,7 +29,7 @@
 //     that is the point — see `liveMainCheckoutIn`/`startedSessionFor`, whose
 //     own docstrings carry the argument; do not fold them back into one
 //     predicate.
-//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12117`): a second `start` whose
+//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12440`): a second `start` whose
 //     `_id()` is already `_alive` is a no-op that attaches to the session
 //     already there. A blind kickoff would hand this program to a session
 //     started for something else — the queue does not interrupt it, but it
@@ -79,8 +79,8 @@ export const START_PROGRAM_WAIT_MS = 20_000;
 /** A MAIN CHECKOUT of `project` — not one of its workspaces. The shared half
  *  of both arms below, and the one C1 was about: `wrapper`+`project` alone is
  *  not a main checkout, because `cmd_ws_add` writes BOTH fields onto every
- *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3530`, called
- *  at `ccd/ccd:3707`) that
+ *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3667`, called
+ *  at `ccd/ccd:3887`) that
  *  `useProjectedHome` mirrors exactly (`server/src/limits.ts:96`) — so a
  *  two-field match hits live workers on a box in its normal state.
  *  `FleetSession.workspace` is server-reported and documented "null for a
@@ -93,9 +93,9 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *
  *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
  *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
- *  KEEPS the id (`ccd/ccd:13125`, `_reg_set "$id" wrapper "$target"`), while
+ *  KEEPS the id (`ccd/ccd:13459`, `_reg_set "$id" wrapper "$target"`), while
  *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
- *  (`ccd/ccd:12144` and `ccd/ccd:12182`) — keyed on the ID, which a swap does
+ *  (`ccd/ccd:12467` and `ccd/ccd:12508`) — keyed on the ID, which a swap does
  *  not move. On the
  *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
  *  from their own id prefix (an id reading `<wrapper>-<project>` whose registry
@@ -153,7 +153,7 @@ function liveMainCheckoutIn(
  *
  *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
  *  unique key, by the same `cmd_swap` fact that widened the refusal arm
- *  (`ccd/ccd:13125` moves the wrapper, keeps the id). A main checkout
+ *  (`ccd/ccd:13459` moves the wrapper, keeps the id). A main checkout
  *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
  *  refusal (`status !== 'dead'`), so Start is offered; the projection says
  *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
@@ -392,7 +392,7 @@ export function StartProgramSheet({
   // wrapper-scoped. Now that `liveMainCheckoutIn` is wrapper-independent the
   // two must agree, or the suppression stops covering its own case:
   // `cmd_swap` moves a live session's `wrapper` while keeping its id
-  // (`ccd/ccd:13125`), so a session this sheet started at `W` can be reported
+  // (`ccd/ccd:13459`), so a session this sheet started at `W` can be reported
   // at `Y` on any later frame — a wrapper-comparing ownership test then fails
   // and the sheet renders "…is already running… may be mid-task" for the
   // session it started ITSELF. That is the Important-2 defect exactly,
@@ -616,7 +616,7 @@ export function StartProgramSheet({
     // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
     // window it has to cover starts the moment `ccd` is asked, not the moment
     // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
-    // fields, THEN `_spawn`s (`ccd/ccd:12206-12208`); the server lists a session
+    // fields, THEN `_spawn`s (`ccd/ccd:12532-12534`); the server lists a session
     // on its `.uuid` file alone (`registry.ts:793` — `started` does not gate
     // listing, and is written after `_spawn` anyway) and reports `status:
     // 'idle'` as soon as tmux has the id (`fleet.ts:236-237`); the watcher
@@ -868,7 +868,7 @@ export function StartProgramSheet({
             //
             // The copy names the SESSION, never the account: this arm is
             // wrapper-independent, so the matched row's own `wrapper` may
-            // differ from the projected one (a swap moves it, `ccd/ccd:13125`)
+            // differ from the projected one (a swap moves it, `ccd/ccd:13459`)
             // and naming an account here would state a fact the match never
             // established. Both outcomes are covered rather than the one the
             // wrapper-scoped version could assume: if this IS the row

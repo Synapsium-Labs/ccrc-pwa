@@ -583,7 +583,7 @@ describe('clip route', () => {
 
   it('413s an over-cap clip with its size — a real file this transport cannot carry is not a missing one', async () => {
     // The measured local/remote divergence, at the only surface that shows
-    // it: `ccd clip` (ccd/ccd:13416) files an image of any size, the agent
+    // it: `ccd clip` (ccd/ccd:13766) files an image of any size, the agent
     // refuses >12 MB, and this route used to call that "not-found".
     const io: FleetIO = {
       ...localIO,

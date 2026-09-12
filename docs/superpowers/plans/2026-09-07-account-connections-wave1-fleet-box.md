@@ -19101,3 +19101,79 @@ And the PAIRED measurement the plan asks for, which says which half of the unins
 work: reverting `plantInstalledBox`'s plant AND the `rm -f --` entry together leaves the preserve-set
 loop GREEN — it would be asserting about a file the fixture never created — while the stamped-fixture
 `it` and the text pin both still fire, because that `it` writes its own copy. Measured exactly that way.
+
+### D-2577 — the sweep's scope is what THIS BRANCH falsified, and it is derived rather than chosen
+
+D-2186 rules the citation sweep "its own task, before the PR" and asks for a mechanical census over
+(citer form × cited file) including self-citations, a referent check per site, and a decision per
+non-contiguous range. Run over the whole tree, that census finds **1332 citation sites across 192
+files** (`ccd/ccd` is cited 401 times, `ccd/ccrc` 211). A referent check on 1332 sites is not a task
+that fits inside this PR, and a PR that rewrote 1332 comments would be unreviewable.
+
+**So the scope is derived, not chosen: the citations THIS BRANCH broke.** For every citation that exists
+UNCHANGED in `origin/main` and points into a file this branch modified, apply the branch's own line map
+(built from `git diff -U0 <merge-base>...HEAD`) to the cited range. If the map moves it, this branch
+falsified it and owes the repair. A citation already wrong on main is pre-existing debt and is not this
+branch's to fix.
+
+Measured: **442 citations falsified**, 387 of them into `ccd/ccd`, from 15 citer files led by `ccd/ccd`
+itself (155 self-citations — exactly the category D-2186 says every previous census structurally could
+not see).
+
+**And a mechanical shift was made provable rather than assumed.** For each site the fixer checks that
+the text at the NEW range in HEAD is byte-identical to the text at the OLD range at the merge-base. That
+is what makes a shift a repair instead of a fresh invention. **435 of 442 verified**; the other seven
+were reported and never written blind. 399 comment lines were rewritten across 81 files, and the diff
+is comments only — measured: zero non-comment lines added.
+
+**D-2186's feared class did not recur.** It records `ccd/ccrc:4303` citing a range an insertion landed
+inside, "no longer contiguous", unrepairable by shift. On this branch **not one of the 442 lands inside
+a changed hunk** — the line map returns a definite target for every one. The class is real; it simply
+did not fire here, and saying so is worth more than repeating the warning.
+
+Residual after the sweep: **four**, and each is known. Three are `:7788` — the ccrc HTTP port in
+`deploy/deploy.sh` and `ccrc-doctor-checks`, matched as a line number by a census that cannot tell a
+port from a citation. The fourth is `ccrc-install-graphify.test.ts`'s D-1343 comment, which D-2186
+**excludes by name** because it quotes a plan's line numbers as HISTORY and a mechanical sweep would
+"fix" a sentence whose entire point is what the plan once said. The census found exactly the site the
+ruling warned about.
+
+### D-2578 — the content check surfaced two citations that were wrong before this branch touched them
+
+Two of the seven unverified sites were not false positives. Both are in `ccd/ccd`, both cite a range
+this branch inserted into, and reading each claimed referent against the BASE text shows **both were
+already wrong at the merge-base**:
+
+- `# fix already records (ccd:1019-1028)`, about "`_lc_rotate`'s flock `exec` fix". Base `1019-1028`
+  holds `_lane_enabled` and `_account_ok` — no `_lc_rotate`, no flock. The real referent is
+  `_lc_rotate`'s `FIX ROUND 1 (a)` block.
+- `` `cmd_ws_rm` (ccd:1076-1087) `` — base `1076-1087` holds `_is_valid_wrapper`. `cmd_ws_rm` is a
+  thousand lines further down.
+
+A shift would have carried each false claim to a new number and made it look freshly checked. Both are
+instead **re-expressed by SYMBOL**, which is the repair D-2186 prescribes for a citation a shift cannot
+honestly make, and each says in place that its old range was wrong at base too.
+
+This is the general property worth keeping: the byte-equality check was built to prove shifts safe, and
+its FAILURES are a referent detector. It only sees the errors that happen to sit where this branch
+inserted — which is why D-2579 exists.
+
+### D-2579 — the referent debt this sweep does NOT close, stated rather than implied
+
+What the sweep repaired is the SHIFT: 435 citations now point at the same text they pointed at before
+this branch moved it. That is a strictly weaker claim than "these citations are correct", and the
+difference must not be read as closed.
+
+D-2186 measured **12 of 14 cross-file citers wrong on the referent** at base. A shift preserves a wrong
+referent exactly as faithfully as a right one. Of the ~1332 sites tree-wide, this sweep checked the
+referent of exactly **seven** — the ones whose content changed under them — and found two wrong. That
+is a 2-of-7 sample from a biased draw, not a rate, and it is the only referent evidence this task
+produced.
+
+**What would actually close it**, recorded so the next attempt does not re-derive the scope: a per-site
+referent check over all 1332, which is a fan-out job rather than a sequential one; the `:7788` class
+excluded by shape (a "citation" whose target is its own file and whose line exceeds that file's length
+is not a citation); and `ccrc-install-graphify.test.ts`'s D-1343 comment excluded by name. The census
+and fixer that produced this task's numbers are three short scripts and are worth rebuilding rather
+than reinventing — the load-bearing one is the byte-equality check, because it is what separates a
+repair from a plausible-looking rewrite.

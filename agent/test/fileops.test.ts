@@ -149,7 +149,7 @@ describe('ccrc-agent file ops', () => {
     await open();
     // Sparse via truncate: the cap is checked against st.size BEFORE any byte
     // is read, so no 12 MB buffer is ever allocated by this test. Reachable in
-    // production because `ccd clip` (ccd/ccd:13416) mv -f's an image of any
+    // production because `ccd clip` (ccd/ccd:13766) mv -f's an image of any
     // size into this directory with no size check, while the upload route
     // refuses one (server/src/server.ts:1803-1804).
     const file = path.join(fixture!.home, '.cc-clips', 'huge.png');

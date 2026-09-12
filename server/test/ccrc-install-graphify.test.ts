@@ -1186,7 +1186,7 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
     // `— left in place; remove by hand`, said in `_inst_graph_hooks_off`'s
     // chained-content refusal — the one other place the tree says it. Cited by
-    // NAME, not by line (D-1343): the plan prescribed `ccd/ccrc:5411 and :5249`
+    // NAME, not by line (D-1343): the plan prescribed `ccd/ccrc:9029 and :5249`
     // verbatim, and :5249 was the converge's unmarked-`## graphify` refusal,
     // which R0's own commit deletes. The spec quotes the phrase with a second
     // em dash; the tree is what ships, and D-1247 records the divergence rather

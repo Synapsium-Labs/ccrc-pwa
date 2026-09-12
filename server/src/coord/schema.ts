@@ -244,7 +244,7 @@ export const MIGRATIONS: readonly string[] = [
   // ── 3: user_version 2 -> 3 ────────────────────────────────────────────────
   // The lifecycle journal mirror (build 9 §1 D1/D6/D8). `$REG/.lifecycle/
   // journal-<19-digit-epochNs>.ndjson` is APPEND-ONLY on the fleet host and is
-  // the one record `_reg_purge` (ccd:458-556) cannot reach; these three tables
+  // the one record `_reg_purge` (ccd:484-582) cannot reach; these three tables
   // are the server's copy of it.
   //
   // RE-MEASUREMENT, PROVABLY — the D8 ruling, written here rather than in a

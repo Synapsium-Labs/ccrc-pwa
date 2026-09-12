@@ -488,7 +488,7 @@ _check_flock() {
 
 # ── gh's authentication ───────────────────────────────────────────────────
 # DELIBERATE DIVERGENCE FROM ccd, do not "harmonise" the two: `ccd` never
-# probes `gh auth status` — it classifies gh's own stderr instead (ccd:707-715,
+# probes `gh auth status` — it classifies gh's own stderr instead (ccd:733-741,
 # "`gh auth status` is NOT probed first: it is another network call on the
 # unhappy path"), because ccd runs that path in a poll loop over every open PR.
 # Doctor is the COLD path: it runs when a human asks "is this box fit to
@@ -728,7 +728,7 @@ _check_path() {
 # this asks about the units whose FILE is present and skips a box that has none
 # rather than demanding units a dev checkout was never meant to have. A server
 # box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
-# cap-scopes timer, and `deploy.sh` (:416, :463) is what puts each there.
+# cap-scopes timer, and `deploy.sh` (:417, :464) is what puts each there.
 #
 # ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
 # A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
@@ -1623,7 +1623,7 @@ _check_exposure() {
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
 # Its own `systemctl`, in SYSTEM scope — NOT `_check_services`, which reads
-# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:443 as root and is
+# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:444 as root and is
 # nobody's user unit. The FAIL is the D2 pending state made visible: exposure
 # configured, ceremony not yet run — so the remedy IS the ceremony, all three
 # steps, not a pointer back to a transcript that has scrolled away.
@@ -1719,7 +1719,7 @@ _check_caddyfile() {
 # the answer exists before DNS propagates and never depends on the WAN path.
 # The handshake is the WHOLE conversation — no HTTP request is sent (the
 # D-150 note above). Bounded by CCRC_DOCTOR_GH_TIMEOUT for the reason that
-# knob exists: a wedged listener holding :443 without answering is precisely a
+# knob exists: a wedged listener holding :444 without answering is precisely a
 # box this check will be run on.
 _check_cert() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDY_ROOT_CA:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
@@ -1750,7 +1750,7 @@ _check_cert() {
   # Candidates: loopback first (the common all-interfaces bind), then this
   # box's own addresses (`hostname -I` — the name check's source). Caddy CAN
   # bind a single interface: live 2026-08-21, tailscaled held the tailnet
-  # IP's :443, caddy took the public IP, and loopback REFUSED — a probe that
+  # IP's :444, caddy took the public IP, and loopback REFUSED — a probe that
   # stopped there FAILed a box serving a perfectly good certificate. The
   # first listener that completes a handshake is the one measured.
   local -a cert_cands=(127.0.0.1)
@@ -2074,7 +2074,7 @@ _dr_wr_has() {
 
 # IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
 # every roster account of every kind must answer yes to, because that path is
-# literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
+# literally what ccd runs (ccd:7684). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
 # happened, and a present non-executable file is a `chmod`.
@@ -2349,7 +2349,7 @@ _check_wrappers() {
       continue
     fi
     # An id is not decoration: it is the FILENAME ccd executes
-    # ($HOME/.local/bin/<id>, ccd:7361), so the roster's ids are held to the
+    # ($HOME/.local/bin/<id>, ccd:7684), so the roster's ids are held to the
     # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
     # states. Nothing else in this check can be trusted about an entry whose id
     # is not an id, so it is reported and skipped rather than looked up on disk
@@ -2763,7 +2763,7 @@ _check_graphify() {
   # measured and WARN would report a problem there is none. Existence and
   # readability are checked BEFORE `_box_env_value` runs (its `< "$file"`
   # redirection is fatal to a missing file) — the same guard
-  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:4205-4208).
+  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:7813-7816).
   local role=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
     role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"

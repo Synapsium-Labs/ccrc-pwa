@@ -389,7 +389,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:9004`, cadence at `ccd/ccd:10472`) — and an honest mistake.
+   * rotates every 5s (`ccd/ccd:9327`, cadence at `ccd/ccd:10795`) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.
@@ -1622,7 +1622,7 @@ export function registerCoordRoutes(
    * and the reason is `GET /api/runs`'s exactly: A WORKER MUST BE ABLE TO ASK
    * "WHAT HAPPENED TO MY WORKSPACE" WITHOUT A BROWSER. It runs on the fleet
    * host with no cookie jar, and the answer it needs is about a workspace that
-   * may no longer exist — `_reg_purge` (`ccd:458-556`) has already deleted
+   * may no longer exist — `_reg_purge` (`ccd:484-582`) has already deleted
    * every per-session field by then, which is the whole reason the journal is
    * a dot-prefixed DIRECTORY. Gated, an armed box answers `401 no-session` and
    * the one surface that survives a destruction is unreachable from the box

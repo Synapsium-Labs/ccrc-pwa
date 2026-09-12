@@ -97,7 +97,7 @@ function reconstruct(dir: string): Reconstructed {
   const holdAgrees = m !== null && Number(m[1]) === ledgerCurrentWave && Number(m[2]) === ledgerWaves;
 
   // 4. `.prhistory` is append-only, and ccd writes to it only when a NEW pr
-  //    number SUPERSEDES an old one for this workspace (ccd:865-866),
+  //    number SUPERSEDES an old one for this workspace (ccd:891-892),
   //    recording the OUTGOING pr and its phase — so the CURRENT pr for a
   //    workspace is never in `.prhistory`; it lives in the registry's
   //    `.prnumber`/`.prphase` instead. Both are corroborated against the

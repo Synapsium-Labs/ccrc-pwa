@@ -224,7 +224,7 @@ describe('parseJournalLine: the vocabulary', () => {
 
   // FIX ROUND 1, F1: `badoutcome` was entirely dropped before this round —
   // no field on `JournalRow`, `o['badoutcome']` never read — even though
-  // ccd writes it today (`ccd/ccd:1351`, `:1417-1422`) and
+  // ccd writes it today (`ccd/ccd:1469`, `:1417-1422`) and
   // `LifecycleEvent.badoutcome` (`shared/api.ts:4007-4010`) already declares
   // it with the identical invariant `badact` has. These two cases mirror the
   // two `badact` cases directly above, one per side of the pair.
@@ -249,7 +249,7 @@ describe('parseJournalLine: the vocabulary', () => {
   // LC_ACT_UNKNOWN ? actRaw : null)` read a caller-supplied `badact` key
   // FIRST regardless of what `act` resolved to, so a forged line pairing a
   // perfectly valid `act` with an attacker's own `badact` string came out
-  // with BOTH set — exactly the signal `ccd/ccd:1417-1422`'s `_lc_emit`
+  // with BOTH set — exactly the signal `ccd/ccd:1535-1540`'s `_lc_emit`
   // guarantees never happens on a genuine line, and exactly what a reader
   // uses to decide "ccd's own vocabulary is stale". The journal is
   // append-only on a box with a single UNIX user (identity there is

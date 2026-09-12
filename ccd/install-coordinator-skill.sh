@@ -42,7 +42,7 @@ else
 fi
 
 # Refuse rather than degrade — ccd's own rule for a missing tool
-# (`ccd:2135-2139`: "refusing to run the destructive verb unserialised"). A
+# (`ccd:2258-2262`: "refusing to run the destructive verb unserialised"). A
 # half-installed skill is worse than none: the model would follow whatever
 # fragment landed.
 #
