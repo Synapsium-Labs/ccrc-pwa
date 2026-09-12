@@ -418,4 +418,39 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
     h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
     expect(newSessions().at(-1)).toContain("--remote-control 'myid'");
   });
+
+  it('a row whose wrapper is not home-able spawns WITHOUT --remote-control even on an `on` box (Task 2, 2026-09-07)', () => {
+    // Remote Control needs a claude.ai OAuth token carrying the inference
+    // scope. A non-home-able lane is an external backend — ccgpt runs Claude
+    // Code in token mode against a local proxy, and its config dir holds no
+    // claude.ai OAuth at all — so the flag would be refused, or hang the
+    // spawn on a handshake that can never complete. `_spawn_start` gates
+    // `rcflag` on `_is_home_able "$wrapper"` for this reason, mirroring
+    // `_spawn_settle`'s `_is_home_able` guard around `_inject_spawn_effort`:
+    // the same "the external backend doesn't take Claude-specific input"
+    // reasoning, gating a different line of the same spawn.
+    //
+    // The harness never installs the roster's non-home-able account; this
+    // case installs the stub on purpose, the same idiom
+    // ccd-default-pool.test.ts uses for the same reason.
+    //
+    // MUTATION MEASURED (2026-09-07): dropping `_is_home_able "$wrapper" &&`
+    // from the `rcflag` line reds exactly this case and nothing else —
+    //   1 failed | 19 passed  (`ccd-rc-flag` alone)
+    // — on the first assertion below (the primary spawn line carries the flag
+    // once the guard is gone); restored, the shipped bytes carry the guard.
+    writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    seed('myid');
+    h.sh('_reg_set myid wrapper gpt');
+    seed('sibling');   // wrapper claude (seed's default) — the control row
+    flag('on\n');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    expect(newSessions().at(-1)).not.toContain('--remote-control');
+    // The sibling row, in the SAME harness, on the SAME `on` box: proves the
+    // gate is keyed on this row's wrapper, not on some global suppression the
+    // gpt spawn tripped.
+    rmSync(path.join(h.home, 'ccd-calls'));
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start sibling new`);
+    expect(newSessions().at(-1)).toContain("--remote-control 'sibling'");
+  });
 });

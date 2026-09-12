@@ -30,4 +30,8 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'graph-sweep-census', root: '~/.ccrc/graph-sweep.json', pattern: 'R',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (last 10 passes kept)',
     bound: 'rolling', tier: 'bounded by pass count', ruling: null },
+  { name: 'project-pool-tag', root: '~/.cc-sessions/pools/<project>', pattern: 'O',
+    creators: ['ccd project-pool', 'operator shell'], collector: null,
+    bound: 'until cleared', tier: '<64 bytes per tagged project, one file per project',
+    ruling: 'Operator intent on the record: persists until `ccd project-pool --project <p> --clear` or `rm`. A tag whose project directory and registry rows are both gone is inert — no lane reads it — and `ccrc doctor` lists it as WARN `pools-stale`.' },
 ];

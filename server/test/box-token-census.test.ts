@@ -11,8 +11,10 @@
 //
 // THE SET IS NAMED, and that is the whole design (D-1162). The three sites were
 // each counting a DIFFERENT thing — "box-token-gated coordination routes"
-// (hard-require), "box-token machine lanes" (including the five dual-credential
-// GETs and `/api/notify`), and `requireMailToken` call sites alone. A scanner
+// (hard-require), "box-token machine lanes" (including the dual-credential GETs
+// — five when this note was written in 2026-09, six once the ask lane added
+// `GET /api/asks`, and seven once feed joined them — and `/api/notify`), and
+// `requireMailToken` call sites alone. A scanner
 // demanding one word from all three would be wrong twice. So this file derives
 // ONE set — every route handler that CONSULTS the box token, by either
 // mechanism, across both files that register one — and the prose was rewritten
@@ -133,15 +135,14 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
   'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four',
   'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty'];
-const SCAN_RE = new RegExp(`\\b(${WORDS.slice(2).join('|')})\\b`, 'gi');
-
-// A LIMIT OF THAT REGEX, recorded because it is silent and dated. Leftmost-first
-// alternation plus `\b` means a hyphenated word matches only its first half:
-// `twenty-one` scans as `twenty`, `twenty-five` as `{twenty, five}`. Harmless
-// while the surface is nineteen lanes — no scanned passage can legitimately hold
-// a number above twenty today — but the day the count passes twenty this scanner
-// reds on CORRECT prose, and the fix is to match the hyphenated forms first
-// rather than to widen `word()`.
+// D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
+// so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
+// the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
+// as two tokens. Sorting by descending length makes every hyphenated form try
+// before the bare word it starts with. `word()` is untouched, deliberately:
+// widening it would change what a count MEANS rather than how it is read.
+const SCAN_RE = new RegExp(
+  `\\b(${[...WORDS.slice(2)].sort((a, b) => b.length - a.length).join('|')})\\b`, 'gi');
 
 // A CONSTRAINT ON PROSE INSIDE THE SCANNED PASSAGES, stated because it is easy
 // to trip and the failure reads like a false alarm until you know: within a
@@ -200,6 +201,17 @@ const word = (n: number): string => {
  *  correct. */
 const numeralsIn = (text: string): string[] =>
   [...text.matchAll(SCAN_RE)].map((m) => m[0]!.toLowerCase());
+
+  // D-2168: leftmost-first alternation in ascending order made `twenty-one`
+  // scan as `twenty`, so a correct sentence about a 21-lane surface read as a
+  // sentence about a 20-lane one. Landed while the surface was still 18/19,
+  // where it is provably a no-op — this test is the whole evidence of the fix.
+  it('reads a hyphenated number word as one token', () => {
+    expect(numeralsIn('the twenty-one box-token machine lanes')).toEqual(['twenty-one']);
+    expect(numeralsIn('all twenty-two of them')).toEqual(['twenty-two']);
+    expect(numeralsIn('the nineteen lanes')).toEqual(['nineteen']);
+    expect(numeralsIn('twenty lanes, then twenty-five')).toEqual(['twenty', 'twenty-five']);
+  });
 
 /** Assert a passage's counts, in two steps with two different repairs (D-1233).
  *  WHICH numbers first, then in WHAT ORDER — a passage that has the right counts
@@ -405,10 +417,25 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // which is derivable, and stays derivable when a route is added.
     //
     // Scoped to `requireMailToken` because that is what the sentence says. The
-    // dual-credential GETs (`/api/lifecycle`, `/api/peers`, `/api/claims`) also
-    // sit outside the prefixes and consult the token, but through an inline
+    // dual-credential GETs also consult the token, but through an inline
     // `checkMailToken` as a cookie-OR-token fallback, and the bullet does not
-    // claim them.
+    // claim them. There are SEVEN of them now — `/api/runs`, `/api/runs/:id/items`,
+    // `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims` and `/api/asks`
+    // (the ask pre-emption lane) — of which the first two are inside the
+    // `/api/runs*` prefix and the last five sit outside it. This note named three, and had
+    // named three since before either of the two additions; corrected by the
+    // whole-branch review (M5 of that pass). It is a NOTE, not an assertion —
+    // the loop below derives its own set, and this sentence only says which
+    // lanes that set deliberately leaves out. What IS derived for this family
+    // is `EXEMPT_BUT_AUTHENTICATED` above, and it is NOT a superset of these
+    // seven: it is derived by filtering the EXEMPT table for the
+    // `EXEMPT-BUT-AUTHENTICATED` marker, and `POST /api/runs` carries no such
+    // marker — its EXEMPT reason reads "the coordinator opens a run — box-token
+    // gated". So that route is exempt from the SESSION gate while hard-requiring
+    // the box token, which is a different arrangement from the dual-credential
+    // reads this set collects, and it is absent from the set rather than an
+    // extra member of it. The README sentence the set feeds is where a route
+    // added to the dual-credential class without a mention reds the build.
     const requireSites = ((): string[] => {
       const starts = [...COORD_SRC.matchAll(/app\.(get|post)\('([^']+)'/g)]
         .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, path: m[2]!, at: m.index! }));

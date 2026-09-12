@@ -64,7 +64,7 @@ run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These ten sentences are the boundary between "a coordinator" and "an agent
+These eleven sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -77,6 +77,7 @@ with a shell on the fleet host". They are not advice.
 8. One coordinator per program. If `POST /api/runs` answers `claimed-by-another`, stop — another coordinator owns this program.
 9. This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.
 10. This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.
+11. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
@@ -167,6 +168,7 @@ client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
+`project-mismatch`, `home-mismatch`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
 `unknown-item`, `item-terminal`. Their meanings are in
@@ -189,6 +191,20 @@ effective ceiling on a brief and the recovery rule (trim the brief and resend;
 the run is untouched) are in the dispatch table, `references/wave-lifecycle.md`
 §2 — not repeated here, so there is exactly one place this code's dispatch-side
 meaning lives.
+
+**`hold-oversize` is different:** `/dispatch` and `/:id/close` answer
+`error:'hold-oversize'` (413) when the complete session-card reason — programme,
+wave, optional denominator, and exact run id — cannot fit the hook's
+127-character display window. Stop and shorten the programme slug; the refusing
+boundary performs no fleet act. `POST /api/runs` is NOT in that list: its slug
+cap is derived so the widest hold it can compose is 124 of 127, so an
+over-long slug is refused there as `bad-request` (400) with a `detail` naming
+the budget, before any row exists. The two routes that CAN emit it read
+persisted or reconstructed rows that never passed that door. The route-specific tables in `references/wave-lifecycle.md`
+name exactly what remains untouched. `hold-invalid` (400) is its grammar/domain
+sibling: a persisted programme or an included wave, denominator, or run id cannot
+be represented as the session hook's positive-decimal hold grammar. Stop and
+report it; changing a title cannot repair that stored run.
 
 **Not every non-2xx body carries a code at all.** `error:'bad-request'` (400,
 a malformed request body — including the fingerprint SHAPE `POST
@@ -252,7 +268,8 @@ not after.
    only once its installer has run there, so say it again even though the skill
    says it (`references/wave-lifecycle.md` §2). This
    is also where wave 1's hold actually lands, reason `program:<slug>
-   wave:1/M`. For wave ≥ 2 the route itself resumes the workspace and injects
+   wave:1/M run:<id>` — the run's own id is part of the reason, so size a slug
+   against that full string, not against the prefix. For wave ≥ 2 the route itself resumes the workspace and injects
    `/clear` before queuing the brief — this session never sends `/clear`
    itself (clause 9). Then **end your turn** (clause 7).
 3. **Wake on mail.** What actually lands in your session is a tiny one-line
@@ -290,8 +307,10 @@ not after.
    lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
    the same workspace**.
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
-   and, *if no other open run names this workspace*, releases the hold so the
-   ordinary sweep can archive it. Read `released` in the response: `false`
+   and, *if no other open run names this workspace*, releases the hold. Nothing
+   archives the workspace on its own after that: the merged sweep only pushes
+   a notification, so the workspace stays live and supervised until a human
+   archives it. Read `released` in the response: `false`
    means the run closed but the workspace is **still claimed** — another open
    run owns it, which is exactly the state step 5's open-before-close creates.
    The program is not done; close the other run. Do not archive the workspace

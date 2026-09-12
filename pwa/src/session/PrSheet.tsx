@@ -21,6 +21,13 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
 
+/** The one fact every merged-and-unarchived note below opens with, spelled
+ *  once because it is the same fact in all three: nothing archives on merge,
+ *  so this is where a merged workspace RESTS rather than a state it is on its
+ *  way out of. What differs between the arms is only what archiving costs
+ *  from here. */
+const NOT_ARCHIVED = 'Not archived — ccrc does not archive on merge.';
+
 export function PrSheet({
   session, open, onClose, onReap,
   archive = api.archive,
@@ -74,15 +81,15 @@ export function PrSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, id]);
 
-  // THE THIRD REASON a merged workspace sits unarchived, and it needs ZERO
-  // wire change: the fleet store already carries the active run list. Both
-  // reads are HOOKS, so they run above the `session === null` guard like every
-  // other hook here.
+  // THE OPEN RUN the merged note names, and it needs ZERO wire change: the
+  // fleet store already carries the active run list. Both reads are HOOKS, so
+  // they run above the `session === null` guard like every other hook here.
   //
   // Gated on `runsFrameSeen` — an empty `runs` before the first frame is not
-  // evidence of no runs, the store's own idiom — and DEGRADING to the shipped
-  // two-reason sentence rather than asserting from a list that has not
-  // arrived.
+  // evidence of no runs, the store's own idiom — and DEGRADING to the plain
+  // sentence rather than asserting a claim from a list that has not arrived.
+  // The plain sentence is true of every unarchived merged workspace, so
+  // degrading to it says less than we know, never more.
   const runsFrameSeen = fleet((s) => s.runsFrameSeen);
   const openRun = fleet((s) => s.runs).find((r) => r.sessionId === id && !isRunClosed(r)) ?? null;
   const claimingRun = runsFrameSeen ? openRun : null;
@@ -255,19 +262,19 @@ export function PrSheet({
                 Copy link
               </button>
               <button type="button" className="btn-ghost" onClick={load} disabled={busy}>Refresh</button>
-              {/* THE HOLD CHANGES THIS SENTENCE TOO — fix-wave finding 6. The
-                  merged branch below was corrected and this one was not, and
-                  this is the branch an operator reads for the WHOLE of a wave:
-                  a PR sits open for hours, and "when it merges, ccrc archives
-                  this workspace automatically" is precisely what the hold
-                  suppresses (`archiveMerged` skips on the held rung before it
-                  ever asks `archiveSafety`). Same verbatim reason, same
-                  no-parsing rule, and it names the release path rather than
-                  promising a sweep that will never come. */}
+              {/* ONE sentence, no arms. This is the branch an operator reads
+                  for the WHOLE of a wave — a PR sits open for hours — so what
+                  it says the merge will do has to be exact, which is why it
+                  has been rewritten twice. It used to promise that ccrc
+                  archives on merge, and to carve the held workspace out as the
+                  exception. There is no exception now because there is no act:
+                  `sweepMerged` (server/src/watch.ts) announces the merge and
+                  archives nothing, held or not. A hold arm here would
+                  manufacture a difference the merge no longer makes — what a
+                  hold still costs is named where it applies, on the merged
+                  branch below and beside Release in the actions sheet. */}
               <p className="pr-note">
-                {session.held !== null
-                  ? `Merging happens on GitHub. It will NOT archive this workspace: held — ${session.held}. Release it (Release, in the session’s actions sheet) and the next sweep after the merge archives it.`
-                  : 'Merging happens on GitHub. When it merges, ccrc archives this workspace automatically.'}
+                Merging happens on GitHub. It does not archive this workspace — ccrc leaves it running, and archiving it is yours to do.
               </p>
             </>
           )}
@@ -289,37 +296,45 @@ export function PrSheet({
                 </>
               ) : (
                 <>
-                  {/* TWO reasons a merged PR can still be unarchived, and they
-                      are not the same refusal — this surface is the one an
-                      operator opens after a merge, so it must name the one
-                      that applies (spec: every refusal is named).
-                      `archiveMerged` (server/src/watch.ts) skips on
-                      `r.held !== null` BEFORE it ever asks `archiveSafety`,
-                      so when a hold is present it is the whole cause and the
-                      session is very often idle, not busy — "session busy"
-                      there would send the operator to wait out a session that
-                      is not running, a wait no sweep can ever end. The hold's
-                      reason is rendered verbatim (shared/api.ts's no-parsing
-                      rule) so the sentence names WHICH program refuses.
-                      "Archive now" stays offered in both branches, and that is
-                      not an oversight: `cmd_ws_archive` in ccd/ccd has no held
-                      rung of its own (only `cmd_ws_rm`/`cmd_ws_reap` do), so a
-                      by-hand archive of a held workspace succeeds. Only the
-                      automatic gate is off. CITED BY SYMBOL, not by line: this
-                      said `ccd:1415`, and the hold wave's own insertions pushed
-                      `cmd_ws_archive` down past it, so the citation came to
-                      point into `cmd_caps` — a line number is a fact about a
-                      revision, a function name is a fact about the program. */}
-                  {/* THREE reasons now, in the order of what the operator can
-                      do about them. The hold still wins when both are present:
-                      one sentence, never two — a note that stacks its reasons
-                      is a note nobody reads. */}
+                  {/* UNARCHIVED IS THE RESTING STATE, not a deferral.
+                      `sweepMerged` (server/src/watch.ts) announces the merge
+                      and archives nothing, so a merged workspace stays live
+                      until a human archives it — and this sheet's own
+                      "Archive now" is that human's door.
+
+                      What the note still has to distinguish is what archiving
+                      COSTS from here, because the two costs are not the same
+                      refusal and this surface is the one an operator opens
+                      after a merge (spec: every refusal is named). A hold
+                      means a program still claims the workspace: the archive
+                      itself goes through, and it is cleanup that refuses until
+                      the hold is released. An open run means
+                      `POST /api/sessions/:id/archive` answers `409 run-open`,
+                      which is answerable — ArchiveConflictSheet offers
+                      "Archive anyway" — so it is a confirmation, not a wall.
+                      The hold's reason is rendered verbatim (shared/api.ts's
+                      no-parsing rule) so the sentence names WHICH program
+                      holds it.
+
+                      "Archive now" stays offered in all three branches, and
+                      that is not an oversight: `cmd_ws_archive` in ccd/ccd has
+                      no held rung of its own (only `cmd_ws_rm`/`cmd_ws_reap`
+                      do), so a by-hand archive of a held workspace succeeds.
+                      CITED BY SYMBOL, not by line: this said `ccd:1415`, and
+                      the hold wave's own insertions pushed `cmd_ws_archive`
+                      down past it, so the citation came to point into
+                      `cmd_caps` — a line number is a fact about a revision, a
+                      function name is a fact about the program.
+
+                      The hold still wins when both are present: one sentence,
+                      never two — a note that stacks its reasons is a note
+                      nobody reads. */}
                   <p className="pr-note">
                     {session.held !== null
-                      ? `Not archived — held: ${session.held}. A held workspace is skipped by every sweep; release it (Release, in the session’s actions sheet) or archive it by hand below.`
+                      ? `${NOT_ARCHIVED} Held: ${session.held} — archiving it below still works, but cleanup will refuse until the hold is released (Release, in the session’s actions sheet).`
                       : claimingRun !== null
-                        ? `Not archived — run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace. Since Build 8 the sweep asks coord.db, not only the hold file, so releasing the hold will not archive it while that run is open. Close the run, or archive it by hand below.`
-                        : 'Not archived yet (session busy)'}
+                        ? `${NOT_ARCHIVED} Run ${claimingRun.id} (${claimingRun.program} wave ${claimingRun.wave}${claimingRun.waveOf === null ? '' : `/${claimingRun.waveOf}`}) is still open on this workspace, so Archive now will ask you to confirm before it takes the worktree out from under that run.`
+                        : `${NOT_ARCHIVED} This workspace stays live until you archive it below.`}
                   </p>
                   <button type="button" className="btn-ghost" disabled={busy || fault !== null}
                           title={faultTitle} onClick={() => void archiveNow()}>

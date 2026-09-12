@@ -25,7 +25,7 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     // `expected [ …20 acts… ] to deeply equal [ …21 acts… ]`, and an act ccd
     // emits would degrade to `unknown` on a build that models it perfectly well.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
-    expect(want.length, 'guards the guard: an empty want passes everything').toBe(21);
+    expect(want.length, 'guards the guard: an empty want passes everything').toBe(22);
     const got = lines(h.sh('printf "%s\\n" "${_LC_ACTS[@]}"'));
     expect([...got].sort()).toEqual([...want].sort());
     expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')

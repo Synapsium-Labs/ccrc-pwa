@@ -4,7 +4,7 @@
 
 **Goal:** Move graphify's read side out of the account-wide `CLAUDE.md` block ccrc does not own and into the five artifacts ccrc installs outright — the session hook, the worker skill, the pinned venv on `PATH`, the hookstate file — and make its effect measurable instead of asserted.
 
-**Architecture:** Five mechanisms, each landing in an artifact ccrc already owns and already tests. R4 puts a `graphQueries` counter in the hookstate the session hook already writes, carries it onto `FleetSession` additively and renders it as a `graph N` chip. R1 makes the hook print one `SessionStart` context card measured for the session's own tree. R2 adds clause 12 to the worker skill. R0 retires `_inst_graph_always_on` and replaces it with `_inst_graph_always_on_off`, a remover built from PR #44's own marker census. R3 converges `~/.local/bin/graphify` onto the pinned venv and gives the PATH question its own doctor check. R5 (the `PreToolUse` speed bump) is declined by the spec and has **no task here**.
+**Architecture:** Five mechanisms, each landing in an artifact ccrc already owns and already tests. R4 puts a `graphQueries` counter in the hookstate the session hook already writes, carries it onto `FleetSession` additively and renders it as a `graph N` chip. R1 makes the hook print one `SessionStart` context card measured for the session's own tree. R2 adds clause 12 to the worker skill. R0 retires `_inst_graph_always_on` and replaces it with `_inst_graph_always_on_off`, a remover built from PR #44's own marker census. R3 converges `~/.local/bin/graphify` onto the pinned venv and gives the PATH question its own doctor check. R5 (the `PreToolUse` speed bump) was declined by the spec and had no task here; **reversed by operator ruling 2026-09-05 (D-1613) — Task 7 builds it** as §2 "R5 — built" specifies.
 
 **Tech Stack:** bash 4.4+ (`ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`), `jq`, TypeScript 7 strict (`server/`, `shared/`, `pwa/`), vitest, React 19, node `>=22.13.0`.
 
@@ -2312,6 +2312,160 @@ carries **only** `docs/superpowers/plans/` — the ticks above, Step 6's measure
 stale ledger cells re-measured. Committing the two source files again would be an empty diff.
 
 ---
+
+## Task 7: R5 — the `PreToolUse` gate (operator ruling 2026-09-05, D-1613)
+
+**Spec:** `docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md` §2 "R5 — built".
+Every predicate, string and bound below is spelled there; this task lists where each lands.
+
+**Files:**
+- Modify: `ccd/session-hook.sh` — the `PreToolUse` arm gains the gate; `_hook_graph_card` gains the
+  gate sentence; the hookstate write gains `graphGateDenials`; the three-field read becomes four.
+- Modify: `server/src/hookstate.ts` — `graphGateDenials: number | null`, revived like `graphQueries`.
+- Modify: `shared/api.ts` — `FleetSession.graphGateDenials` (additive), `graphGateCount` reader,
+  `reviveFleetSession` literal.
+- Modify: `server/src/fleet.ts` — carry `hs?.graphGateDenials ?? null`.
+- Modify: `pwa/src/fleet/SessionLine.tsx` — `graph N · gated k`.
+- Modify: `ccd/ccrc-doctor-checks` — `_check_graphify` PASS/WARN line adds `gate on|off`.
+- Modify: `README.md` — the R5 paragraph (decline → ruling), the kill-switch, the bound.
+- Tests: `server/test/session-hook.test.ts` (the gate describe), `server/test/hookstate.test.ts`,
+  `server/test/fleet*.test.ts` (the carry), `pwa/test/session-line.test.tsx` (the chip — the plan
+  first said `pwa/src/fleet/SessionLine.test.tsx`, a file that does not exist; D-1691),
+  `server/test/ccrc-doctor-graphify.test.ts`, and the two derived doc guards in
+  `server/test/ccrc-install-graphify.test.ts` that today pin the DECLINE — re-derived to pin the
+  ruling and D-1613's reading instead (the decline stays in both docs as history). Also touched,
+  and load-bearing rather than churn: `server/test/coordinator-skill.test.ts` and
+  `server/test/worker-skill.test.ts` harvest the card's freshness spelling from the hook, and the
+  one spelling moved from `fresh=` to `GM_FRESH=` when the card and the gate began sharing one
+  measurement; `server/test/bucket.test.ts` and twenty `pwa/test/*` fixture files gained the
+  non-optional `graphGateDenials` field mechanically — the visible cost of hand-copied fixtures.
+
+**Steps (each red first, each guard with a measured mutation):**
+1. Gate deny JSON on `Grep` in a fresh-graph tree with `graphQueries` 0 — byte-exact stdout.
+2. Silent after one `graphify query` (PostToolUse counted it); silent with no graph; silent at 11
+   commits behind, gated at 10; silent with `$HOME/.ccrc/graph-gate-off`.
+3. `Bash` head-search (`grep -rn x src`, `rg x`, `FOO=1 rg x`, `cd a && find . -name y`,
+   `git grep x`) denied; pipeline-tail (`vitest run | grep Tests`), `graphify query "x"`, `ls` allowed.
+4. Bound: three denials, the fourth call passes, hookstate reads `graphGateDenials: 3`.
+5. Reset: startup and `/clear` set both counters to 0; `resume` keeps them.
+6. Fail-open: unreadable hookstate JSON, `cwd` outside any tree, stamp unparseable → no stdout.
+7. Card sentence present when armed, the off-sentence when the kill-switch exists, absent when stale.
+8. `hookstate.ts`: `null` ≠ 0 for `graphGateDenials`; `fleet.ts` carry pinned; `graphGateCount`
+   tolerant reader; chip renders `gated k` only for k > 0; doctor line.
+9. README + the two doc guards re-derived; `single-definition`, `topology-clean`, `dtbd`,
+   `deviation-refs` green; full server + pwa suites green.
+10. Commit per step group; AGENT-FIRST deploy after merge; then take the reading: denials and queries
+    across the live fleet on a dated day, recorded under D-1613.
+
+**Completed 2026-09-05 (PR #54)** — steps 1–9 as commits `3e016fbc` (hook gate, 13 gate tests + 3 card
+tests), `5eda46d5` (hookstate, wire, carry, chip), `3245b40b` (doctor line), `ddf8d807` (README and the
+two doc guards), plus the review pass (D-1689–D-1691). Full server suite 251 files / 6625 passed, full
+pwa suite 78 files / 2139 passed. An independent read-only reviewer measured the mutation table in its
+own worktree — 18 of 20 rows red, two green and explained: (a) `Denial`→`Denied` 3 red; (b) gate ignores
+`graphQueries` 1; (c1) drop `_hook_graph_measure`'s rc conjunct **0 — subsumed by `_hook_gate_tree`'s
+non-empty `GM_BEHIND`, and (c2) the permissive `_hook_gate_tree` 1 red proves the pair jointly
+non-redundant**; (d) `MAX_BEHIND` 10→11 2; (e) drop the kill-switch 1; (f) drop `Bash` 1, unanchor the
+regex 1; (g) `MAX_DENIALS` 3→4 3; (h) no reset 1, reset on resume 1; (i) drop `hs_unreadable` 1; (j) drop
+the card sentence 2; (k) `hookstate.ts` null→0 2; (l) drop the carry 2, render `gated 0` 1,
+**`graphGateCount` null→0 0 — unobservable through a chip that renders on `> 0`, pinned directly since
+(D-1691) 1 red**; (m) drop the doctor clause 3; (n) README `built`/`ruling` 1, `declined` 1. Then the
+review's own three: deny printed before the write (D-1689) 1 red; `graphGateCount` fold 1 red; the R5
+paragraph losing `declined` 1 red. Hand-driven against a fixture HOME and this repo's real 7926-node
+graph: three denials, the fourth search passes, `resume` keeps, `clear` resets, one query opens, the
+kill-switch silences, a missing `cwd` and a non-JSON payload exit 0 silently. Step 10 is the deploy and
+the reading, below D-1613.
+
+## Task 8: R6 — the Read nudge (operator ruling 2026-09-06, D-1745)
+
+**Spec:** `docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md` §2 "R6 — the Read
+nudge". Every predicate, string and list below is spelled there; this task lists where each lands.
+
+**Files:**
+- Modify: `ccd/session-hook.sh` — `GRAPH_NUDGE_READ_RE` beside `GRAPH_SEARCH_RE`; the `PreToolUse` arm
+  gains the nudge branch for `Read` (raw-payload prefilter → jq `file_path` → `graphify-out/` exclusion →
+  `_hook_graph_measure` + `_hook_gate_tree`); the envelope rides the deny's own print site (`deny_json`
+  generalised to one `pre_json`); the card's gate sentence gains "and source-file reads are nudged".
+- Modify: `README.md` — the R5 paragraph gains the nudge (what is nudged, the list's provenance, why not
+  a deny, coexistence with graphify's project hooks); the hook-section stdout sentence names the nudge.
+- Tests: `server/test/session-hook.test.ts` (new describe 'the PreToolUse Read nudge (R6, D-1745)'; the
+  card tests' pinned sentence; 'prints NOTHING on every other event' re-scoped so a source `Read` in an
+  armed tree is no longer a silence fixture), `server/test/ccrc-install-graphify.test.ts` (token list
+  gains `GRAPH_NUDGE_READ_RE` or the word `nudged`), `server/test/worker-skill.test.ts` /
+  `coordinator-skill.test.ts` only if their harvest of the card sentence breaks.
+
+**Steps (each red first, each guard with a measured mutation):**
+1. Nudge JSON on `Read` of `src/a.ts` in a fresh-graph tree with `graphQueries` 0 — byte-exact stdout,
+   no `permissionDecision` key.
+2. Silent after one `graphify query`; silent on `graphify-out/GRAPH_REPORT.md`; silent on `package.json`;
+   silent with `$HOME/.ccrc/graph-gate-off`; silent at 11 behind, nudged at 10.
+3. A `Read` is never denied in ANY state (loop the gate's arming states); a `Grep` in the armed state is
+   denied and not nudged — exactly one stdout line.
+4. Fail-open: unparseable hookstate, payload without a tree, registry `chmod 500` → silent.
+5. Card: the sentence reads gated-and-nudged when armed; the off-sentence unchanged.
+6. The suite HARVESTS `GRAPH_NUDGE_READ_RE` from the hook (D-1363 idiom) and asserts the 28 extensions
+   graphify 0.9.9 ships (`_HOOK_SOURCE_EXTS`) are exactly those — pinned as a list in the test with the
+   provenance comment, so a drift in either direction is red.
+7. README + guards; `single-definition`, `topology-clean`, `dtbd`, `deviation-refs` green; full server
+   suite green.
+8. Commit per step group; AGENT-FIRST deploy after merge; the reading is R4's own series
+   (`graph-gate-snapshot`), read for how soon `graphQueries` leaves 0 in sessions that read first.
+
+**Completed 2026-09-06** — steps 1-7 as two commits on `feat/graphify-read-nudge`, rewritten before the
+push (D-1797) and so named here by subject rather than hash: `feat(session-hook): the PreToolUse Read
+nudge — advice, never a deny` (the hook
+branch and `server/test/session-hook.test.ts`'s new describe 'the PreToolUse Read nudge (R6, D-1745)';
+an earlier `f096b39e` was amended to carry the mutation table, so `175a518b` is the only commit of the
+pair) and this one (README + the read-side README guard). T1 red-first, hook untouched with the tests
+written: **9 failed | 79 passed (88)** — the eight R6 rows that need the mechanism plus the card's armed
+sentence; **88 passed (88)** after the hook change. Related suites green together: `session-hook`,
+`worker-skill`, `coordinator-skill`, `ccrc-install-graphify`, `install-session-hooks`,
+`ccrc-doctor-graphify` = **271 passed (271)**; `single-definition`, `deviation-refs`, `typecheck-tests`
+= **149 passed (149)**. The R6 silence rows (already queried, `graphify-out/`, kill-switch, 11 behind,
+no graph, no tree, corrupt hookstate, `Grep` not nudged) pass vacuously before the branch exists and are
+each measured red by a row below.
+
+T1's mutation table, measured one row at a time on the committed tree, the hook restored from a scratch
+copy after each (never by checkout), green baseline 88/88:
+
+| # | mutation | result |
+| --- | --- | --- |
+| m1 | one byte of the nudge text (`no query.` -> `no queries.`) | 7 failed / 81 passed |
+| m2 | the nudge ignores `graphQueries` (`Read` past the zero-count conjunct) | 1 failed / 87 passed - *silent once the session has run one query* |
+| m3 | the `graphify-out/` exclusion dropped | 1 failed / 87 passed - *silent for a read UNDER `graphify-out/`, at any depth* |
+| m4 | one extension (`ts`) dropped from `GRAPH_NUDGE_READ_RE` | 7 failed / 81 passed - the harvest guard AND every `.ts` row |
+| m5 | the kill-switch conjunct dropped for `Read` | 1 failed / 87 passed - *silent while the operator kill-switch file exists* |
+| m6 | the nudge branch emits a DENY envelope instead | 8 failed / 80 passed - incl. *never DENIES a `Read`, in any state the gate can be in* |
+| m7 | the nudge printed from inside the arm, before the hookstate write | 1 failed / 87 passed - *says nothing when the registry cannot be written (D-1689's ordering)* |
+| m8 | the card's gate sentence reverted to R5's wording | 1 failed / 87 passed - *tells the session the gate is armed, in the trees where it IS armed* |
+
+T1 was also hand-run against a fixture HOME in a scratchpad (a tree with a fresh 7662-node graph; the
+live `$HOME` never touched, the fixture deleted after): the card carries the gated-and-nudged sentence,
+a `.ts` `Read` answers the nudge envelope with no `permissionDecision`, one query silences it.
+
+The README guard's own mutations, measured on `server/test/ccrc-install-graphify.test.ts` (green
+baseline **57 passed (57)**):
+
+| # | mutation | result |
+| --- | --- | --- |
+| r1 | the README's `**nudge, not a deny**` sentence dropped, the paragraph otherwise intact | 1 failed / 56 passed - *describes the Read nudge without saying it is not a deny* |
+| r2 | the whole `**The Read nudge (R6).**` block deleted | 1 failed / 56 passed - same anchored row; the `Read nudge`/`nudged` TOKENS survive, because the hook bullet's stdout sentence names the nudge too, so the pair binds the two mentions together and the anchored assertion binds the paragraph (recorded in the test's own comment) |
+
+MEASURED DRIFT, corrected in the same PR: the extension list is **28** entries — `py js ts tsx jsx astro
+vue svelte go rs java rb c h cpp hpp cc cs kt swift php scala lua sh md rst txt mdx` — counted off the
+hook's own assignment and pinned item-by-item by `session-hook.test.ts`'s harvest; this task's step 6
+and D-1746 first said 27 (the prose miscounted graphify 0.9.9's own tuple) and now say 28.
+
+ONE EDIT INSIDE `## Deviations found`, forced by a standing rule and made as narrowly as possible:
+D-1746's project list named a repository whose name is in `topology-clean`'s fleet-account-label class,
+so the entry as first committed reds `nothing in the tree speaks it`. The name is replaced by a
+description and nothing else in the entry moved — the count, the corpora and the figures are as
+measured. The history row (`and nothing this branch ADDS speaks it, at any commit in the range`) reads
+every blob the branch introduces, so the branch's three commits were REWRITTEN before the push — same
+trees, the token in no blob — which is why the commits on the PR are not the hashes the workflow's
+agents reported (D-1797).
+
+Step 8's other half is still open: the AGENT-FIRST deploy after merge (`ccd/session-hook.sh` is a fleet
+artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that read first.
 
 ## Deviations found
 
@@ -4678,6 +4832,151 @@ stale ledger cells re-measured. Committing the two source files again would be a
   workdir, so it is never built; a named worktree a session later enters is picked up on the next
   pass. **Mutation:** remove the registry test → a fixture `.claude/worktrees/x` with no session
   gains a row (the test asserts none; a sibling `y` named by a `<id>.workdir` keeps its row).
+
+- **D-1613** (2026-09-05, THE R4 READING, AND THE RULING THAT REVERSES R5'S DECLINE) — §2 R5 declined
+  the `PreToolUse` speed bump until "one week of R4 data", and D-1365 made the revisit an act: read
+  the chips across the live fleet on one dated day and record it here. **Taken 2026-09-05 11:08 UTC,
+  two days after the read side deployed (PR #45, 2026-09-03):** graphify's own query log holds 4
+  queries since the deploy, across 3 corpora (custom-tools 2, rp-llm 1, MekWarLive 1), and the 18 live
+  sessions' hookstates agree — `graphQueries` 0 in 10 sessions, 1 in 2, 2 in 1, `null` in 5 (no
+  `SessionStart` since the deploy). The counter and the log agree, so R4 measures; what it measures is
+  that the card and clause 12 moved nothing. **Operator ruling on that reading:** *"WHY IS IT NOT
+  ENFORCED?! WE WANT TO ENFORCE."* §6 decision 1 is reversed; R5 is built as §2 "R5 — built"
+  specifies (the gate in the existing `PreToolUse` arm, fail-open, bounded at 3 denials, counted beside
+  the queries, kill-switch `$HOME/.ccrc/graph-gate-off`), Task 7 above. The next reading is the
+  gate's own effect: denials beside queries, on a dated day after the deploy.
+  **Deployed 2026-09-05 21:57 UTC** — PR #54 squash-merged as `fb45c5dd`, agent lane first, then the
+  server; both lanes report that sha; the installed hook carries the gate; `ccrc doctor` on the fleet
+  box reads `gate on`; no kill-switch file. **Baseline at deploy, so the reading has something to be
+  read against:** the query log holds 40 queries since the ruling at 11:08 UTC (swift-harbor 26,
+  custom-tools 6, rp-llm 5, plain-hollow 3) against 4 in the two days before it — the ruling itself
+  moved the number before the gate did, which the reading must not credit to the gate. Of 19
+  hookstates: `graphQueries` 26, 7, 4, 4, 3, 1 in six sessions, 0 in eight, `null` in five; within
+  twelve minutes of the deploy four sessions had written `graphGateDenials: 0` (each had queried
+  before the gate arrived), and no zero-query session had searched yet, so no denial existed to read.
+  The reading proper — denials beside queries across the fleet on a dated day after the deploy, read
+  against D-1690's four bounded false positives — is still the act this entry names.
+  **The reading, taken 2026-09-08 11:07 UTC against the hourly series** (`~/.ccrc/graph-gate-readings.jsonl`,
+  operator plumbing outside every checkout, one JSON line per fire since 2026-09-05 23:23 UTC). The
+  carrier itself lost every fire that preceded a day's first query until 2026-09-07 14:07 UTC — a
+  `grep -c … || echo 0` that captured `0\n0` on a no-match, which `--argjson` refuses; 10 of 13 fires on
+  Sep 7 wrote nothing — repaired that day as the session-card design's B0
+  (`2026-09-07-ccrc-session-card-design.md` §8.2), and every fire since has landed, 22 consecutive at
+  this reading. The number: graphify's query log holds 4 on Sep 4, 48 on Sep 5 (the ruling at 11:08, the
+  gate at 21:57), 70 on Sep 6 (the Read nudge from 16:36), 119 on Sep 7 and 14 by 11:07 on Sep 8 —
+  against ~20 a day across Aug 22 – Sep 1 (224 in eleven days), 154 on Sep 2 (the read side's own build
+  day, not the fleet), 0 on Sep 3. The first full day with the nudge is the highest, and one day cannot
+  separate the nudge from the workload. Denials: 17, in 9 sessions (1, 1, 1, 1, 2, 2, 3, 3, 3), and all
+  9 queried afterwards — 8 inside the same hourly window as their first denial (the day-1 transcript
+  shows two queries within 7 s of it), and one, an expoAI-assistant worktree, reached the bound at 13:04
+  Sep 6, worked four more hours with no query, went idle, and queried six minutes after resuming at 11:06
+  Sep 7. Three sessions reached the bound of 3 and every one queried — that worktree sat at `gated 3`
+  with no query for thirteen hourly rows, four of them working, before it did — so no SESSION paid the
+  bound and walked on (rows do show it; sessions do not), none of D-1690's four classes is observed to
+  have cost anything, and the one fan-out case (day 1, two parallel workflow subagents) counted 1, 2, 3
+  with nothing lost. Of 18 live sessions all 18 have a graph and 16 have queried in their current
+  counter epoch; the two at zero also hold zero denials and have sat idle on a single `SessionStart`
+  since the afternoon of Sep 7 (the supervisor heartbeat, not the hookstate, is what keeps them
+  measuring live), so nothing they ran reached a search tool. **By
+  the rule recorded 2026-09-05 — "if denials are mostly followed by a query in the same session, the
+  gate works and D-1690 stays recorded" — the gate works, D-1690 stays recorded, nothing further is
+  built.** The series keeps running; the session-card design reads the same file as its B0 baseline.
+- **D-1797** (2026-09-06, REVIEW OF THE R6 BRANCH, all closed before the push) — the independent
+  reviewer measured 16 mutation rows red and added two of its own, one of which was GREEN: (1) MAJOR —
+  the refactor that made the gate's conditions 1–4 the nudge's too moved the denial bound into a
+  `bounded` flag consulted at two sites, and the `Bash` copy was pinned by nothing (dropping it left
+  88/88 green while a shell-only searcher would have read "Denial 4 of 3"); the bound is decided at ONE
+  conjunct again and the bound test now spends three denials on `Grep` and asserts a shell search is
+  silent — mutation 1 red. (2) MAJOR — the README's coexistence paragraph said ccrc's half "speaks once
+  per session rather than once per call", false for a nudge that rides every source read until the
+  first query and a deny that speaks up to three times; corrected to what stops it. (3) MAJOR — the
+  branch's first docs commit carried a fleet-account label in D-1746's project list, red on
+  `topology-clean`'s history row at every later commit even after the tree was clean; the three commits
+  were rewritten with the same final trees so no blob speaks it. (4) MINOR — the hook's header still
+  said "two printfs … on PreToolUse it is a permission decision"; now three builders, one print site.
+  (5) MINOR — graphify's `hook-guard read` lowercases the path before matching and the nudge did not, so
+  `A.TS` was nudged by one half and not the other; lowercased at all three match sites, pinned by an
+  upper-case row measured red first. Also corrected: the 27-for-28 miscount of graphify's extension
+  tuple in Task 8 step 6 and D-1746 (the README already said 28), and the plan's hash references to the
+  rewritten commits. Verified by the reviewer rather than assumed: `src/graphify-out-tools/a.ts` IS nudged
+  (not a `graphify-out/` segment), `.d.ts` nudged, `Makefile`/`.gitignore`/`a.js.map`/`package.json`
+  silent, spaces/quotes/newlines/backslashes/20 KB paths all one well-formed line and exit 0, and a
+  Read never carries `permissionDecision` in any state.
+- **D-1745** (2026-09-06, OPERATOR RULING: R6 THE READ NUDGE) — asked "do we replace/enforce for the same
+  actions as the hooks graphify ships with?", the comparison (D-1746) showed two actions graphify covers
+  that the gate does not: a `Read` of a source file, and a search at the tail of a pipeline. The first is
+  a real hole — a session can navigate file by file and never trip the gate; the second is left open on
+  purpose (filtering output already produced is not a codebase question). Ruling 12:49 UTC, "Let's do
+  it": close the Read hole fleet-wide as a NUDGE (`additionalContext`, no `permissionDecision`), not a
+  deny — `Edit` requires a prior `Read`, so a deny would charge every session told to fix a named file
+  one denial before its first edit. Armed on the gate's own conditions 1–4, unbounded and uncounted
+  (advice spends nothing and stops at the first query), printed from the deny's print site after the
+  write (D-1689). Spec §2 "R6", Task 8 above. graphify's project hooks stay where they are.
+- **D-1746** (2026-09-06, FINDING: WHAT GRAPHIFY ITSELF SHIPS, MEASURED ON THIS FLEET) — graphify 0.9.9's
+  installer writes two `PreToolUse` hooks into a project's `.claude/settings.json`: matcher `Bash` →
+  `graphify hook-guard search`, which nudges (`additionalContext`, "MANDATORY: … You MUST run graphify
+  query before grepping") whenever the command CONTAINS `grep`, `ripgrep`, `rg `, `find `, `fd `, `ack `
+  or `ag ` anywhere, pipeline tails included; and matcher `Read|Glob` → `graphify hook-guard read`, which
+  nudges on any `file_path`/`pattern` ending in one of 28 source/doc extensions outside `graphify-out/`.
+  Both check only that `graph.json` EXISTS (no freshness), never block, never stop, and cover neither the
+  `Grep` tool nor subagents beyond a sentence asking the agent to pass the rule on. On this fleet they
+  are installed in seven projects (MekWarLive, rp-llm, custom-tools, expoAI-assistant,
+  synapsium-platform, one further repository whose name tracked text may not spell (`topology-clean`'s
+  fleet-account-label class), plus MekWarLive's worktree via the tracked file) — four of the
+  seven as UNTRACKED `.claude/settings.json`, so a fresh clone or worktree has none. Query log, the week
+  before the read side shipped (2026-08-25..09-02): 345 queries, 330 in those projects, ccrc-pwa 0; the
+  custom-tools worktrees (no untracked file) at 0 against the main checkout's 104. Since the ruling:
+  102 queries, ccrc-pwa 24 with only the gate and the card. Read as: the per-call nudge and the
+  once-per-session deny both move the number, and only a fleet-wide mechanism reaches every tree.
+- **D-1689** (2026-09-05, review of PR #54, MAJOR, FIXED) — THE DENY WAS SAID BEFORE IT WAS COUNTED. The
+  arm emitted the envelope at once and the hookstate write came ~45 lines later, and every path out
+  of the write is `exit 0`. Measured with `$REG` at 0500: four searches, four denials, every one
+  "Denial 1 of 3" — the bound never advanced, and the same failed write lost `graphQueries`, so the
+  documented escape (one graphify query) was dead too; with the registry unwritable (ENOSPC, quota, a
+  read-only `$HOME` — states the doctor watches for) every search tool in every session on the box was
+  denied until the operator touched the kill-switch. The hook's own comment stated one half of the
+  invariant ("counted only if it was said") and nothing enforced the dual. Fix: `_hook_emit_deny`
+  became `_hook_deny_json`, called only inside a `$( )`; the arm builds and counts; the envelope is
+  printed at the end of the file, after `mv -f` lands, and the 64 KB-cap exit and the write-failure
+  exit both leave silently. Test: registry `chmod 500` → stdout empty and no state file; restored →
+  the next search is "Denial 1 of 3" and the file reads `graphGateDenials: 1` (root skips it, since
+  root writes through 0500). Mutation — print the envelope in the arm again — 1 red.
+- **D-1690** (2026-09-05, review of PR #54, RECORDED, NOT FIXED) — WHAT THE GATE CANNOT TELL, so the
+  next reading is read correctly: a session showing `gated 3` may have earned it on none of these.
+  (1) The gate measures the tree named by the payload's `cwd` (fallback `$REG/<id>.workdir`), and a
+  `Bash` command `cd /other/repo && rg foo` is denied on THIS tree's graph — the other repo need
+  have none. And `_hook_graph_measure` does not walk up to a repo root, so a `cwd` in a subdirectory
+  of the repo is never gated at all (fail-open, silent). (2) `find … -delete` and `find … -exec` head
+  with `find` and are denied; a cleanup is answered with "run graphify query". (3) The hookstate is
+  one file, read-modify-write, no compare-and-swap: two subagent `PreToolUse` events in the same
+  instant both read `gd=0`, both deny, both write `gd=1` — one denial lost, the bound not strict
+  under fan-out. Pre-existing race class (`graphQueries` shares it), fail-open direction preserved.
+  (4) A hookstate that is the JSON literal `null` arms the gate as a measured zero — no writer in the
+  tree produces it. All four stop at three denials. Recorded here rather than fixed because each fix
+  is a design (walk to the repo root; parse `find`'s verbs; lock the hookstate) the ruling did not
+  ask for, and the reading will show whether any of them is worth its cost.
+  **Read against the series 2026-09-08 (D-1613's reading):** across 17 denials in 9 sessions none of the
+  four is observed — every session that reached the bound queried (two inside the hour, one the next
+  morning), and the day-1 fan-out counted 1, 2, 3 with nothing lost. Stays recorded; no fix built. The
+  reading's own limit, so nobody over-reads it: the series carries counters, not commands, so a class
+  can hide inside a session that converted anyway; what it can say is that no session paid the bound
+  and walked on.
+- **D-1691** (2026-09-05, review of PR #54, MINORS, closed) — (a) `graphGateCount`'s `null`→`0`
+  degrade was UNMECHANISED: its only consumer renders on `> 0`, so the fold passed every suite; pinned
+  directly in `pwa/test/session-line.test.tsx` (mutation 1 red). (b) The README guard's whole-file
+  `/declined/i` was satisfied 470 lines away by the unread bucket's "declined, not forgotten" —
+  measured green with the R5 history deleted; anchored on `PreToolUse[\s\S]{0,240}?declined` (1 red).
+  (c) `printf > "$tmp" 2>/dev/null` printed bash's own redirection failure on the hook's real stderr;
+  braced. (d) The `Bash` prefilter's comment claimed the ordinary call "pays nothing"; 2 of 14
+  ordinary commands (`npm run package` carries `ack`, `manage.py migrate` carries `ag`) pay one jq
+  fork while the session sits at zero queries — the comment now says so. (e) A test title claimed
+  "and does not gate" for an assertion on the card text alone; retitled. (f) Task 7's file list named
+  `pwa/src/fleet/SessionLine.test.tsx`, which does not exist — `pwa/test/session-line.test.tsx` — and
+  omitted the two skill suites whose harvest moved to `GM_FRESH=`. Two mutation rows measured green
+  and explained rather than fixed: the `_hook_graph_measure` rc conjunct is subsumed by
+  `_hook_gate_tree`'s non-empty `GM_BEHIND` (its partner row proves the pair jointly non-redundant),
+  kept as belt-and-braces; the reviewer's `typecheck-tests` was red only because its worktree lacked
+  `agent/node_modules` — that suite typechecks `agent/test` too, a setup fact worth knowing.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

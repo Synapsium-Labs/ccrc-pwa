@@ -151,8 +151,9 @@ export function deviceActor(device: string | null): string {
  * and the residual is DISCLOSED rather than papered over: the word names the
  * agent LANE, not the ccrc-agent process, so it cannot on its own tell the
  * agent apart from the server's own timers. That is precisely why `actor` is
- * NOT optional on `ActorFlags` — the actor is what makes `archiveMerged`'s
- * timer and an operator's tap distinguishable — and why a fifth surface word is
+ * NOT optional on `ActorFlags` — the actor is what makes an unattended lane's
+ * own write (the naming sweep's `sweep:names`, a run close's `run:<id> close`)
+ * and an operator's tap distinguishable — and why a fifth surface word is
  * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
  * set that `ccd:1641` also spells would be one enumeration in two languages
  * drifting apart.
@@ -184,6 +185,10 @@ export const CCD_ARGV = {
    *  separate entry because the two words are separate grants in the agent's
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
   enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
+  /** `start`/`enable` with the crossing declared — see `swapCross` below for
+   *  why the flag leads and why these are separate entries. */
+  startCross:  (w: string, p: string, wd?: string) => argv(['start', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
+  enableCross: (w: string, p: string, wd?: string) => argv(['enable', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
   /** `surface` is REQUIRED, not defaulted — the caller always knows who is
    *  asking, and a default here would be how a second caller quietly
@@ -221,6 +226,21 @@ export const CCD_ARGV = {
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
+  /** THE DELIBERATE CROSSING (account pools, spec §5.7). A SEPARATE ENTRY, not
+   *  a parameter of `swap` above — `start`/`enable`'s rule, for its reason: a
+   *  route picks the entry, so both spellings are enumerated by
+   *  `whitelist-subset.test.ts` and neither can drift out of the agent's list.
+   *
+   *  THE FLAG LEADS, and the position is the safety property, not a style
+   *  choice. A trailing `--cross-pool` on an old ccd's `start <w> <p> <wd>`
+   *  binds as a silently-ignored fourth positional and `runCcdOr502` renders
+   *  its exit 0 as `200 {ok:true}` — the silent-success class this file already
+   *  paid for once with `stop --surface`. A LEADING one is refused by
+   *  `_is_valid_wrapper` on every ccd that has ever shipped, so the wrong guess
+   *  costs a loud 502. `capSupported(state, POOLS_CAP)` at the call site is the
+   *  gate that should stop it reaching an old box at all; this is the second
+   *  lock. */
+  swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
   wsAdd:     (p: string) => argv(['ws-add', p]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
@@ -300,8 +320,8 @@ export const CCD_ARGV = {
   wsRelease: (id: string, dec: ActorFlags | null) =>
                argv(['ws-release', '--session', id, ...decFlags(dec)]),
   /** The second ccd write with no human in the loop — after `wsArchive`, which
-   *  `FleetWatcher.archiveMerged` already fires unattended on merge — and the
-   *  first whose argv is derived from model output. `--branch` carries a name
+   *  `coord/close.ts`'s failed-run close fires unattended — and the first whose
+   *  argv is derived from model output. `--branch` carries a name
    *  `_ws_branch_valid` has NOT seen yet: validation lives on the box, once,
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
@@ -311,6 +331,20 @@ export const CCD_ARGV = {
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
+   *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
+   *  `enable` rule above: the project-pool route picks between two words rather
+   *  than parameterising one builder. The agent grants the one prefix that
+   *  covers both, and `whitelist-subset` enumerates each separately so one
+   *  route-built shape cannot hide behind its sibling.
+   *
+   *  `project` reaches ccd UNVALIDATED, exactly as `/api/projects/:project/
+   *  workspaces` sends it: `_ws_project_valid` on the box is the authority,
+   *  and nothing server-side joins a request-supplied name into a path. */
+  projectPoolSet:   (project: string, pool: string) =>
+                      argv(['project-pool', '--project', project, '--pool', pool]),
+  projectPoolClear: (project: string) =>
+                      argv(['project-pool', '--project', project, '--clear']),
 } as const;
 
 /**
@@ -344,6 +378,23 @@ export function verbSupported(
  *  finding for this vocabulary, so its own green run is not what proves the
  *  parity; the `toContain` assertion above is. */
 export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
+
+/** The `ccd caps` token that says this box honours project pool tags (wave
+ *  2a). Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason: a
+ *  capability token copied into two files is the drift shape
+ *  `single-definition.test.ts` exists for. ccd's own `echo pools-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, and that test's `toContain` assertion is what keeps THIS one
+ *  equal to them.
+ *
+ *  It gates ONE decision, and only one: whether the server may build a
+ *  `--cross-pool` argv for create or swap. The project-pool tag route is gated
+ *  on the VERB's presence instead of on this token, while the ordinary-swap
+ *  409 pre-check and project placement forecast are the server's own decisions
+ *  over measured pool data — gated by neither this token nor any other. Wave 2a
+ *  introduced the token before those wave-3 consumers; this paragraph describes
+ *  their composed contract now that both stages are present. */
+export const POOLS_CAP = 'pools-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

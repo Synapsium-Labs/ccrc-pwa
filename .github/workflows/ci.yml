@@ -106,6 +106,18 @@ jobs:
         working-directory: agent
         run: npm ci
 
+      # Same cross-package need, for pwa: typecheck-tests.test.ts also spawns
+      # tsc against `pwa/tsconfig.json` (pwaRoot, resolved the same way as
+      # agentRoot) to close the "pwa's own `vitest run` never asks tsc
+      # anything" gap. Without pwa/node_modules here, that spawn fails on
+      # unresolvable imports (react, zustand, vite/client, …) — a dependency
+      # error, not a type error — and the assertion would report pwa "has
+      # type errors" for the wrong reason.
+      - name: Install pwa dependencies (needed by server's cross-package typecheck test)
+        if: matrix.package == 'server'
+        working-directory: pwa
+        run: npm ci
+
       # Local binary, never npx: `npx vitest` resolves to a global cache copy
       # with no jsdom and falsely reports "no tests" alongside 39 errors.
       - name: Test
@@ -176,6 +188,9 @@ jobs:
         run: npm ci
       - name: Install agent dependencies (needed by server's cross-package typecheck test)
         working-directory: agent
+        run: npm ci
+      - name: Install pwa dependencies (needed by server's cross-package typecheck test)
+        working-directory: pwa
         run: npm ci
       - name: Test
         working-directory: server

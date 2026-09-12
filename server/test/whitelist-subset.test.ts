@@ -26,6 +26,13 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   stopPair: ['claude', 'demo', 'pwa'],
   forget: ['claude-corp-demo'],
   swap: ['demo-quiet-basin', 'claude2'],
+  /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
+   *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
+   *  rule, for its reason: a route picks the ENTRY, so both spellings are
+   *  enumerated here and neither can drift out of the agent's whitelist. */
+  swapCross: ['demo-quiet-basin', 'claude-b'],
+  startCross: ['claude', 'demo'],
+  enableCross: ['claude', 'demo'],
   wsAdd: ['demo'],
   // Same bare `['ws-add']` grant, second builder: the dispatch path's
   // worker-declaring form. Its sample proves the FLAGGED shape crosses the
@@ -58,6 +65,12 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
+  // Two ENTRIES, not one parameterised by `pool: string | null` — the
+  // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
+  // picks between two words, the argv shapes differ in their tail, and layer
+  // 3 fails outright if nothing builds one of them.
+  projectPoolSet: ['demo', 'pool-a'],
+  projectPoolClear: ['demo'],
 };
 
 /**
@@ -189,14 +202,16 @@ describe('layer 3 — the list never drifts wider than the code', () => {
 
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
-  // because it is the SECOND WRITE the server calls unattended — after
-  // `ws-archive`, which `FleetWatcher.archiveMerged` already fires on merge
-  // with no human in the loop — and the first whose argv is derived from
-  // model output (FleetWatcher's naming sweep). So the grant must name the
-  // flag rather than the verb: a bare `['ws-rename']` permits `ccd ws-rename
-  // <anything> <anything…>`, which is exactly the positional argv surface
-  // this branch left behind. Cross-PACKAGE and object-reading, for the
-  // reasons the ws-reap assertion above states.
+  // because it is the OTHER write the server calls unattended — `ws-archive`
+  // used to be the first (`FleetWatcher.archiveMerged` fired it on merge with
+  // no human in the loop, until the operator ruled the auto-archive out on
+  // 2026-09-10 and archiving became a human/coordinator-only act) — and
+  // `ws-rename` is the one whose argv is derived from model output
+  // (FleetWatcher's naming sweep). So the grant must name the flag rather
+  // than the verb: a bare `['ws-rename']` permits `ccd ws-rename <anything>
+  // <anything…>`, which is exactly the positional argv surface this branch
+  // left behind. Cross-PACKAGE and object-reading, for the reasons the
+  // ws-reap assertion above states.
   it('ws-rename is grantable ONLY with --session', () => {
     const rn = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-rename');
     expect(rn.length, 'exactly one ws-rename grant').toBe(1);
@@ -315,6 +330,14 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     stopPair: ['stop', 'claude', 'demo', '--surface', 'pwa'],
     forget: ['forget', 'claude-corp-demo'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
+    // LEADING flag, before the positionals — the token order is
+    // parse-load-bearing and it is the SAFE direction under version skew (spec
+    // §5.6): a TRAILING `--cross-pool` on an old ccd's `start w p wd` is a
+    // silently ignored fourth positional, while a leading one is refused by
+    // `_is_valid_wrapper` on every ccd that has ever shipped. Loud beats silent.
+    swapCross: ['swap', '--cross-pool', 'demo-quiet-basin', 'claude-b'],
+    startCross: ['start', '--cross-pool', 'claude', 'demo'],
+    enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
     wsAdd: ['ws-add', 'demo'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
@@ -343,6 +366,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
     coordPause: ['coord-pause', '--state', 'on'],
+    projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
+    projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
@@ -355,5 +380,12 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'true']);
     expect(CCD_ARGV.prOpen('demo-quiet-basin', 'the work', 'Ym9keQ==', false))
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'false']);
+  });
+
+  it('the cross-pool builders carry the workdir AFTER the positionals, flag still leading', () => {
+    expect(CCD_ARGV.startCross('claude', 'demo', '/w'))
+      .toEqual(['start', '--cross-pool', 'claude', 'demo', '/w']);
+    expect(CCD_ARGV.enableCross('claude', 'demo', '/w'))
+      .toEqual(['enable', '--cross-pool', 'claude', 'demo', '/w']);
   });
 });

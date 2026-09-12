@@ -145,11 +145,14 @@ export function reviveDec(v: unknown): LifecycleDec | null {
     surface: isDecSurface(surface) ? surface : 'unknown',
     actor: s(o, 'actor'),
     reason: s(o, 'reason'),
+    // `'1'` or null, never coerced — see `LifecycleDec.crosspool`'s own
+    // docstring for why this is `s()`, not `n()`.
+    crosspool: s(o, 'crosspool'),
   };
 }
 
 /**
- * `LifecycleMeas`'s full twenty-five keys, and only those — a 26th key is a
+ * `LifecycleMeas`'s full twenty-eight keys, and only those — a 29th key is a
  * compile error here (TS2353) exactly as it is on the interface itself
  * (`shared/api.ts`'s own `LIFECYCLE_MEAS_KEY_MAP`).
  *
@@ -163,15 +166,17 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * "widen LifecycleMeas to the 23 keys ccd actually emits") and wave 3's fix
  * round (Task 24, commit `b54891f`, restoring `atticsrc`/`manifestBytes`) —
  * both landed on this branch before Task 28 ran, so the `LifecycleMeas` this
- * file imports already has twenty-five required readonly members. A literal
- * modelling only ten of them does not merely mis-model — it fails to
+ * file imports had twenty-five required readonly members at that HEAD (now
+ * twenty-eight — account pools wave 2b, Task 6 fix round 1, added `home`,
+ * `pool`, `reason`). A literal modelling only ten of them does not merely
+ * mis-model — it fails to
  * typecheck (TS2741/TS2739), which `server/test/typecheck-tests.test.ts`
- * would catch. `shared/api.ts`'s own docstring on `LifecycleMeas` (:3814-
- * 3858, quoted sentence at :3821) states the twenty-five as "A RULING, NOT AN
- * OVERSIGHT" [FIX ROUND 1, F6: corrected from a mis-measured :3828-:3854 —
- * STANDING RULE 2], and
+ * would catch. `shared/api.ts`'s own docstring on `LifecycleMeas` states the
+ * closed set as "A RULING, NOT AN OVERSIGHT" [FIX ROUND 1, F6: corrected from
+ * a mis-measured line-number citation — STANDING RULE 2, and see D-1850 on
+ * why this file now cites by grep rather than by line number], and
  * `server/test/lifecycle-wire.test.ts` and `server/test/ccd-lifecycle-
- * contain.test.ts` both already pin the twenty-five independently of this
+ * contain.test.ts` both already pin the twenty-eight independently of this
  * file. Per STANDING RULE 6 ("when a brief's prose and its code sample
  * disagree, the CODE SAMPLE wins") this is stronger than a prose/sample
  * split: it is the brief's sample against code two tasks already shipped on
@@ -181,7 +186,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * `task-29-report.md`.
  *
  * What the brief's "ten declared, rest lives in raw" design intent survives
- * as: any key a future ccd emits that is NOT one of these twenty-five still
+ * as: any key a future ccd emits that is NOT one of these twenty-eight still
  * never reaches `meas` — it is still recoverable only from `raw`, verbatim.
  */
 export function reviveMeas(v: unknown): LifecycleMeas | null {
@@ -198,6 +203,9 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     from: s(o, 'from'), dropped: n(o, 'dropped'), registered: n(o, 'registered'),
     state: s(o, 'state'), bytes: n(o, 'bytes'), resumed: s(o, 'resumed'),
     tombstone: s(o, 'tombstone'),
+    // Account pools wave 2b (Task 6 fix round 1) — the two `rehome` emitters'
+    // fields; see `LifecycleMeas.home`/`.pool`/`.reason`'s own docstrings.
+    home: s(o, 'home'), pool: s(o, 'pool'), reason: s(o, 'reason'),
   };
 }
 

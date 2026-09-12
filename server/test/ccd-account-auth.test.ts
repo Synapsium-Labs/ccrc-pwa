@@ -955,8 +955,18 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
     // what tells a capability token apart from a verb. Said here too, because
     // the file that adds the token and the file that classifies it are two
     // packages apart in a reader's head even though they are not on disk.
-    expect(read('server', 'test', 'ccd-archive.test.ts'))
-      .toContain("const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'stop-surface'];");
+    //
+    // MEMBERSHIP, NOT THE WHOLE ARRAY (D-2595). This quoted the entire literal
+    // until the
+    // account-pools merge added `pools-v1` to it — a false red over a list
+    // doing its job. What this test is FOR is that `account-v1` is classified
+    // at all; the exactness of the rest is `ccd-archive.test.ts`'s own business
+    // and it holds the set equal to the advertised one in both directions.
+    const arr = /const KNOWN_CAPABILITY_TOKENS = \[([^\]]*)\]/
+      .exec(read('server', 'test', 'ccd-archive.test.ts'));
+    expect(arr, 'ccd-archive.test.ts has no KNOWN_CAPABILITY_TOKENS array').not.toBeNull();
+    expect(arr![1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')))
+      .toContain('account-v1');
   });
 
   it('_inst_bins places the helper on BOTH platform arms', () => {
@@ -993,8 +1003,19 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
     // the case names it. The entry is what keeps that true once anything
     // stamps the file; `ccrc-uninstall.test.ts`'s stamped fixture is where it
     // goes red.
+    //
+    // MEMBERSHIP IN THAT `case`, NOT THE WHOLE ARM AS A LITERAL (D-2595). This
+    // assertion
+    // used to quote the entire line, and the account-pools merge broke it by
+    // adding two siblings to the same arm — a false red over a change that did
+    // exactly what this test wants. The claim was never "these five names in
+    // this order"; it is "`ccd-account-auth` is one of the names this arm
+    // skips", which is what the split below measures, still anchored to that
+    // one line rather than to the name appearing anywhere in a 12k-line file.
     const ccrc = read('ccd', 'ccrc');
-    expect(ccrc).toContain('case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-auth) continue ;; esac');
+    const arm = ccrc.match(/^\s*case "\$name" in ([^)]*)\) continue ;; esac$/m);
+    expect(arm, 'the executables `case` in _uninst_wrappers must be findable').not.toBeNull();
+    expect(arm![1].split('|')).toContain('ccd-account-auth');
     expect(ccrc).toContain('"$HOME/.local/bin/ccd-account-auth"');
   });
 

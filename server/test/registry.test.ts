@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -7,6 +7,7 @@ import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
   SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
+  STRANDED_NO_REASON, STRANDED_UNREADABLE,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -15,6 +16,72 @@ import { unreadableField, absentField } from './ioDoubles.js';
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
 };
+
+const REGISTRY_CENSUS_TAG = 'registry-read-census';
+
+function buildRecordFieldReadCount(src: string): number {
+  const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
+  expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
+  return [...body![1]!.matchAll(/\bfield(?:Measured)?\(/g)].length;
+}
+
+function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
+  const claims = new Map<string, number[]>();
+  const commentText = src.split('\n').map((line) => {
+    const comment = line.match(/^\s*(?:\/\/|\*)\s?(.*)$/);
+    return comment?.[1] ?? '';
+  }).join(' ');
+  for (const match of commentText.matchAll(/(\d+)\s+[^\d\n]{0,40}?\[registry-read-census:(fields|single|fleet)\]/g)) {
+    const values = claims.get(match[2]!) ?? [];
+    values.push(Number(match[1]));
+    claims.set(match[2]!, values);
+  }
+  return claims;
+}
+
+const GENERATED_DIRS = new Set(['node_modules', 'dist', 'coverage']);
+
+function filesUnder(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory() && !GENERATED_DIRS.has(entry.name)) files.push(...filesUnder(absolute));
+    else if (entry.isFile()) files.push(absolute);
+  }
+  return files;
+}
+
+describe('registry read census', () => {
+  it('derives the single-session and 24-session remote costs from buildRecord', () => {
+    const root = path.resolve(import.meta.dirname, '..', '..');
+    const registrySrc = readFileSync(path.join(root, 'server/src/registry.ts'), 'utf8');
+    const fieldReads = buildRecordFieldReadCount(registrySrc);
+    const expected = new Map<string, number>([
+      ['fields', fieldReads],
+      ['single', 1 + fieldReads],
+      ['fleet', 1 + 24 * fieldReads],
+    ]);
+    expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
+
+    const files = filesUnder(path.join(root, 'server'))
+      .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
+    const seen = new Map<string, number>();
+    for (const absolute of files) {
+      const file = path.relative(root, absolute);
+      const src = file === 'server/src/registry.ts'
+        ? registrySrc
+        : readFileSync(absolute, 'utf8');
+      if (!src.includes(`[${REGISTRY_CENSUS_TAG}:`)) continue;
+      for (const [kind, values] of taggedRegistryCensusClaims(src)) {
+        const derived = expected.get(kind);
+        expect(derived, `${file} has an unknown ${REGISTRY_CENSUS_TAG} kind: ${kind}`).toBeDefined();
+        expect(values, `${file} has a stale ${kind} registry census claim`).toEqual(values.map(() => derived!));
+        seen.set(kind, (seen.get(kind) ?? 0) + values.length);
+      }
+    }
+    expect([...seen.keys()].sort()).toEqual([...expected.keys()].sort());
+  });
+});
 
 describe('readRegistry', () => {
   let home: string;
@@ -525,8 +592,9 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 22 field reads instead of
-// a whole-fleet sweep. These pin that it agrees with readRegistry's own
+// narrowed to one id — one readdir plus that id's 23
+// [registry-read-census:fields] field reads instead of a whole-fleet sweep.
+// These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
 describe('readSessionRecord', () => {
@@ -573,7 +641,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 22-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 23-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -593,7 +661,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 22 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-a-MekWarLive', {
       wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -614,11 +682,7 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
-    // substrate marker (D-310 (was D-B8-14)) — the substrate file joined the sweep. The
-    // number is pinned rather than derived because it IS the remote-mode cost:
-    // one round trip each, per session, per 2-second tick.
-    expect(fieldReads).toHaveLength(22);
+    expect(fieldReads).toHaveLength(23);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 
@@ -1115,6 +1179,56 @@ describe('the lifecycle stamps (D3)', () => {
       expect(r.stopped, JSON.stringify(bad)).toBeNull();
       expect(r.lifecycleUnmeasured, JSON.stringify(bad)).toEqual(['stopped']);
     }
+  });
+
+  it('reads a strand marker, splitting epoch from reason', () => {
+    seed(reg, 'demo-quiet-basin', {
+      stranded: '1785299000 claude:pool=pool-b claude-a:limit',
+    });
+    return read().then((r) => {
+      expect(r.stranded).toEqual({
+        at: 1785299000, reason: 'claude:pool=pool-b claude-a:limit',
+      });
+    });
+  });
+
+  it('gives a strand with no reason a sentence, never empty wire text', async () => {
+    // The same ruling as SWAP_BLOCKED_NO_REASON: preserve an actionable reason
+    // for wave 4's renderer instead of carrying `reason: ''` through the wire.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000' });
+    expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000    ' });
+    expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
+  });
+
+  it('a LISTED but unreadable strand marker fails SHUT — never null', async () => {
+    // "Not stranded" over a flagged row is the destructive direction (spec
+    // §5.8.3): a misread must not make the wire assert that the fleet is fine
+    // while a session waits on nobody.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
+    const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toEqual({ at: 0, reason: STRANDED_UNREADABLE });
+  });
+
+  it('an unreadable read for a marker that is NOT in the listing is null, not a fabricated strand', async () => {
+    // The other half of the same ladder, and the reason presence comes from the
+    // LISTING: a dropped agent-WS round trip on a session that has no
+    // `.stranded` at all must not mint one.
+    const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toBeNull();
+  });
+
+  it('a marker cleared between the listing and its own read is null — a proven ENOENT is a proven clear', async () => {
+    // `_strand_clear` runs on EVERY healthy tick (spec §5.5.4 step 3), so this
+    // race is routine, not exotic — D-113's argument for `.substrate`, applied
+    // to a marker that is removed far more often.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
+    const r = await read(absentField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toBeNull();
+  });
+
+  it('a session with no strand marker reads null', async () => {
+    expect((await read()).stranded).toBeNull();
   });
 });
 

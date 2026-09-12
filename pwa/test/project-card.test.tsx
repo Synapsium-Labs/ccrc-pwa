@@ -16,10 +16,10 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
   workdir: '/w', workspace: 'quiet-mesa', name: null, status: 'idle',
   statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
-  model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
+  model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
@@ -380,7 +380,7 @@ const FROZEN = 1_800_000_000_499;
 
 const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'demo', sessionId: null, workspace: null, branch: null,
+  project: 'demo', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },

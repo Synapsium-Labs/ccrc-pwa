@@ -81,9 +81,9 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: Date.now() - 2 * MIN,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
   version: '2.1.0',
   ...over,
 });
@@ -233,7 +233,7 @@ describe('FleetScreen', () => {
   // rendered no strip.
   it('renders the accounts strip in the first-run block, not just the populated fleet', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false }],
+      accounts: [{ wrapper: 'claude', five: 0, seven: 0, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false }],
       projected: { wrapper: 'claude', score: 0 },
       roster: [],
     });
@@ -295,8 +295,8 @@ describe('FleetScreen', () => {
       conn: 'open',
       sessions: [],
       feed: [
-        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '' },
-        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '' },
+        { seq: 1, at: stamp - 60_000, kind: 'mail', sessionId: 'x', title: 'read already', body: '', runId: null },
+        { seq: 2, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
       ],
     });
     expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
@@ -944,7 +944,7 @@ describe('AccountsStrip', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
       accounts: [
         // gpt has NO active session, yet still shows — telemetry-driven.
-        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false },
+        { wrapper: 'gpt', five: 8, seven: 8, ts: nowSec, fiveResetAt: nowSec + 2 * 3600, sevenResetAt: nowSec + 3 * 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false },
       ],
       // gpt is not home-able, so the projection names an Anthropic account
       // regardless of what telemetry exists — see `projectHome` in limits.ts,
@@ -1202,7 +1202,7 @@ const RUN_FROZEN = 1_800_000_000_499;
 
 const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'OpenClawHetzner', sessionId: null, workspace: null, branch: null,
+  project: 'OpenClawHetzner', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
   openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },

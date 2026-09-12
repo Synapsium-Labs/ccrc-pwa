@@ -19177,3 +19177,222 @@ is not a citation); and `ccrc-install-graphify.test.ts`'s D-1343 comment exclude
 and fixer that produced this task's numbers are three short scripts and are worth rebuilding rather
 than reinventing — the load-bearing one is the byte-equality check, because it is what separates a
 repair from a plausible-looking rewrite.
+
+### D-2592 — the roster re-pick dropped the project, and neither parent of the merge was wrong
+
+`cmd_ws_add` picks a home twice. The first pick is pool-aware — `hw=$(_ws_least_loaded "$project")`.
+The second is the re-pick this wave added, inside the subshell that re-sources `accounts.sh` after the
+`git fetch` window, so a workspace is never placed on a lane that LEFT the roster mid-command. It was
+written as a bare `_ws_least_loaded || true`, which was the only call there was: on this branch that
+function took no arguments.
+
+Account pools then gave `_ws_least_loaded` an optional `[project]` and made the POOL FILTER depend on
+it. With no argument, `_project_pool_state ""` answers `untagged`, `_pool_ok` admits every candidate,
+and the re-pick overwrites the pool-aware pick with the CHEAPEST lane on the box — out of pool, and
+with no crossing recorded, which is the exact move `cmd_swap`'s guard refuses by name.
+
+**Git merged both changes with no conflict.** Each side is correct against its own parent; the defect
+exists only in the tree neither author ran. `ccd-pool-ok.test.ts`'s "still places into a tagged project
+when the pool has an account" is what said so — 36/36 at `origin/main`, 35/36 at the merge, and the
+failing assertion named `claude` (pool-a, cheapest) where the project was tagged `pool-b`.
+
+Measured rather than reasoned, and worth recording because the reasoning was wrong twice: the first
+hypothesis was the account wave's own `_account_measured` gate, and neutralising that line left the
+test just as red. What found it was `grep -n '_ws_least_loaded'` across all three trees at once —
+`origin/main` has TWO call sites and both pass `"$project"`; the branch tip has the bare one; the merge
+has all three.
+
+Fixed by passing `"$project"`, with the whole account above written at the call site.
+
+### D-2593 — two waves independently closed the same mirror gap, and the merge kept both
+
+`shared/roster-json.mjs`'s `hidden` gate exists twice in the merged file: once as account pools wrote it
+(D-1663, off spec §12 P-1) and once as this wave wrote it (D-1854). Same field, same rule, same refusal
+text, different weeks and different specs. Git had no reason to conflict them — they landed at different
+offsets — so the merge produced `const hidden` declared twice in one scope, which does not parse.
+
+Nothing in either suite caught it. `tsc --noEmit` did, on the first run after staging, because the
+server typechecks the `.mjs` mirror too. Worth stating plainly: the file was BROKEN for every bare-node
+caller between the merge commit and this fix, and the only reason that window was short is that a
+typecheck runs before the suites here.
+
+The half that is not a merge accident is the one worth keeping: a mirror gap wide enough for two
+unrelated waves to trip over it, weeks apart, is not an oversight — it is what an unpinned duplicate
+costs. The survivor now says so.
+
+### D-2594 — the uninstall census was already stale on `origin/main`, and this wave made it worse
+
+`_uninst_tree_bins`' `rm -f --` list on `origin/main` removes seven names; the paragraph above it calls
+`ccd-account-health` "the FIFTH ccrc-OWNED executable" and `graphify` "the SIXTH entry in this census".
+Main had added `ccd-telemetry-keepalive` to the list without amending the sentence that counts it — so
+the prose said SIXTH about a list of seven before this branch touched anything.
+
+This is the second booking of the same defect at the same site: D-1347 is the first, and its own comment
+("the install grew a fifth name and this census did not, because it is hand-kept") is still sitting four
+lines below the count it was written about. Adding `ccd-account-auth` would have made graphify the
+eighth while the paragraph still said sixth.
+
+A SECOND INSTANCE, same class, different census: `README.md`'s account-entry shape reads
+`{id, label, configDirSuffix, exec, homeAble, hue, telemetry, hidden?}`. Account pools added `pool` to
+`parseRoster`, to both mirrors and to the allowed-key set, and never to that sentence — so the README
+on `origin/main` describes an entry shape the parser has not had since wave 1. Neither parent listed it;
+the merged tree would have shipped the omission with a wave's worth of new prose around it. `pool?` added.
+
+Corrected to the derived census — seven ccrc-owned names, graphify eighth — in `ccd/ccrc`, in
+`deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` header and in `ccrc-uninstall.test.ts`'s fixture
+comments, all three of which carry their own hand-kept ordinal. **The ordinals are still unpinned.**
+`ccrc-uninstall.test.ts` measures the LIST in both directions and reds if a name is missing; nothing
+measures the WORDS "FIFTH"/"SIXTH"/"EIGHTH", which is why this has now gone stale twice with green
+suites either side of it.
+
+### D-2595 — a test that quotes a whole list literal reds when the list does its job
+
+Two pins in `ccd-account-auth.test.ts` quoted an entire line of another file:
+
+* `_uninst_wrappers`' skip arm, as `case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-auth) continue ;; esac`
+* `ccd-archive.test.ts`'s `const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'stop-surface'];`
+
+The merge added two siblings to the first and one to the second — each exactly the change those lists
+exist to receive — and both pins went red. A false red, for a correct change, in a test whose stated
+claim was never about the other members: the comments say "the entry is what keeps that true" and "the
+capability is named in the list that partitions caps output". Both claims are MEMBERSHIP.
+
+Re-expressed as membership, still anchored to the specific line (the `case` arm is matched by regex, not
+searched for anywhere in a 12k-line file) so the pin is no weaker against the mutation it was written
+for. The general rule this is an instance of: quote a literal when the exact bytes ARE the claim; when
+the claim is "X is in this list", split the list.
+
+### D-2596 — each parent's comment was true of its own parent and false of the merge
+
+`_ws_least_loaded`'s header is argued at length on both sides of the merge, and the merge falsified one
+paragraph in each direction:
+
+* **main's** parity list says gap 1 — skipping a `telemetry:'none'` lane — "did not close", because
+  "the generated file carries ids, home-ability and the upstream id, and no telemetry field at all, so
+  bash still has nothing to consult". This wave's `_account_measured` closes exactly that, off
+  `CCRC_MEASURED`, which `shared/generate.mjs` has emitted since stage 2a.
+* **this branch's** copy says gap 2 — the half-measured row — is "STILL OPEN". Main's `_limit_score`
+  closes it, and a third one nobody on this branch had seen (the half-ROLLED row, reachable by any
+  Anthropic account at any 5h reset), with one line: `[[ -z "$five" || -z "$seven" ]] && return 0`.
+
+Neither author was careless; each measured their own tree. The merged header states the merged truth —
+three fallback tiers, gap 1 closed HERE with its own residual hole named (`_account_measured` reads an
+unset `CCRC_MEASURED` as measured-everything, a state `projectHome` cannot reach), gaps 2 and 3 closed
+by `_limit_score`, and `compatible` turning gap 1 from an agreement of circumstance into a rule.
+
+Three measured claims the same header makes were re-run against the merged tree rather than trusted:
+the candidate-walk census (`grep -cE 'for (w|cand) in ...'` → 5 lines, 4 walks), the `--cross-pool` arm
+count (5) and the `_reg_read "$id" project` census (6 bare, 5 non-comment). All three still hold.
+
+### D-2599 — "take theirs" on a DELETION hunk silently drops what this side added to the deleted block
+
+`ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each carried their own copy of `TREE_FILES`
+— the list of repo paths the install fixture builds a placed tree from. Main's memory-store wave
+extracted both copies into one `server/test/installTreeFixture.ts` and deleted them from the two suites,
+which `single-definition.test.ts` now pins.
+
+Both conflicts therefore presented as "ours: 143 lines / theirs: 0". Taking theirs is the correct
+resolution — the list moved — but it is ALSO a deletion of everything this branch had added to those
+lists, in both copies, and a deletion hunk shows you none of that. Three entries were lost:
+`ccd/ccd-account-auth`, `shared/base-url.mjs` and `deploy/account-op.mjs`. I moved the first, having
+noticed only the first.
+
+**120 tests across the two files went red**, and the failure did not name the cause: `shared/roster-json.mjs`
+imports `./base-url.mjs`, so a placed tree without it fails the generator's first spawn with
+`ERR_MODULE_NOT_FOUND`, which surfaced as `expected 'node:internal/modules/esm/resolve:275…' to contain
+'did not converge'`. The lesson is mechanical and worth keeping: when a conflict's other side is EMPTY,
+diff the deleted block against the merge-base before accepting it — `comm -23` over the two extracted
+lists is the whole check, and it takes a minute.
+
+Both entries restored to the shared module, each carrying the argument its original site had.
+
+### D-2600 — a proximity pin is a constraint on where a merge may insert, and nothing says so at the site
+
+`graph-noise-ship.test.ts` requires `install_atomic ccd/graph-noise.default.list` to sit within three
+CODE lines of `install_atomic ccd/ccd-graph-sweep` in `deploy/deploy.sh` — "if the sweep moves, this
+follows it; if the list drifts into the server lane, they stop being neighbours and this reds". It is a
+good pin and it did its job.
+
+What it cannot say is that the three-line gap is a BUDGET, and that main had already spent one of it on
+`ccrc-models-probe`. Unioning this wave's `ccd-account-auth` into the same run of `install_atomic` calls
+— the obvious resolution, and the one every other executable in that block got — spent the last of it
+and reddened a test about the noise list, which this wave never touched.
+
+Moved below the noise list instead, which costs nothing: both sites are inside the agent block and both
+precede the agent restart the placement actually cares about. The constraint is now written at the
+insertion point, because the next wave to add an executable there will meet it too and the test's own
+message names neither the budget nor who spent it.
+
+### D-2601 — `ccrc account remove` was a fourth speller of a path main had just single-sourced, and its message denied a verb that now exists
+
+`_acct_remove` reported the model-class registry as KEPT by spelling
+`$HOME/.ccrc/models/$id.classes.json` in bash. Main's model-class wave then made that filename
+single-source: `single-definition.test.ts` holds `classes.json` to three files — `deploy/models-op.mjs`,
+`shared/models.mjs`, `shared/models.ts` — none of them bash, on the argument that "a bash holder would
+be a second, unvalidated editor of the same bytes".
+
+This arm is a REPORTER, not an editor, so the rule's stated reason does not bite. It was still a fourth
+speller, and the fix that costs nothing also makes the report TRUER: there are **four** files, not one —
+`<id>.json`, `<id>.classes.json`, `<id>.classes.tsv`, `<id>.effort.json` — so naming the registry alone
+told an operator about a quarter of what the removal left behind. A prefix glob over
+`$HOME/.ccrc/models/$id.*` reports all four and spells none of them.
+
+**The two waves were designed to meet, weeks apart, and neither author knew.** `models-op.mjs`'s own `rm`
+comment reads: "`ccrc account remove` deliberately never deletes under ~/.ccrc/models/ and names this
+verb as the remedy, so an ORPHAN — no roster row for this id — is the expected case, not an error."
+Meanwhile this branch's operator step said ccrc "kept it because this build has no owning cleanup verb"
+— true when written, false from the merge commit onward. It now names `ccrc models <id> rm`, which is
+what main was waiting for it to say.
+
+One defect found on the way: the flag I first wrote reused `stands`, which is that function's
+operator-facing SENTENCE variable and is still live above the site. It got its own local.
+
+### D-2602 — the convention's WRITER joined its three readers, which is the argument the pin asked for
+
+`single-definition.test.ts` pins `.cc-secrets/<id>-oauth.env` to an exact holder list and its comment
+sets the bar: "A FOURTH holder should have to argue again." This branch's `ccd-account-auth` is that
+fourth, and the argument is the strongest available — it is not another reader, it is the **writer**.
+`_auth_write_secret` writes a 0600 temp file beside the target and renames it into place; the three
+existing holders (`ccd-account-health`'s probe, `ccd-telemetry-keepalive`'s turn, `ccrc-doctor-checks`'
+re-measurement) all read what that rename publishes.
+
+Stated plainly because it changes how the pin should be read from here on: every holder before this one
+was a CONSUMER of a convention no file in the tree established. The account wave added the producer, so
+it is now one writer and three readers rather than three readers and an absent author.
+
+Measured on the same terms as the other three — its constructing line is the `mv -f --`, not the temp
+path beside it, and its shape normalises to the same `<dir>/<id>-oauth.env` the other three build. The
+bar is raised, not lowered: a FIFTH holder still has to argue.
+
+### D-2603 — two single-sourced vocabularies that overlap by two tokens, neither derived from the other
+
+This wave made `shared/providers.ts` the one home of the provider ids and pinned it with a scan that
+reds on any source file restating two or more of them inside one `[...]`. Main's model-class wave
+declares `PROBE_KINDS = ['codex', 'openrouter', 'compatible']` in `shared/models.ts`. Two of those three
+words are provider ids, so the scan fires.
+
+It is not a restatement, and main's own comment draws the line first: "It names the DISCOVERY mechanism,
+not the account-connections `provider` (auth and connection): round-2 ruling 10 keys probes here and
+nowhere else." The lists overlap by two tokens and neither derives from the other — `codex` is a probe
+and not a provider, `anthropic` is a provider with no probe. **Collapsing them would be the defect**,
+so the scan gets a one-LINE exemption rather than a file-level one.
+
+The exemption is pinned LIVE, which is the part worth copying: two assertions check that `PROBE_KINDS`
+still trips the scan and that nothing else in `shared/models.ts` does. Without the first, renaming or
+moving that constant would leave a filter quietly exempting a line that no longer exists, and the scan
+would go on passing while protecting nothing.
+
+### D-2604 — the server typecheck is not the tests typecheck, and only the second one saw this
+
+Main widened `projectHome(roster, limits)` to `projectHome(roster, limits, pool)`. This branch's three
+new parity cases in `projected-home.test.ts` call it with two arguments.
+
+`cd server && tsc --noEmit -p tsconfig.json` passed on the merged tree — that project excludes `test/`.
+The break surfaced twice over, as three runtime failures (`Cannot read properties of undefined (reading
+'state')` inside `poolRule`) and as `typecheck-tests.test.ts`'s tests-inclusive project reporting three
+TS2554s. Worth recording because the first gate anyone reaches for after a merge is the package
+typecheck, and on this repo that gate cannot see the directory where most of the merge's risk lives.
+
+Fixed by passing `{ state: 'untagged' }`, which is not merely what compiles: the bash half of each pair
+is `_ws_least_loaded` called with no project, so untagged is the only value that keeps the two sides
+being asked the same question.

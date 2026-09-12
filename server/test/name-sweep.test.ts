@@ -291,7 +291,7 @@ describe('the naming sweep', () => {
   // worktree and keeps its transcript, so without this guard the row is fully
   // in scope for conditions 2-4 and a server restart (`attemptedRenames` is
   // empty at boot) would rename a branch the operator can no longer find by
-  // name. Same guard, same shape, as `archiveMerged` (watch.ts).
+  // name. Same guard, same shape, as `sweepMerged` (watch.ts).
   it('does not rename an archived workspace, even though the row is otherwise eligible', async () => {
     const h = harness();
     seed(h.home, { archived: '1785300123' });

@@ -128,8 +128,9 @@ function idArray(ids) {
  *
  * ── `_ccrc_dir_id`, `_ccrc_label`, `_ccrc_hue`, `CCRC_MEASURED` ──
  *
- * The four emissions that finished what stage 2a started. Their one consumer
- * is `ccd/statusline-command.sh`, which until they existed held the LAST
+ * The four emissions that finished what stage 2a started. Their consumers are
+ * `ccd/statusline-command.sh` and, for `CCRC_MEASURED`,
+ * `ccd/ccd-telemetry-keepalive`; the statusline until then held the LAST
  * hand-written copy of the roster in the tree — four literal `case` arms
  * mapping a config dir to an account, and four more mapping it to a label and
  * a colour. An account those arms did not name got no `~/.cc-limits/<id>.json`
@@ -164,6 +165,35 @@ function idArray(ids) {
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
+ * ── `_ccrc_pool` ──
+ *
+ * The account half of project pools. Emitted ALWAYS, even when no account is
+ * tagged — an empty `case` — for two reasons that are not the same reason:
+ * `declare -F _ccrc_pool` is how `ccd`'s `_acct_pool` asks whether this box's
+ * `accounts.sh` knows about pools at all, and the supervisor's 5-second loop
+ * calls this function (waves 2a/2b), where `command not found` would be the
+ * answer on every box whose roster
+ * has no tags yet. An empty `case … esac` is valid bash and answers empty at
+ * rc 0, which is exactly the contract below.
+ *
+ * That contract is `_ccrc_cfg_dir`'s, restated: empty stdout at exit 0 for an
+ * untagged id AND for an unknown one, with the caller deciding what silence
+ * means. Folding those two silences together is a real fold and is disclosed
+ * rather than assumed — it is safe only because `_is_valid_wrapper` gates every
+ * id before a pool question is ever asked of it.
+ *
+ * Values are emitted RAW, like ids and hues and for the same reason:
+ * `POOL_NAME_RE` (`shared/roster.ts`) is `ID_RE`'s shape, so a pool name holds
+ * no whitespace and no shell metacharacter, and `echo` is safe because the name
+ * must begin with a lowercase letter and so can never be `-n`/`-e`/`-E`.
+ *
+ * This emission is also why `pool` is in `accounts.sh` at all rather than only
+ * in the JSON: `rosterAgreement` compares digests of the GENERATED file
+ * (`server/src/fleetstate.ts`), so a roster field that is never emitted is a
+ * field whose disagreement between the box's two hand-owned `accounts.json`
+ * copies nobody can see. `hidden` is deliberately outside the digest and stays
+ * there.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */
@@ -171,6 +201,15 @@ export function generateAccountsSh(roster) {
   const ids = roster.accounts.map((a) => a.id);
   const homeAbleIds = roster.homeAble.map((a) => a.id);
   const measuredIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
+  // WHAT BACKEND IS THIS, as opposed to WHERE MAY WORK BE PLACED. Those are two
+  // questions and `homeAble` used to answer both, because until now every
+  // home-able account happened to be an Anthropic one. Four things in ccd ask
+  // `_is_home_able` when they mean "does this lane speak Claude Code's own
+  // protocol" — the `--remote-control` flag, the spawn-time effort injection,
+  // the cross-backend transcript sanitiser, and the 429 exclusion writer — and
+  // the moment a Codex lane becomes placeable those four start lying. Emit the
+  // backend answer separately so each site can ask the question it means.
+  const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -203,11 +242,29 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.hue} ;;`)
     .join('\n');
 
+  // One arm per TAGGED account, in `byIdLengthDesc` order like `_ccrc_cfg_dir`
+  // above. `typeof a.pool === 'string'` rather than a truthiness test and rather
+  // than `!= null`: `generateAccountsSh` consumes a `Roster` STRUCTURALLY, with no
+  // runtime check that its argument ever passed through `parseRoster` or
+  // `rosterFromJson` (see the header). `!= null` would already exclude both
+  // `null` and `undefined`, so that is NOT the distinction being drawn here — what
+  // `typeof === 'string'` adds is refusing a non-string that reached this function
+  // without being validated by either producer, which `.mjs` callers are not
+  // typechecked against. `a.pool = 7` under `!= null` emits `id) echo 7 ;;`; under
+  // this predicate it emits no arm. Untagged, unvalidated and junk all produce no
+  // arm, which is the only answer this emitter can honestly give for a value it
+  // was never allowed to see.
+  const poolArms = roster.byIdLengthDesc
+    .filter((a) => typeof a.pool === 'string')
+    .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
+    .join('\n');
+
   return `#!/usr/bin/env bash
 # Generated from ~/.ccrc/accounts.json. Do not edit — \`ccrc install\` rewrites it.
 CCRC_ACCOUNTS=${idArray(ids)}
 CCRC_HOME_ABLE=${idArray(homeAbleIds)}
 CCRC_MEASURED=${idArray(measuredIds)}
+CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in
@@ -233,6 +290,11 @@ ${labelArms}
 _ccrc_hue() {
   case "$1" in
 ${hueArms}
+  esac
+}
+_ccrc_pool() {
+  case "$1" in
+${poolArms}
   esac
 }
 `;

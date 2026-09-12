@@ -8,6 +8,7 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { saveSnapshot, type FleetState } from '../src/fleetstate.js';
 import { KeyedQueue } from '../src/inject/queue.js';
+import { CCD_ARGV } from '../src/ccdargv.js';
 import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -46,10 +47,10 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
-  started: true, spawnState: null,
+  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+  started: true, spawnState: null, ask: null,
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -65,21 +66,21 @@ describe('GET /api/fleet/health', () => {
     expect(res.statusCode).toBe(200);
     // `roster: 'unknown'` and not `'agreed'` — local mode drives ccd off this
     // same roster, so there is nothing to compare and nothing was compared.
-    expect(res.json()).toEqual({ mode: 'local', connected: true, downSince: null, roster: 'unknown', build: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'local', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
@@ -112,7 +113,34 @@ describe('GET /api/fleet/health', () => {
       .toMatchObject({ roster: 'unknown' });
     await app.close();
   });
-});
+
+  it('local mode with no measured caps says projectPools: unknown — never unavailable', async () => {
+    // `unavailable` is a MEASURED absence an operator acts on (redeploy the
+    // agent lane). No caps list is no evidence, and wave 4's banner arms on
+    // `unavailable` only — so folding these two would put a "redeploy the
+    // fleet host" banner on every dev box.
+    const app = await buildServer(testDeps());
+    const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+    expect(res.json().projectPools).toBe('unknown');
+    await app.close();
+  });
+
+  it('a fleet host advertising project-pool is enforced; one that is not is unavailable', async () => {
+    const verb = CCD_ARGV.projectPoolClear('demo')[0]!;
+    for (const [verbs, expected] of [
+      [[verb, 'swap'], 'enforced'],
+      [['swap', 'start'], 'unavailable'],
+      [null, 'unknown'],
+    ] as const) {
+      const app = await buildServer(remoteDeps({}, {
+        connected: true, downSince: null, ccdVerbs: verbs === null ? null : [...verbs],
+        rosterFp: null, build: null,
+      }));
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.json().projectPools, JSON.stringify(verbs)).toBe(expected);
+      await app.close();
+    }
+  });});
 
 describe('GET /api/fleet — degraded mode', () => {
   it('serves the cached snapshot with stale:true + downSince when disconnected', async () => {
@@ -135,7 +163,14 @@ describe('GET /api/fleet — degraded mode', () => {
     const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
-    expect(res.json()).toEqual({ sessions: [] });
+    // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
+    // carries `pools` for first paint, and this stays an exact-shape assertion
+    // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
+    // its meaning. `listed: false` is the truthful answer for a fixture whose
+    // registry root does not list: nobody decides, and that is not `untagged`.
+    expect(res.json()).toEqual({
+      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+    });
     await app.close();
   });
 
@@ -182,7 +217,14 @@ describe('GET /api/fleet — degraded mode', () => {
     const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, cachePath);
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
-    expect(res.json()).toEqual({ sessions: [] });
+    // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
+    // carries `pools` for first paint, and this stays an exact-shape assertion
+    // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
+    // its meaning. `listed: false` is the truthful answer for a fixture whose
+    // registry root does not list: nobody decides, and that is not `untagged`.
+    expect(res.json()).toEqual({
+      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+    });
     await app.close();
   });
 });
@@ -331,4 +373,33 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
       expect.soft(lc.gaps, 'gaps').toBe(0);
     } finally { await app.close(); }
   });
-});
+
+  // The ask half of this composed first-paint handler, plus its websocket
+  // cold-start twin, is pinned by fleetws.test.ts's cold-path ask cases.
+  it('a live assemble carries the measured pools for first paint', async () => {
+    const home = mkTmp('ccrc-fleet-pools-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-sessions', 'pools'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'pools', 'demo'), 'pool-a');
+    const app = await buildServer(testDeps(home));
+    const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    expect(res.json().pools).toEqual({
+      listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+    });
+    await app.close();
+  });
+
+  it('the DEGRADED arm carries no pools key at all — a cached tag is not live policy', async () => {
+    // Nothing pooled is persisted (spec §5.4.1). Serving the last snapshot must
+    // not come with a pool answer this process could not take, so the key is
+    // ABSENT and the PWA renders nothing rather than a stale chip.
+    const cachePath = path.join(mkTmp('ccrc-fleet-pools-cache-'), 'state-cache.json');
+    await saveSnapshot([session('demo')], cachePath);
+    const app = await buildServer(remoteDeps({}, {
+      connected: false, downSince: 1785300000000, ccdVerbs: null, rosterFp: null, build: null,
+    }, cachePath));
+    const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    expect(res.json().stale).toBe(true);
+    expect(Object.keys(res.json())).not.toContain('pools');
+    await app.close();
+  });});

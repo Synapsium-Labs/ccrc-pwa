@@ -17,7 +17,13 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from '../src/server.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -207,6 +213,10 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    // The durable feed, filterable by programme (cross-repo programmes §4). A
+    // NEW ROW rather than a `--program` on some existing one: the table is the
+    // client's own contract and grows by a row, never by a URL argument.
+    [['feed', 'list'], 'GET', '/api/feed'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
@@ -231,10 +241,9 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Eighteen since `runs items-list` landed. That row is NOT a widening of
-    // the surface by imitation — it is the READ half of `runs items`, which
-    // was unusable without it: settling needs ids and nothing published them.
-    expect(keys).toHaveLength(18);
+    // Nineteen since `feed list` landed — the programme-scoped read of the
+    // durable feed, which the coordinator corpus is about to name.
+    expect(keys).toHaveLength(19);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -281,6 +290,53 @@ describe('the output contract', () => {
     reply = { code: 200, body: '{"ok":true,"runs":[]}' };
     const r = await runBoth(['runs', 'list']);
     expect(r.stdout.trim()).toBe('{"ok":true,"runs":[]}');
+  });
+
+  it('uses the fixture box token against an armed real feed route', async () => {
+    const base = testDeps(home);
+    fs.writeFileSync(
+      path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine('fixture passphrase', { n: 1024, r: 8, p: 1, keylen: 32 }, 1)}\n`,
+      { mode: 0o600 },
+    );
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildServer({
+        ...base,
+        cfg: { ...base.cfg, authEnabled: true },
+        mailToken: TOKEN,
+        coord,
+      });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      expect(port).toBeGreaterThan(0);
+      fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
+        `CCRC_AGENT_TOKEN=irrelevant\nCCRC_SERVER_URL=http://127.0.0.1:${port}\n`);
+
+      const authenticated = await run(['feed', 'list']);
+      expect(authenticated.status).toBe(0);
+      expect(JSON.parse(authenticated.stdout)).toEqual({ events: [] });
+      expect(authenticated.stderr).toMatch(/^http 200$/m);
+
+      // A handler refusal is still protocol output, not a transport failure.
+      fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), `${'x'.repeat(64)}\n`);
+      const refused = await run(['feed', 'list']);
+      expect(refused.status).toBe(0);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: 'unauthenticated',
+        verdict: 'no-session',
+      });
+      expect(refused.stderr).toMatch(/^http 401$/m);
+    } finally {
+      try {
+        if (app) await app.close();
+      } finally {
+        coord.db.close();
+      }
+    }
   });
 
   it('puts the status on stderr, so a caller never parses it back out of the body', async () => {
@@ -400,10 +456,12 @@ describe('an id reaches a path template only if the table declared one', () => {
 });
 
 describe('a query key rides only if its row declared it', () => {
-  // The corpora ask for four of these and no more: `to`, `project`, `session`,
-  // `of`. Anything else is refused rather than appended, for the same reason the
-  // path is a template and not an argument — a client that forwarded arbitrary
-  // query keys would be a URL builder with extra steps.
+  // Every key any row declares, today: `to`, `program`, `all`, `limit` (mail
+  // list), `of`/`project` (peers), `session` (lifecycle), `project`/`all`
+  // (claims), `project` (ledger), `program`/`limit` (feed list). Anything else
+  // is refused rather than appended, for the same reason the path is a template
+  // and not an argument — a client that forwarded arbitrary query keys would be
+  // a URL builder with extra steps.
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
@@ -436,6 +494,30 @@ describe('a query key rides only if its row declared it', () => {
       expect(r.status, `value ${JSON.stringify(bad)} must be refused`).not.toBe(0);
       expect(seen, `value ${JSON.stringify(bad)} must not reach the wire`).toHaveLength(0);
     }
+  });
+
+  it('appends the programme filter on mail list', async () => {
+    await run(['mail', 'list', '--program', 'build4']);
+    expect(seen[0]!.url).toBe('/api/mail?program=build4');
+  });
+
+  it('exercises `all` and `limit` on mail list together — neither is a bare flag', async () => {
+    // The generic `--*` arm (`:279`–`:287`) always consumes a VALUE — there is
+    // no bare-flag form on this client — so `--all` rides as `--all 1`, exactly
+    // like `GET /api/mail?to=`'s existing `all` key.
+    await run(['mail', 'list', '--program', 'build4', '--all', '1', '--limit', '20']);
+    expect(seen[0]!.url).toBe('/api/mail?program=build4&all=1&limit=20');
+  });
+
+  it('reaches the feed, filtered and limited', async () => {
+    await run(['feed', 'list', '--program', 'build4', '--limit', '50']);
+    expect(seen[0]!.url).toBe('/api/feed?program=build4&limit=50');
+  });
+
+  it('refuses a key feed list does not declare', async () => {
+    const r = await run(['feed', 'list', '--to', 'demo-quiet-mesa']);
+    expect(r.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
   });
 });
 

@@ -5508,20 +5508,43 @@ describe('ccrc account remove', () => {
   });
 
   it('keeps unowned model metadata and names a cleanup that actually exists', () => {
+    // INVERTED AT THE ACCOUNT-POOLS MERGE (D-2601), and the title is why. This
+    // case used to require the step to say "remove it by hand … ccrc kept it
+    // because this build has no owning cleanup verb", and to pin the ABSENCE of
+    // the string `ccrc models`. Both were correct on this branch, where no such
+    // verb existed. The model-class registry shipped one, and `models-op.mjs`'s
+    // own `rm` comment names it as the remedy it expects THIS verb to print:
+    // "`ccrc account remove` deliberately never deletes under ~/.ccrc/models/
+    // and names this verb as the remedy". So the assertion that was right is now
+    // exactly backwards, and the title is the thing to measure against.
+    //
+    // ALL FOUR FILES, not the registry alone: `rm` reaps `<id>.json`,
+    // `<id>.classes.json`, `<id>.classes.tsv` and `<id>.effort.json`, so the
+    // removal now reports whichever of them stand. Planting all four is what
+    // makes the prefix glob's widening measurable instead of asserted — and the
+    // fifth file, belonging to another lane, is what keeps the glob honest in
+    // the other direction.
     const home = box('ccrc-account-remove-model-registry-');
     seedFull(home);
     plantTmux(home, []);
-    const model = join(home, '.ccrc', 'models', 'alt-max.classes.json');
     mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
-    writeFileSync(model, '{}\n');
+    const models = ['alt-max.json', 'alt-max.classes.json', 'alt-max.classes.tsv',
+      'alt-max.effort.json'].map((n) => join(home, '.ccrc', 'models', n));
+    for (const m of models) writeFileSync(m, '{}\n');
+    const other = join(home, '.ccrc', 'models', 'claude.classes.json');
+    writeFileSync(other, '{}\n');
 
     const j = oneObject(run(home, ['account', 'remove', '--id', 'alt-max']));
-    expect(existsSync(model)).toBe(true);
-    expect(j['kept']).toContain(model);
+    for (const m of models) {
+      expect(existsSync(m), `${m} was deleted — this verb never deletes under ~/.ccrc/models/`)
+        .toBe(true);
+      expect(j['kept'], `${m} stands on disk and the report does not name it`).toContain(m);
+    }
+    expect(existsSync(other)).toBe(true);
+    expect(j['kept'], 'the glob claimed another lane\'s file').not.toContain(other);
     const steps = j['operator-steps'] as string[];
-    expect(steps).toContain(`Review ${model} and remove it by hand if it is no longer needed; `
-      + 'ccrc kept it because this build has no owning cleanup verb.');
-    expect(steps.join('\n')).not.toContain('ccrc models');
+    expect(steps.join('\n'), 'the step names no verb, or names one that does not exist')
+      .toContain('ccrc models alt-max rm');
   });
 
   // ── WHAT A REFUSAL AFTER THE FIRST IRREVERSIBLE EFFECT MUST SAY ───────────

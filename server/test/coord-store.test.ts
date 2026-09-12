@@ -7,12 +7,23 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { openCoordDb } from '../src/coord/db.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
-         MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
+         MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
-import { releaseIsSafe } from '../src/coord/rundefs.js';
-import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
+import {
+  HOLD_REASON_MAX_CHARS,
+  holdReason,
+  releaseIsSafe,
+} from '../src/coord/rundefs.js';
+import {
+  PROGRAM_KICKOFF_SUBJECT,
+  PROGRAM_SLUG_MAX_CHARS,
+  RUN_HOLD_NUMBER_MAX,
+  RUN_ID_MAX_DECIMAL,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>
@@ -45,6 +56,154 @@ describe('CoordStore: runs', () => {
     openRun(s);
     expect(openRun(s, { wave: 2, claimedBy: 'ccrc-pwa-other' }))
       .toMatchObject({ refused: 'claimed-by-another' });
+  });
+
+  it('validates a fresh hold with SQLite\'s exact id and rolls both inserts back on overflow', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+      detail:
+        `hold reason ${HOLD_REASON_MAX_CHARS + 1} characters exceeds the ` +
+        `${HOLD_REASON_MAX_CHARS} character session-card cap`,
+    });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+
+    // A rolled-back AUTOINCREMENT insert does not consume its id. This pins the
+    // sentinel path rather than accepting a refusal that committed then cleaned.
+    const next = openRun(s, { program: 'after-refusal', title: 'After refusal' });
+    expect(next).toMatchObject({ id: 1, holdReason: 'program:after-refusal wave:1/5 run:1' });
+  });
+
+  it('measures the actual multi-digit generated id at the fresh-insert boundary', () => {
+    const s = store();
+    for (let wave = 1; wave <= 9; wave++) {
+      const decoy = openRun(s, { program: `decoy-${wave}`, title: 'Decoy', wave });
+      expect(decoy).toMatchObject({ id: wave });
+    }
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 10).length;
+    const exact = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+    const accepted = openRun(s, { program: exact, title: exact, wave, waveOf });
+    expect(accepted).toMatchObject({
+      id: 10,
+      holdReason: holdReason(exact, wave, waveOf, 10),
+    });
+  });
+
+  it('revalidates an idempotent planned row with its reused exact id', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run(program, program, now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(program, wave, waveOf, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toMatchObject({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(s.runs({ includeClosed: true })).toHaveLength(1);
+  });
+
+  it('opens the widest hold a budget-sized slug can compose, inside the cap by exactly the ' +
+     'width the nineteen-digit run-id reservation buys', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX - 1);
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const opened = openRun(s, {
+      program,
+      title: program,
+      wave: RUN_HOLD_NUMBER_MAX,
+      waveOf: RUN_HOLD_NUMBER_MAX,
+    });
+    expect(opened).toMatchObject({ id: RUN_HOLD_NUMBER_MAX });
+    if (!('id' in opened)) throw new Error('worst-case open refused');
+
+    // THE RESERVATION, MEASURED. The budget sizes the run-id slot against
+    // SQLite's INTEGER width, not JavaScript's safe maximum, so the widest hold
+    // this process will ever actually serialize lands strictly INSIDE the cap —
+    // and the gap is precisely the three digits the wider reservation bought.
+    const reserved = RUN_ID_MAX_DECIMAL.length - String(RUN_HOLD_NUMBER_MAX).length;
+    expect(reserved).toBe(3);
+    expect(opened.holdReason).toHaveLength(HOLD_REASON_MAX_CHARS - reserved);
+
+    // …while the reserved shape itself lands exactly ON the cap. That equality
+    // is what makes the slug budget a derivation rather than a guess: one more
+    // slug character would put the reserved worst case over the hook's window.
+    expect(holdReason(program, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL))
+      .toHaveLength(HOLD_REASON_MAX_CHARS);
+    expect(holdReason(`${program}x`, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL).length)
+      .toBeGreaterThan(HOLD_REASON_MAX_CHARS);
+  });
+
+  it('rejects an unsafe generated SQLite id and rolls both inserts back', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    const refused = openRun(s, { program: 'unsafe-id', title: 'Unsafe id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'generated run id is not a positive safe integer',
+    });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+  });
+
+  it.each([
+    ['an unsafe wave', { wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an exponent-scale wave', { wave: 1e100 }],
+    ['a negative denominator', { waveOf: -1 }],
+    ['an unsafe denominator', { waveOf: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a malformed programme', { program: 'bad program' }],
+  ])('rejects %s and rolls a fresh programme and run back', (_label, fields) => {
+    const s = store();
+    const refused = openRun(s, fields);
+    expect(refused).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    expect(s.programs()).toEqual([]);
+    expect(s.runs({ includeClosed: true })).toEqual([]);
+  });
+
+  it('rejects an unsafe persisted id on an idempotent retry', () => {
+    const s = store();
+    const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run('unsafe-reused-id', 'Unsafe reused id', now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(unsafe, 'unsafe-reused-id', 1, 5, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program: 'unsafe-reused-id', title: 'Unsafe reused id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'reused run id is not a positive safe integer',
+    });
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM runs').get() as { n: number }).n).toBe(1);
   });
 
   it('records who caused every transition, and refuses one the machine forbids', () => {
@@ -1096,7 +1255,7 @@ describe('CoordStore: feed (Task 10)', () => {
   // signature would never let a caller pass, then read it back.
   it('reads a kind token this build does not know as `unknown`, never as a raw string', () => {
     const s = store();
-    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b' });
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     s.db.prepare('UPDATE feed_events SET kind = ? WHERE seq = ?').run('review', 1);
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['unknown']);
   });
@@ -1104,7 +1263,7 @@ describe('CoordStore: feed (Task 10)', () => {
   it('still reads every KNOWN kind through the same guard, unchanged', () => {
     const s = store();
     for (const kind of ['ask', 'done', 'merged', 'mail', 'run'] as const) {
-      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b' });
+      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
@@ -1985,14 +2144,15 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
     parkRendered(s, 'coordinator', ids[3]!, MAIL_REPLAY_CEILING_ERROR);
     const reach = s as unknown as {
-      requeueAbandonedCoordinatorMail: (p: string, to: string, d: readonly string[]) => number;
+      requeueAbandonedMail: (role: { role: 'coordinator'; program: string },
+                             to: string, d: readonly string[]) => number;
     };
 
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(2);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(2);
     // Again, with nothing left to move: the `NOT EXISTS` guard sees the two rows
     // the first call minted, so the answer is 0 rather than 2 a second time —
     // which is also why the number cannot be pinned as a constant.
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(0);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(0);
   });
 
   it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {
@@ -2136,8 +2296,8 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const s = store();
     const ids = waves(s);
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
-    const patched = s as unknown as { requeueAbandonedCoordinatorMail: () => void };
-    patched.requeueAbandonedCoordinatorMail = () => { throw new Error('requeue failed'); };
+    const patched = s as unknown as { requeueAbandonedMail: () => void };
+    patched.requeueAbandonedMail = () => { throw new Error('requeue failed'); };
 
     expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
 
@@ -2288,10 +2448,36 @@ describe('CoordStore: the coord feed kind', () => {
     // that the row lands would have passed against exactly that defect.
     const s = store();
     s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'coord', sessionId: '',
-      title: 'caps', body: 'workers 3 to 5' });
+      title: 'caps', body: 'workers 3 to 5', runId: null });
     expect(s.feedEvents(10)).toEqual([
-      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5' },
+      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
     ]);
+  });
+});
+
+describe('the durable feed carries the run it is about', () => {
+  it('stores and returns runId, and answers null for an event about no run', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'mail', sessionId: 'demo-quiet-mesa',
+      title: 't', body: 'b', runId: r.id });
+    // An `ask` is about a SESSION and belongs to no run. Programless, not
+    // unmeasured — and it must still be in the unfiltered feed.
+    s.recordFeedEvent('epoch-1', { seq: 2, at: 1001, kind: 'ask', sessionId: 'demo-quiet-mesa',
+      title: 'q', body: '', runId: null });
+    expect(s.feedEvents(10).map((e) => e.runId)).toEqual([r.id, null]);
+  });
+});
+
+describe('programHome', () => {
+  it('answers the stored home, and null for a programme that stores none', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    expect(s.programHome('build4')).toBeNull();
   });
 });
 
@@ -2372,5 +2558,277 @@ describe('CoordStore: openCoordinatorIds', () => {
 
   it('is empty on a store with no runs at all', () => {
     expect(store().openCoordinatorIds()).toEqual([]);
+  });
+});
+
+describe('sessionProject — which repo a reused session belongs to', () => {
+  it('answers the project of the FIRST run that ever named the session, and null for one no run has', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const a = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in a)) throw new Error('open refused');
+    s.setSession(a.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ORDER BY id LIMIT 1 and not "the newest": the question is which repo the
+    // WORKSPACE was created in, and that is a fact about the session's first
+    // run. A later row naming the same session cannot re-home a worktree.
+    const b = s.openRun({ program: 'build5', title: 'U', project: 'other-project',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two' });
+    if (!('id' in b)) throw new Error('open refused');
+    s.setSession(b.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ABSENCE PERMITS, and it is a real answer rather than a failure: every
+    // wave-1 open that adopts an operator-made workspace lands here.
+    expect(s.sessionProject('demo-never-run')).toBeNull();
+  });
+});
+
+describe('the programme row remembers its home', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const open = (s: CoordStore, over: Record<string, unknown> = {}) => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator', ...over } as Parameters<CoordStore['openRun']>[0]);
+    if (!('id' in r)) throw new Error('open refused');
+    return r;
+  };
+
+  it('writes homeProject on the FIRST insert, and never rewrites it on a later open', () => {
+    const s = store();
+    open(s, { homeProject: 'demo' });
+    expect(s.programHome('build4')).toBe('demo');
+    // The ON CONFLICT arm updates `title` and nothing else — a second open of
+    // the same programme cannot silently re-home it, which is the whole reason
+    // `setProgramHome` exists as a separate, NULL-only write.
+    open(s, { wave: 2, homeProject: 'other-project' });
+    expect(s.programHome('build4')).toBe('demo');
+  });
+
+  it('leaves the column NULL when no home is given', () => {
+    const s = store();
+    open(s);
+    expect(s.programHome('build4')).toBeNull();
+  });
+
+  it('setProgramHome backfills a NULL home and REFUSES to overwrite a stored one', () => {
+    const s = store();
+    open(s);
+    s.setProgramHome('build4', 'demo');
+    expect(s.programHome('build4')).toBe('demo');
+    s.setProgramHome('build4', 'other-project');
+    expect(s.programHome('build4'), 'setProgramHome overwrote a home that was already stored')
+      .toBe('demo');
+  });
+
+  it('puts the home on the wire, null and non-null alike', () => {
+    const s = store();
+    const a = open(s, { homeProject: 'demo' });
+    expect(toRunSummary(s.run(a.id)!).homeProject).toBe('demo');
+    const t = store();
+    const b = open(t);
+    expect(toRunSummary(t.run(b.id)!).homeProject).toBeNull();
+  });
+});
+
+describe('bindSession — the one writer of runs.sessionId, and the heir inherits the mail', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const openOne = (s: CoordStore): number => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    return r.id;
+  };
+  /** One `to:'worker'` mail queued to the session that holds the run today —
+   *  the shape `POST /api/mail` mints once the role resolves. */
+  const workerMail = (s: CoordStore, runId: number, toId: string, subject: string): number =>
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'worker', runId,
+        kind: 'status', subject, body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, toId, '');
+      const stamped = s.setDeliveryEnvelope(d.id, `to: ${toId}\nack: ccrc-api mail ack ${d.id}\n`);
+      if (!stamped.ok) throw new Error(stamped.why);
+      return d.id;
+    });
+
+  it('a FIRST bind, from null, re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(s.run(runId)?.sessionId).toBe('demo-worker');
+  });
+
+  it('re-binding to the SAME session re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(s.mailForRecipient('demo-worker')).toHaveLength(1);
+  });
+
+  it('re-binding to a DIFFERENT session gives the heir a freshly rendered row and parks the predecessor', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    const oldDelivery = workerMail(s, runId, 'demo-worker', 'the wave brief');
+
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+
+    // The heir gets a NEW delivery of the SAME mail — two delivery rows for one
+    // mail is what this schema has always meant by "delivered to two
+    // recipients", and its counters are ZERO because they are true of it.
+    const heirs = s.mailForRecipient('demo-heir');
+    expect(heirs).toHaveLength(1);
+    expect(heirs[0]!.subject).toBe('the wave brief');
+    expect(heirs[0]!.attempts).toBe(0);
+    expect(heirs[0]!.state).toBe('queued');
+    expect(heirs[0]!.deliveryId).not.toBe(oldDelivery);
+
+    // FRESHLY RENDERED — the envelope names the HEIR, not the corpse, and its
+    // `ack:` line names its own delivery id. A replay may never be re-rendered;
+    // this is a second delivery, so it renders its own.
+    const env = s.deliveryEnvelope(heirs[0]!.deliveryId)!.envelope;
+    expect(env).toContain('to: demo-heir');
+    expect(env).not.toContain('to: demo-worker');
+    expect(env).toContain(`ack: ccrc-api mail ack ${heirs[0]!.deliveryId}`);
+
+    // …and the predecessor's row is PARKED, with a sentence that is true of it.
+    const old = s.delivery(oldDelivery)!;
+    expect(old.state).toBe('rejected');
+    // A DELIBERATE cancel: it must not read as "this park still needs a human"
+    // in a mailbox nobody is watching any more.
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it('leaves mail addressed to a literal session id alone — it was sent to a session, not to a chair', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 0 });
+    expect(s.mailForRecipient('demo-heir')).toHaveLength(0);
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(1);
+  });
+
+  it('scopes the predecessor park to the mails it actually re-issued — a session-addressed mail to the same predecessor stays OUTSTANDING', () => {
+    // MUT-2 (PR #75 review round 1). `parkSupersededDeliveries` is `AND mailId
+    // IN (…)` for a reason: the predecessor may hold a `to:'worker'` brief AND
+    // a mail sent to it BY NAME, and only the first is re-issued to the heir.
+    // Without the scope the second is parked `recipient rebound` too — lost to
+    // both sessions. The literal-session case above drives `reissued: 0`, so
+    // the park never RUNS there and could never observe its own scope.
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');   // to:'worker', delivered to demo-worker
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    expect(s.outstandingMailFor('demo-heir').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(s.outstandingMailFor('demo-worker').map((m) => m.subject)).toEqual(['personal']);
+  });
+
+  it('runs.sessionId has exactly ONE re-binding writer in the store, and it is bindSession', () => {
+    // The funnel as a MECHANISM. `setSession` and `markDispatched` both wrote
+    // this column directly before this wave, and either one restored would keep
+    // every behavioural case above green while silently reopening the hole the
+    // funnel exists to close: a re-bind that hands nobody the mail.
+    //
+    // ANY `UPDATE runs SET …` that mentions the column before its WHERE — not
+    // one spelling of it (PR #75 review round 1, MUT-3): the old scan matched
+    // `UPDATE runs SET sessionId` only, and a restored write with the column
+    // LAST in its SET list walked straight past it, measured green.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
+    const updates = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    // The one that remains sits inside bindSession — the funnel, not a caller.
+    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
+    const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
+    expect(bindAt).toBeGreaterThan(-1);
+    expect(updates[0]!.index!).toBeGreaterThan(bindAt);
+    expect(updates[0]!.index!).toBeLessThan(nextMethodAt);
+    // The OTHER writer, named and argued rather than hidden (store-4):
+    // `reconstruct`'s `INSERT INTO runs (…, sessionId, …)` makes a FRESH row
+    // from the registry — there is no predecessor to inherit mail from, so it
+    // is not a re-bind and the funnel has nothing to do for it. Exactly one
+    // such INSERT, and it lives in `reconstruct`.
+    const inserts = [...src.matchAll(/INSERT INTO runs \(([^)]*)\)/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(inserts, 'a second INSERT names runs.sessionId — argue it here or route it through bindSession').toHaveLength(1);
+    expect(inserts[0]!.index!).toBeGreaterThan(src.indexOf('  reconstruct(input: {'));
+    // Premise: the widened regex recognises what it forbids — it finds the
+    // funnel's own statement.
+    expect(updates[0]![0]).toContain('sessionId');
+  });
+});
+
+describe('the programme filters', () => {
+  /** Two programmes, one mail each, plus one mail and one event that belong to
+   *  no run at all — the population every assertion below turns on. */
+  const seeded = () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = s.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if (!('id' in r)) throw new Error('open refused');
+      s.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(s.db, () => {
+        const m = s.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = s.queueDelivery(m.id, 'demo-coordinator', '');
+        s.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');           // programless — no run at all
+    s.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    s.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    s.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+    return s;
+  };
+
+  it('mailForProgram answers this programme only — a programless mail is not in it, nor another programmeial row', () => {
+    const s = seeded();
+    expect(s.mailForProgram('build4', {}).map((m) => m.subject)).toEqual(['ours']);
+    expect(s.mailForProgram('build5', {}).map((m) => m.subject)).toEqual(['theirs']);
+  });
+
+  it('mailForProgram honours `all` exactly as the recipient read does', () => {
+    const s = seeded();
+    // Park the one row this programme has; the default read drops a deliberate
+    // cancel, `all` returns history.
+    s.cancelOutstandingDeliveries(s.runs()[0]!.id);
+    expect(s.mailForProgram('build4', {})).toHaveLength(0);
+    expect(s.mailForProgram('build4', { all: true }).map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('feedEventsForProgram answers this programme only — a programless event is not in it', () => {
+    const s = seeded();
+    expect(s.feedEventsForProgram('build4', 100).map((e) => e.title)).toEqual(['ours']);
+    expect(s.feedEventsForProgram('build5', 100).map((e) => e.title)).toEqual(['theirs']);
+    // …and the unfiltered read still carries all three, which is where a
+    // programless event belongs and the ONLY place it appears.
+    expect(s.feedEvents(100).map((e) => e.title)).toEqual(['ours', 'theirs', 'a question']);
   });
 });

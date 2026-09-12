@@ -168,7 +168,7 @@ describe('ccrc-adopt: the measured five-account box', () => {
     });
   });
 
-  it('assigns homeAble and telemetry by exec kind: upstream/generated are homeAble+anthropic, external is opt-in+none', () => {
+  it('assigns homeAble and telemetry by exec kind: upstream/generated are homeAble+anthropic, external is homeAble:false+none', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
     for (const id of ['claude', 'claude2', 'claude-corp', 'claude-dev0']) {

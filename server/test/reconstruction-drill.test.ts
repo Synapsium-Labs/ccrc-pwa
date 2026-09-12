@@ -210,8 +210,9 @@ describe('the reconstruction drill', () => {
   });
 
   it('still recovers the program with the hold released, and SAYS the confidence dropped', () => {
-    // The final-merge state: the coordinator released, the sweep archived, the
-    // DB is gone. The ledger alone still answers, and the drill must not
+    // The final-merge state: the coordinator released, the workspace was
+    // archived by hand (nothing does that unattended anymore), the DB is
+    // gone. The ledger alone still answers, and the drill must not
     // pretend the corroboration it lost was never there.
     const dir = copyFixtureWithout(fx, 'registry/ccrc-pwa-clear-cove.hold');
     const r = reconstruct(dir);
@@ -262,6 +263,15 @@ describe('the reconstruction drill', () => {
                                          // names the session that opened the run, and the registry has no
                                          // field for it at all. So a DB loss forgets who owned the
                                          // programme, and the recovery is a human saying so, not a parse.
+      'homeProject',                     // D-2352: the programme's home repo (cross-repo §3 F2). The
+                                         // ledger TEMPLATE has no home line and neither the
+                                         // registry nor `.prhistory` names one, so `reconstruct`
+                                         // rebuilds every programme with a NULL home — and the
+                                         // NEXT open backfills whatever it is told
+                                         // (`setProgramHome` is `WHERE homeProject IS NULL`),
+                                         // so `home-mismatch` cannot fire until then. A DB loss
+                                         // forgets the home; the recovery is the coordinator
+                                         // sending the right one on the next open, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
       'health',                          // F7's per-run health facts. Every one of the eight is a
@@ -278,6 +288,23 @@ describe('the reconstruction drill', () => {
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
       'coordinator caps counters',
+      // asks: LOST, AND THE LOSS IS FREE (D-2169). There is no flat file
+      // behind this table, deliberately: the live pane carries the question
+      // and the watcher's in-memory map carries the deferred push, so a
+      // rebuilt db simply pushes every ask immediately — the behaviour that
+      // shipped before this lane existed. What is genuinely gone is which
+      // PARENT ruled on which question — and the feed only ever half-covers
+      // that. The QUESTION is recorded at HOLD time (watch.ts's hold(), the
+      // mint-time push); who ANSWERED it and what they chose is a separate
+      // record written at ANSWER time (routes.ts's POST /api/asks/:id/answer,
+      // by its own comment: "the mint-time record is the question; this one
+      // is the answer, naming the parent and what it chose"). A DECLINE gets
+      // no attributed record at all — /release just re-pushes that same
+      // snapshotted question event, with no mention of which parent passed.
+      // The chain still holds, though: a decline notifies the operator at
+      // once, and it is THEIR ruling that then gets recorded, so what was
+      // actually decided is never lost — only which parent chose to pass.
+      'asks',
     ] as const;
     // Compile-time half of the same claim: if PR I adds or removes a
     // RunSummary field, this object satisfies-fails before any test runs —
@@ -286,20 +313,20 @@ describe('the reconstruction drill', () => {
     // production module" survives this, since `import type` is erased.)
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
-      project: true, sessionId: true, workspace: true, branch: true, state: true,
+      project: true, homeProject: true, sessionId: true, workspace: true, branch: true, state: true,
       claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(21);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(22);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(15);
+    expect(UNRECOVERABLE.length).toBe(17);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

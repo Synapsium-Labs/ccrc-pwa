@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
+import { readHookState } from './hookstate.js';
 import {
   isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
 } from '../../shared/api.js';
@@ -43,7 +44,8 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     ~22 a session's read fires — so it asks to be retried.
+   *                     23 [registry-read-census:fields] field reads a session's
+   *                     read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
    *                     null); the directory listing is the evidence, the same
@@ -186,6 +188,24 @@ export interface SessionRecord {
   /** `$REG/<id>.swapblocked` — `<epoch> <reason>`, the durable half of §2.4's
    *  refusal (M9: a notify banner with no socket open is gone). */
   swapBlocked: { at: number; reason: string } | null;
+
+  /**
+   * `$REG/<id>.stranded` — the supervisor's record that this session is
+   * hard-blocked and NO account in its pool can take it (spec §5.8, ruling 6).
+   * `<epoch-seconds> <reason>`, the `swapblocked` shape, written by
+   * `_strand_mark` and removed by `_strand_clear`.
+   *
+   * AN AXIS, NOT A STATE: the row keeps whatever `status`/`bucket` said; this
+   * says the swapper has nowhere to move it to. Distinct from `swapBlocked`,
+   * which records a REFUSAL of a swap that was attempted — a strand is the
+   * absence of any candidate to attempt.
+   *
+   * FAIL-SHUT, and read through `fieldMeasured` for it: `at: 0` with
+   * {@link STRANDED_UNREADABLE} when the marker is LISTED and its bytes did
+   * not come back. "Not stranded" over a flagged row is the destructive
+   * direction — this cell is the loud one ruling 6 exists to produce.
+   */
+  stranded: { at: number; reason: string } | null;
   /** `$REG/<id>.spawn` — `<epoch> <rc>`, written by `_spawn` ALWAYS, before
    *  returning (§3.1). Read here so the verdict a supervisor raised in its own
    *  process is a fact this side of the seam can see; no wire field carries it
@@ -269,11 +289,17 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires ~22 reads per session under one
- * request timeout). Held with an unreadable reason, never unheld: the
- * consumer is `archiveMerged`'s `held !== null` gate, and `ccd ws-archive` has
- * no held rung of its own, so a misread that read as released would kill a
- * live pane at a wave boundary.
+ * the agent WS is enough (`readRegistry` fires 23
+ * [registry-read-census:fields] field reads per session under one request
+ * timeout). Held with an unreadable reason, never unheld: the consumer
+ * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
+ * which binds a candidate workspace only on `cutShort(res) === true &&
+ * winner.held === null` — on the stated ground that a workspace a cut-short
+ * `ws-add` just created never carries a hold while a live coordinated worker
+ * always does — so a misread that read as released is what lets a slow
+ * dispatch adopt a LIVE worker's workspace as its own. `watch.ts`'s naming
+ * sweep and its merged push read the same field, and both would speak as if
+ * nothing were in the way.
  *
  * A human-readable sentence rather than a marker value because the reason
  * string IS the display — this text is what the PWA chip and the merged push
@@ -306,6 +332,25 @@ export const HOLD_NO_REASON = '<hold file is empty — no program named>';
  * ignore.
  */
 export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
+
+/**
+ * The reason a strand carries when `$REG/<id>.stranded` records an epoch and
+ * nothing after it. Same ruling as `SWAP_BLOCKED_NO_REASON`: `_strand_mark`
+ * always writes a reason (`_strand_why` synthesizes one), so the only ways in
+ * are the residual empty-field routes `BranchEvidence`'s `'empty'` rung sets
+ * out. Carry a sentence instead of empty text so the wire preserves an
+ * actionable reason for wave 4's renderer.
+ */
+export const STRANDED_NO_REASON = '<strand recorded no reason>';
+
+/**
+ * The reason a strand carries when the marker is LISTED in the registry
+ * directory but its bytes could not be read. `SUBSTRATE_UNREADABLE`'s ruling
+ * applied to ruling 6's marker: presence comes from the LISTING, never from a
+ * non-null read, because collapsing an unreadable marker to null would make the
+ * wire assert "no strand recorded" over a supervisor-flagged row.
+ */
+export const STRANDED_UNREADABLE = '<strand marker unreadable>';
 
 /**
  * The reason a substrate fault carries when `$REG/<id>.substrate` is listed in
@@ -355,8 +400,15 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * itself trims rather than leaving it to each of the ladder's ~9 call
  * sites to remember. A `reason` (`absent`/`unreadable`) carries no content
  * to trim and passes through unchanged.
+ *
+ * EXPORTED for exactly one out-of-file caller: `coord/dispatch.ts`'s
+ * `project-mismatch` rung, which decides on `.project` and therefore must
+ * read it MEASURED rather than through `SessionRecord.project`'s `?? id`
+ * default — a display default that would otherwise reach a decision as if it
+ * were a measurement (cross-repo programmes wave 1, D-2342). Every other
+ * caller stays in this file.
  */
-async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
+export async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
   const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));
   return r.ok ? { ok: true, content: r.content.trim() } : r;
 }
@@ -400,9 +452,11 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (registry.ts's own module docstring: "~22 reads per session" — a 24-session
-// fleet sees ~529 round trips PER `readRegistry` call) would otherwise log the
-// same stuck field dozens of times a minute. `warnOnce` is keyed `id#field`,
+// (23 [registry-read-census:fields] field reads per session — a 24-session
+// fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+// PER `readRegistry` call, before the conditional reconfirmation listing)
+// would otherwise log the same stuck field dozens of times a minute.
+// `warnOnce` is keyed `id#field`,
 // not just `field`, so one wrapper's degraded read never silences a
 // DIFFERENT session's — and it is pruned per id no longer listed, so a
 // reaped session's history does not live forever.
@@ -486,7 +540,8 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 22-field read plus the `SessionRecord` it builds — the ONE
+ * One session's 23-field read [registry-read-census:fields] plus the
+ * `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
  * copy of this shape to drift out of sync with the first. `names` is the
@@ -509,7 +564,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -522,6 +577,7 @@ async function buildRecord(
     fieldMeasured(io, cfg.registryDir, id, 'stopped'), fieldMeasured(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
+    fieldMeasured(io, cfg.registryDir, id, 'stranded'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -588,6 +644,7 @@ async function buildRecord(
 
   const holdListed = names.includes(`${id}.hold`);
   const substrateListed = names.includes(`${id}.substrate`);
+  const strandedListed = names.includes(`${id}.stranded`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
@@ -753,6 +810,25 @@ async function buildRecord(
     swapBlocked: swapStamp === null
       ? null
       : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
+    // `.substrate`'s ladder, with `swapBlocked`'s empty-reason ruling: presence
+    // from the LISTING (a strand blanked by a dropped read re-enables nothing,
+    // but it does hide the one cell ruling 6 exists to show), a measured
+    // `absent` reads null DIRECTLY — `_strand_clear` removes this marker on
+    // every healthy tick, so a marker listed at the top of a read and cleared
+    // before its own field read is the ORDINARY recovery, not a fault (D-113's
+    // argument, applied to a marker that moves far more often than
+    // `.substrate`) — and a stampless file keeps its whole text at `at: 0`
+    // rather than losing the one sentence a maintainer could act on.
+    stranded: strandedRead.ok
+      ? (strandedRead.content === ''
+          ? { at: 0, reason: STRANDED_NO_REASON }
+          : (() => {
+              const p = packedStamp(strandedRead.content);
+              return p === null
+                ? { at: 0, reason: strandedRead.content }
+                : { at: p.at, reason: p.rest === '' ? STRANDED_NO_REASON : p.rest };
+            })())
+      : (strandedRead.reason === 'absent' ? null : (strandedListed ? { at: 0, reason: STRANDED_UNREADABLE } : null)),
     // An rc that does not parse is not a verdict. `_spawn` writes the stamp
     // ALWAYS, before returning, so an unparseable one means the stamp never
     // landed whole, not an ambiguous outcome — and `rc: NaN` on the wire
@@ -809,11 +885,11 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
-  // `ccd ws-release` landing anywhere inside the ~22-field-read window left
+  // `ccd ws-release` landing anywhere inside the 23-field-read window left
   // the name in the listing and no bytes behind it, indistinguishable at
   // `field()` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
-  // `archiveMerged` fired a held-merged push announcing corruption seconds
+  // `sweepMerged` fired a held-merged push announcing corruption seconds
   // after the operator tapped Release.
   //
   // `.hold`'s ordinary race is resolved WITHOUT a second listing now: a
@@ -866,10 +942,12 @@ export type SingleRead =
   | { found: false; reason: 'unlistable' };
 
 /**
- * `readRegistry`, narrowed to ONE session (C0.3). One `readdir` plus that
- * id's 22 field reads — ~23 agent-WS round trips in remote mode, instead of
- * `readRegistry`'s 24-generation sweep of the whole fleet (~529 round trips
- * on a 24-session fleet) — for every caller that only ever asked "what does
+ * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
+ * `readdir` plus that id's 23 [registry-read-census:fields] field reads — 24
+ * agent-WS operations [registry-read-census:single] in remote mode, instead of
+ * `readRegistry`'s 553-operation baseline [registry-read-census:fleet] on a
+ * 24-session fleet. The conditional reconfirmation listing described below is
+ * excluded from both baselines. This serves every caller that only asked "what does
  * the registry say about THIS session" and never needed uniqueness or a
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
  * loop body `readRegistry` uses, so there remains exactly one parser.
@@ -908,4 +986,73 @@ export async function readSessionRecord(io: FleetIO, cfg: CcrcConfig, id: string
     }
   }
   return { found: true, record: rec };
+}
+
+/** `freshAskAt`'s "I could not measure this child" answer, spelled ONCE
+ *  (whole-branch review M2) so the route that must distinguish it from a
+ *  real `updatedAt` compares against a name rather than a bare `-1` in two
+ *  files. Negative by construction: `insertAsk` only ever stores a real
+ *  hookstate `updatedAt`, so no stored `askAt` can collide with it and the
+ *  CAS below still fails shut for any caller that does NOT check. */
+export const UNMEASURED_ASK_AT = -1;
+
+/**
+ * The ask pre-emption lane's shared fail-shut re-measurement (D-2170, D-2171
+ * fix round 1 finding 2): the child's live hookstate, re-read NOW rather than
+ * trusted from an ask row's own stored `askAt` — `askKey` hashes CONTENT, so
+ * a child looping over N structurally identical questions regenerates the
+ * same key for instance 2 that it did for instance 1, and the grace window
+ * is exactly the gap in which one becomes the other. `updatedAt` is what
+ * actually moves between them, and `takeAskForAnswer`'s CAS refuses
+ * `ask-moved` unless this still matches the row's own `askAt`.
+ *
+ * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
+ * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
+ * near sufficient for one: `ccd/session-hook.sh` stamps it on EVERY write,
+ * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
+ * off the file, so a subagent event on a session blocked at a dialog rewrites
+ * the identical envelope under a fresh number. Read alone, this function
+ * therefore refused parents over bumps nobody made — permanently, because
+ * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
+ * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the
+ * SAME menu carrying the SAME `askKey`, so the equality this returns is
+ * measured against a row the watcher has been keeping current. Do not read
+ * the strictness here as the whole guard.
+ *
+ * `UNMEASURED_ASK_AT` on anything unmeasurable — no session record, no
+ * measured identity, no readable hookstate — because that value can never
+ * equal a stored `askAt` (`insertAsk` always takes it from a REAL
+ * hookstate's `updatedAt`, and `Date.now()` values are never negative), so
+ * an unmeasurable read refuses rather than proceeds. The same "an
+ * unmeasurable answer is not a permissive one" posture the reclaim guard
+ * takes: a spurious refusal costs the caller one retry, a false pass presses
+ * a digit into a question nobody actually re-read.
+ *
+ * IT IS THE CALLER'S JOB TO TELL THE TWO REFUSALS APART (whole-branch review
+ * M2). A caller that hands this value straight to `takeAskForAnswer` gets
+ * `ask-moved` back, which is a TRUE statement about the CAS and a FALSE one
+ * about the world: nothing moved, a read failed. `POST /api/asks/:id/answer`
+ * therefore compares against `UNMEASURED_ASK_AT` first and answers
+ * `child-unmeasurable`. `server.ts`'s operator route does not need to: a
+ * lost CAS never refuses the operator there, so the distinction changes
+ * nothing it does.
+ *
+ * ONE definition for both callers of this guard — `coord/routes.ts`'s
+ * `POST /api/asks/:id/answer` and `server.ts`'s `POST
+ * /api/sessions/:id/ask` — deliberately: both already close over the SAME
+ * `Deps` object (`registerCoordRoutes(app, deps, ...)` passes `buildServer`'s
+ * own `deps` straight through, unmodified), so a security-relevant fail-shut
+ * guard duplicated across the two files could drift silently. It lives here
+ * rather than in either route file because both already import
+ * `readSessionRecord`/`measuredIdentity` from this module, and putting it in
+ * either route file would make the other import a fastify-adjacent module
+ * for a six-line pure-registry+hookstate read.
+ */
+export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<number> {
+  const read = await readSessionRecord(io, cfg, childId);
+  if (!read.found) return UNMEASURED_ASK_AT;
+  const identity = measuredIdentity(read.record);
+  if (identity === null) return UNMEASURED_ASK_AT;
+  const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
+  return hs === null ? UNMEASURED_ASK_AT : hs.updatedAt;
 }

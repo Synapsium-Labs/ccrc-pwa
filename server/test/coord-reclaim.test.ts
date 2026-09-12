@@ -233,7 +233,7 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
 const seedRun = (s: CoordStore, claimedBy: string, wave = 1): number => {
   const r = s.openRun({ program: PROGRAM, title: 'F5 demo', project: 'demo',
     wave, waveOf: 2, claimedBy });
-  if ('refused' in r) throw new Error(`fixture: openRun refused (${r.refused})`);
+  if (!('id' in r)) throw new Error('fixture: openRun refused');
   return r.id;
 };
 

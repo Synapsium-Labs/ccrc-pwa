@@ -1,8 +1,13 @@
-// The server half of workspace holds: `archiveMerged`'s gate becomes
-// *merged AND unheld*, and the held branch pushes once per (workspace, PR)
-// instead of archiving. Harness copied from `pr-sweep.test.ts`'s
-// `archiveMerged` tests (`grep -rln archiveMerged server/test`) — same seed,
-// same runner shape, same registry-file idiom for the new `.hold` field.
+// The server half of workspace holds — a lane that ANNOUNCES, and never acts.
+// `archiveMerged` is gone (operator ruling, 2026-09-10: it killed live panes on
+// merge, five of them measured revived by hand) and `sweepMerged` replaced it.
+// The hold and the open run survive that removal with their job changed rather
+// than lost: they used to VETO the archive, and they now choose which SENTENCE
+// the merge gets — `PR #N merged — <reason>; nothing archived.` against the
+// bare `PR #N merged; nothing archived.` when nothing is in the way. So these
+// tests are no longer about what is spared; they are about what is said.
+// Harness copied from `pr-sweep.test.ts`'s merged-lane tests — same seed, same
+// runner shape, same registry-file idiom for the `.hold` field.
 import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -52,14 +57,16 @@ const mergedLine = (id: string, number = 42): string => JSON.stringify({
   phase: 'merged', number, checkedAt: 1785300000000, reason: null,
 });
 
-/** A runner that answers tmux (idle, alive) and records ccd argv. */
-function runnerFor(prOut: string, calls: string[][], pid = '4242'): Runner {
+/** A runner that answers tmux (idle, alive) and records ccd argv. `prOut` may
+ *  be a THUNK: a workspace outlives its own merge now, so more than one test
+ *  here has to change the PR the same session reports between sweeps. */
+function runnerFor(prOut: string | (() => string), calls: string[][], pid = '4242'): Runner {
   return async (_cmd, args) => {
     calls.push(args);
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { code: 0, stdout: `${pid}\n`, stderr: '' };
     if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'pr-state') return { code: 0, stdout: prOut, stderr: '' };
+    if (args[0] === 'pr-state') return { code: 0, stdout: typeof prOut === 'function' ? prOut() : prOut, stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
 }
@@ -72,7 +79,7 @@ const liveIdle = (home: string, pid = '4242'): void => {
 };
 
 /** `prSweepStartedAt` returns to 0 in `sweepPr`'s own `finally` — the one
- *  signal that a whole sweep (archiveMerged included) has actually finished,
+ *  signal that a whole sweep (`sweepMerged` included) has actually finished,
  *  same reasoning as `pr-sweep.test.ts`'s own waits. */
 const sweepSettled = (w: FleetWatcher): Promise<void> =>
   vi.waitFor(() => { expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0); });
@@ -81,17 +88,40 @@ const forceDue = (w: FleetWatcher): void => {
   (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
 };
 
+/** THIS lane's pushes only. A watcher built with a `coord` also raises the run
+ *  lane's own notifications, and one fixture below advances a run on purpose —
+ *  `merged-<id>#<pr>` is this lane's own collapse key (`announceMerged` passes
+ *  it explicitly — `pushOne`'s id-only default would let a second PR's
+ *  announcement replace the first in the tray), so it
+ *  is the honest discriminator. Every other test here asserts on the raw call
+ *  list, which is itself a pin that its fixture raises nothing else. */
+/** This workspace's merged announcements, in order. Matched on the tag's
+ *  PREFIX, not the whole tag: `announceMerged` collapses per (workspace, PR),
+ *  so the tag carries the number and a workspace that lands two PRs produces
+ *  two distinct tags — which is exactly what the last test in this file walks
+ *  through. */
+const mergedPushes = (
+  notify: { mock: { calls: [PushPayload][] } }, id = 'demo-quiet-basin',
+): PushPayload[] =>
+  notify.mock.calls.map(([p]) => p).filter((p) => p.tag?.startsWith(`merged-${id}#`) === true);
+
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one op of the ~21 a session's
- *  `readRegistry` fires in parallel times out: null, indistinguishable at
- *  `field()` from a file that is not there. */
+ *  the shape `remote/io.ts` produces when one of the 23
+ *  [registry-read-census:fields] reads a session's `readRegistry` fires in
+ *  parallel times out: null, indistinguishable at `field()` from a file that
+ *  is not there. */
 const holdUnreadableIO: FleetIO = {
   ...localIO,
   readFileMeasured: async (p) => (p.endsWith('.hold') ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
 };
 
-describe('archiveMerged — merged AND unheld', () => {
-  it('merged + held never archives, across many sweeps', async () => {
+describe('sweepMerged — a held merge is announced, never acted on', () => {
+  it('says it once across many sweeps, names the hold, and archives nothing', async () => {
+    // The ruling and the sentence that replaced it, in one test. The negative
+    // half alone would be vacuous — a deleted lane also runs no `ws-archive` —
+    // so it is only ever asserted here beside the push that DID happen: three
+    // sweeps over one merged, held row produce no archive argv at all and
+    // exactly ONE notification, whose reason clause is the hold verbatim.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
@@ -105,31 +135,43 @@ describe('archiveMerged — merged AND unheld', () => {
       await sweepSettled(w);
     }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    // Not just "no archive call" — no push carrying the ARCHIVE copy either,
-    // across every one of the three sweeps.
-    for (const [payload] of notify.mock.calls) expect(payload.body).not.toContain('nothing deleted');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].body)
+      .toBe('PR #42 merged — program:agent-evals wave:1/4; nothing archived.');
     w.stop();
   });
 
-  it('merged + released archives on the very next sweep — the level re-arms itself', async () => {
+  it('a release AFTER the announcement does not re-announce — one merge, one sentence', async () => {
+    // THIS WAS THE RE-ARM TEST: the hold was a level, and releasing it let the
+    // very next sweep archive. There is no act left to re-arm. The latch is per
+    // (workspace, PR), so a release changes nothing about a merge already
+    // announced — PR #42 was told with the hold as its reason and that stays
+    // the only sentence it gets. The price is one notification naming a hold
+    // that has since gone; the alternative is saying the same merge twice.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'w');
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:3/4');
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await sweepSettled(w);
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body).toContain('program:agent-evals wave:3/4');
 
     release(home, 'demo-quiet-basin');
     forceDue(w);
     await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
-    expect(calls).toContainEqual(['ws-archive', '--session', 'demo-quiet-basin']);
+    await sweepSettled(w);
+    expect(notify).toHaveBeenCalledTimes(1);
+    // And the release is not a trigger either: the row that used to be archived
+    // the instant it read unheld is still here, untouched.
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 
-  it('the held-merged push fires ONCE, says held, and names nothing destroyed', async () => {
+  it('the merged push says WHAT is in the way, verbatim, and collapses on the session', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
@@ -139,40 +181,33 @@ describe('archiveMerged — merged AND unheld', () => {
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    // A second sweep must not re-fire the latch.
-    forceDue(w);
-    await w.tick();
-    await sweepSettled(w);
 
-    expect(notify).toHaveBeenCalledTimes(1);
     const payload = notify.mock.calls[0]![0];
     expect(payload.title).toContain('✓ merged');
     // The reason string IS the display — verbatim, not paraphrased — and the
-    // body says plainly that nothing was destroyed.
+    // body says plainly that nothing was destroyed. This wording is DELIBERATELY
+    // unchanged from when the held branch was the only one that could produce
+    // it: what changed underneath is that every merge now reads this way.
     expect(payload.body).toContain('program:agent-evals wave:1/4');
     expect(payload.body).toContain('nothing archived');
-    // Same collapse key as the real archive push, so a later real archive
-    // push REPLACES this one on the phone rather than stacking.
-    expect(payload.tag).toBe('merged-demo-quiet-basin');
+    // `pushOne`'s default `${kind}-${sessionId}` collapse key, deliberately not
+    // overridden: a later statement about this workspace REPLACES this one on
+    // the phone rather than stacking beside it.
+    expect(payload.tag).toBe('merged-demo-quiet-basin#42');
     w.stop();
   });
 
-  it('the held-merged push latch resets when the PR number changes', async () => {
+  it('the merged push latch resets when the PR number changes', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'w');
+    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
     let prNumber = 591;
-    const run: Runner = async (_cmd, args) => {
-      calls.push(args);
-      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
-      if (args[0] === 'capture-pane') return { code: 0, stdout: '', stderr: '' };
-      if (args[0] === 'pr-state') return { code: 0, stdout: mergedLine('demo-quiet-basin', prNumber), stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
+    const deps = {
+      ...testDeps(home, runnerFor(() => mergedLine('demo-quiet-basin', prNumber), calls)),
+      push: { notify } as never,
     };
-    const deps = { ...testDeps(home, run), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
@@ -183,73 +218,64 @@ describe('archiveMerged — merged AND unheld', () => {
     await w.tick();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify.mock.calls[1]![0].body).toContain('PR #601');
-    // REVIEW FINDING 4, measured: with `watch.ts`/`registry.ts` reverted to
-    // `c120e88^` this test was the one new test that stayed GREEN — the OLD
-    // unconditional archive path pushes once per sweep too, and its body also
-    // names a PR number, so every assertion above was satisfied by the branch
-    // this file exists to pin. These two say WHICH branch fired: the held one,
-    // which archives nothing and says so.
+    // THE NUMBER IN THE LATCH KEY, which is more load-bearing since the archive
+    // was removed than it was when it was added: a workspace SURVIVES its own
+    // merge now, so it goes on to land a second PR and `boundRow` binds the
+    // newest one. Keyed on the id alone this lane would announce a workspace's
+    // first merge and silently swallow every one after it — which, on a
+    // workspace that no longer retires itself, is most of them.
     for (const [payload] of notify.mock.calls) expect(payload.body).toContain('nothing archived');
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 
-  // Registry ladder (architecture doc, increment 1's second half): SKIP,
-  // before ANYTHING else — including the `workspace === null ||
-  // archivedAt !== null` test right below it in `archiveMerged`, which is
-  // itself UNSAFE on a degraded row (both fields read null on an unreadable
-  // file, and a false null on `archivedAt` would make an ALREADY-archived
-  // workspace look freshly archive-ELIGIBLE). Written FIRST and confirmed
-  // red against the pre-gate code: `records` comes from `readRegistry`,
-  // which now DEGRADES (never drops) a row with one unreadable identity
-  // field, so this row reaches `archiveMerged`'s loop for the first time
-  // ever — exactly the hazard the design's own review flagged ("emitting
-  // rows that were previously dropped exposes them to destructive lanes for
-  // the first time").
-  it('skips a row with an unmeasured identity field — never archives it, however merged it looks', async () => {
-    // Calls the private `archiveMerged` DIRECTLY, with a hand-built,
-    // FULLY WORKING `io` (a live, idle, unheld session that a healthy
-    // `archiveSafety` fresh read would happily answer 'ok' for) — isolating
-    // THIS guard from `archiveSafety`'s own, separate one (added by the same
-    // ladder): only the `records` snapshot handed to `archiveMerged` carries
-    // `unmeasured`, exactly modelling a field that read back unreadable in
-    // the PRE-SWEEP snapshot `sweepPr` took (this file's own "the hold is
-    // re-read at the DECISION POINT" block explains why that snapshot
-    // exists) yet would read clean if re-fetched right now. Deleting
-    // `archiveMerged`'s own early guard alone (leaving `archiveSafety`'s
-    // untouched) reaches this exact fully-working `io` and archives —
-    // proving neither guard is redundant with the other.
+  // Registry ladder (architecture doc, increment 1's second half): SKIP, before
+  // anything else. This rung outlived the act it was written to guard, with its
+  // job changed: a degraded row's `held` reads null exactly as an unheld row's
+  // does, so announcing the bare "merged; nothing archived." off one is a claim
+  // about a hold this box never measured. It says nothing at all instead.
+  it('says nothing at all about a row with an unmeasured identity field', async () => {
+    // Calls the private `sweepMerged` DIRECTLY, twice, on ONE watcher: the same
+    // merged PR, the same workspace, one measured field's difference. The pair
+    // is what makes the silence mean something — a lane that pushed nothing
+    // ever would pass the first assertion and fail the second. The latch makes
+    // it sharper still: had the degraded call announced, its key would suppress
+    // the healthy one and the second assertion would go red too.
     const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    const calls: string[][] = [];
-    const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const deps = { ...testDeps(home), push: { notify } as never };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     const degraded: SessionRecord = {
       id: 'demo-quiet-basin', wrapper: '', project: 'demo', workdir: '/w/demo-quiet-basin', uuid: 'u-demo-quiet-basin',
       started: true, home: null, pool: null, lastswap: null,
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, spawn: null, lifecycleUnmeasured: [],
+      substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
       unmeasured: ['wrapper'],
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
       checkNames: null, ahead: 3, reason: null, checkedAt: 1785300000000, mergedAt: null, retryAt: null };
     const cast = w as unknown as {
       prStates: Map<string, PrState>;
-      archiveMerged(records: SessionRecord[]): Promise<void>;
+      sweepMerged(records: SessionRecord[]): void;
     };
     cast.prStates.set('demo-quiet-basin', merged);
-    await cast.archiveMerged([degraded]);
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    cast.sweepMerged([degraded]);
+    expect(notify).not.toHaveBeenCalled();
+
+    cast.sweepMerged([{ ...degraded, wrapper: 'claude', unmeasured: [] }]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');
     w.stop();
   });
 
-  it('a present-but-unreadable .hold reads as held and still blocks the archive', async () => {
+  it('a present-but-unreadable .hold is NAMED in the sentence, never read as unheld', async () => {
     // The remote-fleet fault the fail-shut mapping exists for (review finding
-    // 2): `readdir` succeeded — the file IS listed — and one `read` op over
-    // the agent WS did not, which `remote/io.ts` maps to null exactly as a
-    // missing file. Reading that as released archives a held workspace, and
-    // `ccd ws-archive` has no held rung to catch it: the pane dies mid-program.
+    // 2): `readdir` succeeded — the file IS listed — and one `read` op over the
+    // agent WS did not, which `remote/io.ts` maps to null exactly as a missing
+    // file. That misread used to end a live pane at a wave boundary; now it
+    // ends a sentence, and the sentence is the whole of what is left to get
+    // right. Reading it as released would announce "nothing is in the way" over
+    // a workspace this box could not read the hold of.
     const home = seed(['demo-quiet-basin', 'demo-still-cove']);
     liveIdle(home);
     hold(home, 'demo-quiet-basin', 'program:agent-evals wave:2/4');
@@ -259,37 +285,42 @@ describe('archiveMerged — merged AND unheld', () => {
     expect(records.find((r) => r.id === 'demo-quiet-basin')?.held).toBe(HOLD_UNREADABLE);
     // …and the sentinel is not blanket: a session with no `.hold` at all is
     // still unheld under the very same failing IO, which is what keeps this a
-    // fail-shut mapping rather than "nothing ever archives".
+    // fail-shut mapping rather than "every merge names a broken registry".
     expect(records.find((r) => r.id === 'demo-still-cove')?.held).toBeNull();
 
     const calls: string[][] = [];
+    const notify = vi.fn(async (_p: PushPayload) => {});
     const deps = {
       ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
       io: holdUnreadableIO,
+      push: { notify } as never,
     };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
     await sweepSettled(w);
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body).toBe(`PR #42 merged — ${HOLD_UNREADABLE}; nothing archived.`);
     w.stop();
   });
 });
 
-describe('archiveMerged — the hold is re-read at the DECISION POINT', () => {
-  it('a hold placed while the sweep is in flight still blocks the archive', async () => {
-    // FIX-WAVE FINDINGS 1/5, the critical one. `sweepPr` reads `records` ONCE
-    // at the top, then awaits one gh-bound `ccd pr-state` per project (20 s
-    // budget each; the sweep is only abandoned after 15 minutes), and only
-    // then calls `archiveMerged(records)`. A hold placed inside that window is
-    // invisible to a gate that reads the snapshot — and the window is exactly
-    // when a hold gets placed, because the merge that ends wave N is what
-    // tells the orchestrator to hold for wave N+1. `ccd ws-archive` has no
-    // held rung to catch it, so the pane and its whole scrollback die at the
-    // wave boundary the feature exists to protect.
+describe("sweepMerged — the reason comes from the sweep's own snapshot", () => {
+  it('a hold placed while the sweep is in flight is NOT named — and costs a word, not a session', async () => {
+    // THE FRESH REGISTRY RE-READ AT THE DECISION POINT IS GONE, and this test
+    // is what pins its absence. `sweepPr` reads `records` once at the top, then
+    // awaits one gh-bound `ccd pr-state` per project, and only then calls
+    // `sweepMerged(records)`. A hold placed inside that window — and that is
+    // exactly when holds get placed, since the merge that ends wave N is what
+    // tells the coordinator to hold for wave N+1 — is invisible to the
+    // snapshot. When the decision was DESTRUCTIVE that blindness ended a pane;
+    // now it is display only, so the whole cost of the stale read is a less
+    // specific sentence. The trade is deliberate: this row is announced with no
+    // reason clause at all, and nothing is done to it either way. A re-added
+    // fresh read reds this test.
     //
     // The hold here is written by the `pr-state` leg itself: same ordering as
-    // the real thing (snapshot taken, THEN the hold appears, THEN
-    // archiveMerged runs), with no timing to get right.
+    // the real thing (snapshot taken, THEN the hold appears, THEN sweepMerged
+    // runs), with no timing to get right.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
@@ -305,44 +336,13 @@ describe('archiveMerged — the hold is re-read at the DECISION POINT', () => {
     await w.tick();
     await sweepSettled(w);
 
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    // And it is told, in the held branch's own words — not silently deferred
-    // as if the session were merely busy.
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     const payload = notify.mock.calls[0]![0];
-    expect(payload.body).toContain('program:agent-evals wave:2/4');
-    expect(payload.body).toContain('nothing archived');
-    w.stop();
-  });
-
-  it('a release landing mid-sweep defers ONE sweep and never archives on a stale hold', async () => {
-    // DOCUMENTS the two rungs' division of labour rather than covering a fix
-    // (it is green before the fix too — the existing "merged + released
-    // archives on the very next sweep" test covers the re-arm). The snapshot
-    // rung is kept in front of the fresh one because it costs no registry read
-    // in the steady state, where every hold predates the sweep; the price is
-    // that it is blind to a release that lands mid-sweep. That blindness has
-    // exactly one direction — it DEFERS — and a deferral destroys nothing and
-    // re-arms itself 120 s later, which is why the fresh read below it is the
-    // one that had to be added and this one did not have to be removed.
-    const home = seed(['demo-quiet-basin']);
-    liveIdle(home);
-    hold(home, 'demo-quiet-basin', 'program:agent-evals wave:4/4');
-    const calls: string[][] = [];
-    const inner = runnerFor(mergedLine('demo-quiet-basin'), calls);
-    const run: Runner = async (cmd, args) => {
-      const res = await inner(cmd, args);
-      if (args[0] === 'pr-state') release(home, 'demo-quiet-basin');
-      return res;
-    };
-    const w = new FleetWatcher(testDeps(home, run), new Bus(), 10_000);
-    await w.tick();
-    await sweepSettled(w);
+    expect(payload.body).toBe('PR #42 merged; nothing archived.');
+    expect(payload.body).not.toContain('wave:2/4');
+    // The snapshot said unheld — under the old lane that was the whole gate,
+    // and this is the row it would have archived.
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-
-    forceDue(w);
-    await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
     w.stop();
   });
 });
@@ -365,13 +365,14 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires ~21 field reads per
-    // session. A `ccd ws-release` anywhere in that window leaves the name in
+    // `readRegistry` lists the directory, then fires 23
+    // [registry-read-census:fields] reads per session. A `ccd ws-release`
+    // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
     // from a read that failed, so a perfectly ordinary release was reported as
-    // HOLD_UNREADABLE, the registry-is-broken sentence, and `archiveMerged`
-    // fired a held-merged push announcing corruption seconds after the
-    // operator tapped Release. One second listing tells them apart.
+    // HOLD_UNREADABLE, the registry-is-broken sentence, and `sweepMerged`
+    // announced corruption seconds after the operator tapped Release. One
+    // second listing tells them apart.
     const home = seed(['demo-quiet-basin']);
     hold(home, 'demo-quiet-basin', 'program:agent-evals wave:1/4');
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -426,61 +427,94 @@ const coordWithOpenRun = (home: string, id: string): CoordStore => {
   return coord;
 };
 
-describe('archiveMerged — and an OPEN RUN, even with no hold', () => {
-  it('does not archive a merged workspace an open run names, though the hold is ABSENT', async () => {
+describe('sweepMerged — an OPEN RUN names the reason when no hold does', () => {
+  it('names the run, in full, on a merged workspace whose hold is ABSENT', async () => {
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
-    // NO `hold(...)` call: this is release-then-crash, and the whole point of
-    // the rung is that an absent hold is no longer sufficient.
+    // NO `hold(...)` call: this is release-then-crash. Under the old lane an
+    // absent hold was the whole permission to archive, which is why the run
+    // rung was added; what it buys now is the SENTENCE — a merge on a workspace
+    // a program still owns must not read as a merge with nothing in the way.
     const calls: string[][] = [];
     const notify = vi.fn(async (_p: PushPayload) => {});
+    const coord = coordWithOpenRun(home, 'demo-quiet-basin');
     const deps = {
       ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
       push: { notify } as never,
-      coord: coordWithOpenRun(home, 'demo-quiet-basin'),
+      coord,
     };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     for (let i = 0; i < 3; i++) { forceDue(w); await w.tick(); await sweepSettled(w); }
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
-    // Same shape of notification `notifyHeldMerged` already sends, and it
-    // NAMES the run — a silent skip would be the defect one door over.
-    await vi.waitFor(() => expect(notify).toHaveBeenCalled());
-    expect(notify.mock.calls[0]![0].body).toContain('nothing archived');
-    expect(notify.mock.calls[0]![0].body).toMatch(/run \d+/);
+    // The whole clause, verbatim — id, program, wave and waveOf. A silent skip
+    // would be the defect one door over, and a vague one ("a run is open") is
+    // the defect two doors over: the operator has to know WHICH.
+    const runId = coord.runs()[0]!.id;
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].body)
+      .toBe(`PR #42 merged — run ${runId} is still open — build4 wave 2/3; nothing archived.`);
     w.stop();
   });
 
-  it('archives again once that run closes — the level re-arms on the RUN now, not on the hold', async () => {
+  it('a closed run stops naming a reason — but never re-opens a sentence already said', async () => {
+    // THE RUN-SIDE RE-ARM TEST, which used to prove that closing the run let
+    // the next sweep archive. There is no act to re-arm, so what is pinned here
+    // is the pair of properties that replaced it: the latch holds PR #42 to the
+    // one sentence it already got, however much the reason changes underneath,
+    // and the reason is nonetheless re-measured for the NEXT PR — which now
+    // reads as the ordinary merge, no clause at all, because nothing is in the
+    // way any more.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
+    const notify = vi.fn(async (_p: PushPayload) => {});
     const coord = coordWithOpenRun(home, 'demo-quiet-basin');
-    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), coord };
+    let prNumber = 42;
+    const deps = {
+      ...testDeps(home, runnerFor(() => mergedLine('demo-quiet-basin', prNumber), calls)),
+      push: { notify } as never,
+      coord,
+    };
     const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick(); await sweepSettled(w);
-    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    const runId = coord.runs()[0]!.id;
+    await vi.waitFor(() => expect(mergedPushes(notify)).toHaveLength(1));
+    expect(mergedPushes(notify)[0]!.body).toContain(`run ${runId} is still open`);
 
-    const openId = coord.runs()[0]!.id;
-    coord.advance(openId, 'dispatched', 'coordinator');
-    coord.advance(openId, 'closing', 'coordinator');
-    coord.advance(openId, 'done', 'coordinator');
+    coord.advance(runId, 'dispatched', 'coordinator');
+    coord.advance(runId, 'closing', 'coordinator');
+    coord.advance(runId, 'done', 'coordinator');
+    forceDue(w); await w.tick(); await sweepSettled(w);
+    expect(mergedPushes(notify)).toHaveLength(1);
+
+    prNumber = 601;
     forceDue(w); await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
+    await vi.waitFor(() => expect(mergedPushes(notify)).toHaveLength(2));
+    expect(mergedPushes(notify)[1]!.body).toBe('PR #601 merged; nothing archived.');
+    // Unheld, unclaimed and merged twice over: the exact row the old lane
+    // archived on sight, still here.
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 
-  it('a watcher with NO coord still archives — `deps.coord` is optional and that is load-bearing', async () => {
-    // `testDeps` supplies no `coord`; fourteen tests in this file and every
-    // archive test in `pr-sweep.test.ts` build their watchers from it. This
-    // test exists so a future NON-optional `this.deps.coord.openRunsForSession`
-    // reds ONE named test instead of fourteen unrelated ones.
+  it('a watcher with NO coord still announces — `deps.coord` is optional and that is load-bearing', async () => {
+    // `testDeps` supplies no `coord`; most of the watchers in this file and
+    // every merged-lane test in `pr-sweep.test.ts` are built from it, so
+    // `sweepMerged`'s `this.deps.coord?.openRunsForSession(...) ?? []` is what
+    // keeps them all running. This test exists so a future non-optional access
+    // reds ONE named test instead of a dozen unrelated ones. No coord and no
+    // hold is also the ORDINARY merge — nothing is in the way, and the sentence
+    // carries no reason clause at all.
     const home = seed(['demo-quiet-basin']);
     liveIdle(home);
     const calls: string[][] = [];
-    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)),
-      new Bus(), 10_000);
+    const notify = vi.fn(async (_p: PushPayload) => {});
+    const deps = { ...testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), push: { notify } as never };
+    const w = new FleetWatcher(deps, new Bus(), 10_000);
     await w.tick();
-    await vi.waitFor(() => expect(calls.filter((c) => c[0] === 'ws-archive')).toHaveLength(1));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    expect(notify.mock.calls[0]![0].body).toBe('PR #42 merged; nothing archived.');
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     w.stop();
   });
 });

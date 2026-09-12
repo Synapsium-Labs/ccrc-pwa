@@ -119,8 +119,8 @@ describe('a partially purged registry never frees the slug', () => {
   // comment keeps this list; it is repeated here so the fixture is a full
   // registry entry rather than a plausible subset.
   const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
-    'home', 'hookstate.json', 'lastcompact', 'lastswap', 'pool', 'prnumber', 'project',
-    'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+    'compactnote', 'compactskip', 'home', 'hookstate.json', 'lastcompact', 'lastswap', 'pool', 'prnumber',
+    'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
 
   const seedFullEntry = (): string => {
     const regdir = path.join(home, '.cc-sessions');

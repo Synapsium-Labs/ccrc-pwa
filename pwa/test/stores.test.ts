@@ -44,9 +44,9 @@ const fleetSession = (id: string, wrapper: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
 });
 
 const emptySnap = (): SessionSnapshot => ({
@@ -341,6 +341,28 @@ describe('session store optimistic send', () => {
 
     store.getState().disconnect();
     expect(store.getState().mail).toEqual([]);
+  });
+
+  // The same shape as the two above, on the channel it was never applied to.
+  // `status` is written by the stream's `status` frame and by nothing else,
+  // and the store is kept per session id for the life of the tab
+  // (`getSessionStore`) — so before this, a status learned in one connection
+  // was still on screen in the next one. MEASURED 2026-09-10: a lane swap took
+  // the pane away for 4.8s, the open screen was told `dead`, and the socket
+  // that would have corrected it was replaced rather than kept — leaving
+  // "Not running — the chat is read-only" and a disabled composer over a
+  // session whose transcript was streaming into that very view. `null` is not
+  // a guess about liveness: it is the store's own initial state, and
+  // `SessionScreen`'s `status ?? live?.status` falls through to the fleet
+  // snapshot exactly as it does before the first frame of any connection.
+  it('disconnect() drops the status — one connection\'s reading is not the next one\'s truth', () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn() } });
+    store.getState().apply({ type: 'status', status: 'dead', statusUpdatedAt: 1_700_000_000_000 });
+    expect(store.getState().status).toBe('dead');
+
+    store.getState().disconnect();
+    expect(store.getState().status).toBeNull();
+    expect(store.getState().statusUpdatedAt).toBeNull();
   });
 
   it('disconnect() leaves the scraped dialog untouched — that channel is re-scraped fresh every poll', () => {
@@ -960,7 +982,7 @@ describe('fleet store', () => {
     it('asks GET /api/feed once on the first successful connect, and merges it into `feed`', async () => {
       const fetchFeed = vi.fn(async () => ({
         events: [
-          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1' },
+          { at: 1, seq: 1, kind: 'mail' as const, title: 'from the durable read', body: '', sessionId: 's1', runId: null },
         ],
       }));
       const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
@@ -992,7 +1014,7 @@ describe('fleet store', () => {
       const fetchFeed = vi.fn(async () => {
         calls += 1;
         if (calls === 1) throw new Error('offline');
-        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1' }] };
+        return { events: [{ at: 1, seq: 1, kind: 'mail' as const, title: 'landed on retry', body: '', sessionId: 's1', runId: null }] };
       });
       const store = createFleetStore({ makeSocket, fetchFeed, catchUp: async () => ({ events: [], epoch: 'e', seq: 0, resync: false }) });
       store.getState().connect();

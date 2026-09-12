@@ -459,6 +459,66 @@ describe('ccrc doctor: graphify', () => {
   // present, measurement FAILED" (a real defect) — the overloaded-null shape
   // this codebase bans by name. `_check_disk` WARNs on the identical shape
   // for $HOME; this is that same measurement over $HOME/worktrees.
+  // ── R5 (D-1613): THE SEARCH GATE'S STATE IS ON THE LINE, NOT ONLY IN THE SHELL ─
+  // The gate denies a session's first `Grep`/`Glob`/head-search until it has
+  // queried the tree's graph, and its kill-switch is a FILE the operator
+  // touches by hand (`ccd/session-hook.sh`'s own `GRAPH_GATE_OFF`) — nothing
+  // in this tree writes it and no verb reports it, so an operator who turned
+  // the gate off in a hurry has nowhere to read that back except the shell.
+  // `ccrc doctor` is the only surface that measures this box's graphify
+  // condition at all, so the gate state rides EVERY verdict line this check
+  // prints: it is a fact about the box, not a finding about it (an operator
+  // switch deliberately set is REPORTED, never warned about — the same way
+  // `$REG/coordinator-paused` reaches the wire rather than a doctor bucket),
+  // and the class the rest of the measurement lands in must not decide
+  // whether the fact is said.
+  //
+  // HARVESTED, not remembered (the D-1363 idiom, this file's first use of it):
+  // the kill-switch path comes off the hook's own assignment rather than being
+  // typed here a second time, so the day the hook moves the file this suite
+  // plants the fixture where the hook now looks — and throws, naming the
+  // rename, if the assignment is gone — instead of passing against a path
+  // nothing reads.
+  const GATE_OFF = ((): string => {
+    const hook = readFileSync(join(REPO, 'ccd', 'session-hook.sh'), 'utf8');
+    const m = hook.match(/^GRAPH_GATE_OFF="\$HOME\/(.+)"$/m);
+    if (!m) throw new Error('ccd/session-hook.sh no longer assigns GRAPH_GATE_OFF under $HOME — ' +
+      "the doctor line that names the operator file has to be re-derived against the hook's " +
+      'new spelling, not left pointing at the old one');
+    return m[1]!;
+  })();
+
+  it('says the search gate is armed, on the PASS line (R5, D-1613)', () => {
+    const home = healthy('ccrc-doctor-gfx-gate-on-'); graphifyHealthy(home);
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^PASS graphify:/);
+    expect(line, 'the graphify line says nothing at all about the search gate').toContain('gate on');
+  });
+
+  it('says the gate is off and NAMES the operator file to remove (R5, D-1613)', () => {
+    const home = healthy('ccrc-doctor-gfx-gate-off-'); graphifyHealthy(home);
+    writeFileSync(join(home, GATE_OFF), '');
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^PASS graphify:/);
+    expect(line, 'the off state is invisible, or the line does not say which file to remove')
+      .toContain(`gate off (operator file $HOME/${GATE_OFF})`);
+  });
+
+  it('carries the gate state on a WARN line too — the verdict class does not decide the fact', () => {
+    // The excludes WARN from above, with the kill-switch on top of it: a box
+    // with something to fix is exactly the box whose operator is reading this
+    // line, and it is the one that used to lose the gate state entirely.
+    const home = healthy('ccrc-doctor-gfx-gate-warn-'); graphifyHealthy(home);
+    writeFileSync(join(home, GATE_OFF), '');
+    const repo = join(home, 'projects', 'demo');
+    mkdirSync(repo, { recursive: true });
+    execFileSync(realPath('git'), ['init', '-q'], { cwd: repo });
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toMatch(/^WARN graphify:/);
+    expect(line, 'a WARN drops the gate state the PASS line carries').toContain('gate off');
+    expect(line, 'the WARN lost the finding it is actually about').toContain('graphify-out/');
+  });
+
   it('D-995: WARNs (not silent) when df cannot read the worktrees root — a stale/dead mount', () => {
     const home = healthy('ccrc-doctor-gfx-disk-unread-'); graphifyHealthy(home);
     mkdirSync(join(home, 'worktrees'), { recursive: true });

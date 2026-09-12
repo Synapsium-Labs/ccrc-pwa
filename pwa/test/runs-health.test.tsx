@@ -21,7 +21,7 @@ const HEALTHY: RunHealth = {
 
 const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'program-leverage', programTitle: 'Program leverage',
-  wave: 7, waveOf: 8, project: 'ccrc-pwa',
+  wave: 7, waveOf: 8, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-quiet-meadow', workspace: 'quiet-meadow', branch: 'ws/quiet-meadow',
   state: 'working', claimedBy: 'ccrc-pwa-brisk-meadow', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null,

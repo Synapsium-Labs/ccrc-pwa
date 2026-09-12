@@ -186,6 +186,15 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   const unowned: Record<string, string> = {
     'ccclip': 'a template-less `mktemp -t ccclip`',
     'ccd-graph-sweep': '`stat -c %Y`/`stat -c %s`, `date +%s%3N`, a bare `timeout` and a template-less `mktemp`',
+    // The telemetry keepalive (spec 2026-09-07 §C). Linux-only by PRODUCT
+    // shape as well as userland — its timer never installs on the Darwin arm,
+    // the same carve-out the sweep has — and its two GNU spellings are both
+    // load-bearing rather than incidental: the turn's deadline has no
+    // `--max-time` to borrow the way `ccd-account-health` borrows curl's, and
+    // the per-account `duration_ms` the census reports is milliseconds. The
+    // file's own PORTABILITY header names this entry, so the exemption is
+    // written down on both sides rather than only here.
+    'ccd-telemetry-keepalive': 'a bare `timeout` and `date +%s%3N`',
     'ccrc-adopt': 'a template-less `mktemp`',
   };
 

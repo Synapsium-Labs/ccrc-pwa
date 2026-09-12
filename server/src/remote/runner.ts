@@ -87,6 +87,21 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // case exactly — hence the same number rather than a guess.
   start: 300_000,
   enable: 300_000,
+  // `cmd_swap` stops the supervisor unit (ccd/ccd:13722) and kills the tmux
+  // pane (:13723) BEFORE it flips the registry's `wrapper` (:13817). A kill
+  // inside that window leaves a session that is not running, a registry that
+  // still names the old account, and NO marker of either: no `swapblocked`, no
+  // `lastswap`, no line in `swap.log`. Nothing in the tree can tell that state
+  // from "never swapped", which is why this is a correctness fix and not a
+  // comfort margin.
+  //
+  // 300 s is the agent's own `MAX_EXEC_TIMEOUT_MS` ceiling (agent/src/server.ts),
+  // not a merely larger number, because the transcript carry has no bash-side
+  // bound below it — `SWAP_BEAT_MAX` bounds the heartbeat re-stamping, not the
+  // copy. So this NARROWS the window to the agent's maximum; it does not close
+  // it, and a carry slower than 300 s is still killed mid-flight. Closing it
+  // needs a ccd-side bound and is not this row's job.
+  swap: 300_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {

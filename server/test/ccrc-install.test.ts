@@ -47,16 +47,17 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
-  copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
+  copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync, symlinkSync,
 } from 'node:fs';
-import path, { join, dirname } from 'node:path';
+import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
+import { TREE_STUBS, installFixtureTree } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -82,149 +83,6 @@ const BASH = realPath('bash');
  *  there is no version of this suite that could still be measuring the verb. */
 const RSYNC = realPath('rsync');
 
-/** Every path the fixture tree is built from, repo-relative. Tasks 8-9 add
- *  lines here (the unit files) as the steps that read them land.
- *
- *  A DIRECTORY entry is copied whole; every other entry is one file. The
- *  recursive branch exists because `deploy/systemd/` is four drop-ins under
- *  three directories and listing them one by one is a fixture that goes stale
- *  the moment a fifth lands (Task 6 review, Minor 5). */
-const TREE_FILES = [
-  // The four executables that ship in `ccd/` and resolve each other through
-  // `CCRC_HERE`: `ccrc` itself, plus the check table, the wrapper-shape
-  // contract and `ccrc-adopt`. Absent siblings are not a smaller fixture —
-  // `cmd_doctor` and `cmd_wrappers` refuse by name when one is missing, so the
-  // doctor tail (Task 8) would fail for a fixture reason.
-  'ccd/ccrc',
-  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
-  // refuses a tree without it, which is the point — a placed tree missing it
-  // would leave the box refusing builds over ccrc's own artifacts.
-  'ccd/graph-noise.default.list',
-  'ccd/ccrc-doctor-checks',
-  'ccd/ccrc-wrapper-shape',
-  'ccd/ccrc-adopt',
-  // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
-  // "one directory up from this script" resolution `cmd_wrappers` uses, true
-  // in a checkout and at `~/ccrc/deploy` on a deployed box.
-  'deploy/gen-accounts.mjs',
-  'deploy/gen-wrappers.mjs',
-  // The third module reached that way, and it is here because the install now
-  // ENDS with doctor: `_check_accounts` runs `node
-  // "$CCRC_HERE/../deploy/account-op.mjs" doctor …`, and a placed tree without
-  // it makes that check WARN on a box this file asserts has zero warnings. A
-  // real box has it — `_inst_tree`'s rsync copies `$src/deploy` and
-  // `$src/shared` whole — so its absence here was a property of this list
-  // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
-  // and `shared/base-url.mjs`, are already below.
-  'deploy/account-op.mjs',
-  // The roster SEED `_inst_roster` places on a box that has none. The
-  // realistic "the operator already has a roster" fixture is no repo file any
-  // more — the shipped five-account migration roster left the tree with the
-  // stage-5 de-brand (spec §5, D-202) — so FIVE_ACCOUNT_ROSTER below serialises
-  // `DEFAULT_TEST_ROSTER` instead: a roster with `claude-b` in it, so
-  // "generated FROM the installed roster" stays provable rather than merely
-  // plausible.
-  'deploy/accounts.default.json',
-  // `gen-accounts.mjs` imports the first three; `gen-wrappers.mjs` imports
-  // `wrapper.mjs` and two of the same three. They were written dependency-free
-  // for exactly this bare-`node` caller, so this is the complete transitive
-  // set — `the fixture tree is the one the generator needs` proves it by
-  // running the generator inside the fixture rather than by re-reading the
-  // imports here. `shared/base-url.mjs` joined it in the wave that gave
-  // `shared/roster-json.mjs` its first import: the endpoint gate is IMPORTED
-  // rather than hand-copied (D-1854's split-verdict argument), so a fixture
-  // tree missing it fails the generator's first spawn with
-  // `ERR_MODULE_NOT_FOUND`, not a lint warning.
-  'shared/generate.mjs',
-  'shared/mark.mjs',
-  'shared/base-url.mjs',
-  'shared/roster-json.mjs',
-  'shared/wrapper.mjs',
-  // The node floor doctor reads out of the shipped `package.json`, for BOTH
-  // box roles (`_check_node` looks for the server's, then the agent's). The
-  // doctor tail arrives in Task 8; the files are cheap and their absence would
-  // make that task's first run fail for a fixture reason.
-  'server/package.json',
-  'agent/package.json',
-  // ── Task 7: what `_inst_bins` and `_inst_files` place ──────────────────
-  // `ccd` itself is 570 KB and is copied whole rather than stubbed, because
-  // the assertion it serves ("`~/.local/bin/ccd` is a byte copy of the tree's
-  // ccd") is satisfied by any two identical stubs — while the things that
-  // actually go wrong are installing a symlink, a truncated copy, or the
-  // wrong file, all of which a real payload catches and a 12-byte one does
-  // not.
-  'ccd/ccd',
-  'ccd/ccd-cap-scopes',
-  // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
-  // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
-  // UNIT and its ENABLE are role-gated, per `_inst_units`/`_inst_enable`).
-  'ccd/ccd-graph-sweep',
-  // The account-connection helper, on BOTH arms — see `_inst_bins`.
-  'ccd/ccd-account-auth',
-  'ccd/session-hook.sh',
-  'ccd/install-session-hooks.sh',
-  'ccd/tmux.conf',
-  'ccd/statusline-command.sh',
-  'deploy/notify.sh',
-  // The first DIRECTORY entry. Nothing in Task 7 reads it — `_inst_tree`
-  // copies it as part of `deploy/`, and Task 8's `_inst_units` installs the
-  // drop-ins out of it. It is here now so the recursive branch above ships
-  // with a user rather than as untested fixture machinery.
-  'deploy/systemd',
-  // ── Task 8: the two unit files that do NOT live under `deploy/systemd/`,
-  // and the script `_inst_enable` runs after the service is started. The
-  // supervisor unit ships in `ccd/` beside the script that instantiates it;
-  // `ccrc.service` ships at the top of `deploy/`. `verify-service.sh` is
-  // reached as `$CCRC_HERE/../deploy/verify-service.sh`, so it has to be in
-  // the tree the verb is RUN from and not merely in the one it places.
-  'deploy/ccrc.service',
-  'ccd/claude-session@.service',
-  'deploy/verify-service.sh',
-  // ── Stage 4 Task 5: the agent's unit, which `--role fleet` installs and
-  // every other role still refuses (its REQUIRED EnvironmentFile is the
-  // reasoned exclusion — the role gate replaced the blanket refusal).
-  'deploy/ccrc-agent.service',
-  // ── Stage 3a Task 9: the passphrase hasher. This install writes NO
-  // passphrase (the seed-once doctrine applied to a credential, and the
-  // `curl … | bash` stdin hazard `cmd_passwd`'s tty refusal exists for), but
-  // the run ENDS with doctor, whose `auth` check reaches this file through
-  // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
-  // tree, that check would report a bug in ccrc on every fixture box.
-  'deploy/gen-auth-hash.mjs',
-  // ── The two SKILL TREES and their two installers (worker-skill Task 4).
-  // `_inst_skills` places each tree into `~/.cc-sessions/` and then RUNS the
-  // installer it just placed beside it, so all four are read out of the tree
-  // this fixture builds. They are DIRECTORY entries for the same reason
-  // `deploy/systemd` is: the coordinator skill is a SKILL.md plus a
-  // `references/` directory whose contents its own installer refuses to run
-  // without, and a hand-listed fixture would go stale the moment a fourth
-  // reference lands.
-  'ccd/coordinator-skill',
-  'ccd/worker-skill',
-  'ccd/install-coordinator-skill.sh',
-  'ccd/install-worker-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
-  // installers, through the same `_inst_atomic`. It ships alone — no
-  // `ccd/graphify-skill` tree — because its SRC is assembled from the
-  // installed package at run time, never vendored (spec §B).
-  'ccd/install-graphify-skill.sh',
-];
-
-/** The two BUILD ARTIFACTS `_inst_tree` refuses to place a tree without. They
- *  are build output, not repository files, so the fixture WRITES them instead
- *  of copying them — and it writes placeholders, because the step measures
- *  that the path EXISTS (a box cannot run a server it never built) and a real
- *  bundle would make every test in this file slower for nothing. The tests
- *  that want the refusal delete one. */
-const TREE_STUBS: Record<string, string> = {
-  'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
-  'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
-  // D-1159: the agent entry point `ccrc-agent.service` runs. Present for the
-  // same reason the two above are — a fleet box cannot run an agent it never
-  // built — and deleted by the one test that wants that refusal.
-  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
-};
-
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
 /** The `ccrc` a test runs: the one INSIDE the fixture tree, so `CCRC_HERE`
@@ -235,30 +93,6 @@ const treeFile = (home: string, rel: string): string => join(treeRoot(home), rel
 /** `<home>/ccrc` — where `_inst_tree` PLACES the tree, and the layout the PATH
  *  shim, `_dr_pkg_candidates` and both deploy lanes already assume. */
 const placed = (home: string, ...rel: string[]): string => join(home, 'ccrc', ...rel);
-
-/** Builds a fixture tree out of `TREE_FILES` + `TREE_STUBS`, preserving each
- *  file's mode (the `ccd/` scripts are 0755 in the repository and one of them
- *  is `exec`d by `cmd_adopt`). `sub` is the directory under `$HOME` it lands
- *  in: `checkout` for the ordinary case, `ccrc` for the one test that runs the
- *  verb from the tree it would otherwise be copying onto itself. Returns the
- *  tree root. */
-export function installFixtureTree(home: string, sub = 'checkout'): string {
-  const root = join(home, sub);
-  for (const rel of TREE_FILES) {
-    const src = join(REPO, rel);
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    if (statSync(src).isDirectory()) { cpSync(src, dest, { recursive: true }); continue; }
-    copyFileSync(src, dest);
-    chmodSync(dest, statSync(src).mode & 0o777);
-  }
-  for (const [rel, body] of Object.entries(TREE_STUBS)) {
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, body);
-  }
-  return root;
-}
 
 /** ── THE DOCTOR HALF OF THE FIXTURE (Task 8) ────────────────────────────
  *  `cmd_install` now ENDS with `cmd_doctor`, and its exit code is doctor's, so
@@ -1805,6 +1639,18 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-telemetry-keepalive lands beside it too (spec 2026-09-07 §C) — every role, but not Darwin', () => {
+    // Mirrors the `ccd-graph-sweep` case above, byte for byte: `_inst_bins`
+    // ships this one on every role the same way, and rides the same darwin
+    // carve-out (its systemd timer never installs there; the script needs GNU
+    // date/stat, flock(1) and jq). Its UNIT and ENABLE are additionally
+    // role-gated (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-telemetry-keepalive');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-telemetry-keepalive')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -2321,6 +2167,22 @@ const UNIT_FILES: Array<[string, string]> = [
   // their absence explicitly.
   ['ccd-graph-sweep.service', 'deploy/systemd/ccd-graph-sweep.service'],
   ['ccd-graph-sweep.timer', 'deploy/systemd/ccd-graph-sweep.timer'],
+  // ROLE-GATED on the sweep's exact terms: a server box holds no wrapper HOMEs
+  // and no ~/.cc-secrets, so it has no credential to probe.
+  ['ccd-account-health.service', 'deploy/systemd/ccd-account-health.service'],
+  ['ccd-account-health.timer', 'deploy/systemd/ccd-account-health.timer'],
+  // spec 2026-09-07 §C: ROLE-GATED the same way — `_inst_units` skips both on
+  // a `--role server` box. The default fixture install is role `both`.
+  ['ccd-telemetry-keepalive.service', 'deploy/systemd/ccd-telemetry-keepalive.service'],
+  ['ccd-telemetry-keepalive.timer', 'deploy/systemd/ccd-telemetry-keepalive.timer'],
+  // C5: ROLE-GATED on the same terms as the three pairs above — a server box
+  // holds no account lanes and no `~/.ccrc/models` registries to refresh.
+  // Before this fix `_inst_units` had never heard of this pair at all: the
+  // only installer was `deploy/deploy.sh`'s agent lane, so `ccrc install
+  // --role fleet` shipped the verbs and the probe but never armed the timer
+  // that is supposed to run them hourly.
+  ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
+  ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2358,7 +2220,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs six unit files and two drop-ins, byte for byte, at 644', () => {
+  it('installs ten unit files and two drop-ins, byte for byte, at 644', () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
@@ -2445,7 +2307,14 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // idiom), which is why it is not folded into the `_ccrc_die`-guarded
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
-      // THE RESTART, in deploy's own position (deploy.sh:724-726): after both
+      '--user enable --now ccd-account-health.timer',
+      // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
+      // and degrading rather than dying for the same reason.
+      '--user enable --now ccd-telemetry-keepalive.timer',
+      // C5: a FIFTH enable, role-gated on the same terms and degrading the
+      // same way — a server box has no lanes for this timer to refresh.
+      '--user enable --now ccrc-models.timer',
+      // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
       // pinned to the dist it started with. Without this line the SECOND
@@ -2843,7 +2712,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(
       /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
-    // Nothing but the four executables `_inst_bins` installs (graphify Task 10
+    // Nothing but the five executables `_inst_bins` installs (graphify Task 10
     // adds `ccd-graph-sweep`) and R3's one SYMLINK — no wrapper, no temp file,
     // no staged leftover — beside what the fixture itself planted.
     //
@@ -2857,9 +2726,10 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
-        // and graph-sweep (systemd-timer-bound), macOS is a supported box for it.
+        // and the three timer-bound ones, macOS is a supported box for it.
         ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
-        : ['ccd', 'ccd-account-auth', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
+        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
+           'ccd-telemetry-keepalive', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3488,6 +3358,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // graphify Task 10 (O3/O6b): fleet is not server, so the sweep timer
     // enables here too.
     expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
+    // C5: fleet is not server, so the models timer enables here too.
+    expect(argv).toContain('--user enable --now ccrc-models.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3555,6 +3427,9 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
       '--user enable --now ccd-graph-sweep.timer',
+      '--user enable --now ccd-account-health.timer',
+      '--user enable --now ccd-telemetry-keepalive.timer',
+      '--user enable --now ccrc-models.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3570,14 +3445,25 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
-    // before this task still lands unchanged.
+    // before this task still lands unchanged. C5: the models pair joins the
+    // same gate — a server box has no lanes to refresh.
     for (const [dest] of UNIT_FILES) {
-      if (dest === 'ccd-graph-sweep.service' || dest === 'ccd-graph-sweep.timer') continue;
+      if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
+        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-account-health.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-account-health.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
