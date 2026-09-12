@@ -1674,7 +1674,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
 
   it('SKILL.md tells the coordinator how to address a worker, in the crossing section', () => {
     expect(flat(skill)).toContain(
-      flat("Address the worker as `to: 'worker'` with this run's `runId`"));
+      flat("Address the worker as `toId: 'worker'` with this run's `runId`"));
   });
 
   it('keeps the resolved-recipient promise while adding the second role', () => {

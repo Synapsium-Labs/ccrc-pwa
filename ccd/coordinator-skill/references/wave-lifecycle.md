@@ -373,7 +373,7 @@ submits unchanged. The worked example is in §4 — a worker sent here by its ow
 skill should read that block before it writes its first done-claim.
 
 **Addressing, and the one rule that keeps it boring.** A worker is addressed
-either by its session id or as `to:"worker"` with the run — the role resolves to
+either by its session id or as `toId:"worker"` with the run — the role resolves to
 whatever session that run currently names, which is what makes a replacement
 reachable without anyone re-typing an id. So carry the `runId` on every mail you
 send, whichever role you address: with it, `coordinator` resolves off that run's
