@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9b23b33e6738517604eeb3c9670fd3e8a64732409237b337e54b926113df7294
+# ccrc:generated 1 sha256=56f3c3bc3eb4a6690dfa95a1088f5e8c6072bd873e46cd877c79199034247841
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4938,6 +4938,7 @@ cmd_caps() {   # one verb name per line — what THIS copy of ccd implements.
   # honesty about capability.
   [[ $# -eq 0 ]] || die "usage: ccd caps"
   cat <<'EOF'
+account-pane
 attach
 caps
 clip
@@ -5320,6 +5321,92 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
     fi
     echo "running"
   fi
+}
+
+cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai-login] [--cancel]
+  # THE ONE DETACHED-PROCESS VEHICLE THE WHITELIST CAN CREATE (spec §6). Only
+  # ccd may make a tmux session — `EXEC_WHITELIST.tmux` grants has-session,
+  # list-panes, capture-pane, send-keys and resize-window and nothing else
+  # (agent/src/whitelist.ts) — so a `claude setup-token` mint, which is an Ink
+  # full-screen TUI that produces ZERO BYTES without a tty (measured
+  # 2026-09-07, CC 2.1.263), has no home without this verb.
+  #
+  # `_tmux_new_session`, NEVER `_spawn`. Two separate reasons, and both matter:
+  # `_spawn_start` reads wrapper/workdir/uuid out of the registry and dies with
+  # `incomplete registry for '<id>'` for an id that names an ACCOUNT rather
+  # than a session; and `_spawn_settle` drives `_accept_first_run_prompts`,
+  # which presses Down and Enter into the pane. A sign-in a robot answers is a
+  # sign-in that was dismissed. Through `_tmux_new_session` the pane also lands
+  # in ccrc-tmux-server.scope like every other, which is the whole argument
+  # that function's own header makes.
+  #
+  # FLAG-ANCHORED, exactly as `cmd_coord_pause` above: `--id` is not a
+  # confirmation token, it is the verb's whole argument surface, and a
+  # one-token grant would permit every positional form it might ever grow.
+  # Wave 2 enrols it in the agent's REQUIRED_VERB_FLAG so that dropping the
+  # flag from the GRANT is a boot refusal; this line is the half that holds
+  # on a box, where there is no whitelist at all (D-1865).
+  [[ $# -ge 2 && $1 == --id ]] || die "usage: ccd account-pane --id <id> [--method setup-token|openai-login] [--cancel]"
+  local id="$2"; shift 2
+  # BEFORE ANY PATH OR PANE NAME IS BUILT FROM IT, and this is the tree's own
+  # stated rule rather than a local nicety — the R-3 block in `_ws_common_dir`
+  # ("a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>`
+  # file ccd owns") is the same argument about the same class of value. The id
+  # is about to be single-quoted into a command string tmux hands to a shell.
+  # The class is `shared/roster.ts`'s ID_RE, which is where every rostered id
+  # comes from.
+  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $id"
+  local method='' cancel=0
+  while (( $# )); do
+    case "$1" in
+      # An explicit arity check, not a bare `shift 2`: ccd runs under
+      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
+      # shifts nothing, and this loop never terminates (cmd_ws_archive carries
+      # the same three lines over the same hazard).
+      --method) [[ $# -ge 2 ]] || die "usage: ccd account-pane --id <id> [--method setup-token|openai-login] [--cancel]"
+                method="$2"; shift 2 ;;
+      --cancel) cancel=1; shift ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  _is_valid_wrapper "$id" || die "unknown-account: $id (no roster entry claims it)"
+  local pane; pane="cc-auth-$id"
+  if (( cancel )); then
+    # `null`, not a refusal: "there is no pane" is the state --cancel exists to
+    # reach, so reaching it is success. The caller that wants to know whether it
+    # killed anything reads the field.
+    if tmux has-session -t "$pane" 2>/dev/null; then
+      tmux kill-session -t "$pane" || die "could not kill $pane"
+      printf '{"cancelled":%s}\n' "$(_json_str "$pane")"
+    else
+      printf '{"cancelled":null}\n'
+    fi
+    return 0
+  fi
+  case "$method" in
+    setup-token|openai-login) ;;
+    '') die "usage: ccd account-pane --id <id> [--method setup-token|openai-login] [--cancel]" ;;
+    # `login` is deliberately absent: it drives a plain pipe with no pane and
+    # no pty (measured), so asking for a pane to run it in is a request this
+    # verb should refuse rather than quietly honour.
+    *) die "bad-method: $method (want setup-token|openai-login; login needs no pane)" ;;
+  esac
+  # IDEMPOTENT BY MEASUREMENT, not by hope. `has-session` conflates "gone",
+  # "no server" and "no socket" into rc=1 (the four-row measurement beside
+  # `_tmux`), so this check can be wrong in the direction of trying again —
+  # and tmux itself is the backstop there: `new-session -d -s <name>` on a
+  # live name exits non-zero with `duplicate session`, which the `||` below
+  # turns into a refusal rather than a second helper.
+  ! tmux has-session -t "$pane" 2>/dev/null \
+    || die "auth-in-progress: $pane is already running (ccd account-pane --id $id --cancel to stop it)"
+  _tmux_new_session -d -s "$pane" -x 120 -y 40 \
+    "exec '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
+    || die "could not create $pane"
+  # `_json_str` for both, though both are already constrained — the id by the
+  # regex above and the method by the `case` — because the tree's rule is that
+  # a JSON string literal is produced by the one encoder, not by a printf whose
+  # safety is an argument in a comment.
+  printf '{"pane":%s,"method":%s}\n' "$(_json_str "$pane")" "$(_json_str "$method")"
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -13681,9 +13768,10 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  account-pane) shift; cmd_account_pane "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|pr-open|pr-state|account-pane|version} <args>" >&2; exit 1 ;;
 esac
 fi

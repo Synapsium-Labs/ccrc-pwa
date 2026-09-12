@@ -18695,3 +18695,46 @@ carried `shared/roster-json.mjs` and `shared/base-url.mjs`; it was short by exac
 The lesson is the general one about a fixture that ENUMERATES what a real install copies wholesale:
 the two go out of agreement silently, and only a check that reads a newly-required file finds out.
 Pinned by mutation — removing the line reds that case alone.
+
+### D-2554 — the red-first headline counts one red too many, because one of the twelve asserts an absence
+
+Task 50's Step 2 says "FAIL — **11 red of 12, and the twelfth is green on purpose**", the twelfth
+being `EVERY tmux send-keys in ccd targets a REGISTRY id`. Measured on this branch at the tip of
+Task 33: **10 red, 2 passed**.
+
+The second green is `presses NO key into the pane it just made`. Its whole body is two
+`expect(...).toEqual([])` assertions over `h.calls()` — it asserts that nothing happened. On a tree
+with no `account-pane` verb at all the dispatcher prints its usage line and exits 1, no tmux call is
+recorded, and both assertions hold. An absence assertion cannot go red on a tree where the code it
+constrains does not exist; it only becomes a mechanism once something is there to be constrained.
+
+Left as it is rather than rewritten, because the guard is real and IS measured — Step 5's second
+mutation reds it (see D-2555). What is corrected is the headline: an executor who treats "11 red" as
+the gate stops on a difference that is not a defect, which is the same failure mode
+`ccrc-install.test.ts`'s count once had.
+
+### D-2555 — mutation 1's expected-red list names a case that mutation 1 cannot red, and omits two it does
+
+Task 50's Step 5 predicts mutation 1 (`_tmux_new_session …` → `_spawn "$id" new`) reds three cases,
+one of them `presses NO key into the pane it just made`, "with the `accept …` line
+`_accept_first_run_prompts` writes into `h.calls()`".
+
+Measured: **four red, and that is not one of them.** `_spawn` reaches `_spawn_start` first, which
+reads wrapper/workdir/uuid out of the registry and dies on `incomplete registry for 'claude-a'` —
+an ACCOUNT id has no registry row. `_spawn_settle`, and therefore `_accept_first_run_prompts`, is
+never reached, so no key is ever sent and the absence assertion holds. The reasoning the plan gives
+for NOT using `_spawn` is exactly why its own mutation cannot produce the evidence it predicts: the
+first reason (`incomplete registry`) fires before the second (the typer) can.
+
+The four that do go red are `creates cc-auth-<id> at 120x40 …` (`JSON.parse('')`), `is idempotent …`,
+`--cancel kills the pane …` — all three on the empty stdout a dead `_spawn` leaves — and the
+structural `goes through _tmux_new_session and never through _spawn`.
+
+`presses NO key` is pinned by mutation 2 instead (adding `tmux send-keys -t "cc-auth-$id" Enter` to
+`cmd_account_pane`), measured RED on that case plus the two structural ones. So the typer guard has a
+mutation; it is just not the mutation the plan attributes it to.
+
+Eight mutations were measured on this task in total, each red and each restored: `_spawn` routing,
+the literal-target `send-keys`, the `--id` flag anchor (6 red — it also unbinds `$id`), the ID_RE
+guard, `_is_valid_wrapper`, the method `case`, the `has-session` in-progress guard, and `--cancel`'s
+`null` arm.
