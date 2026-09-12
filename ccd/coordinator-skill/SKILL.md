@@ -304,8 +304,10 @@ not after.
    matters: closing first, even briefly, leaves the program with zero open
    runs, and the server retires a program with none — silently breaking
    every `toId:'coordinator'` mail from that point on. Opening first never
-   lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
-   the same workspace**.
+   lets the count reach zero. After close succeeds, run `"$API" runs list
+   --closed 1`, find the producer by run id, and require its own `state` to be
+   `done`; a missing row or any other state means report and do not dispatch.
+   Only then dispatch wave N+1 (step 2) **fresh into the same workspace**.
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. Nothing
    archives the workspace on its own after that: the merged sweep only pushes
@@ -323,9 +325,11 @@ ledger you write, and whose plan every wave is measured against — and its wave
 may run in ANY project. The home is stated, never inferred. **Every `POST /api/runs`
 for this programme carries `homeProject`**, the same value on every wave; the
 response answers `ledgerRepo` and `ledgerAbsPath` for it — the ledger itself, under
-`docs/superpowers/programs/`. A plan citation is built from `ledgerRepo`, the home
-repo's root, not from `ledgerAbsPath`'s directory: the plan sits in the SIBLING
-directory, `docs/superpowers/plans/`, not beside the ledger. A later open naming a different home is
+`docs/superpowers/programs/`. `ledgerAbsPath` is ONLY that ledger path; it is not
+and cannot be used as the home repository root or as the plan path. For a crossing
+brief, resolve the home checkout separately as `homeRepoRoot`, keep the tracked
+plan path as `planRepoPath` under `docs/superpowers/plans/` with no leading slash,
+and name the full 40-hex commit as `planSha`. A later open naming a different home is
 refused `home-mismatch` with `by:` the stored value — the fix is your body, never
 the server. (An open with no `homeProject` at all is still accepted for one
 deploy generation and recorded as a `legacy-home-project` run event, with the
@@ -347,21 +351,25 @@ and two of the daily budget. `cap-concurrency` or `cap-daily` during a cross-rep
 programme is this, not a bug — stop, say which cap, and wait to be woken, exactly
 as you would for any other.
 
-**A brief for a foreign-repo wave cites the home repo's plan by ABSOLUTE PATH at a
-named sha, and INLINES the contract excerpt the wave depends on, verbatim from the
-merged file.** One box, one user, so the path resolves from any workspace; the sha
-is what makes the citation mean one thing a month from now. The worker reads that
-plan for CONTEXT and never to discover its contract — a contract it had to go and
-find is a contract your brief did not give it — and it never writes to that repo.
-Paths, not payloads: the 8 KB ceiling is unchanged, and the excerpt is the part of
-the plan this wave is bound by, not the plan.
+**A brief for a foreign-repo wave carries `homeRepoRoot`, `planRepoPath`, and
+`planSha`, and INLINES the contract excerpt the wave depends on, verbatim from the
+merged file.** `homeRepoRoot` is the absolute home-repository root;
+`planRepoPath` is the tracked repository-relative plan path, with no leading slash;
+and `planSha` is the full 40-hex commit SHA. The worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; inability to resolve the
+repository, commit, or path means report and stop. It never substitutes `HEAD`,
+reads the current checkout directly, fetches, checks out, or otherwise mutates the
+home repository. The inline excerpt controls interface shape; the plan blob at
+`planSha` controls wave scope and requirements; the current checkout's plan is not
+authoritative for this dispatch. Paths, not payloads: the 8 KB ceiling is unchanged.
 
-**Before dispatching a wave that consumes another wave's output, `GET /api/runs`
-and read the producer run's own `state`. Anything but `done` — do not dispatch,
-report.** There is no dependency edge in the schema and none is coming: the server
-will happily dispatch a consumer into a repo whose producer is still `working`,
-and what comes back is a wave built against an interface that has not landed. The
-measurement is one call, and it is the whole guard.
+**Before dispatching a wave that consumes another wave's output, first open the
+consumer run, then successfully close the producer, then run `"$API" runs list
+--closed 1` and find the producer by run id.** The default runs listing omits
+`done` and `failed` rows, so only the closed listing can prove the producer's own
+`state` is `done`. A missing row or any other state means report and do not
+dispatch. There is no dependency edge in the schema and none is coming: this
+post-close measurement is the whole guard.
 
 **Deviations found during a foreign-repo wave are minted against the HOME
 project** — `POST /api/ledger/deviations` with the home project's name — and

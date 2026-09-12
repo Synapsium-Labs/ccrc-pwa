@@ -456,15 +456,20 @@ describe('an id reaches a path template only if the table declared one', () => {
 });
 
 describe('a query key rides only if its row declared it', () => {
-  // Every key any row declares, today: `to`, `program`, `all`, `limit` (mail
-  // list), `of`/`project` (peers), `session` (lifecycle), `project`/`all`
-  // (claims), `project` (ledger), `program`/`limit` (feed list). Anything else
-  // is refused rather than appended, for the same reason the path is a template
-  // and not an argument — a client that forwarded arbitrary query keys would be
-  // a URL builder with extra steps.
+  // Every key any row declares, today: `closed` (runs list), `to`, `program`,
+  // `all`, `limit` (mail list), `of`/`project` (peers), `session` (lifecycle),
+  // `project`/`all` (claims), `project` (ledger), `program`/`limit` (feed list).
+  // Anything else is refused rather than appended, for the same reason the path
+  // is a template and not an argument — a client that forwarded arbitrary query
+  // keys would be a URL builder with extra steps.
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
+  });
+
+  it('lists closed runs through the route table instead of hiding the query in prose', async () => {
+    await run(['runs', 'list', '--closed', '1']);
+    expect(seen[0]!.url).toBe('/api/runs?closed=1');
   });
 
   it('appends two declared keys on a row that takes two', async () => {

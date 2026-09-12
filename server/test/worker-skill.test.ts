@@ -408,7 +408,7 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
 //
 // Sentence literals, the CONTRACT's own mechanism: a paraphrase fails as a
 // deletion does. Kept OUT of the CONTRACT array on purpose — these are
-// guidance, not the twelve, and adding one there would red the count pins for a
+// guidance, not the thirteen, and adding one there would red the count pins for a
 // change that adds no clause.
 describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
   // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
@@ -423,14 +423,26 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
   const FOREIGN: readonly (readonly [string, string])[] = [
     ['the plan may be outside this workspace',
       'the plan file your brief names can sit OUTSIDE this workspace'],
-    ['read it by the absolute path the brief gives',
-      'Read it by the ABSOLUTE PATH the brief gives'],
-    ['never write to it',
-      'never write to it'],
+    ['homeRepoRoot is the absolute repository root',
+      '`homeRepoRoot`, the absolute path to the home repository root'],
+    ['planRepoPath is tracked and repository-relative',
+      '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
+    ['planSha is a full immutable identifier',
+      '`planSha`, a full 40-hex commit SHA'],
+    ['read the named Git object exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['an unresolved named object fails closed',
+      'If the repository, commit, or path cannot be resolved, report and stop.'],
+    ['ledgerAbsPath does not double as a plan coordinate',
+      '`ledgerAbsPath` is only the absolute programme-ledger path'],
     ['commit only on this workspace branch, in this repository',
       "commit only on this workspace's own branch in THIS repository"],
     ['the contract excerpt is inlined in the brief, and is the authority',
       'The contract excerpt your wave depends on is INLINED in the brief'],
+    ['the named blob controls wave requirements',
+      'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
+    ['the current checkout cannot override the dispatch',
+      'The current checkout\'s plan is not authoritative for this dispatched wave.'],
     ['a reply may arrive addressed to the role',
       'A reply may arrive addressed to the ROLE `worker`'],
   ];
@@ -443,8 +455,18 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
     expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
   });
 
+  it('rejects every mutable-checkout fallback in the foreign-plan section', () => {
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    expect(section).not.toContain('Read it by the ABSOLUTE PATH the brief gives');
+    expect(section).not.toContain('cat "$planAbsPath"');
+    expect(section).not.toContain('show "HEAD:');
+    expect(section).not.toContain('current checkout is authoritative');
+  });
+
   it('adds no new clause and no second numbered list', () => {
-    // The count pins above would catch a thirteenth clause; this catches the
+    // The count pins above would catch a fourteenth clause; this catches the
     // near-miss that would make THEM unreadable — a numbered list in the new
     // prose, which `^\d+\. ` cannot tell from a clause.
     const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));

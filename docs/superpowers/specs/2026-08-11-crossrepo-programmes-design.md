@@ -447,12 +447,14 @@ ambiguity; the programme filter and role addressing are what make it *convenient
 ## Operator rulings, 2026-08-11 (post-review — the two sharp questions settled)
 
 **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Ruled with the orchestrator's
-reasoning adopted: `work_items.blockedBy` already demonstrated the dead-schema class; the
-discipline is checkable, not aspirational — the SKILL gains the rule "before dispatching a
-consumer wave, GET /api/runs and read the producer run's state; not `done` → do not dispatch";
-and the door stays open additively (an optional `dependsOn` + one typed refusal) to be walked
-through only when a measured incident of the phased-cutover class justifies it. Evidence
-drives schema.
+reasoning adopted: `work_items.blockedBy` already demonstrated the dead-schema class. The
+operational sequence preserves the programme first: open the consumer run, successfully close
+the producer, then run `ccrc-api runs list --closed 1`, find the producer by run id, and require
+its own `state` to be `done` before dispatching the consumer. The ordinary runs listing hides
+`done` and `failed` rows, so it cannot prove this boundary. A missing row or any state other than
+`done` means report and do not dispatch. The door stays open additively (an optional `dependsOn`
+plus one typed refusal) only when a measured incident of the phased-cutover class justifies it.
+Evidence drives schema.
 
 **Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.** Ruled against this spec's provisional
 "defaulted": inference-from-wave-1 is the defect class that caused this fleet's worst

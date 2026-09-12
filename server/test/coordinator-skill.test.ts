@@ -1577,12 +1577,24 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       'two concurrency slots and two of the daily budget'],
     ['homeProject on every open',
       'Every `POST /api/runs` for this programme carries `homeProject`'],
-    ['the brief cites the home plan by absolute path at a sha',
-      "cites the home repo's plan by ABSOLUTE PATH at a named sha"],
+    ['the brief carries the three immutable-plan coordinates',
+      'carries `homeRepoRoot`, `planRepoPath`, and `planSha`'],
+    ['homeRepoRoot is the repository root, not a file path',
+      '`homeRepoRoot` is the absolute home-repository root'],
+    ['planRepoPath is tracked and repository-relative',
+      '`planRepoPath` is the tracked repository-relative plan path, with no leading slash'],
+    ['planSha is a complete immutable identifier',
+      '`planSha` is the full 40-hex commit SHA'],
     ['the brief inlines the contract excerpt verbatim',
       'INLINES the contract excerpt the wave depends on, verbatim from the merged file'],
-    ['Q1 — the producer run is READ, not remembered',
-      "read the producer run's own `state`. Anything but `done` — do not dispatch, report."],
+    ['the named plan is read as an immutable Git object',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['failed immutable reads stop rather than falling back',
+      'inability to resolve the repository, commit, or path means report and stop'],
+    ['the authority split keeps interface and wave scope distinct',
+      'The inline excerpt controls interface shape; the plan blob at `planSha` controls wave scope and requirements'],
+    ['Q1 — the producer is checked after close through the closed listing',
+      'then successfully close the producer, then run `"$API" runs list --closed 1`'],
     ['deviations are minted against the home project',
       'minted against the HOME project'],
   ];
@@ -1645,15 +1657,48 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       '`"homeProject":"<the home project>"`'],
     ['§1 — the two response fields, and their null',
       'both are null while the stored home is null'],
+    ['§1 — ledgerAbsPath is not a plan coordinate',
+      '`ledgerAbsPath` is ONLY that home\'s programme ledger'],
     ['§2 — what a foreign-repo brief carries beyond the ordinary list',
-      'the absolute path of the home plan, at a sha, plus the contract excerpt inlined verbatim'],
-    ['§5 — Q1 at the wave boundary',
-      "read the producer run's own `state` before you dispatch a consumer wave"],
+      '`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`'],
+    ['§2 — the named plan is read mechanically',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['§2 — failure cannot fall back to a mutable checkout',
+      'If the repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§5 — Q1 uses the closed listing after close',
+      'After that close succeeds'],
+    ['§5 — Q1 invokes the declared client query',
+      '"$API" runs list --closed 1'],
   ];
 
   it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
     expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
       .toContain(flat(sentence));
+  });
+
+  it('orders the producer gate after close and before consumer dispatch', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
+      lifecycle.indexOf('## 6 — Final merge'));
+    const closeAt = boundary.indexOf('POST /api/runs/:id/close');
+    const checkAt = boundary.indexOf('"$API" runs list --closed 1');
+    const dispatchAt = boundary.indexOf('Dispatch wave N+1');
+    expect(closeAt, 'the producer close is missing from the between-wave sequence')
+      .toBeGreaterThanOrEqual(0);
+    expect(checkAt, 'the closed-list producer check is missing from the between-wave sequence')
+      .toBeGreaterThan(closeAt);
+    expect(dispatchAt, 'consumer dispatch must follow the closed-list producer check')
+      .toBeGreaterThan(checkAt);
+  });
+
+  it('does not teach mutable-plan fallbacks or collapse ledger and plan paths', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const brief = lifecycle.slice(lifecycle.indexOf('**A brief for a wave in ANOTHER project'),
+      lifecycle.indexOf('**The execution skill is the one list item'));
+    expect(brief).not.toContain('cat "$planAbsPath"');
+    expect(brief).not.toContain('show "HEAD:');
+    expect(brief).not.toContain('the absolute path of the home plan');
+    expect(brief).toContain('current checkout\'s plan is\nnot authoritative');
   });
 
   // §4. There are TWO roles now, and the asymmetry between them is the part a

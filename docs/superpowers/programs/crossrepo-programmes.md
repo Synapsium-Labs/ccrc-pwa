@@ -75,7 +75,7 @@ acceptance list, verbatim.
 - **account-pools wave 3 is in `server/src/coord/{routes,store}.ts` now** (run 35, dispatched
   2026-09-08). Wave 1's worker rebases over it before opening its PR; a conflict in `openRun` or the
   route's body validation is expected, not a defect.
-- **The coordinator skill's ten clauses and the worker skill's twelve stay VERBATIM** — every addition is
+- **The coordinator skill's eleven clauses and the worker skill's thirteen stay VERBATIM** — every addition is
   an additive paragraph with its own harvest pin (`coordinator-skill.test.ts:92-118`,
   `worker-skill.test.ts:34-71`).
 - **`nestFleet.ts` and its five rules do not change.** The marker is computed in the card from the run it

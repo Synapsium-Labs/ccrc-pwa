@@ -27,12 +27,13 @@ non-goals — and Build 2.5's programme/ledger discipline
    dispatch runs into any project.
 2. **Enable the two fully:** (1) waves dispatching runs into any project, with every single-project
    seam verified and closed; (2) cross-repo mail made easily discoverable.
-3. **Foreign-repo workers read the home repo's plan by ABSOLUTE PATH** — one box, one user, an
-   assumption this spec records rather than hides (§3 F3, §6).
-4. **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** The coordinator skill gains the rule
-   "before dispatching a consumer wave, read the producer run's state; not `done` → do not
-   dispatch". No `dependsOn` column until a measured incident of the phased-cutover class justifies
-   one.
+3. **Foreign-repo workers read the named plan Git object.** A brief carries the absolute home
+   repository root, the tracked repository-relative plan path, and a full 40-hex commit SHA; the
+   worker resolves exactly that blob rather than the mutable checkout (§3 F3, §6).
+4. **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Preserve open-before-close, then
+   successfully close the producer, then query closed runs and require that producer's own `state`
+   to be `done` before dispatching the consumer. No `dependsOn` column until a measured incident of
+   the phased-cutover class justifies one.
 5. **Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.** Not inferred from wave 1. Accepted-and-logged
    as legacy when absent for one deploy generation, then required on the first wave's open and stored
    on the programme row.
@@ -162,8 +163,8 @@ whenever every wave shares one project.
 `references/wave-lifecycle.md:24-27,468` present "same `sessionId`, same workspace" as the wave ≥ 2
 default with no project condition. `ccd/worker-skill/SKILL.md:11,66` say only "the plan file the brief
 names"; `:67` (clause 7) states the absolute-path rule for mail artifacts and nothing about plans. Both skills'
-clauses are pinned verbatim (`server/test/coordinator-skill.test.ts:92-118`, ten clauses;
-`server/test/worker-skill.test.ts:34-71`, twelve), so every sentence below changes in the same commit
+clauses are pinned verbatim (`server/test/coordinator-skill.test.ts:92-118`, eleven clauses;
+`server/test/worker-skill.test.ts:34-71`, thirteen), so every sentence below changes in the same commit
 as its pin.
 
 **Design — coordinator skill:**
@@ -175,12 +176,18 @@ as its pin.
   `cap-concurrency` or `cap-daily` during a cross-repo programme is this, not a bug.
 - Every `POST /api/runs` carries `homeProject`. (During the legacy generation the server tolerates its
   absence; the skill never omits it.)
-- A brief for a foreign-repo wave cites the home repo's plan by ABSOLUTE PATH at a named sha
-  (`ledgerAbsPath`'s directory, the plan beside it) and INLINES the contract excerpt the wave depends
-  on, verbatim from the merged file — the worker never reads the home plan to discover its contract,
-  only to read its context. Paths, not payloads; 8 KB stands.
-- Q1's discipline sentence: before dispatching a consumer wave, `GET /api/runs` and read the producer
-  run's state; anything but `done` → do not dispatch, report.
+- A brief for a foreign-repo wave carries `homeRepoRoot` (the absolute home-repository root),
+  `planRepoPath` (the tracked repository-relative path under `docs/superpowers/plans/`, no leading
+  slash), and `planSha` (a full 40-hex commit SHA), plus the contract excerpt inlined verbatim. The
+  worker reads exactly `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; failure to resolve any
+  part means report and stop, with no `HEAD`, current-checkout, fetch, checkout, or mutation fallback.
+  `ledgerAbsPath` remains only the absolute programme-ledger path. The inline excerpt controls
+  interface shape; the named plan blob controls wave scope and requirements. Paths, not payloads;
+  8 KB stands.
+- Q1's discipline sentence: open the consumer run first, successfully close the producer, then run
+  `"$API" runs list --closed 1`, find the producer by run id, and require its state to be `done`. The
+  default runs listing omits closed rows; a missing producer or any other state means report and do
+  not dispatch.
 - The refusal-list sentence in the skill names `project-mismatch` and `home-mismatch`, and
   `references/wave-lifecycle.md` explains both — in WAVE 1, not here, because the skill test requires
   every `RunRefuseCode` to be named in the skill corpus the moment it exists
@@ -198,8 +205,9 @@ as its pin.
 
 **Design — worker skill:**
 
-- The plan the brief names may live in ANOTHER repository. Read it by the absolute path the brief
-  gives; never write to it; commit only on this workspace's own branch in this repository.
+- The plan the brief names may live in ANOTHER repository. Read exactly the Git object named by
+  `homeRepoRoot`, `planSha`, and `planRepoPath`; never fall back to the current checkout, never mutate
+  the home repo, and commit only on this workspace's own branch in this repository.
 - Address the coordinator as `toId: 'coordinator'` with this run's `runId` — unchanged — and note that a
   reply from the coordinator may arrive addressed to the ROLE `worker`, which resolves to this session.
 
@@ -285,8 +293,10 @@ mail screen renders the feed and nothing filters either by programme.
   path or the verbatim-replay guarantee.
 - **The programme filter.** `GET /api/mail?program=<slug>` (EXACTLY ONE of `to` and `program` — a
   mailbox and a thread are different questions with different joins, so both at once is a 400,
-  D-2057; `all` as today) answers every mail whose `runId` joins to a run of that programme, through
-  the join `resolveCoordinator` already uses. `GET /api/feed?program=<slug>` answers the events of
+  D-2057) answers only outstanding programme mail by default. Use exactly
+  `GET /api/mail?program=<slug>&all=1` for the full programme mail history.
+  `GET /api/feed?program=<slug>` answers the full event archive and has no
+  outstanding/history split. Both filters join through the run row; the feed filter answers the events of
   that programme — which needs a `runId` the feed row does not carry today (`NotifyEvent` is
   `seq, at, kind, sessionId, title, body` on the wire, and the ring-capped `feed_events` table
   likewise), so the ONE migration of this build (§8) also adds a nullable `feed_events.runId`, the
@@ -333,10 +343,10 @@ mail screen renders the feed and nothing filters either by programme.
 ## 6. Non-goals — the rejected nouns, carried verbatim so nobody relitigates
 
 - No "cross-repo project" noun; no entity that owns several repos.
-- No shared programmes home, no replicated ledger, no ledger sync; foreign waves read the home ledger
-  by absolute path and never write it.
+- No shared programmes home, no replicated ledger, no ledger sync; foreign waves read the named
+  home-plan Git object and never write the home repository.
 - No multi-repo workspace; the whitelisted verbs cannot re-point one and will not learn to.
-- No cross-box anything; §3 F3's absolute path depends on one box, one user, and says so.
+- No cross-box anything; §3 F3's `homeRepoRoot` depends on one box, one user, and says so.
 - No cross-run dependency edges or server-side gates (Q1); `blockedBy` stays within a run.
 - No server-side contract registry; the contract excerpt is prose in a brief and a file in the
   producing repo.
@@ -406,8 +416,8 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
 
 **Dogfood, as its own programme after wave 2 is live:** home `custom-tools`, wave 1 there, wave 2 in
 `data-internal` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
-draft and unchanged: the wave-2 brief cites the home plan by absolute path at a sha and inlines the
-contract verbatim from the merged file; the board shows the crossing on the wave-2 row and the abroad
+draft and unchanged: the wave-2 brief carries `homeRepoRoot`, `planRepoPath`, and `planSha`, reads
+that exact plan blob, and inlines the contract verbatim from the merged file; the board shows the crossing on the wave-2 row and the abroad
 line on the home card; the ledger's wave table records both PRs across two repos; no content moved by
 copy-paste; `project-mismatch` never fires in anger — its proof is a test, not an incident.
 

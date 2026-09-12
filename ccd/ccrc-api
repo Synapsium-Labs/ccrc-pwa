@@ -85,7 +85,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # has no route parity at all — so a skill that starts calling a route this table
 # lacks fails in the field, not in the suite.
 declare -A ROUTES=(
-  [runs.list]='GET|/api/runs|no|-'
+  [runs.list]='GET|/api/runs|no|closed'
   [runs.open]='POST|/api/runs|no|-'
   [runs.dispatch]='POST|/api/runs/{id}/dispatch|yes|-'
   [runs.advance]='POST|/api/runs/{id}/advance|yes|-'

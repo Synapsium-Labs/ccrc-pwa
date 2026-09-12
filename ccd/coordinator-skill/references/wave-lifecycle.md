@@ -37,19 +37,19 @@ dispatch from the live registry row (§2) — and refuses both times. A session 
 run has ever named refuses nothing: absence permits, which is exactly the
 wave-1 open that adopts a workspace the operator made by hand.
 
-**`homeProject`, and the two paths it names.** `ledgerRepo` echoes the home the
-programme now stores, and `ledgerAbsPath` is that home's ledger by ABSOLUTE
-path — the file a wave running in another repository reads without guessing
-where it lives. Both are `null` while the programme stores no home. The server
-tolerates an absent `homeProject` for one deploy generation and records that it
-did; send it on every open anyway. A programme that stores no home takes the
-FIRST home any open sends — first writer wins, recorded as
-`home-project-backfilled` on that run — and nothing in the API can change it
-afterwards: a later open sending a different value is refused `home-mismatch`
-against it. Send the programme's home, the repo holding its ledger, spec and
-plan — never the repo you happen to be running in. The server trims the value
-and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
-`400 bad-request` whose `detail` names `homeProject`.
+**`homeProject`, and the ledger path it names.** `ledgerRepo` echoes the home the
+programme now stores, and `ledgerAbsPath` is ONLY that home's programme ledger by
+ABSOLUTE path. It is not the home repository root, it is not the plan path, and a
+coordinator must not derive either from it. Both response fields are `null` while
+the programme stores no home. The server tolerates an absent `homeProject` for one
+deploy generation and records that it did; send it on every open anyway. A
+programme that stores no home takes the FIRST home any open sends — first writer
+wins, recorded as `home-project-backfilled` on that run — and nothing in the API
+can change it afterwards: a later open sending a different value is refused
+`home-mismatch` against it. Send the programme's home, the repo holding its ledger,
+spec and plan — never the repo you happen to be running in. The server trims the
+value and refuses one that is not a single path segment (a `/`, `.` or `..`) with
+a `400 bad-request` whose `detail` names `homeProject`.
 
    For wave ≥ 2, reclaiming the workspace wave 1 held, add
    `"sessionId":"<the held session id>"` to the same call — it tells the open
@@ -221,16 +221,20 @@ skill the worker should invoke** (`superpowers:executing-plans` or
 settled, the deviations already ledgered, and whatever your review of the last
 handoff decided.
 
-**A brief for a wave in ANOTHER project carries two more things**, and they are
-the two the worker cannot get for itself: the absolute path of the home plan, at
-a sha, plus the contract excerpt inlined verbatim from the merged file. The path
-resolves because there is one box and one user; the sha is what keeps the
-citation meaning one thing later; and the excerpt is inlined because a worker
-that has to go and FIND its contract has been handed a brief that did not carry
-one. It reads the home plan for context, never writes to it, and commits only on
-its own workspace's branch in the repo it is running in — the branch-discipline
-sentence below, which is already in every brief, is the whole of what changes for
-it.
+**A brief for a wave in ANOTHER project carries four more things:**
+`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`, the
+tracked repository-relative plan path under `docs/superpowers/plans/`, with no
+leading slash; `planSha`, the full 40-hex commit SHA; and the contract excerpt
+inlined verbatim from the merged file. These are separate from `ledgerAbsPath`,
+which names only `docs/superpowers/programs/<slug>.md`. The worker reads the
+immutable plan object exactly with
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If the repository, commit,
+or path cannot be resolved, it reports and stops. It must not substitute `HEAD`,
+directly read the current checkout, fetch, checkout, or otherwise mutate the home
+repository. The inline excerpt controls interface shape; the plan blob at
+`planSha` controls wave scope and requirements; the current checkout's plan is
+not authoritative for this dispatch. It commits only on its own workspace's
+branch in the repo it is running in.
 
 **The execution skill is the one list item that is not merely useful.** The
 worker's own clause 6 reads "Invoke the execution skill the brief names rather
@@ -548,15 +552,6 @@ whole time, which is the only prevention this ordering rule buys.
    now has two open runs (this wave's, still `working`/`awaiting-review`/
    `merging`, and the new `planned` one) — it can never read as zero from
    here.
-
-   **If wave N+1 CONSUMES what this wave produced, read the producer run's own
-   `state` before you dispatch a consumer wave** — `GET /api/runs`, the run row,
-   the word. Anything but `done` and you do not dispatch: you report. There is no
-   `dependsOn` column and none is planned (a measured incident of the
-   phased-cutover class is what would buy one), so this measurement is the only
-   thing standing between a consumer wave and an interface that has not landed.
-   It matters most exactly when the producer is in ANOTHER repo, where "I would
-   have noticed" is not true.
 4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
    wave's** run id — re-measures the SAME facts, against the SAME codes, as
    `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
@@ -578,7 +573,14 @@ whole time, which is the only prevention this ordering rule buys.
    `error:'hold-invalid'` (400) has the same no-act/no-close guarantees, but
    means the stored programme or numeric domain cannot satisfy the hook grammar;
    stop and report it rather than retrying unchanged.
-5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
+5. **After that close succeeds**, if wave N+1 consumes what this wave produced,
+   run `"$API" runs list --closed 1`, find this producer by its run id, and
+   require its own `state` to be `done`. The default `runs list` excludes `done`
+   and `failed` rows, so it cannot perform this check. A missing producer row or
+   any state other than `done` means report and do not dispatch. There is no
+   `dependsOn` column: this post-close read is the only gate between a consumer
+   and an interface that has not landed, especially across repositories.
+6. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
 
 ## 6 — Final merge
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Teach the two skills the project boundary wave 1 made mechanical — reuse a `sessionId` only inside one project, state `homeProject` on every open, cite a foreign repo's plan by absolute path and inline its contract, wait on a producer run's measured state, address the worker by role with a `runId` — and make the console say which repo a run is in, which repo its programme is homed in, and which programme a feed record belongs to.
+**Goal:** Teach the two skills the project boundary wave 1 made mechanical — reuse a `sessionId` only inside one project, state `homeProject` on every open, read a foreign repo's plan from its named Git object and inline its contract, verify a producer through the closed-runs view after closing it, address the worker by role with a `runId` — and make the console say which repo a run is in, which repo its programme is homed in, and which programme a feed record belongs to.
 
-**Architecture:** Nine edits, no new decision. The skills get ADDITIVE prose beside pins that already exist: the coordinator's ten clauses and the worker's twelve stay verbatim, and every new paragraph ships with its own harvest assertion in the suite that already reads that corpus. The PWA gets ONE new tolerant reader (`runHomeProject`) and ONE new derived note (`crossingNote`) in `pwa/src/fleet/runWords.ts` — the file that already owns every decision `RunsScreen` and `ProjectCard` render but do not make — and three surfaces compose them: the runs row gains a project badge and a crossing marker, the project card marks the rule-3 orphan worker and lists the waves abroad from an ADDITIVE `abroad` prop `FleetScreen` computes, and the mail screen groups the feed by programme through `NotifyEvent.runId` joined against `GET /api/runs`. `nestFleet` and its five rules do not change; nothing here decides anything the server did not already record.
+**Architecture:** Nine edits, no new decision. The skills get ADDITIVE prose beside pins that already exist: the coordinator's eleven clauses and the worker's thirteen stay verbatim, and every new paragraph ships with its own harvest assertion in the suite that already reads that corpus. The PWA gets ONE new tolerant reader (`runHomeProject`) and ONE new derived note (`crossingNote`) in `pwa/src/fleet/runWords.ts` — the file that already owns every decision `RunsScreen` and `ProjectCard` render but do not make — and three surfaces compose them: the runs row gains a project badge and a crossing marker, the project card marks the rule-3 orphan worker and lists the waves abroad from an ADDITIVE `abroad` prop `FleetScreen` computes, and the mail screen groups the feed by programme through `NotifyEvent.runId` joined against `GET /api/runs`. `nestFleet` and its five rules do not change; nothing here decides anything the server did not already record.
 
 **Tech Stack:** Markdown skills under `ccd/` (installed by the four-homes lane), TypeScript (strict, NodeNext) in `pwa/src` and `shared/`, React 19 + `@testing-library/react` under jsdom, vitest for every suite, node >= 22.13.0.
 
@@ -25,8 +25,8 @@ Copied from the spec and from `CLAUDE.md`. Every task's requirements implicitly 
 - **`FLEET_PROTO` stays 1; the wire is additive-only.** This wave adds NO wire field at all — `RunSummary.homeProject` and `NotifyEvent.runId` are wave 1's, and this wave is their first PWA reader. A newer peer must tolerate an older peer omitting a field. `homeProject` has ONE reader, full stop: `runHomeProject`, called at every one of its three call sites (Tasks 5–7) — there is no wire-boundary normaliser for `RunSummary` the way `reviveNotifyEvent` is one for `NotifyEvent`, so `runHomeProject` is both the wire tolerance and the render-time accessor. `runId` has TWO readers at two different boundaries, and that is deliberate, not a duplicate: `reviveNotifyEvent` (`shared/api.ts`, wave 1) is what a `NotifyEvent` crosses coming IN — the durable `GET /api/feed` read and the live catch-up tail both go through it, and it is what turns a missing key into `null` at the wire; Task 8's `eventRunId` in `pwa/src/lib/feed.ts` is the render-time accessor for a store row that a caller cannot prove was revived (an older cached build, a merge that put an unrevived object in the store), belt to that boundary's braces. Every `pwa/src` render site reads `eventRunId(ev)`, never `ev.runId` directly, which is what makes THAT the one rule that actually needs stating: not "one reader total" but "one reader per boundary, and the render side never reaches past its own."
 - **No overloaded null at a seam.** Two conditions a caller handles differently must not collapse to one value. In this wave that binds three places: a feed record with NO `runId` and one whose `runId` names a run this read did not return are different facts and get different headers (Task 8); a `homeProject` that is null (legacy generation) and one that equals the run's own project are both "no crossing" but only the second is a measured sameness, and neither may render the marker (Task 5); an orphan whose coordinator is merely on another card and one whose programme is homed elsewhere are two facts and the marker states each only when it measured it (Task 6).
 - **Mutation-table discipline.** Every guard ships WITH a test that goes RED when the guard is deleted or mutated, measured before and after — not asserted in a comment. TDD, red first. Each task names the exact mutation, the suite it reds, and the expected message.
-- **The pinned clauses are VERBATIM and this wave does not touch them.** `server/test/coordinator-skill.test.ts:104-115` pins ten coordinator clauses and `server/test/worker-skill.test.ts:34-71` (the array itself at `:49-64`) pins twelve worker clauses, character for character (straight apostrophes in the worker's, curly in the coordinator's). Every addition here is a NEW paragraph or a NEW section; if a clause literal changes, the change is wrong.
-- **Two scans constrain what may be written into `ccd/worker-skill/SKILL.md`** and both are easy to trip by accident: `worker-skill.test.ts:95-103` asserts `^\d+\. ` matches EXACTLY the twelve contract lines (so no new numbered list at column zero), and `:105-117` harvests `\b([a-z]+) (?:clauses|lines)\b` and requires every hit to be the derived word `twelve` (so no new sentence may say "two clauses" or "three lines"). The destructive-verb census (`:137-152`) requires `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore` to appear ONLY inside clause 8 — new prose may name none of them.
+- **The pinned clauses are VERBATIM and this wave does not touch them.** `server/test/coordinator-skill.test.ts:104-115` pins eleven coordinator clauses and `server/test/worker-skill.test.ts:34-71` (the array itself at `:49-64`) pins thirteen worker clauses, character for character (straight apostrophes in the worker's, curly in the coordinator's). Every addition here is a NEW paragraph or a NEW section; if a clause literal changes, the change is wrong.
+- **Two scans constrain what may be written into `ccd/worker-skill/SKILL.md`** and both are easy to trip by accident: `worker-skill.test.ts:95-103` asserts `^\d+\. ` matches EXACTLY the thirteen contract lines (so no new numbered list at column zero), and `:105-117` harvests `\b([a-z]+) (?:clauses|lines)\b` and requires every hit to be the derived word `thirteen` (so no new sentence may say "two clauses" or "three lines"). The destructive-verb census (`:137-152`) requires `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore` to appear ONLY inside clause 8 — new prose may name none of them.
 - **The coordinator's route corpus is parity-checked in BOTH directions** (`coordinator-skill.test.ts:204-275`): every `GET`/`POST /api/…` string in `SKILL.md` + every reference except `mail-envelope.md` must be a route `server/src/coord/routes.ts` actually registers, and every registered route must be named unless it is in the EXEMPT set. New prose may name `POST /api/runs`, `POST /api/runs/:id/dispatch`, `GET /api/runs`, `POST /api/mail`, `POST /api/ledger/deviations` — all registered and already named — and must name none of the ungated operator doors.
 - **L0 imports nothing.** `shared/*.ts` is bundled by the PWA. This wave adds nothing to `shared/`; `pwa/src/fleet/runWords.ts` is PWA-side and imports only types from `../../../shared/api`, exactly as it does today.
 - **New CSS introduces no new colour pair, and every rule is MEASURED, by one of two routes.** Three rules (Task 5's `.run-project`, `.run-crossing`, `.run-crossing-glyph`) name `.run-row` directly in their own selector — `.run-row .run-project`, not bare — and `.run-row` is self-grounded (`fleet.css:1967`, background AND colour both set), so `design/audit.mjs`'s named-ancestor route grounds them for free, the same route `.run-row .run-dispatch` (`fleet.css:2012-2017`) already stands on. The other seven (Task 6's `.proj-crossing`/`.proj-crossing-glyph`, Task 7's `.proj-abroad-line`/`.proj-abroad-glyph`, Task 8's `.mail-chip`/`.mail-chip[data-on]`/`.mail-group-head`) are written bare — they sit visually on `.proj-card-body`'s or the mail screen's own ground, but their OWN selectors name no ancestor, and a route that only reads selectors cannot recover a ground the DOM supplies and the stylesheet does not say. Measured directly (`node design/contrast-check.mjs` against a scratch copy of `fleet.css` with these ten rules added): the three named-ancestor rules print PASS immediately: 462→468. The seven bare ones print nothing and the uncovered census grows by exactly seven, 250→257 — the suite would still stay green (the census is allowed to be non-empty, and none of the seven is "recoverable from the selector," the only shape that would fail it), but that is a colour pair shipping UNPRICED, not one the tool has priced and found safe. So each of Tasks 6–8 registers its own bare rules in `design/audit.mjs`'s `INHERITED_GROUNDS`, in the SAME commit as the rule — the `.proj-ready-why` entry's own comment states the house rule ("Added WITH the rule rather than after it: the first draft of the reason line shipped uncovered, which is precisely the defect those three entries exist to record"). Re-measured with all seven registered (`.proj-*` under `var(--bg-surface)`, `.mail-*` under `var(--bg-page)`): every one PASSES — 5.25–16.94:1 across both themes, all comfortably above the 4.5 floor — and the uncovered census returns to 250. Two cues on every state: a glyph AND a word, never colour alone.
@@ -53,9 +53,9 @@ Copied from the spec and from `CLAUDE.md`. Every task's requirements implicitly 
 | `RunSummary.homeProject: string \| null` | `shared/api.ts` | Tasks 5–7 read it through `runHomeProject`, never directly |
 | `NotifyEvent.runId: number \| null` | `shared/api.ts`, revived by `reviveNotifyEvent` | Task 8 groups the feed on it |
 | `HOME_PROJECT_LEGACY_ACCEPTED` | `server/src/coord/routes.ts` | named in Task 2's prose as the reason an absent `homeProject` is still accepted today |
-| `ledgerRepo`, `ledgerAbsPath` on the open response | `server/src/coord/routes.ts` | Tasks 1–2: the coordinator reads `ledgerAbsPath` to build the absolute plan path it cites |
+| `ledgerRepo`, `ledgerAbsPath` on the open response | `server/src/coord/routes.ts` | Tasks 1–2: the coordinator treats `ledgerAbsPath` only as the ledger path and carries separate `homeRepoRoot`, `planRepoPath`, and `planSha` plan coordinates |
 | the `worker` role recipient, `resolveWorker(runId)` | `server/src/coord/routes.ts`, `store.ts` | Task 3 (the coordinator's addressing rule) and Task 4 (the worker's note that a reply may name the role) |
-| `GET /api/mail?program=`, `GET /api/feed?program=` | `server/src/coord/routes.ts` | named in Task 3's prose as the read a coordinator makes for a programme's mail |
+| `GET /api/mail?program=`, `GET /api/mail?program=&all=1`, `GET /api/feed?program=` | `server/src/coord/routes.ts` | Task 3 distinguishes outstanding programme mail, full mail history, and the feed archive |
 
 **This wave PRODUCES (nothing later in this programme consumes it; wave 3 only documents it):**
 
@@ -94,10 +94,10 @@ Three of them, and none is optional:
 
 | File | Task | Responsibility after this wave |
 |---|---|---|
-| `ccd/coordinator-skill/SKILL.md` | 1, 3 | Carries the crossing section (reuse rule, `homeProject` on every open, the caps arithmetic, the absolute-path brief, Q1, deviations against the home project) and the role-addressing sentence. |
-| `ccd/coordinator-skill/references/wave-lifecycle.md` | 2, 3 | The long form at the call sites: §1 (open), §2 (what a foreign-repo brief carries), §3 (role addressing), §5 (Q1 at the wave boundary). |
+| `ccd/coordinator-skill/SKILL.md` | 1, 3 | Carries the crossing section (reuse rule, `homeProject` on every open, the caps arithmetic, immutable named-plan coordinates and read, post-close Q1, deviations against the home project) and the role-addressing sentence. |
+| `ccd/coordinator-skill/references/wave-lifecycle.md` | 2, 3 | The long form at the call sites: §1 (open), §2 (the foreign-plan source tuple and exact Git-object read), §3 (role addressing and programme history), §5 (post-close Q1 at the wave boundary). |
 | `ccd/coordinator-skill/references/mail-envelope.md` | 3 | The role vocabulary is TWO roles; `to:` is still always the resolved session. |
-| `ccd/worker-skill/SKILL.md` | 4 | The foreign-plan rule (read by absolute path, never write, commit only on this branch) and the note that a reply may be addressed to the role `worker`. |
+| `ccd/worker-skill/SKILL.md` | 4 | The foreign-plan rule (read the named Git object, never mutate the home repo, commit only on this branch) and the note that a reply may be addressed to the role `worker`. |
 | `server/test/coordinator-skill.test.ts` | 1, 2, 3 | Harvest pins for every new coordinator sentence. |
 | `server/test/worker-skill.test.ts` | 4 | Harvest pins for the two new worker paragraphs. |
 | `pwa/src/fleet/runWords.ts` | 5 | Owns `runHomeProject`, `waveLabel`, `CROSSING_GLYPH`, `crossingNote` — the decisions the three surfaces render. |
@@ -141,8 +141,9 @@ Anchor quotes, verified against the working tree. Wave 1 edits this file too (th
    matters: closing first, even briefly, leaves the program with zero open
    runs, and the server retires a program with none — silently breaking
    every `toId:'coordinator'` mail from that point on. Opening first never
-   lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
-   the same workspace**.
+   lets the count reach zero. After close succeeds, run `"$API" runs list
+   --closed 1`, find the producer by run id, and require `state:done`; only
+   then dispatch wave N+1 (step 2) **fresh into the same workspace**.
 ```
 
 `ccd/coordinator-skill/SKILL.md:296-302` — the insertion point is the blank line at `:299`:
@@ -191,12 +192,14 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       'two concurrency slots and two of the daily budget'],
     ['homeProject on every open',
       'Every `POST /api/runs` for this programme carries `homeProject`'],
-    ['the brief cites the home plan by absolute path at a sha',
-      "cites the home repo's plan by ABSOLUTE PATH at a named sha"],
+    ['the brief carries the immutable-plan source tuple',
+      'carries `homeRepoRoot`, `planRepoPath`, and `planSha`'],
     ['the brief inlines the contract excerpt verbatim',
       'INLINES the contract excerpt the wave depends on, verbatim from the merged file'],
-    ['Q1 — the producer run is READ, not remembered',
-      "read the producer run's own `state`. Anything but `done` — do not dispatch, report."],
+    ['the named plan blob is read exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['Q1 — the producer is verified after close through closed runs',
+      'then successfully close the producer, then run `"$API" runs list --closed 1`'],
     ['deviations are minted against the home project',
       'minted against the HOME project'],
   ];
@@ -250,7 +253,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
-Expected: FAIL — 10 failing in the new describe (`carries the crossing section at all`, the eight `it.each` rows, and `names BOTH new refusal codes…` — that last one fails too: with the heading absent, `start` is `-1` and `expect(start).toBeGreaterThanOrEqual(0)` reds before the loop ever runs), each reporting a missing string. The one negative case (`does not let the crossing section teach a second /clear writer or a reap`) passes vacuously on an empty slice — `skill.slice(-1, end)` reads the file's last character, not the section — and it becomes a real assertion the moment the section exists. Everything else in the file stays GREEN: the ten clauses are untouched.
+Expected: FAIL — the heading pin and every positive `CROSSING` row report the missing immutable-plan, lifecycle, or crossing sentence. The scoped negative case becomes a real assertion once the section exists. Everything else in the file stays GREEN: the eleven clauses are untouched.
 
 - [ ] **Step 3: Write the section**
 
@@ -286,21 +289,22 @@ and two of the daily budget. `cap-concurrency` or `cap-daily` during a cross-rep
 programme is this, not a bug — stop, say which cap, and wait to be woken, exactly
 as you would for any other.
 
-**A brief for a foreign-repo wave cites the home repo's plan by ABSOLUTE PATH at a
-named sha, and INLINES the contract excerpt the wave depends on, verbatim from the
-merged file.** One box, one user, so the path resolves from any workspace; the sha
-is what makes the citation mean one thing a month from now. The worker reads that
-plan for CONTEXT and never to discover its contract — a contract it had to go and
-find is a contract your brief did not give it — and it never writes to that repo.
-Paths, not payloads: the 8 KB ceiling is unchanged, and the excerpt is the part of
-the plan this wave is bound by, not the plan.
+**A brief for a foreign-repo wave carries `homeRepoRoot`, `planRepoPath`, and
+`planSha`, and INLINES the contract excerpt the wave depends on, verbatim from the
+merged file.** `homeRepoRoot` is the absolute home-repository root;
+`planRepoPath` is the tracked repository-relative plan path with no leading slash;
+and `planSha` is the full 40-hex commit SHA. The worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolved repository,
+commit, or path means report and stop, without substituting `HEAD`, reading the
+current checkout, fetching, checking out, or mutating the home repo. The inline
+excerpt controls interface shape; the plan blob controls wave scope and
+requirements. `ledgerAbsPath` names only the programme ledger.
 
-**Before dispatching a wave that consumes another wave's output, `GET /api/runs`
-and read the producer run's own `state`. Anything but `done` — do not dispatch,
-report.** There is no dependency edge in the schema and none is coming: the server
-will happily dispatch a consumer into a repo whose producer is still `working`,
-and what comes back is a wave built against an interface that has not landed. The
-measurement is one call, and it is the whole guard.
+**Before dispatching a wave that consumes another wave's output, first open the
+consumer run, then successfully close the producer, then run `"$API" runs list
+--closed 1` and find the producer by run id.** Require its own state to be `done`;
+the default listing omits closed rows, and a missing row or any other state means
+report and do not dispatch. This post-close read is the whole guard.
 
 **Deviations found during a foreign-repo wave are minted against the HOME
 project** — `POST /api/ledger/deviations` with the home project's name — and
@@ -312,7 +316,7 @@ discipline rather than a mechanism, which is exactly why it is written down.
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
-Expected: PASS — the whole file green, including the ten-clause pin, the route-parity pair (the section names `POST /api/runs`, `GET /api/runs` and `POST /api/ledger/deviations`, all registered and all already in the corpus) and the refusal-code census.
+Expected: PASS — the whole file green, including the eleven-clause pin, the route-parity pair (the section names `POST /api/runs`, `GET /api/runs` and `POST /api/ledger/deviations`, all registered and all already in the corpus), the named-Git-object pins, the post-close ordering pin, and the refusal-code census.
 
 - [ ] **Step 5: Measure the mutation (row "the crossing sentences are pinned")**
 
@@ -401,11 +405,31 @@ Append inside the describe added in Task 1, in `server/test/coordinator-skill.te
       '`"homeProject":"<the home project>"`'],
     ['§1 — the two response fields, and their null',
       'both are null while the stored home is null'],
+    ['§1 — ledgerAbsPath is not a plan coordinate',
+      '`ledgerAbsPath` is ONLY that home\'s programme ledger'],
     ['§2 — what a foreign-repo brief carries beyond the ordinary list',
-      'the absolute path of the home plan, at a sha, plus the contract excerpt inlined verbatim'],
-    ['§5 — Q1 at the wave boundary',
-      "read the producer run's own `state` before you dispatch a consumer wave"],
+      '`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`'],
+    ['§2 — the named plan is read mechanically',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['§2 — failure cannot fall back to a mutable checkout',
+      'If the repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§5 — Q1 uses the closed listing after close',
+      'After that close succeeds'],
+    ['§5 — Q1 invokes the declared client query',
+      '"$API" runs list --closed 1'],
   ];
+
+  it('orders the producer gate after close and before consumer dispatch', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
+      lifecycle.indexOf('## 6 — Final merge'));
+    const closeAt = boundary.indexOf('POST /api/runs/:id/close');
+    const checkAt = boundary.indexOf('"$API" runs list --closed 1');
+    const dispatchAt = boundary.indexOf('Dispatch wave N+1');
+    expect(closeAt).toBeGreaterThanOrEqual(0);
+    expect(checkAt).toBeGreaterThan(closeAt);
+    expect(dispatchAt).toBeGreaterThan(checkAt);
+  });
 
   it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
     expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
@@ -416,7 +440,7 @@ Append inside the describe added in Task 1, in `server/test/coordinator-skill.te
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
-Expected: FAIL — 6 failing, one per row, each naming the section and rule that is missing. Task 1's rows stay green.
+Expected: FAIL — every new lifecycle row whose source tuple, immutable read, ledger distinction, or post-close check is absent reports the missing section and rule. The ordering test also fails until close, closed-list verification, and dispatch appear in that order. Task 1's rows stay green.
 
 - [ ] **Step 3: Write the three paragraphs**
 
@@ -441,29 +465,32 @@ Expected: FAIL — 6 failing, one per row, each naming the section and rule that
 3b. `references/wave-lifecycle.md` §2 — insert immediately after the brief-content paragraph (`:167-172`), before `**The execution skill is the one list item that is not merely useful.**`:
 
 ```markdown
-**A brief for a wave in ANOTHER project carries two more things**, and they are
-the two the worker cannot get for itself: the absolute path of the home plan, at
-a sha, plus the contract excerpt inlined verbatim from the merged file. The path
-resolves because there is one box and one user; the sha is what keeps the
-citation meaning one thing later; and the excerpt is inlined because a worker
-that has to go and FIND its contract has been handed a brief that did not carry
-one. It reads the home plan for context, never writes to it, and commits only on
-its own workspace's branch in the repo it is running in — the branch-discipline
-sentence above, which is already in every brief, is the whole of what changes for
-it.
+**A brief for a wave in ANOTHER project carries four more things:**
+`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`, the
+tracked repository-relative plan path under `docs/superpowers/plans/`, with no
+leading slash; `planSha`, the full 40-hex commit SHA; and the contract excerpt
+inlined verbatim from the merged file. These are separate from `ledgerAbsPath`,
+which names only `docs/superpowers/programs/<slug>.md`. The worker reads the
+immutable plan object exactly with
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If the repository, commit,
+or path cannot be resolved, it reports and stops. It must not substitute `HEAD`,
+directly read the current checkout, fetch, checkout, or otherwise mutate the home
+repository. The inline excerpt controls interface shape; the plan blob at
+`planSha` controls wave scope and requirements; the current checkout's plan is
+not authoritative for this dispatch. It commits only on its own workspace's
+branch in the repo it is running in.
 ```
 
 3c. `references/wave-lifecycle.md` §5 — insert as a paragraph immediately after step 3 (`:468-473`), before step 4:
 
 ```markdown
-   **If wave N+1 CONSUMES what this wave produced, read the producer run's own
-   `state` before you dispatch a consumer wave** — `GET /api/runs`, the run row,
-   the word. Anything but `done` and you do not dispatch: you report. There is no
-   `dependsOn` column and none is planned (a measured incident of the
-   phased-cutover class is what would buy one), so this measurement is the only
-   thing standing between a consumer wave and an interface that has not landed.
-   It matters most exactly when the producer is in ANOTHER repo, where "I would
-   have noticed" is not true.
+   **After that close succeeds**, if wave N+1 consumes what this wave produced,
+   run `"$API" runs list --closed 1`, find this producer by its run id, and
+   require its own `state` to be `done`. The default `runs list` excludes `done`
+   and `failed` rows, so it cannot perform this check. A missing producer row or
+   any state other than `done` means report and do not dispatch. There is no
+   `dependsOn` column: this post-close read is the only gate between a consumer
+   and an interface that has not landed, especially across repositories.
 ```
 
 - [ ] **Step 4: Run it to verify it passes, then measure the mutation**
@@ -477,8 +504,10 @@ Mutations, one at a time, reverted between:
    Run: same command. Expected: FAIL — two rows: `wave-lifecycle.md states §1 — why sessionId is a same-project field` and `… §1 — the crossing open sends none`.
 2. Change `"homeProject":"<the home project>"` to `"home":"<the home project>"`.
    Run: same. Expected: FAIL — `wave-lifecycle.md states §1 — homeProject rides the open body`.
-3. Delete the §5 paragraph.
-   Run: same. Expected: FAIL — `wave-lifecycle.md states §5 — Q1 at the wave boundary`.
+3. Delete the §5 post-close paragraph.
+   Run: same. Expected: FAIL — both §5 rows and `orders the producer gate after close and before consumer dispatch`.
+4. Move the closed-list check before the close call.
+   Run: same. Expected: FAIL — `orders the producer gate after close and before consumer dispatch`.
 
 - [ ] **Step 5: Commit**
 
@@ -498,7 +527,7 @@ git commit -m "docs(coordinator-skill): the lifecycle states the boundary at the
 - Modify: `server/test/coordinator-skill.test.ts`
 
 **Interfaces:**
-- Consumes: the `worker` role recipient at `POST /api/mail` and `resolveWorker(runId)` (wave 1); `resolveCoordinator`'s single-active-programme fallback (unchanged); `GET /api/mail?program=<slug>` and `GET /api/feed?program=<slug>` (wave 1).
+- Consumes: the `worker` role recipient at `POST /api/mail` and `resolveWorker(runId)` (wave 1); `resolveCoordinator`'s single-active-programme fallback (unchanged); `GET /api/mail?program=<slug>` for outstanding mail, `GET /api/mail?program=<slug>&all=1` for full mail history, and `GET /api/feed?program=<slug>` for the full feed archive (wave 1).
 - Produces: nothing importable. The artefact is the role vocabulary in the corpus a coordinator reads before it sends anything.
 
 **Spec refs:** §4 (mail at programme scale — the role, the `runId` discipline, the programme filter), §3 F3's last bullet.
@@ -656,11 +685,11 @@ git commit -m "docs(coordinator-skill): two roles on the mail lane, and the runI
 - Consumes: the `worker` role recipient at `POST /api/mail` (wave 1) — the worker never sends to it, it only receives through it; `WORKER_KICKOFF_PREFIX` unchanged.
 - Produces: nothing importable. The artefact is the section `## The plan the brief names may live in another repository` in `ccd/worker-skill/SKILL.md`.
 
-**Spec refs:** §3 F3 (worker design, both bullets), §1 ruling 3 (absolute path, one box, one user), §6 (no ledger sync — a foreign wave never writes the home repo).
+**Spec refs:** §3 F3 (worker design, including `homeRepoRoot`/`planRepoPath`/`planSha` and the exact Git-object read), §1 ruling 3 (named immutable object, no mutable-checkout fallback), §6 (no ledger sync — a foreign wave never writes the home repo).
 
-**Mutation table row — "the foreign-plan rule is pinned":** goes RED when the read-by-absolute-path sentence, the never-write sentence, the commit-here sentence or the role-reply note is deleted or paraphrased. Measured in Step 4.
+**Mutation table row — "the foreign-plan rule is pinned":** goes RED when the exact named-Git-object command, fail-closed sentence, authority split, commit-here sentence, or role-reply note is deleted or paraphrased. Measured in Step 4.
 
-**Three scans constrain this file and every one of them is easy to trip.** `worker-skill.test.ts:95-103` requires `^\d+\. ` to match EXACTLY the twelve clause lines — the new section carries NO numbered list at column zero. `:105-117` harvests `\b([a-z]+) (?:clauses|lines)\b` and requires every hit to be `twelve` — the new prose says "clause 2" and "clause 6", never "two clauses". `:137-152` requires the five destructive verbs to appear only in clause 8 — the new prose names none of them.
+**Three scans constrain this file and every one of them is easy to trip.** `worker-skill.test.ts:95-103` requires `^\d+\. ` to match EXACTLY the thirteen clause lines — the new section carries NO numbered list at column zero. `:105-117` harvests `\b([a-z]+) (?:clauses|lines)\b` and requires every hit to be `thirteen` — the new prose says "clause 2" and "clause 6", never "two clauses". `:137-152` requires the five destructive verbs to appear only in clause 8 — the new prose names none of them.
 
 Anchor quotes, verified against the working tree. `ccd/worker-skill/SKILL.md:82-90`:
 
@@ -691,14 +720,12 @@ Append to `server/test/worker-skill.test.ts`:
 //
 // Clause 6 says "the plan file it names" and has always meant a file in this
 // workspace, because until now there was no other kind. A programme homed in
-// another repo makes that assumption load-bearing and wrong: the path is
-// absolute, the repo is not this one, and the two things a worker must NOT do
-// there (write to the plan, commit against it) are exactly the two an
-// unqualified "your requirements are the plan" invites.
+// another repo makes that assumption load-bearing and wrong: the brief must
+// identify an immutable Git object, while every write and commit stays here.
 //
 // Sentence literals, the CONTRACT's own mechanism: a paraphrase fails as a
 // deletion does. Kept OUT of the CONTRACT array on purpose — these are
-// guidance, not the twelve, and adding one there would red the count pins for a
+// guidance, not the thirteen, and adding one there would red the count pins for a
 // change that adds no clause.
 describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
   // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
@@ -712,14 +739,26 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
   const FOREIGN: readonly (readonly [string, string])[] = [
     ['the plan may be outside this workspace',
       'the plan file your brief names can sit OUTSIDE this workspace'],
-    ['read it by the absolute path the brief gives',
-      'Read it by the ABSOLUTE PATH the brief gives'],
-    ['never write to it',
-      'never write to it'],
+    ['homeRepoRoot is the absolute repository root',
+      '`homeRepoRoot`, the absolute path to the home repository root'],
+    ['planRepoPath is tracked and repository-relative',
+      '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
+    ['planSha is a full immutable identifier',
+      '`planSha`, a full 40-hex commit SHA'],
+    ['read the named Git object exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['an unresolved named object fails closed',
+      'If the repository, commit, or path cannot be resolved, report and stop.'],
+    ['ledgerAbsPath does not double as a plan coordinate',
+      '`ledgerAbsPath` is only the absolute programme-ledger path'],
     ['commit only on this workspace branch, in this repository',
       "commit only on this workspace's own branch in THIS repository"],
     ['the contract excerpt is inlined in the brief, and is the authority',
       'The contract excerpt your wave depends on is INLINED in the brief'],
+    ['the named blob controls wave requirements',
+      'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
+    ['the current checkout cannot override the dispatch',
+      'The current checkout\'s plan is not authoritative for this dispatched wave.'],
     ['a reply may arrive addressed to the role',
       'A reply may arrive addressed to the ROLE `worker`'],
   ];
@@ -732,8 +771,8 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
     expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
   });
 
-  it('adds no thirteenth clause and no second numbered list', () => {
-    // The count pins above would catch a thirteenth clause; this catches the
+  it('adds no new clause and no second numbered list', () => {
+    // The count pins above would catch a fourteenth clause; this catches the
     // near-miss that would make THEM unreadable — a numbered list in the new
     // prose, which `^\d+\. ` cannot tell from a clause.
     const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
@@ -760,7 +799,7 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`
-Expected: FAIL — 7 failing: `carries the section at all` and the six `it.each` rows. `adds no thirteenth clause` passes (nothing was added yet) and the negative section test passes vacuously — both become real in Step 4. The twelve-clause pin and the count pins stay GREEN.
+Expected: FAIL — the heading pin and every positive `FOREIGN` row whose immutable-plan rule is absent report the missing sentence. `adds no new clause` passes before the section exists and becomes real in Step 4. The thirteen-clause pin and the count pins stay GREEN.
 
 - [ ] **Step 3: Write the section**
 
@@ -770,20 +809,33 @@ Insert into `ccd/worker-skill/SKILL.md` between the `**Clause 5 is not a style p
 ## The plan the brief names may live in another repository
 
 A programme is homed in ONE repo and its waves may run in any, so the plan file
-your brief names can sit OUTSIDE this workspace. Read it by the ABSOLUTE PATH the
-brief gives — one box, one user, so the path resolves from here — and take your
-requirements from it exactly as clause 6 already says. Two things you do not do
-with it: never write to it, and never treat it as the branch you are working on.
-You commit only on this workspace's own branch in THIS repository (clause 2), and
-the home repo's plan and ledger are read-only from where you are sitting.
+your brief names can sit OUTSIDE this workspace. For a foreign plan, the brief
+carries three separate values: `homeRepoRoot`, the absolute path to the home
+repository root; `planRepoPath`, the tracked repository-relative plan path with
+no leading slash; and `planSha`, a full 40-hex commit SHA. Read exactly the
+immutable Git object:
+
+```bash
+git -C "$homeRepoRoot" show "$planSha:$planRepoPath"
+```
+
+If the repository, commit, or path cannot be resolved, report and stop. Never
+substitute `HEAD`, read the current checkout directly with `cat` or a file read,
+fetch, checkout, or otherwise mutate the home repository. `ledgerAbsPath` is
+only the absolute programme-ledger path under `docs/superpowers/programs/`; it is
+not `homeRepoRoot` and it is not `planRepoPath`. You commit only on this
+workspace's own branch in THIS repository (clause 2).
 
 The contract excerpt your wave depends on is INLINED in the brief, verbatim from
-the merged file, and that inline copy is the authority for the interface. The home
-plan is context you may read, never somewhere to go hunting for a contract the
-brief did not hand you; if the two disagree, the plan's text governs (clause 6) and
-you say so in your `wave-done` mail so the ledger gets it. A deviation you find is
-still never a number you invent (clause 11): report it, and the coordinator mints
-it against the programme's home project.
+the merged file, and that inline copy is the authority for the INTERFACE — the
+shape of the thing you build against, frozen at the moment the brief was cut.
+The plan blob read at `planSha` is the authority for the WAVE'S REQUIREMENTS —
+what to build and why (clause 6). The current checkout's plan is not authoritative
+for this dispatched wave. Those are different questions, so a disagreement is
+not a tie to break: the excerpt still wins on shape, the named plan blob still
+wins on scope, and you say so either way in your `wave-done` mail so the ledger
+gets it. A deviation you find is still never a number you invent (clause 11):
+report it, and the coordinator mints it against the programme's home project.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,
@@ -794,20 +846,22 @@ always (clause 3), and you answer `toId:'coordinator'` as always.
 - [ ] **Step 4: Run it to verify it passes, then measure the mutation**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`
-Expected: PASS — whole file green: twelve clauses verbatim, `1..12` with no gaps, the count word still `twelve` in both prose statements, and the five destructive verbs still counted only inside clause 8.
+Expected: PASS — whole file green: thirteen clauses verbatim, `1..13` with no gaps, the count word still `thirteen` in both prose statements, and the five destructive verbs still counted only inside clause 8.
 
 Mutations, reverted between:
 
-1. Delete `never write to it, and never treat it as the branch you are working on`.
-   Run: same. Expected: FAIL — `states never write to it`.
-2. Paraphrase `Read it by the ABSOLUTE PATH the brief gives` to "Read it by the path the brief gives".
-   Run: same. Expected: FAIL — `states read it by the absolute path the brief gives`.
-3. Delete the whole role-reply paragraph.
+1. Replace `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"` with a direct read of the current checkout.
+   Run: same. Expected: FAIL — `states read the named Git object exactly` and the mutable-checkout fallback guard.
+2. Replace `planSha` in the command with `HEAD`.
+   Run: same. Expected: FAIL — `states read the named Git object exactly` and the explicit `show "HEAD:` negative guard.
+3. Delete `If the repository, commit, or path cannot be resolved, report and stop.`
+   Run: same. Expected: FAIL — `states an unresolved named object fails closed`.
+4. Delete the whole role-reply paragraph.
    Run: same. Expected: FAIL — `states a reply may arrive addressed to the role`.
-4. Add a numbered list to the new section (`1. read the plan`).
-   Run: same. Expected: FAIL — two rows: this task's `adds no thirteenth clause and no second numbered list` AND the existing `numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps`, which is the pin this mutation exists to prove is still load-bearing.
-5. Write `two clauses` anywhere in the new section.
-   Run: same. Expected: FAIL — the existing `spells that same count, as one derived word, everywhere prose states it`, message `SKILL.md says two clauses where the CONTRACT pins 12`.
+5. Add a numbered list to the new section (`1. read the plan`).
+   Run: same. Expected: FAIL — this task's `adds no new clause and no second numbered list` AND the existing `numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps`.
+6. Write `two clauses` anywhere in the new section.
+   Run: same. Expected: FAIL — the existing count-word pin, message `SKILL.md says two where the CONTRACT pins 13`.
 
 - [ ] **Step 5: Commit**
 
@@ -2398,7 +2452,7 @@ Expected: the agent lane rsyncs, installs both skills atomically and restarts th
 
 Measure all four fields at one moment, after the last push, and send them once — `branchTip` from `git -C <this worktree> rev-parse HEAD`, `handoffCommit` the same sha, `prNumber` and `prPhase` from the PR this wave opened. Then stop pushing.
 
-The report says, in prose: which spec sections this wave closed (§3 F3, §3 F4, §4's mail-screen bullet, §7's skill and PWA rows, §8's within-wave ordering); that the ten and twelve clause pins are byte-identical to what they were on `origin/main`; that `nestFleet.ts` and `nestFleet.test.ts` are untouched; every mutation row and the red it produced; and the `## Deviations found` entries below, each with the number the coordinator minted for it.
+The report says, in prose: which spec sections this wave closed (§3 F3, §3 F4, §4's mail-screen bullet, §7's skill and PWA rows, §8's within-wave ordering); that the eleven coordinator clauses and thirteen worker clauses are byte-identical to what they were on `origin/main`; that `nestFleet.ts` and `nestFleet.test.ts` are untouched; every mutation row and the red it produced; and the `## Deviations found` entries below, each with the number the coordinator minted for it.
 
 ---
 
