@@ -3952,3 +3952,51 @@ deviation found while executing this plan is allocated in its own call at the mo
   mutate the absence default and remote guard separately and restore each
   exactly. Production behavior remains unchanged. No test fix may begin until
   the coordinator issues a number and rules this coverage seam.
+
+- **D-2692 — NewSessionSheet can authorize a
+  crossing that the operator selected while it was still eligible.** The chosen
+  `ProjectRow` persists across live roster updates, while `start()` recomputes
+  `isCrossing(project)` from the current roster. An isolated Sonnet verifier ran
+  a registered focused test: select `demo` while its pool-a matches the chosen
+  account's pool-a, update that account to pool-b while the sheet remains open,
+  observe `demo` move behind disclosure while remaining selected and Start
+  enabled, then observe `api.createSession` receive `crossPool:true`. That
+  violates Task 8's requirement that only projects deliberately chosen from the
+  disclosed crossing side send the override. Proposed ruling: clear a selected
+  project when a live update changes it from plainly offered to crossing, so
+  Start remains disabled until the operator reveals and selects it deliberately;
+  red-first the exact transition and mutation-pin the invalidation. No source or
+  test fix may begin until the coordinator issues a number and rules the remedy.
+
+- **D-2693 — ProjectCard's two route-pool
+  handoffs are correct but independently unpinned.** Task 9's direct SessionLine
+  tests pass `projectPool` themselves, while project-card tests do not observe
+  off-pool semantics on either the active or expanded archived row. An isolated
+  Sonnet verifier established a clean registered baseline of 262 tests, then
+  deleted only the active `projectPool={pool}` prop and separately only the
+  archived prop; each mutant remained 262/262 green with no TypeScript errors.
+  Source SHA-256 changed distinctly for each mutant and restored to
+  `2da38ddc5d52406e82900e0321431c366c83907ac22a0fda3541136960c4ebc7`;
+  the test hash stayed unchanged. Proposed ruling: add route-authoritative
+  ProjectCard integration assertions for one active and one expanded archived
+  row, with deliberately disagreeing route and frame pools, so each call-site
+  deletion independently reds. Production remains unchanged. No test fix may
+  begin until the coordinator issues a number and rules this seam.
+
+- **D-2694 — The integrated branch computes
+  project-specific placement but StartProgramSheet still starts on the legacy
+  global projection.** `ProjectRow.placement` can select an eligible account in
+  pool A while the global untagged-project projection selects pool B;
+  StartProgramSheet labels, collision-checks, and submits the pool-B wrapper and
+  omits `crossPool`, so the server correctly returns `409 pool-mismatch` despite
+  an eligible measured pool-A target. The optional placement field lets this
+  integration regression compile, and existing 87 registered StartProgramSheet
+  tests plus strict PWA TypeScript remained green in isolated review. This is
+  the concrete reachable case D-2642 forecast after refuting the earlier claim
+  that only an account chooser could repair the surface. Proposed ruling: use a
+  measured `ProjectRow.placement.wrapper` for label, collision check, and create
+  request; render measured none/unmeasurable outcomes honestly; retain the global
+  projection only when placement is absent for old-server compatibility; never
+  silently add `crossPool:true`. Add a divergent global-versus-route-placement
+  test before production changes. No source or test fix may begin until the
+  coordinator issues a number and rules the remedy.
