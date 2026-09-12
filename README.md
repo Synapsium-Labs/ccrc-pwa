@@ -638,13 +638,62 @@ Nothing hand-edits it; a torn one would take out every live session at once,
 which is why it lands via the same atomic scp-to-temp + `mv` as `ccd` itself,
 and lands **before** `ccd` and before both installers.
 
-An account entry is `{id, label, configDirSuffix, exec, homeAble, hue,
-telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
+hidden?}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
 placement; `telemetry: 'none'` says the account will never report rate limits,
-so its permanent unknown is not read as permanent emptiness.
+so its permanent unknown is not read as permanent emptiness; `hidden: true` says
+the entry is roster plumbing rather than one of your accounts.
+
+`exec` says how ccrc reaches the account's binary, and it carries the account's
+connection: `{kind: 'upstream' | 'generated' | 'external', secretsFile?,
+provider?, baseUrl?, models?}`. `secretsFile` is legal on all three kinds — on a
+`generated` account it is the 0600 file ccrc writes and the wrapper sources; on
+the other two it is DECLARATIVE, naming the file somebody else's launcher
+sources so `ccrc doctor` can say whether it exists without ever opening it.
+`provider` is one of `anthropic`, `openrouter`, `compatible`, `openai`
+(`shared/providers.ts`, the only file that enumerates them); it is required on
+`generated` and defaults to `anthropic` with one warning per parse, optional on
+`external` where absent means *undeclared*, and not spelled on `upstream`.
+`baseUrl` is the endpoint the lane talks to — `https:`, or `http:` on
+`127.0.0.1`, `[::1]` or `localhost`, with no `user:password`, no query string
+and no fragment — required when `provider` is `compatible`, which ships no
+default. `models` is the api-key lane's four-alias routing map plus an optional
+`selectable` allowlist, and is legal only where the provider table says a lane
+has one.
+
+**Two validators, one roster, and neither may be laxer.** `shared/roster.ts`'s
+`parseRoster` runs in the server, which refuses to boot on a roster it rejects.
+`shared/roster-json.mjs`'s `rosterFromJson` runs under a bare `node` in the
+deploy path, which cannot import TypeScript — so it re-implements the same
+checks, with ONE exception it now imports instead (`BASE_URL_OK`, from
+`shared/base-url.mjs`, because a stricter endpoint gate on the deploy side
+refuses a roster the server boots on), and its header states the asymmetry the
+rest live by: they may be STRICTER, never laxer. A roster it wrongly rejects
+fails a deploy loudly; a roster it wrongly accepts regenerates a box's
+`accounts.sh` and wrappers and then leaves the server unable to start.
+`server/test/gen-accounts.test.ts` is the mechanism: one direction compares the
+two implementations' generated bash byte for byte, the other asserts that every
+roster `parseRoster` throws on is refused by the CLI too.
+
+#### What the parser and the mirror each check
+
+| field | parser rule | mirror line | `gen-accounts.test.ts` CASES row |
+|---|---|---|---|
+| `hidden` | `non-boolean hidden` — optional, but a present value must be a boolean | `non-boolean hidden` | “a non-boolean hidden” |
+| `exec.secretsFile` | `SECRETS_SAFE_RE`, no leading `/`, no `..`, no trailing `/` — on all three kinds | `SECRETS_SAFE_RE` | “an absolute EXTERNAL secretsFile” |
+| `exec.provider` | `isProviderId`, defaulted to `anthropic` on `generated` | `PROVIDER_IDS` | “an unknown exec.provider on a generated account” |
+| `exec.baseUrl` | `BASE_URL_OK`, and `base-url-required` where the provider ships no default | imported — `BASE_URL_OK` from `./base-url.mjs`, the one rule this file does not re-spell | “an unparseable exec.baseUrl” |
+| `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
+
+Each row is resolved against the three files it names by
+`server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
+validator reds this table as well as the suite that owns it — the same treatment
+`readme-holds.test.ts` gives the holds paragraph, and for the reason its header
+records: prose that was true when written is the kind an operator acts on after
+it stops being true.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
 both targets:
