@@ -109,6 +109,14 @@ export function classifyHasSession(r: ExecResult): SessionVerdict {
   return { verdict: 'unknown', detail: `tmux exited ${r.code} with no message` };
 }
 
+/** `captureHistory`'s answer. `detail` exists ONLY on `unmeasured`, for
+ *  `SessionVerdict`'s reason: there it is the diagnosis, and on the other two
+ *  it would be noise pretending to be measurement. */
+export type CaptureHistory =
+  | { ok: true; text: string }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'unmeasured'; detail: string };
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
@@ -136,6 +144,37 @@ export class Tmux {
   async captureAnsi(id: string): Promise<string | null> {
     const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
+  }
+  /**
+   * The drawer's scrollback read: the pane's stored history AND its live
+   * screen, with escape sequences kept so the history reads in the colours it
+   * was written in. `-S -<lines>` starts that many lines above the screen;
+   * tmux returns what it HAS, so asking for more than `history-limit` is not
+   * an error (measured on the live box: `-S -2000` against a 1953-line history
+   * answers 2003 lines, 161 KB plain / 201 KB with `-e`, in 43 ms).
+   *
+   * THREE CONDITIONS, NOT TWO, and that is why this does not return
+   * `string | null` like its two siblings above. A caller has to tell "the
+   * session is gone" (render nothing, the drawer is already showing the loss
+   * overlay) from "we could not look" (say so, offer the read again) — collapse
+   * them and the drawer reports a dead session for a tmux server that was busy.
+   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
+   * message that means gone, call everything else unknown, so an unrecognised
+   * future tmux error reads as "unmeasured" rather than as death. The message
+   * is `capture-pane`'s own and differs from `has-session`'s — measured
+   * against tmux 3.4: `can't find pane: cc-nope`.
+   */
+  async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
+    const r = await this.run('tmux',
+      ['capture-pane', '-t', target(id), '-p', '-e', '-S', `-${lines}`]);
+    if (r.code === 0) return { ok: true, text: r.stdout };
+    if (r.stderr.includes("can't find pane")) return { ok: false, reason: 'gone' };
+    const msg = r.stderr.trim();
+    return {
+      ok: false,
+      reason: 'unmeasured',
+      detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
+    };
   }
   async sendLiteral(id: string, text: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;

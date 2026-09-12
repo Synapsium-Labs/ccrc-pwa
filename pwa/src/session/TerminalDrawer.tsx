@@ -6,12 +6,19 @@
 // open dials the measured cols/rows into the URL and later refits ride
 // {type:'resize'}. Closing the drawer closes the socket, after which the
 // server restores the session's canonical tmux window size.
+//
+// THE WHEEL IS NOT PART OF THAT CONVERSATION. tmux attaches this client on the
+// alternate screen, where xterm has no scrollback and turns a wheel notch into
+// arrow keys aimed at the pane — so the wheel is swallowed here and scrolls the
+// pane's own history instead, read over `GET /api/sessions/:id/pane/history`
+// (tmux `capture-pane`, which mutates nothing on the box).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { Sheet } from '../components/Sheet';
+import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
@@ -21,12 +28,32 @@ import './chat.css';
 export interface DrawerTerm {
   write(data: string): void;
   onData(cb: (data: string) => void): void;
+  /** Install the wheel handler. `false` means "xterm must not process this" —
+   *  the return value xterm's own `attachCustomWheelEventHandler` takes. */
+  onWheel(cb: (ev: WheelEvent) => boolean): void;
   /** Fit the grid to the host element; returns the measured cols/rows. */
   fit(): { cols: number; rows: number };
   focus(): void;
   dispose(): void;
 }
 export type MakeTerm = (host: HTMLElement) => DrawerTerm;
+
+/** The history view's terminal: written once, never typed into. Separate from
+ *  `DrawerTerm` because it is a different job — it has no pty behind it, and
+ *  it is the one of the two that HAS scrollback (the live one is on tmux's
+ *  alternate screen, where xterm keeps none). */
+export interface HistoryTerm {
+  write(data: string): void;
+  fit(): { cols: number; rows: number };
+  /** Scroll the view; negative is up, in lines. */
+  scrollLines(amount: number): void;
+  /** Called when the reader, having scrolled up, comes back down to the newest
+   *  line — the gesture that means "I'm done with the history". NOT called for
+   *  the arrival at the bottom that writing the history itself causes. */
+  onBottom(cb: () => void): void;
+  dispose(): void;
+}
+export type MakeHistoryTerm = (host: HTMLElement, lines: number) => HistoryTerm;
 
 /** A token's resolved value at attach time — xterm paints to canvas and
  *  cannot read CSS custom properties itself. `undefined` (token missing)
@@ -36,29 +63,50 @@ const tokenValue = (name: string): string | undefined => {
   return v === '' ? undefined : v;
 };
 
+/** Voice and glass from the tokens: the mono face, well background, on-well
+ *  ink, phosphor cursor. --bg-well stays dark under [data-theme='light'], so
+ *  the terminal is dark regardless of theme. 14px is the plan-fixed terminal
+ *  size (xterm takes a number). Spelled once, worn by both terminals — the
+ *  live one and the history one have to read as the same glass or scrolling
+ *  back would look like leaving the session. */
+const glass = () => ({
+  fontFamily: tokenValue('--font-mono') ?? 'monospace',
+  fontSize: 14,
+  theme: {
+    background: tokenValue('--bg-well'),
+    foreground: tokenValue('--ink-on-well'),
+    cursor: tokenValue('--accent'),
+    cursorAccent: tokenValue('--bg-well'),
+    // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
+    // cohesively. 256/truecolor content bypasses this and paints direct —
+    // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
+    black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
+    blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
+    brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
+    brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
+    brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
+  },
+});
+
+/** `fit()` over a FitAddon, with the one failure both terminals share. */
+const fitter = (term: Terminal, fit: FitAddon) => () => {
+  try {
+    fit.fit();
+  } catch {
+    /* host not measurable yet — keep the current grid */
+  }
+  return { cols: term.cols, rows: term.rows };
+};
+
 const defaultMakeTerm: MakeTerm = (host) => {
   const term = new Terminal({
-    // Voice and glass from the tokens: the mono face, well background,
-    // on-well ink, phosphor cursor. --bg-well stays dark under
-    // [data-theme='light'], so the terminal is dark regardless of theme.
-    // 14px is the plan-fixed terminal size (xterm takes a number).
-    fontFamily: tokenValue('--font-mono') ?? 'monospace',
-    fontSize: 14,
-    theme: {
-      background: tokenValue('--bg-well'),
-      foreground: tokenValue('--ink-on-well'),
-      cursor: tokenValue('--accent'),
-      cursorAccent: tokenValue('--bg-well'),
-      // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
-      // cohesively. 256/truecolor content bypasses this and paints direct —
-      // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
-      black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
-      blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
-      brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
-      brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
-      brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
-    },
+    ...glass(),
     cursorBlink: true,
+    // INERT ON THIS TERMINAL, and kept for the one case where it is not:
+    // `tmux attach` puts the client on the ALTERNATE screen (every attach
+    // begins ESC[?1049h, measured off a real pty), and xterm keeps no
+    // scrollback there. The history the reader wants is tmux's, not this
+    // buffer's — see `openHistory`.
     scrollback: 4000,
   });
   const fit = new FitAddon();
@@ -69,15 +117,47 @@ const defaultMakeTerm: MakeTerm = (host) => {
     onData: (cb) => {
       term.onData(cb);
     },
-    fit: () => {
-      try {
-        fit.fit();
-      } catch {
-        /* host not measurable yet — keep the current grid */
-      }
-      return { cols: term.cols, rows: term.rows };
-    },
+    onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
+    fit: fitter(term, fit),
     focus: () => term.focus(),
+    dispose: () => term.dispose(),
+  };
+};
+
+/** The history terminal: the same glass, no cursor, no keyboard, and a real
+ *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
+ *  touch-drag scrolls it, exactly as a console does. */
+const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
+  const term = new Terminal({
+    ...glass(),
+    cursorBlink: false,
+    disableStdin: true,
+    // DERIVED from the number of lines the server actually sent, never a second
+    // constant to keep in step with it. The factor is the WRAP: a stored line
+    // was written at the pane's width and tmux does not reflow it, so a phone
+    // renders one as several rows — measured at 500 captured lines becoming 948
+    // rows at 48 columns (1.9×), against 527 at 220. 3× leaves headroom over
+    // the narrowest phone rather than silently dropping the oldest history.
+    scrollback: lines * 3,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  return {
+    write: (d) => term.write(d),
+    fit: fitter(term, fit),
+    scrollLines: (n) => term.scrollLines(n),
+    onBottom: (cb) => {
+      // LATCHED, and that is the whole of it: writing the history scrolls the
+      // view to the newest line, which is a bottom arrival nobody asked for.
+      // Only a reader who has been AWAY from the bottom can come back to it.
+      let away = false;
+      term.onScroll(() => {
+        const b = term.buffer.active;
+        if (b.viewportY < b.baseY) away = true;
+        else if (away) cb();
+      });
+    },
     dispose: () => term.dispose(),
   };
 };
@@ -96,7 +176,21 @@ const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
   { legend: '⏎', label: 'Enter', seq: '\r' },
 ];
 
+/** Lines one wheel notch moves — xterm's own default step, and the amount the
+ *  history view opens by so the gesture reads as a scroll rather than a jump. */
+const WHEEL_LINES = 3;
+
 type Conn = 'connecting' | 'open' | 'down';
+
+/** Where the reader is. `live` is the attached pane; the other three are the
+ *  one history read, in its three states. They are four VALUES rather than a
+ *  pair of booleans because the view renders differently for each, and
+ *  "reading" must not be mistakable for "there is nothing here". */
+type Hist =
+  | { at: 'live' }
+  | { at: 'reading' }
+  | { at: 'history'; text: string; lines: number }
+  | { at: 'empty'; why: string };
 
 export interface TerminalDrawerProps {
   id: string;
@@ -104,6 +198,7 @@ export interface TerminalDrawerProps {
   onClose: () => void;
   makeSocket?: (url: string) => WebSocket; // injectable for tests
   makeTerm?: MakeTerm; // injectable for tests
+  makeHistoryTerm?: MakeHistoryTerm; // injectable for tests
 }
 
 export function TerminalDrawer({
@@ -112,6 +207,7 @@ export function TerminalDrawer({
   onClose,
   makeSocket,
   makeTerm,
+  makeHistoryTerm,
 }: TerminalDrawerProps): ReactNode {
   const [conn, setConn] = useState<Conn>('connecting');
   // Bumped by Reconnect — re-runs the attach effect for a fresh fit + dial.
@@ -121,12 +217,49 @@ export function TerminalDrawer({
   // would still be null when the attach effect first runs. Keying the effect
   // on the host makes it run exactly when the glass exists.
   const [host, setHost] = useState<HTMLElement | null>(null);
+  const [hist, setHist] = useState<Hist>({ at: 'live' });
+  const [histHost, setHistHost] = useState<HTMLElement | null>(null);
   const connRef = useRef<Conn>('connecting');
   const sockRef = useRef<WebSocket | null>(null);
   const termRef = useRef<DrawerTerm | null>(null);
   const gridRef = useRef({ cols: 80, rows: 24 });
   const refitRef = useRef<(() => void) | null>(null);
+  const histRef = useRef<Hist>({ at: 'live' });
   const kbInset = useKeyboardInset({ active: open });
+
+  const goHist = (next: Hist): void => {
+    histRef.current = next;
+    setHist(next);
+  };
+
+  /**
+   * The one place the pane's history is read. Idempotent while a read is in
+   * flight or a history is already up, so a flick of the wheel is ONE request.
+   *
+   * It is a READ — `capture-pane` on the server — and never a keystroke: the
+   * pane is left exactly as it was found, which is what lets a second client
+   * (the operator's own terminal on the box) go on using the session while a
+   * phone scrolls back through it.
+   */
+  const openHistory = (): void => {
+    if (histRef.current.at !== 'live') return;
+    goHist({ at: 'reading' });
+    void api.paneHistory(id).then(
+      (r) => {
+        if (histRef.current.at === 'reading') {
+          goHist({ at: 'history', text: r.text, lines: r.lines });
+        }
+      },
+      (e: unknown) => {
+        // WHY, not just "failed": a dead pane and an unreachable box are
+        // different facts to the reader, and the server already told them
+        // apart. `ApiError.body` carries the route's own word for it.
+        const body = e instanceof ApiError ? (e.body as { error?: unknown }) : null;
+        const why = typeof body?.error === 'string' ? body.error : 'unreachable';
+        if (histRef.current.at === 'reading') goHist({ at: 'empty', why });
+      },
+    );
+  };
 
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
@@ -136,6 +269,16 @@ export function TerminalDrawer({
     const ws = sockRef.current;
     if (!ws || connRef.current !== 'open') return;
     ws.send(JSON.stringify(frame));
+  };
+
+  /** A keystroke — from the keyboard or from the quick-key bar. It RETURNS TO
+   *  LIVE first, the way a console jumps to the bottom when you type: the keys
+   *  reach the session either way, and watching them land is the whole reason
+   *  to type. The resize frame deliberately does not go through here — a
+   *  rotation is not a keystroke and must not throw away the history. */
+  const typed = (data: string): void => {
+    if (histRef.current.at !== 'live') goHist({ at: 'live' });
+    sendFrame({ type: 'input', data });
   };
 
   useEffect(() => {
@@ -202,7 +345,26 @@ export function TerminalDrawer({
       if (connRef.current !== 'open') setAttempt((a) => a + 1);
     });
 
-    term.onData((data) => sendFrame({ type: 'input', data }));
+    term.onData(typed);
+
+    // THE WHEEL IS NOT AN ARROW KEY. `tmux attach` puts this client on the
+    // ALTERNATE screen (every attach starts ESC[?1049h, measured off a real
+    // pty) and turns on application cursor keys; in that buffer xterm has no
+    // scrollback, so it translates a wheel notch into Up/Down and sends them to
+    // the pane. Measured through this very drawer: one notch each way put
+    // {"type":"input","data":"\u001bOA"} and "\u001bOB" on the socket — which
+    // is Claude Code's prompt history paging and its agent blocks stepping,
+    // from a scroll gesture. Returning false is xterm's own "do not process
+    // this", and it is the only thing standing between the wheel and the pane:
+    // delete this and `terminal-scrollback.test.tsx` measures the two arrows
+    // again.
+    //
+    // Scrolling UP asks for the console history instead. Scrolling down while
+    // live has nothing to do — the pane's newest line is already on screen.
+    term.onWheel((ev) => {
+      if (ev.deltaY < 0) openHistory();
+      return false;
+    });
 
     // Later size changes (rotation, keyboard, desktop resize) → refit; only a
     // changed grid is worth a resize frame.
@@ -236,9 +398,32 @@ export function TerminalDrawer({
       }
       termRef.current = null;
       term.dispose();
+      // A re-attach is a fresh pane read: a history captured before the drop
+      // is a snapshot of a session that has moved on since.
+      goHist({ at: 'live' });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sendFrame reads refs only
   }, [open, host, attempt, id, makeSocket, makeTerm]);
+
+  // The history view, mounted only while there is a history to show. The live
+  // terminal underneath it keeps its socket and keeps consuming frames, so
+  // coming back to it lands on the pane's newest line, not on a stale screen.
+  useEffect(() => {
+    if (hist.at !== 'history' || histHost === null) return undefined;
+    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines);
+    term.fit();
+    // A capture is LF-separated; a terminal needs the carriage return too, or
+    // every line starts where the last one ended. Done HERE rather than with
+    // xterm's `convertEol` so the bytes a `HistoryTerm` receives are the same
+    // whoever implements it.
+    term.write(hist.text.replace(/\r?\n/g, '\r\n'));
+    // One notch up, so the gesture that opened this visibly did something —
+    // and so the bottom latch is armed by a reader who is genuinely above it.
+    term.scrollLines(-WHEEL_LINES);
+    term.onBottom(() => goHist({ at: 'live' }));
+    return () => term.dispose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
+  }, [hist, histHost, makeHistoryTerm]);
 
   // The keyboard inset changes the drawer's inner height — refit after paint.
   useEffect(() => {
@@ -252,6 +437,30 @@ export function TerminalDrawer({
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
         <div className="term-screen">
           <div ref={setHost} className="term-host" />
+          {/* The history layer sits OVER the live one rather than replacing it:
+              the live terminal keeps its socket, its grid and its scroll
+              position, so leaving the history is not a re-attach. */}
+          {hist.at === 'history' && (
+            <div className="term-history">
+              <div ref={setHistHost} className="term-host" />
+            </div>
+          )}
+          {hist.at !== 'live' && (
+            <div className="term-histbar" role="status" aria-label="History">
+              <span className="term-histbar-word">
+                {hist.at === 'reading' && 'reading history…'}
+                {hist.at === 'history' && `history · ${hist.lines} lines`}
+                {hist.at === 'empty' && `no history · ${hist.why}`}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost term-histbar-live"
+                onClick={() => goHist({ at: 'live' })}
+              >
+                live
+              </button>
+            </div>
+          )}
           {conn !== 'open' && (
             <div className={`term-overlay term-overlay--${conn}`} role="status">
               {conn === 'connecting' ? (
@@ -274,18 +483,49 @@ export function TerminalDrawer({
           )}
         </div>
         <div className="term-keys" role="toolbar" aria-label="Terminal keys">
-          {QUICK_KEYS.map((k) => (
-            <button
-              key={k.label}
-              type="button"
-              className="keycap"
-              aria-label={k.label}
-              onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-              onClick={() => sendFrame({ type: 'input', data: k.seq })}
-            >
-              <span aria-hidden="true">{k.legend}</span>
-            </button>
-          ))}
+          {/* The sequence caps are the half allowed to scroll away. MEASURED:
+              nine caps at --tap-min plus eight gaps and this bar's padding
+              come to 9x44 + 8x8 + 2x12 = 484px before a legend is laid out,
+              and `.sheet-panel--full` drops the drawer's side padding to zero
+              — so on a 390px phone the ninth cap starts at x=428, entirely off
+              the right edge. Survivable while every cap was a key the phone's
+              own keyboard also lacks; not survivable once the strip holds the
+              only door touch has to the console history. */}
+          <div className="term-keys-seq">
+            {QUICK_KEYS.map((k) => (
+              <button
+                key={k.label}
+                type="button"
+                className="keycap"
+                aria-label={k.label}
+                onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
+                onClick={() => typed(k.seq)}
+              >
+                <span aria-hidden="true">{k.legend}</span>
+              </button>
+            ))}
+          </div>
+          {/* A phone has no wheel, and MEASURED against the real Terminal, a
+              touch drag over xterm emits nothing to the pty in either buffer —
+              so touch has no gesture to fix and no gesture that opens this.
+              This key IS its door, which is why it sits OUTSIDE the scroller
+              above: the one affordance touch has must never be the thing that
+              scrolled off the edge.
+
+              An ACTION, not a sequence — outside QUICK_KEYS so that table goes
+              on meaning "bytes the pane receives". The legend is a word rather
+              than a glyph for the same reason: every other legend here IS the
+              key it transmits, and `⇞` would promise a PageUp this button
+              never sends. */}
+          <button
+            type="button"
+            className="keycap keycap--act"
+            aria-label="Scroll back"
+            onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
+            onClick={openHistory}
+          >
+            <span aria-hidden="true">hist</span>
+          </button>
         </div>
       </div>
     </Sheet>

@@ -101,6 +101,25 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
 
+/** How far above the screen the drawer's history read starts. Stated ONCE,
+ *  here, and echoed back to the client in the response — the PWA never names a
+ *  number of its own, so there is nothing for the two sides to disagree about.
+ *  2000 is tmux's DEFAULT `history-limit`; `ccd/tmux.conf` sets none, so that
+ *  default is what the fleet runs. Asking for more is not an error — tmux
+ *  returns what it has.
+ *
+ *  It is a CEILING NOTHING HAS REACHED, and raising it is not this file's to
+ *  take. Measured across ten live panes: the fullest is 1953/2000 after 22.3h
+ *  of continuous work, and none is at its limit. What actually ends a pane's
+ *  history is the program inside it — Claude Code emits `ESC[3J`, which resets
+ *  `history_size` to 0 (measured on a private socket: 452 -> 0), which is why
+ *  four of those ten read 0 and why a fifth begins mid-document at 1802/2000.
+ *  So a larger `history-limit` would buy less than its cost suggests, and the
+ *  cost is real: history is ~4.2 kB/line at this fleet's 220x50 (measured,
+ *  ~26 B per occupied cell, independent of colour), so 20 full panes are
+ *  ~168 MB at 2000 and ~840 MB at 10000 on a 7.4 GB box already in swap. */
+const PANE_HISTORY_LINES = 2000;
+
 /** Content-Type for the clip route, keyed by the (real) extension `clipName` wrote. */
 const CLIP_MIME: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
@@ -1476,6 +1495,50 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // not leave the session shrunken (wrapped panes break capture parsing).
       void deps.tmux.resizeWindow(id, 220, 50);
     });
+  });
+
+  /**
+   * The drawer's scrollback, and the whole of why it is a READ.
+   *
+   * `tmux attach` puts the CLIENT on the alternate screen (every attach begins
+   * ESC[?1049h — measured off a real pty), where xterm has no scrollback and
+   * turns a wheel notch into arrow keys aimed at the pane. tmux holds the
+   * pane's history regardless, so the fix is to read that history rather than
+   * to make the wheel drive the pane.
+   *
+   * The PANE's own alt flag is a SEPARATE layer and it is not always 0 — an
+   * earlier note here said `alternate_on=0` on every live session; measured
+   * across ten, two read 1. It does not matter, and that is worth stating so
+   * nobody "fixes" it: entering the alternate screen SAVES the normal-screen
+   * grid rather than dropping it, so `capture-pane` without `-a` still answers
+   * out of history. Measured on a private socket — 400 lines written, then
+   * ESC[?1049h: `alternate_on` flips to 1 and `capture-pane -S -400` still
+   * returns all 353 retained history lines.
+   *
+   * WHY NOT copy-mode, which is the other way to scroll a pane: copy mode is
+   * PANE state, not client state — a second attached client is dragged into the
+   * scrolled view too — and while a pane is in it `send-keys -l` does not
+   * deliver. Measured against tmux 3.4 with a client attached: the literal
+   * write HUNG (killed at 5 s), the Enter after it was eaten by the mode, and
+   * the text never reached the program — i.e. every prompt this server injects
+   * would wedge for as long as the mode lasted, and nothing in this tree can
+   * see or clear it. `capture-pane` mutates nothing: pane mode and attached
+   * clients measure identical either side of it.
+   *
+   * NO `knownId` GATE, deliberately (so it is absent from `routes.test.ts`'s
+   * census by construction, not by exemption): this route's own answer IS the
+   * measurement of whether the pane is there, taken against the pane rather
+   * than against a registry listing, and it tells `gone` from `unmeasured`
+   * where `knownId` folds both into 404.
+   */
+  app.get('/api/sessions/:id/pane/history', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    const r = await deps.tmux.captureHistory(id, PANE_HISTORY_LINES);
+    if (r.ok) return { ok: true, text: r.text, lines: PANE_HISTORY_LINES };
+    return r.reason === 'gone'
+      ? reply.code(404).send({ ok: false, error: 'gone' })
+      : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
   });
 
   // Write routes: serialized per session through one KeyedQueue; injection

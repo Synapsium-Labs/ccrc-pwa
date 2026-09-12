@@ -2183,6 +2183,51 @@ button.metachip:active {
   height: 100%;
   overflow: hidden;
 }
+/* The console history — the pane's own scrollback, read with capture-pane and
+   laid over the live glass. Same well, same ink: scrolling back must read as
+   the same terminal, not as leaving it. */
+.term-history {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 0 var(--sp-2);
+  background: var(--bg-well);
+}
+/* Its one piece of chrome: what you are looking at, and the way back. Above
+   the history layer, out of the way at the top. */
+/* xterm's own viewport is the scroller here, not this element — and it is the
+   first one in this app that ever scrolls, which is why nothing has styled it
+   before. Contained so a flick past the oldest line drags the history and not
+   the sheet behind it (`.chat-scroller` and `.term-keys-seq` take the same
+   precaution). */
+.term-history .xterm-viewport {
+  overscroll-behavior: contain;
+}
+.term-histbar {
+  position: absolute;
+  top: 0;
+  right: var(--sp-2);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well));
+}
+.term-histbar-word {
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-on-well);
+  white-space: nowrap;
+}
+.term-histbar-live {
+  width: auto;
+  padding: var(--sp-1) var(--sp-3);
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  color: var(--ink-on-well);
+  border-color: color-mix(in srgb, var(--ink-on-well) 35%, transparent);
+}
 /* Attach / loss overlay — a status line over dimmed glass, in the mono
    eyebrow voice. While attaching it respires at the phosphor's tempo. */
 .term-overlay {
@@ -2224,6 +2269,18 @@ button.metachip:active {
   display: flex;
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
+}
+/* The keys scroll; the action beside them does not. MEASURED: nine caps at
+   --tap-min, eight gaps and this padding come to 484px against a 390px phone,
+   and `.sheet-panel--full` zeroes the drawer's side padding — so this strip
+   has always overflowed. That was survivable while everything in it was a key
+   the phone's keyboard also lacks; it stops being survivable once the strip
+   carries the only door touch has to the console history. */
+.term-keys-seq {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: var(--sp-2);
   overflow-x: auto;
   overscroll-behavior: contain;
 }
@@ -2246,6 +2303,17 @@ button.metachip:active {
 }
 .term-keys .keycap:active {
   transform: translateY(1px);
+}
+
+/* The history door. Cut from the same ink as the keys deliberately: --accent
+   measures under the 4.5:1 a legend needs on the light theme's well, so it is
+   the BORDER that says "this one runs no bytes into the pane" — the same move
+   `.term-retry` makes. Placement is load-bearing: this and `.term-keys
+   .keycap` are both specificity (0,2,0), so source order is what makes `flex`
+   and `border-color` win. */
+.term-keys .keycap--act {
+  flex: none;
+  border-color: color-mix(in srgb, var(--ink-on-well) 40%, transparent);
 }
 
 /* ------------------------------------------------------------------ *
