@@ -1553,3 +1553,81 @@ describe('the coordinator skill triggers and resumes on the RUN RECORD, not a ho
     expect(skill).toContain('`references/resume.md`');
   });
 });
+
+// ── cross-repo wave 2: the project boundary, in the skill (spec §3 F3) ───────
+//
+// Wave 1 made the boundary MECHANICAL (`project-mismatch`, `home-mismatch`) and
+// named both codes in the refusal list. That is the server refusing; this is the
+// coordinator knowing. The two are not the same guard and the difference is
+// measurable: a coordinator that meets `project-mismatch` has already queued a
+// brief onto the wrong repo's workspace in its own head, and the refusal is what
+// stops the fleet — not what tells it what to do instead.
+//
+// Sentence-literal pins, the same mechanism `CONTRACT` uses and for the same
+// reason: the SENTENCE is the instruction, so a paraphrase must fail exactly as
+// a deletion does. Each row carries what it is FOR, so a red names the rule that
+// went missing rather than a 90-character string.
+describe('the coordinator learns the project boundary (cross-repo wave 2, spec §3 F3)', () => {
+  const CROSSING: readonly (readonly [string, string])[] = [
+    ['the reuse rule — a sessionId is a same-project idiom',
+      'Reuse `sessionId` ONLY when the next wave stays in the same project.'],
+    ['what a crossing wave does instead',
+      'A wave that CHANGES project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo'],
+    ['the caps arithmetic, so a cap refusal reads as arithmetic',
+      'two concurrency slots and two of the daily budget'],
+    ['homeProject on every open',
+      'Every `POST /api/runs` for this programme carries `homeProject`'],
+    ['the brief cites the home plan by absolute path at a sha',
+      "cites the home repo's plan by ABSOLUTE PATH at a named sha"],
+    ['the brief inlines the contract excerpt verbatim',
+      'INLINES the contract excerpt the wave depends on, verbatim from the merged file'],
+    ['Q1 — the producer run is READ, not remembered',
+      "read the producer run's own `state`. Anything but `done` — do not dispatch, report."],
+    ['deviations are minted against the home project',
+      'minted against the HOME project'],
+  ];
+
+  it('carries the crossing section at all', () => {
+    expect(skill).toContain('## When a wave crosses into another project');
+  });
+
+  // `flat` is this file's own helper (`:654`, the `readme-holds.test.ts` idiom):
+  // both corpora wrap mid-clause at 80 columns, so a raw `toContain` would pin
+  // the WRAP POINT rather than the sentence and would red on a re-flow that
+  // changed nothing. A paraphrase still fails exactly as a deletion does.
+  it.each(CROSSING)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  it('names BOTH new refusal codes where the rule that provokes them is stated', () => {
+    // Not the refusal-list sentence (wave 1's, pinned by its own test above):
+    // this is the section that tells a coordinator what it did to earn them, and
+    // a rule stated without its refusal leaves the reader to guess which one
+    // they are looking at.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    expect(start, 'the crossing section is gone').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const code of ['project-mismatch', 'home-mismatch']) {
+      expect(section, `the crossing section never names ${code}`).toContain(code);
+    }
+    // And the caps it warns about are the real ones, spelled as the codes the
+    // dispatch actually answers with.
+    for (const cap of ['cap-concurrency', 'cap-daily']) {
+      expect(section, `the crossing section never names ${cap}`).toContain(cap);
+    }
+  });
+
+  it('does not let the crossing section teach a second /clear writer or a reap', () => {
+    // The census tests above count `ws-reap`/`ws-rm`/`ws-gc` over `allSkillText`
+    // and clause 9 owns `/clear`; a new section is exactly where a well-meant
+    // recovery sentence gets added. Asserted HERE too, scoped to the section, so
+    // the failure names the section rather than a whole-file count.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-reap', 'ws-rm', 'ws-gc', '/clear']) {
+      expect(section, `the crossing section names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});

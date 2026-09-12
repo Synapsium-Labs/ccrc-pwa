@@ -316,6 +316,57 @@ not after.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
 
+## When a wave crosses into another project
+
+A programme has ONE home project — the repo whose `docs/superpowers/programs/<slug>.md`
+ledger you write, and whose plan every wave is measured against — and its waves
+may run in ANY project. The home is stated, never inferred. **Every `POST /api/runs`
+for this programme carries `homeProject`**, the same value on every wave; the
+response answers `ledgerRepo` and `ledgerAbsPath` for it, and `ledgerAbsPath` is
+the path you build a plan citation from. A later open naming a different home is
+refused `home-mismatch` with `by:` the stored value — the fix is your body, never
+the server. (An open with no `homeProject` at all is still accepted for one
+deploy generation and recorded as a `legacy-home-project` run event, with the
+column left NULL rather than guessed. You never omit it.)
+
+**Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 5
+above — same `sessionId`, same workspace — is a SAME-PROJECT idiom, and nothing
+in it says so because until now there was nothing else. A wave that CHANGES
+project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo,
+which is the path wave 1 already spawns on. Naming the old session for a wave in
+a different project is refused `project-mismatch` with `by:` the project that
+session's workspace belongs to — at the open, and again at the dispatch resume if
+the open ever let one through.
+
+**What a crossing costs, so a cap refusal reads as arithmetic rather than a
+fault.** The programme now holds TWO live workspaces, the home wave's and the
+foreign wave's, and the caps are global to this box: that is two concurrency slots
+and two of the daily budget. `cap-concurrency` or `cap-daily` during a cross-repo
+programme is this, not a bug — stop, say which cap, and wait to be woken, exactly
+as you would for any other.
+
+**A brief for a foreign-repo wave cites the home repo's plan by ABSOLUTE PATH at a
+named sha, and INLINES the contract excerpt the wave depends on, verbatim from the
+merged file.** One box, one user, so the path resolves from any workspace; the sha
+is what makes the citation mean one thing a month from now. The worker reads that
+plan for CONTEXT and never to discover its contract — a contract it had to go and
+find is a contract your brief did not give it — and it never writes to that repo.
+Paths, not payloads: the 8 KB ceiling is unchanged, and the excerpt is the part of
+the plan this wave is bound by, not the plan.
+
+**Before dispatching a wave that consumes another wave's output, `GET /api/runs`
+and read the producer run's own `state`. Anything but `done` — do not dispatch,
+report.** There is no dependency edge in the schema and none is coming: the server
+will happily dispatch a consumer into a repo whose producer is still `working`,
+and what comes back is a wave built against an interface that has not landed. The
+measurement is one call, and it is the whole guard.
+
+**Deviations found during a foreign-repo wave are minted against the HOME
+project** — `POST /api/ledger/deviations` with the home project's name — and
+defined in the home plan, because that is where the plan lives. The allocator
+takes the project from the caller and cannot cross-check it, so this one is
+discipline rather than a mechanism, which is exactly why it is written down.
+
 ## What stays discipline
 
 Handoffs are commits. Briefs are prose reviewed like code. The ledger is for
