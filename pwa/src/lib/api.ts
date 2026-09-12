@@ -504,8 +504,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about. */
+    /** `scrollback`/`alternate` are ABSENT from an older server, and absence
+     *  is not zero: the drawer opens the history exactly as it always did when
+     *  it cannot be told how much sits above the screen. */
     paneHistory: (id: string) =>
-      getJson<{ ok: true; text: string; lines: number }>(`${sid(id)}/pane/history`),
+      getJson<{ ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean }>(
+        `${sid(id)}/pane/history`),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an

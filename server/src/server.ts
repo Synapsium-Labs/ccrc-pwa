@@ -1564,7 +1564,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     const r = await deps.tmux.captureHistory(id, PANE_HISTORY_LINES);
-    if (r.ok) return { ok: true, text: r.text, lines: PANE_HISTORY_LINES };
+    if (r.ok) {
+      // A SECOND measurement, and the route carries it rather than deciding on
+      // it: `capture-pane` answers with the visible screen even when there is
+      // nothing above it, so a successful read alone cannot tell "here is the
+      // history" from "there is no history and this is just the screen again".
+      // The drawer needs that difference to say something true instead of
+      // opening a view with an empty scrollbar in it.
+      //
+      // ADDITIVE and absence-permitting (wire discipline): an unmeasurable
+      // probe omits both fields, and a reader that finds them absent must
+      // behave exactly as it did before they existed. Zero is a MEASURED zero;
+      // absent is "we could not look", and the two must never collapse.
+      const sb = await deps.tmux.paneScrollback(id);
+      return sb === null
+        ? { ok: true, text: r.text, lines: PANE_HISTORY_LINES }
+        : { ok: true, text: r.text, lines: PANE_HISTORY_LINES, scrollback: sb.lines, alternate: sb.alternate };
+    }
     return r.reason === 'gone'
       ? reply.code(404).send({ ok: false, error: 'gone' })
       : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });

@@ -176,6 +176,36 @@ export class Tmux {
       detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
     };
   }
+  /**
+   * What a reader who scrolls up can actually be given, as the two facts that
+   * decide it — and `null` for "we could not look", which is NOT the same as
+   * zero. A measured zero means the drawer should say there is no history; an
+   * unmeasured one must leave today's behaviour alone, or an unreachable tmux
+   * would start reporting empty panes.
+   *
+   * `alternate` is context, NOT the reason a pane is empty — measured on a
+   * private tmux 3.4 socket, because the obvious guess is wrong: entering the
+   * alternate screen does not drop the scrollback. At `alternate_on=1` with
+   * `history_size=454`, `capture-pane -S -2000` still returned all 453 stored
+   * lines. What the alternate screen changes is the FUTURE: nothing scrolls
+   * into the history while a full-screen app holds the pane. What actually
+   * empties one is the application's own `ESC[3J` — measured, 454 to 0 in a
+   * single write — which is what a `claude --resume` does when it repaints.
+   * So the refusal below turns on the COUNT, and this flag only explains why
+   * a zero is going to stay zero for now.
+   *
+   * One `list-panes -F`, the same verb (and the same whitelist entry)
+   * `panePid` already runs — no new door into the exec surface.
+   */
+  async paneScrollback(id: string): Promise<{ lines: number; alternate: boolean } | null> {
+    const r = await this.run('tmux',
+      ['list-panes', '-t', target(id), '-F', '#{history_size} #{alternate_on}']);
+    if (r.code !== 0) return null;
+    const first = r.stdout.split('\n')[0]?.trim() ?? '';
+    const m = /^(\d+) ([01])$/.exec(first);
+    if (m === null) return null;
+    return { lines: Number(m[1]), alternate: m[2] === '1' };
+  }
   async sendLiteral(id: string, text: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
   }

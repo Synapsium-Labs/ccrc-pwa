@@ -771,3 +771,61 @@ describe('the opening scroll', () => {
     expect(h.scrolled).toEqual([-3]);
   });
 });
+
+// — a pane with nothing above its screen —
+//
+// `capture-pane` answers with the VISIBLE SCREEN whether or not a line has
+// ever scrolled off, so a 200 is not by itself a history. Opening one anyway
+// put a second copy of the live view on the glass with an empty scrollbar on
+// it — the operator's own report: "зʼявляється пустий скролбар справа, але
+// історія нікуди не рухається". Measured on the live fleet the same hour: four
+// of ten panes held no scrollback at all. The COUNT is what decides here — a
+// pane keeps its scrollback across the switch to the alternate screen
+// (measured, 453 lines still captured at `alternate_on=1`), so the flag only
+// picks the WORDS for a zero, never causes one.
+describe('a pane with no scrollback says so', () => {
+  it('a MEASURED zero opens no history and names the reason', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, { ...OK_HISTORY, scrollback: 0, alternate: false }));
+    const { t, h } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+
+    expect(await screen.findByText(/nothing has scrolled off this pane yet/i)).toBeTruthy();
+    expect(h.write, 'a dead history terminal was built and written to').not.toHaveBeenCalled();
+    expect(h.madeWith, 'a history terminal was built over an empty capture').toEqual([]);
+    // The door still offers the way back — `empty` is not `live`.
+    expect(historyDoor()).toBeTruthy();
+  });
+
+  it('the alternate screen is named as itself, not as an empty history', async () => {
+    // A full-screen TUI holds the pane. It did not eat the history — tmux keeps
+    // what was already there — but nothing scrolls off while it is up, so a
+    // zero here means something different from a zero on a normal screen:
+    // "not yet" versus "not while this is up".
+    vi.stubGlobal('fetch', jsonFetch(200, { ...OK_HISTORY, scrollback: 0, alternate: true }));
+    const { t } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+
+    expect(await screen.findByText(/full-screen app/i)).toBeTruthy();
+    expect(screen.queryByText(/nothing has scrolled off this pane yet/i)).toBeNull();
+  });
+
+  it('an ABSENT measurement still opens the history — absence is not zero', async () => {
+    // The guard on the guard. An older server omits both fields, and a pane
+    // tmux could not measure sends nothing; either way the drawer must behave
+    // exactly as it did before the fields existed, or one unreachable probe
+    // would tell every reader their session has no history.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    expect(screen.queryByText(/no history/i)).toBeNull();
+    expect(historyDoor()).toBeTruthy();
+  });
+});
