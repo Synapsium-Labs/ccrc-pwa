@@ -253,9 +253,34 @@ export function TerminalDrawer({
     goHist({ at: 'reading' });
     void api.paneHistory(id).then(
       (r) => {
-        if (histRef.current.at === 'reading') {
-          goHist({ at: 'history', text: r.text, lines: r.lines });
+        if (histRef.current.at !== 'reading') return;
+        // NOTHING ABOVE THE SCREEN IS NOT A HISTORY. `capture-pane` answers
+        // with the visible screen even when no line has ever scrolled off, so
+        // a successful read alone would put up a second copy of what the
+        // reader is already looking at — with an empty scrollbar on it and a
+        // wheel that moves nothing. Measured on this fleet: four of ten live
+        // panes hold no scrollback at all.
+        //
+        // The COUNT decides, never the screen the pane is on: a pane on the
+        // alternate screen keeps the scrollback it already had (measured on a
+        // private socket — 453 stored lines still captured at
+        // `alternate_on=1`), so refusing on that flag would hide a real
+        // history behind a full-screen app. The flag only says a zero will
+        // stay zero while the app is up.
+        //
+        // `=== 0` and not `!r.scrollback`: an older server omits the field and
+        // an unmeasurable pane sends nothing, and neither is a zero. Both keep
+        // the behaviour this drawer shipped with.
+        if (r.scrollback === 0) {
+          goHist({
+            at: 'empty',
+            why: r.alternate === true
+              ? 'a full-screen app is up — nothing scrolls off while it is'
+              : 'nothing has scrolled off this pane yet',
+          });
+          return;
         }
+        goHist({ at: 'history', text: r.text, lines: r.lines });
       },
       (e: unknown) => {
         // WHY, not just "failed": a dead pane and an unreachable box are

@@ -21,13 +21,17 @@ import { KeyedQueue } from '../src/inject/queue.js';
 
 const ID = 'claude-a-MekWarLive';
 
-async function makeApp(capture: ExecResult): Promise<{ app: FastifyInstance; calls: string[][] }> {
+async function makeApp(
+  capture: ExecResult,
+  listPanes: ExecResult = { code: 0, stdout: '', stderr: '' },
+): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const home = mkTmp('ccrc-pane-history-');
   seedRoster(home);
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
     if (args[0] === 'capture-pane') return capture;
+    if (args[0] === 'list-panes') return listPanes;
     return { code: 0, stdout: '', stderr: '' };
   };
   const cfg = loadConfig({ CCRC_HOME: home });
@@ -61,12 +65,16 @@ describe('GET /api/sessions/:id/pane/history', () => {
   it('mutates nothing on the pane — no copy-mode, no send-keys, no resize', async () => {
     // The alternative fixes all put the PANE in copy mode, which is shared with
     // every other attached client and, measured against tmux 3.4, makes
-    // `send-keys -l` hang for as long as it lasts. This route must stay a read:
-    // one capture-pane and nothing else.
+    // `send-keys -l` hang for as long as it lasts. This route must stay a read.
+    //
+    // The list is EXACT, not a filter, and that is the guard: both verbs here
+    // are reads, and the day a mutating one is added to this route — copy-mode,
+    // send-keys, resize-window — this line is what refuses it. Growing the list
+    // is a deliberate act with this comment in front of it.
     const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
     await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
-    expect(calls.map((c) => c[1])).toEqual(['capture-pane']);
+    expect(calls.map((c) => c[1])).toEqual(['capture-pane', 'list-panes']);
     await app.close();
   });
 
@@ -107,5 +115,57 @@ describe('GET /api/sessions/:id/pane/history', () => {
     expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
     expect(calls).toEqual([]);
     await app.close();
+  });
+
+  // — how much is actually up there —
+  //
+  // `capture-pane` answers with the VISIBLE SCREEN even when nothing has ever
+  // scrolled off, so a 200 alone cannot tell a history from a second copy of
+  // what the reader is already looking at. The drawer needs the difference to
+  // say something true rather than open a view with an empty scrollbar in it,
+  // and this route is where the difference is measured.
+  it('carries the scrollback measurement beside the text, off the verb that was already allowed', async () => {
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1979 0\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 2000, scrollback: 1979, alternate: false,
+    });
+    // `list-panes`, not a new verb: the whitelist entry `panePid` already uses,
+    // so this widens nothing in the exec surface.
+    expect(calls).toContainEqual(
+      ['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', '#{history_size} #{alternate_on}']);
+  });
+
+  it('reports the alternate screen as CONTEXT, beside the count that decides', async () => {
+    // Not as the reason: measured on a private tmux 3.4 socket, a pane keeps
+    // the scrollback it already had when it enters the alternate screen (453
+    // lines still captured at `alternate_on=1`). The flag says only that
+    // nothing new will scroll off while the full-screen app is up — so the
+    // route carries both facts and lets the reader's own words be chosen from
+    // the pair.
+    const { app } = await makeApp(
+      { code: 0, stdout: 'a full screen\n', stderr: '' },
+      { code: 0, stdout: '0 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toMatchObject({ ok: true, scrollback: 0, alternate: true });
+  });
+
+  it('an unmeasurable probe OMITS both fields — absence is not zero', async () => {
+    // The whole point of the pair. A tmux that cannot answer must leave a
+    // reader with the behaviour the drawer shipped with; reporting zero here
+    // would make every unreachable pane claim it has no history.
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 1, stderr: "can't find pane: cc-nope", stdout: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
   });
 });
