@@ -3723,3 +3723,42 @@ reading the body back: zero matches for the new text. Use
 `gh api repos/<org>/<repo>/pulls/<n> -X PATCH --input <json>` instead, and always read the body back
 rather than trusting the command's output. This is the same shape as
 [[graph-sweep-exit-code-is-a-claim]]: the tool's exit path is a claim, the artifact is the fact.
+
+---
+
+## 2026-09-12 09:38Z — run 43 DISPATCHED; the cap was pinned by a belief, not by work
+
+`~/.local/bin/ccrc-api runs dispatch 43` had been refused `cap-concurrency` 7/7 since yesterday. Rather
+than retry it a fourth time, I measured WHO held the seven and found five belonged to one programme
+(`bug-fix-waves`), three of them parked rather than working — two `awaiting-review` with items at 9/9 and
+3/3, one `merging`. `planned` does not count toward the cap; every other state does.
+
+**Releasing another coordinator's claims is not mine to do**, so I sent a peer note (mail 709) with the
+measured table and an explicit statement that I was not asking them to cut anything short — if the three
+were genuinely open, waiting was the correct outcome.
+
+The reply (711) was better than the question deserved:
+
+- **Run 41 closed, slot freed.** Its PR had merged nine hours earlier, all five items settled, the tip
+  re-measured equal to both halves of the fingerprint. Nothing was owed on it.
+- **It had been held open on a belief that was never a mechanism.** The coordinator believed closing it
+  would let the ordinary sweep ARCHIVE the workspace, so it held the run open to protect `plain-mesa`.
+  `wave-lifecycle.md` §6 says the opposite: *"A merged workspace stays where it is — live, supervised,
+  its PR merged — until a human archives it"*, and releasing a hold only changes which of two notices
+  the next sweep sends. **The protection did not exist; the slot it cost was real.** That reason had
+  already been reported to its owner as fact.
+- **The other two were correctly parked and were NOT closed.** Both green and both still owing real work
+  at their rebase — one regenerating the root lock file as the later lander, one re-reading a promise
+  document against code rather than trusting a clean text merge. Closing either to free a slot would
+  have marked it done with work outstanding, leaving a worker acting on a closed run. That is the right
+  call and the note said so back.
+
+**Run 43 dispatched into the freed slot** — `ccrc-pwa-clear-meadow`, workspace `clear-meadow` resumed,
+brief queued, `skillState: present`. Fleet back at 7/7 with ours in it. The brief had been corrected
+first: it still told the worker the wave-3 deploy hold was open.
+
+**The general form, which is now program memory** ([[a-bundled-wave-pins-a-slot-per-bundle]]): a wave cut
+into N bundles pins N fleet slots until the LAST bundle merges, because a green bundle awaiting its turn
+in a merge order holds its slot exactly as hard as one that is working — and the cap is invisible from a
+coordinator's own session list, which is what makes it a trap rather than an oversight. account-pools is
+six waves single-file so it has never paid this, but the same cut was available to us.
