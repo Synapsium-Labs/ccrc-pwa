@@ -1649,7 +1649,7 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/project-card.test.tsx test/fleet-css.test.ts test/fleet-screen.test.tsx test/contrast.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `design/contrast-check.mjs` gate over the edited stylesheet — a new colour pair that is not already audited fails here, which is why both new rules reuse `--status-attention-text` on the surface ground.
+Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `design/contrast-check.mjs` gate over the edited stylesheet. Reusing a token is not itself audit coverage: per D-2640, each new color-bearing selector must enter `report.measured` on the project card's inherited `--bg-surface` ground.
 
 - [ ] **Step 8: Prove the guard by mutation**
 
