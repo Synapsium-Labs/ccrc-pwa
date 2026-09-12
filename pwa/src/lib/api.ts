@@ -203,7 +203,7 @@ const API_ERROR_TEXT: Record<string, string> = {
   // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
   // sentence here for a code one of them owns would lose its wording. The
   // suite asserts that in both directions.
-  'pool-mismatch': 'That account is in a different pool from this project. Open "show other pools" and confirm the crossing, or pick an account the project\'s pool admits.',
+  'pool-mismatch': 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.',
   'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
   'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 };
@@ -219,6 +219,12 @@ export function apiErrorText(err: unknown): string {
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
     const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-unreadable') {
+      const state = (err.body as { state?: unknown }).state;
+      if (state === 'malformed') {
+        return 'The project\'s pool tag contains an invalid pool name. Fix or clear its file under ~/.cc-sessions/pools/ and try again.';
+      }
+    }
     if (typeof code === 'string') {
       const text = API_ERROR_TEXT[code];
       if (text !== undefined) return text;
@@ -454,10 +460,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // the server had already stopped sending (D-1028).
     projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
-     *  start sends the byte-identical body it sent before pools existed —
-     *  `archive`'s `{force:true}` rule, for `archive`'s reason: a key an older
-     *  server does not know is the silent-success class, and a flag that only
-     *  ever means "yes" never needs to travel saying "no". */
+     *  start keeps the parsed request shape it sent before pools existed —
+     *  no key an older server does not know, and a flag that only ever means
+     *  "yes" never needs to travel saying "no". */
     createSession: ({ crossPool, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
     }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
@@ -481,8 +486,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
     stop: (id: string) => post(`${sid(id)}/stop`),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
-     *  and an absent `opts` both send the byte-identical `{wrapper}` body the
-     *  route has always taken. Not a checkbox anywhere in the UI: it is what a
+     *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
+     *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
      *  a confirm sentence that names the crossing. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>

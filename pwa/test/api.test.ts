@@ -799,11 +799,10 @@ describe('send-failure copy', () => {
 
 // Account pools, wave 4. The three writes and the three refusals.
 //
-// The BYTE-IDENTITY assertions are the point of the first two: an ordinary
-// swap and an ordinary start must send exactly the request they sent before
-// pools existed, because an older server reading an unexpected key is the
-// silent-success class this wire discipline exists to prevent. `archive(id,
-// {force:false})` above is the same shape for the same reason.
+// The ordinary-call assertions pin the compatibility property an older server
+// can observe: the same parsed keys and values, with no stray `crossPool` key.
+// Swap also owns its literal request construction here, so its two ordinary
+// cases pin the URL and complete RequestInit like `archive(id, {force:true})`.
 describe('account pools', () => {
   const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
     jsonResponse(200, { ok: true, pool, ...extra });
@@ -840,20 +839,32 @@ describe('account pools', () => {
     expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects/a%20b/pool');
   });
 
-  it('swap(id, w) posts the byte-identical {wrapper} body it always did', async () => {
+  it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2');
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }),
+      },
+    ]);
   });
 
-  it('swap(id, w, {crossPool:false}) is still the UNCROSSED call — never a body that says no', async () => {
+  it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2', { crossPool: false });
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }),
+      },
+    ]);
   });
 
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
@@ -881,14 +892,22 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
-  it('turns the three pool refusals into sentences, not slugs', () => {
-    // Each names what the box established and what would change it. A bare
-    // `pool-mismatch` under a failed toast says nothing about the disclosure
-    // that exists precisely to let the operator do it on purpose.
-    expect(apiErrorText(asError(409, { ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' })))
-      .toMatch(/different pool/i);
+  it('turns pool-mismatch into a truthful sentence without promising absent controls', () => {
+    const mismatch = apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+      projectPool: 'pool-a',
+    }));
+    expect(mismatch).toMatch(/different pool/i);
+    expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
     expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'unreadable' })))
       .toMatch(/could not be read/i);
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'malformed' })))
+      .toMatch(/invalid pool name/i);
     expect(apiErrorText(asError(400, { error: 'bad-pool-name' })))
       .toMatch(/lowercase/i);
   });

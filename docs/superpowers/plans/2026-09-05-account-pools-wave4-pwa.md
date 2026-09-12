@@ -567,7 +567,7 @@ git commit -m "feat(pwa): one reader for an account's pool, one place the rule i
 
 **Spec:** §5.10 `api.ts` row; §5.4.2 (the tag route's four refusals); §5.6 (the swap/sessions 409/503/501).
 
-**Mutation table:** no §11 row of its own — §11 row 26 pins the SHEET's use of `crossPool`, and this task pins the CLIENT's. Goes red when `swap`/`createSession` start sending a `crossPool` key on an ordinary call (the request stops being byte-identical to the one that shipped), or when the three new codes reach a toast as bare slugs. 501 already renders `UNSUPPORTED_VERB_TEXT` through the existing `unsupported` key (`api.ts:124`, `:176`) — nothing is added for it.
+**Mutation table:** no §11 row of its own — §11 row 26 pins the SHEET's use of `crossPool`, and this task pins the CLIENT's. Goes red when `swap`/`createSession` add a `crossPool` key to the ordinary parsed request shape, when `swap` changes its URL or complete `RequestInit`, or when the three new codes reach a toast as bare slugs. D-2619 adds a state-preservation red for malformed versus unreadable; D-2620 pins that global copy promises no surface-specific control. 501 already renders `UNSUPPORTED_VERB_TEXT` through the existing `unsupported` key (`api.ts:124`, `:176`) — nothing is added for it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -576,11 +576,10 @@ Append to `pwa/test/api.test.ts`, at the end of the file:
 ```ts
 // Account pools, wave 4. The three writes and the three refusals.
 //
-// The BYTE-IDENTITY assertions are the point of the first two: an ordinary
-// swap and an ordinary start must send exactly the request they sent before
-// pools existed, because an older server reading an unexpected key is the
-// silent-success class this wire discipline exists to prevent. `archive(id,
-// {force:false})` above is the same shape for the same reason.
+// The ordinary-call assertions pin the compatibility property an older server
+// can observe: the same parsed keys and values, with no stray `crossPool` key.
+// Swap also owns its literal request construction here, so its two ordinary
+// cases pin the URL and complete RequestInit like `archive(id, {force:true})`.
 describe('account pools', () => {
   const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
     jsonResponse(200, { ok: true, pool, ...extra });
@@ -617,20 +616,26 @@ describe('account pools', () => {
     expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects/a%20b/pool');
   });
 
-  it('swap(id, w) posts the byte-identical {wrapper} body it always did', async () => {
+  it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2');
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }) },
+    ]);
   });
 
-  it('swap(id, w, {crossPool:false}) is still the UNCROSSED call — never a body that says no', async () => {
+  it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2', { crossPool: false });
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }) },
+    ]);
   });
 
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
@@ -658,14 +663,19 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
-  it('turns the three pool refusals into sentences, not slugs', () => {
-    // Each names what the box established and what would change it. A bare
-    // `pool-mismatch` under a failed toast says nothing about the disclosure
-    // that exists precisely to let the operator do it on purpose.
-    expect(apiErrorText(asError(409, { ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' })))
-      .toMatch(/different pool/i);
+  it('turns pool-mismatch into a truthful sentence without promising absent controls', () => {
+    const mismatch = apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a',
+    }));
+    expect(mismatch).toMatch(/different pool/i);
+    expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
     expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'unreadable' })))
       .toMatch(/could not be read/i);
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'malformed' })))
+      .toMatch(/invalid pool name/i);
     expect(apiErrorText(asError(400, { error: 'bad-pool-name' })))
       .toMatch(/lowercase/i);
   });
@@ -717,10 +727,26 @@ Then, inside `API_ERROR_TEXT` (`:175`), after the `registry-unmeasurable` entry:
   // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
   // sentence here for a code one of them owns would lose its wording. The
   // suite asserts that in both directions.
-  'pool-mismatch': 'That account is in a different pool from this project. Open "show other pools" and confirm the crossing, or pick an account the project\'s pool admits.',
+  'pool-mismatch': 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.',
   'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
   'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 ```
+
+Per D-2619, preserve `stderr` precedence and then special-case the state the
+shared refusal code carries, before the static map lookup:
+
+```ts
+    const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-unreadable') {
+      const state = (err.body as { state?: unknown }).state;
+      if (state === 'malformed') {
+        return 'The project\'s pool tag contains an invalid pool name. Fix or clear its file under ~/.cc-sessions/pools/ and try again.';
+      }
+    }
+```
+
+The existing static `pool-unreadable` sentence remains the honest fallback for
+`state:'unreadable'` and for older/partial bodies with no `state`.
 
 - [ ] **Step 4: Add the three calls**
 
@@ -728,10 +754,9 @@ In `pwa/src/lib/api.ts`, replace the `createSession` entry (`:434-435`) and the 
 
 ```ts
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
-     *  start sends the byte-identical body it sent before pools existed —
-     *  `archive`'s `{force:true}` rule, for `archive`'s reason: a key an older
-     *  server does not know is the silent-success class, and a flag that only
-     *  ever means "yes" never needs to travel saying "no". */
+     *  start keeps the parsed request shape it sent before pools existed —
+     *  no key an older server does not know, and a flag that only ever means
+     *  "yes" never needs to travel saying "no". */
     createSession: ({ crossPool, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
     }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
@@ -755,8 +780,8 @@ In `pwa/src/lib/api.ts`, replace the `createSession` entry (`:434-435`) and the 
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
     stop: (id: string) => post(`${sid(id)}/stop`),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
-     *  and an absent `opts` both send the byte-identical `{wrapper}` body the
-     *  route has always taken. Not a checkbox anywhere in the UI: it is what a
+     *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
+     *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
      *  a confirm sentence that names the crossing. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
@@ -771,17 +796,22 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/api.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 63 tests; `tsc` exits 0. The 63 is a derived
-copy-completeness check, not a decreed cardinal: the focused file contains 63
-direct `it(` calls and zero `it.each` calls as measured after adding this
-block. Re-derive both counts if the focused file changes; parameterized rows
-would make direct calls diverge from reported tests.
+Expected: PASS, 64 tests; `tsc` exits 0. The 64 is a derived
+copy-completeness check, not a decreed cardinal: the focused file contains 64
+direct `it(` calls and zero `it.each` calls after D-2619 split the two distinct
+refusal facts into independently named tests. Re-derive both counts if the
+focused file changes; parameterized rows would make direct calls diverge from
+reported tests.
 
 - [ ] **Step 6: Prove the guard by mutation**
 
-1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: `swap(id, w) posts the byte-identical {wrapper} body it always did` — `expected { wrapper: 'claude2', crossPool: false } to deeply equal { wrapper: 'claude2' }`.
+1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: both complete ordinary-request tests receive a body containing `crossPool:false` instead of `JSON.stringify({ wrapper: 'claude2' })`.
 2. In `createSession`, change the body to plain `rest` regardless. Expected red: `createSession omits crossPool entirely unless it is true` — the third assertion fails, `expected {…} to deeply equal { …, crossPool: true }`.
-3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `turns the three pool refusals into sentences, not slugs` — `expected 'pool-mismatch' to match /different pool/i`.
+3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `turns pool-mismatch into a truthful sentence without promising absent controls` receives the bare `pool-mismatch` slug.
+4. **D-2618 URL pin:** change only `swap`'s suffix from `/swap` to `/swop`. Expected red: both complete ordinary-request tests receive `/api/sessions/s1/swop` instead of `/api/sessions/s1/swap`. Restore by exact inverse.
+5. **D-2618 complete-init pin:** change the JSON-body `post` helper's method from `POST` to `PUT`. Expected red includes both complete ordinary-request tests receiving `method:'PUT'`; existing independent callers red too. Restore by exact inverse.
+6. **D-2619 state-preservation pin:** make the `state === 'malformed'` branch return `API_ERROR_TEXT['pool-unreadable']!`. Expected red only in the distinct-state test: unreadable copy does not match `/invalid pool name/i`. Restore by exact inverse.
+7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red only in the mismatch-copy test at `/show other pools|pick an account/i`. Restore by exact inverse.
 
 - [ ] **Step 7: Commit**
 
@@ -956,11 +986,15 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/stores.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS; `tsc` exits 0.
+Expected: PASS, 67 tests; `tsc` exits 0. The 67 is a derived
+copy-completeness check, not a decreed cardinal: this focused file has 67
+direct `it(` calls and zero `it.each` calls after the four-case block lands.
+Following D-2598, re-derive both quantities after changing the focused file;
+parameterized rows make direct calls diverge from reported tests.
 
 - [ ] **Step 5: Prove the guard by mutation**
 
-1. Change the initial state to `pools: (snapshot as unknown as { pools?: ProjectPoolsWire }).pools ?? null` and have the `fleet` branch call `saveFleetSnapshot` with a third argument that a locally-widened `saveFleetSnapshot` writes. Expected red: `is NOT persisted, and a fresh store starts null even with a snapshot on disk` — `expected '{"savedAt":…,"pools":…}' not to contain 'pool'`. Revert both edits.
+1. Per D-2615, change the initial state to `pools: (snapshot as unknown as { pools?: ProjectPoolsWire } | null)?.pools ?? null` and have the `fleet` branch call `saveFleetSnapshot` with a third argument that a locally-widened writer writes (no new import). Expected red: `is NOT persisted, and a fresh store starts null even with a snapshot on disk` — `expected '{"savedAt":…,"pools":…}' not to contain 'pool'`. Revert all three edits by their exact inverses.
 2. Delete the `typeof … === 'object'` half of the `asFleetMsg` arm. Expected red: `drops a pools frame whose payload is missing or not an object` — `expected 'enforced' to be null`.
 3. Delete the `else if (msg.type === 'pools')` branch. Expected red: `starts null and takes a well-formed frame` — `expected null to deeply equal { listed: true, … }`.
 
@@ -3295,3 +3329,68 @@ deviation found while executing this plan is allocated in its own call at the mo
   mutation back to direct lookup must red the six absent-name rows. This is a
   High finding because it is reachable through canonical output, not only a
   malformed wire.
+
+- **D-2617 — Task 2's literal byte-identity claim exceeds both the compatibility
+  contract and its structural assertions.** At review time the four
+  ordinary/explicit-false cases compared parsed JSON shapes. That correctly
+  pins what old servers can observe — unchanged keys and values, especially no
+  unexpected `crossPool` key — because every server consumer parses JSON and no
+  route reads, signs, or
+  deduplicates raw bytes. Pinning raw create-session text would be false
+  confidence: rest-spread preserves caller insertion order, so harmless caller
+  reordering changes bytes without changing the contract while this unit test's
+  literal stays green. Ruling: retain structural create-session assertions and
+  reword Task 2's test, source, plan, and mutation prose from byte identity to
+  unchanged parsed request shape. This reframes and refutes the original
+  D-TBD finding's requested `.toBe` remedy.
+
+- **D-2618 — Task 2 added the first PWA `swap` tests but discarded its URL and
+  complete request init.** Before this task the focused suite contained no
+  `swap` occurrence, so a typo in `${sid(id)}/swap`, a method change, or loss of
+  the JSON content type had no pin. Unlike create-session rest-spread order,
+  swap's `{ wrapper }` literal is owned inside `api.ts`, so its whole wire shape
+  is stable at this seam. Ruling: the absent and explicit-false swap tests each
+  assert the URL plus the complete `RequestInit` — POST, JSON content type, and
+  `JSON.stringify({ wrapper: 'claude2' })`. Named URL and init mutations must
+  reach those assertions and red, then be restored by exact inverse.
+
+- **D-2619 — `apiErrorText` must preserve malformed versus unreadable in its
+  message while the server correctly folds both to one refusal decision.** The
+  route deliberately sends one `pool-unreadable` code plus `state:'unreadable'
+  |'malformed'`; safety requires the same fail-closed decision, but the PWA's
+  static map discarded `state` and falsely diagnosed a malformed name as an IO
+  read failure. This plan already requires distinct malformed/unreadable chip
+  and sheet wording, so the toast would contradict the same screen's measured
+  fact. Ruling: keep the static unreadable entry as the fallback for absent or
+  unreadable state, add one `state === 'malformed'` branch after stderr
+  precedence and before map lookup, test both states, and mutation-fold the
+  malformed sentence back to unreadable. Severity: Low; enforcement is intact
+  and both remedies point to the same file.
+
+- **D-2620 — Task 2's global `pool-mismatch` copy promises two controls absent
+  from a reachable caller.** `StartProgramSheet` consumes the server's account
+  projection computed against an UNTAGGED PROJECT forecast; the selected
+  account may itself be tagged and collide with the tagged project passed to
+  ordinary `createSession`. That sheet has neither `show other pools` nor an
+  account picker, yet the old global sentence promised both. The spec's PWA
+  surfaces table omits StartProgramSheet, and adding an account chooser would be
+  a product/scope decision that also contradicts its pinned two-call flow.
+  Ruling: do not touch the sheet; make global copy truthful by directing the
+  operator to a flow that can disclose and confirm crossing, or to changing the
+  project's pool. The named mutation restores both false promises and must red.
+
+- **D-2615 — Task 3's combined persistence mutant must be null-safe at store
+  bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown
+  as { pools?: ProjectPoolsWire }).pools ?? null` while widening the offline
+  writer and passing the live slot into it. The module-level
+  `useFleetStore = createFleetStore()` constructs before a snapshot exists, so
+  `loadFleetSnapshot()` returns `null` and the direct `.pools` access throws
+  `TypeError: Cannot read properties of null (reading 'pools')` during module
+  evaluation. That is a FALSE red, not a weak one: zero tests register and the
+  named snapshot-byte assertion is never reached. A mutation must change one
+  target behavior and reach the assertion that names it. Ruling: use the
+  smaller null-safe hydration `(snapshot as unknown as { pools?:
+  ProjectPoolsWire } | null)?.pools ?? null`, keeping the same locally widened
+  writer and fleet-handler third argument, with no new import. This combined
+  mutant changes persistence/hydration only and reaches the structural
+  snapshot assertion; restore all three temporary edits by exact inverse.
