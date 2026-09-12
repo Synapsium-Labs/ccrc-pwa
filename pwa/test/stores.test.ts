@@ -970,6 +970,71 @@ describe('fleet store', () => {
     });
   });
 
+  // Account pools, wave 4. Additive on the same terms as `runs`/`coord` above:
+  // an already-deployed PWA drops this frame in `asFleetMsg` and no
+  // `FLEET_PROTO` bump is needed. What is NOT the same is persistence — this
+  // one is deliberately excluded from the offline snapshot, because a cached
+  // tag rendered as live policy would lie about what the fleet is enforcing
+  // right now.
+  describe('the `pools` frame', () => {
+    const wire = { listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' };
+
+    it('starts null and takes a well-formed frame', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().pools).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      expect(store.getState().pools).toEqual(wire);
+      store.getState().disconnect();
+    });
+
+    it('takes the listed:false arm too — an unlistable directory is a value, not a gap', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: { listed: false, enforcement: 'enforced' } }));
+      expect(store.getState().pools).toEqual({ listed: false, enforcement: 'enforced' });
+      store.getState().disconnect();
+    });
+
+    it('drops a pools frame whose payload is missing or not an object — silently, never thrown', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      for (const bad of [{ type: 'pools' }, { type: 'pools', pools: null }, { type: 'pools', pools: 'enforced' }]) {
+        expect(() => lastSocket().message(JSON.stringify(bad))).not.toThrow();
+        expect(store.getState().pools).toBeNull();
+      }
+      store.getState().disconnect();
+    });
+
+    it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
+      // The offline snapshot is written on every `fleet` frame. Nothing pooled
+      // may ride it: `FleetSnapshot` has no field for it, and this asserts
+      // that in the two directions that matter — the bytes on disk, and what a
+      // cold store reads back.
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      expect(store.getState().pools).toEqual(wire);
+      store.getState().disconnect();
+
+      const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+      expect(raw).not.toBeNull();
+      expect(raw).not.toContain('pool');
+      expect(Object.keys(JSON.parse(raw as string) as object).sort()).toEqual(['roster', 'savedAt', 'sessions']);
+
+      const cold = createFleetStore({ makeSocket });
+      expect(cold.getState().sessions.map((s) => s.id)).toEqual(['s1']);  // the snapshot DID hydrate
+      expect(cold.getState().pools).toBeNull();                          // …and carried no policy with it
+    });
+  });
+
   // Review finding 18: `feed` used to have exactly two producers — the
   // catch-up tail (volatile: the mark it reads advances one-way at receipt,
   // so a reload landing after the tail already ran sees nothing left to ask
