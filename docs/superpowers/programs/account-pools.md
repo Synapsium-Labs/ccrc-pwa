@@ -4194,3 +4194,51 @@ recorded as a `D-TBD` token pending a decision on where it lands.
 **Eight findings now. Seven upheld, one refuted — and refuting it produced D-2618, the largest coverage
 hole found this wave.** Worth recording: the review apparatus is good enough that its misses are
 productive, but "the worker's review said so" is not itself evidence.
+
+---
+
+## 2026-09-12 13:29Z — D-2621: TAKEN, not deferred. I reversed my own lean, and why.
+
+Mail 806. Task 2 fix committed `7febd162` (D-2617..D-2620, focused API 64/64, tsc clean, re-review
+running); Task 3 committed `3813f51d`, also under review. The worker asked for a number and a scope
+ruling on the item I had recorded as REPORTED, NOT TAKEN.
+
+**I expected to defer. Measuring the fix reversed it.**
+
+Two things looked true when I wrote "not taken": that the fix required changing `API_ERROR_TEXT` from
+`Record<string,string>` into something that can interpolate — a design step, not a copy fix — and that
+the user-visible gap was confined to `StartProgramSheet`, because `SwapSheet` and `NewSessionSheet`
+compute `splitByPool`/`poolSide` LOCALLY from the roster and the pools frame and so already show which
+pools are in play without reading the 409 body.
+
+**The second is true and stays true. The first is false.** `apiErrorText` already reads `stderr` from
+the body and short-circuits the map, and D-2619 is adding a second pre-map branch for `state` in that
+same function right now. A third branch for `pool-mismatch` is the same idiom again; the static entry
+stays as written and becomes the FALLBACK for a body carrying no names — absence-permits, which is this
+repo's wire discipline rather than a special case. One branch, one constant, two tests.
+
+**And deferral had a cost I had not priced: D-2620 is rewriting that exact sentence NOW.** Defer, and
+the same string is rewritten twice, its tests invalidated twice, its copy reviewed twice — and in between
+we ship a sentence that is merely *not false* where it could have been *useful*. This is the one moment
+where it is free.
+
+**It also settles what D-2620 alone leaves unsatisfying.** Making the sentence truthful without promising
+a control is right, but it leaves `StartProgramSheet` — the one surface with no pool UI, where the toast
+is the only channel — saying nothing except that a pool refused. Naming the two pools promises no control;
+it is the fact the operator needs in order to act elsewhere. It turns a dead end into a lead.
+
+And the wire was built for it: `shared/poolrule.ts:29-31` says the verdict *"CARRIES BOTH NAMES so a 409
+body, a die message and a chip can each say which two pools disagreed"*. A wave whose whole job is the
+PWA pool surface should not be the one that ignores the field designed for it.
+
+**Required of the fix:** same commit as D-2620 (one sentence, do not split it); branch on the code AND
+both names being strings, falling through to the static entry when either is absent — an older server
+does not carry them, and absence must permit rather than print `undefined`; tests BOTH ways, the
+without-names case being the one such fixes usually forget; and the mutation checked against the two
+standing questions from D-2615 (exactly one thing changed, suite reaches the assertion).
+
+**D-2621 issued** (floor 2622), mail 808, status 806 acked.
+
+**Nine findings. The coordinator has now been wrong twice** — the stale-tree ruling, and this lean toward
+deferral — and both times the correction came from measuring rather than from being challenged. Worth
+keeping: a scope ruling is a claim about COST, and cost is measurable; I had guessed at it.
