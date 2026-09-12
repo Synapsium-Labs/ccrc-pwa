@@ -826,12 +826,39 @@ describe('the home card lists the waves running abroad', () => {
 
   it('does not draw the abroad run into the tree — nestFleet is called with `runs` alone', () => {
     // The run names `demo-quiet-mesa` as its coordinator, which IS on this card.
-    // If the abroad list ever reached `nestFleet`, a pending/settled child would
-    // appear under that session for a workspace that is not in this repo.
+    // If the abroad list ever reached `nestFleet`, a pending child would appear
+    // under that session for a workspace that is not in this repo. Shaped
+    // PENDING (`state: 'planned'` plus a stamp) rather than left at `away`'s
+    // default `dispatched`, because `dispatchWindow` answers `none` for any
+    // non-`planned` state regardless of what `nestFleet` was handed — the
+    // shared `away` fixture cannot exercise this path at all, so this case
+    // builds its own pending-shaped run rather than touching `away` itself
+    // (D-2581; a first ruling that this fixture alone would be a complete
+    // witness was wrong — see the sibling case below for the half it missed).
+    const pendingAway: RunSummary = { ...away, state: 'planned', dispatchStartedAt: FROZEN - 1_000 };
     const { container } = render(
-      <ProjectCard group={grp()} runs={[]} abroad={[away]} nowMs={FROZEN}
+      <ProjectCard group={grp()} runs={[]} abroad={[pendingAway]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
     expect(container.querySelector('.proj-pending')).toBeNull();
+  });
+
+  it('does not draw the abroad run into the tree via the SETTLED path either — a shared session id must not bracket it (D-2581)', () => {
+    // `nestFleet`'s settled path keys ONLY on `sessionId`/`claimedBy` being on
+    // THIS card's session list — it never reads the run's own `project`. An
+    // abroad run whose `sessionId` happens to name a session already on this
+    // card is not a hypothetical: nothing in `pwa/` enforces "a run's worker
+    // session lives in the run's own project" (that invariant, if it holds at
+    // all, is a SERVER fact, and this component may not lean on it — the same
+    // lean D-2576 was minted for, one layer out). Without this case the guard
+    // above proved only the pending half; this one is the settled half, and it
+    // is the one that is actually reachable and observably regresses (measured
+    // RED under the abroad-into-nestFleet mutation, GREEN against the shipped
+    // tree — D-2581).
+    const settledAway = { ...away, sessionId: 'demo-still-cove' };
+    const { container } = render(
+      <ProjectCard group={grp({ sessions: [sess(), worker] })} runs={[]} abroad={[settledAway]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-nest')).toBeNull();
   });
 });

@@ -490,12 +490,18 @@ export function FleetScreen({
                    unbracketed: a `└─` never crosses two cards. */
                 runs={activeRuns.filter((r) => r.project === g.project)}
                 /* The SECOND list (spec §3 F4): the runs this project is the
-                   HOME of, working somewhere else. It is the exact complement
-                   of the filter above — that one asks where the work is, this
-                   one asks whose programme it is — and the two never merge,
-                   because only the first may reach `nestFleet`. `runHomeProject`
-                   rather than `r.homeProject`, for the reason its own docstring
-                   gives: an older server omits the key and `undefined !== g.project`
+                   HOME of, working somewhere else. NOT the exact complement of
+                   the filter above (D-2582): a run homed on a third project
+                   and working on a fourth is in NEITHER of this card's lists,
+                   and a crossing run appears in `runs` on the working card and
+                   in `abroad` on the home card — two different cards' lists —
+                   so there is no partition across cards either; the two
+                   filters are merely disjoint on this one card. What is true:
+                   that one asks where the work is, this one asks whose
+                   programme it is — and the two never merge, because only the
+                   first may reach `nestFleet`. `runHomeProject` rather than
+                   `r.homeProject`, for the reason its own docstring gives: an
+                   older server omits the key and `undefined !== g.project`
                    would put every run on every card. */
                 abroad={activeRuns.filter(
                   (r) => runHomeProject(r) === g.project && r.project !== g.project)}
