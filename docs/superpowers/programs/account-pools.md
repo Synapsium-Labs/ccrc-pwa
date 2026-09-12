@@ -3596,3 +3596,73 @@ named branch sitting at `origin/main`. **Measured before deciding:** `shared/bui
 would cost a second supervisor sweep across 26 live sessions for a cosmetic field — not a trade worth
 making. **Deploy from a DETACHED HEAD at `origin/main` next time** and the label reads `HEAD` again.
 
+
+---
+
+## 2026-09-12 — the follow-up PR: the guard I shipped inside the fix (D-2588)
+
+`test-macos` on `79d6d045` completed **success** at 16:54:56Z — measured, not assumed. That leg does not
+gate, and this change was the riskiest possible surface for it (bash 3.2, BSD collation), which is why it
+was watched rather than waved through. All five legs green.
+
+### The defect
+
+PR #88's review round turned two `guards the guard` cases from hard failures into skips, because a box
+whose only UTF-8 locale is `C.utf8` cannot exhibit D-2522 and must not go red for a tree with nothing
+wrong with it. **The replacement guard asserted a different property from the one its own comment
+claims.** The comment says a null from `localeWhere` "must mean 'this box has no such locale' and never
+'the probe is broken'"; the assertion was `expect(localeWhere('echo yes')).not.toBeNull()`, which cannot
+tell those apart. On a box whose `locale -a` lists no UTF-8 locale at all — the exact host the skip
+exists for — the honest answer reds.
+
+**This is the same class one seam over.** The first version collapsed "cannot show the property" into
+RED; its replacement collapsed "cannot show the property" into "the machinery is broken". Fixing a fold
+by moving it is the failure mode this program keeps finding in its own fix rounds.
+
+### Measured, not argued
+
+The condition is unreachable on any box in this fleet, so it was **constructed**: a shim on `PATH` whose
+`locale -a` prints only `C` and `POSIX`, which is what a minimal container really reports.
+
+| run | before the fix | after |
+|---|---|---|
+| this box (3 UTF-8 locales) | 108 passed | **114 passed** |
+| simulated box, no UTF-8 locale | **1 FAILED**, 29 skipped, 78 passed | **0 failed**, 29 skipped, 85 passed |
+
+The 29 skipping correctly while the guard alone failed is the whole shape of the defect: every
+host-gated row behaved, and the case whose job was to certify those skips was the one that broke.
+
+### What the fix is
+
+`probeVerdict(candidates, found)` — four conditions, four values: `found`, `no-locale-tool`,
+`no-utf8-locale`, `probe-broken`. Only the last is a defect here. The candidate list is enumerated once
+into `UTF8_LOCALES`, because the old `localeWhere` threw away the very list the question needs.
+
+**And it is fed LITERALS.** A guard derived from the environment can only exercise the arm the running
+box happens to be in, so the arm that matters elsewhere ships unexecuted on every box that ships it.
+Lifting the decision into a pure function lets one table drive all four arms everywhere. That is this
+program's own `a-derived-guard-is-only-testable-where-it-runs`, applied to the guard rather than to its
+subject — the lesson had been learned about the SUBJECT and not yet about the guard.
+
+### Mutation
+
+| mutation | this box | what failed |
+|---|---|---|
+| none | GREEN 114 | — |
+| `no-utf8-locale` arm → `probe-broken` (**the shipped fold**) | RED (2) | the `[] + null` row, distinctness |
+| `no-locale-tool` arm → `no-utf8-locale` | RED (2) | the `null + null` row, distinctness |
+| `probe-broken` arm → `found` (guard stops guarding) | RED (2) | the `probe-broken` row, distinctness |
+| **control:** `localeWhere` always null while locales ARE listed | RED (1) | **the guard itself** |
+
+The control is the row that matters, because the fix **weakens** an assertion. It still fires on real
+machinery failure, naming the count it measured: "this box LISTS 3 UTF-8 locale(s) and `echo yes` still
+found none under any of them". And the shipped fold re-run under the shim reproduces the original red
+exactly (3 failed, 29 skipped) — joined by the two literal-fed rows, which is what makes it catchable
+on a box that cannot host the condition.
+
+### A protocol slip the tree caught
+
+`deviation-refs.test.ts` went red: D-2588 was allocated and written into a test COMMENT but not yet
+DEFINED in a plan, so the floor seed would have jumped to 2638 and burned the band 2547–2587 forever.
+CLAUDE.md's rule is allocate and define **in the same act**, and the number written without being
+defined seals its own band. Defined in the wave's plan; green.
