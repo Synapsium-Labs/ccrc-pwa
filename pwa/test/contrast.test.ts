@@ -1337,6 +1337,23 @@ describe('the three well-trap rules the blocker was found in', () => {
   });
 });
 
+// ── account-pool project-card cells ─────────────────────────────────────────
+describe('the pool chip and stranded count are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .proj-card-pool', 'var(--ink-tertiary)'],
+    ["fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
+    ['fleet.css .proj-card-stranded', 'var(--status-attention-text)'],
+  ])('%s is grounded on the project card', (key, ink) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 // ── §1.6b's new coloured meta cell ──────────────────────────────────────────
 describe('the spawn chip is measured, not left in the blind spot', () => {
   it('measures the spawn chip rather than leaving it in the uncovered census', () => {

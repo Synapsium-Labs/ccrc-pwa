@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type ProjectRow, type RunSummary } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -339,6 +339,199 @@ describe('FleetScreen', () => {
     expect(screen.queryByText('OpenClawHetzner moved to team·alt')).not.toBeInTheDocument();
   });
 
+  describe('project-specific placement refresh', () => {
+    const projectRows = (projects: ProjectRow[]) => Promise.resolve({ roots: [], projects });
+
+    it('loads placements on mount and matches each row to its project card', async () => {
+      vi.spyOn(api, 'projects').mockImplementation(() => projectRows([
+        { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        { name: 'beta', workdir: '/beta', placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
+      ]));
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        sessions: [session({ id: 'a', project: 'alpha' }), session({ id: 'b', project: 'beta' })],
+      });
+
+      expect(await screen.findByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
+        .toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'New workspace on beta — team·max, 82% free' }))
+        .toBeInTheDocument();
+    });
+
+    it('refreshes on each new pools-frame object, but not on unrelated store updates', async () => {
+      const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+
+      seed(store, { conn: 'open' });
+      expect(projects).toHaveBeenCalledTimes(1);
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(3));
+    });
+
+    it('never timer-polls the O(N) projects route', () => {
+      vi.useFakeTimers();
+      try {
+        const projects = vi.spyOn(api, 'projects').mockReturnValue(new Promise(() => {}));
+        const store = makeStore();
+        render(<FleetScreen store={store} />);
+        expect(projects).toHaveBeenCalledTimes(1);
+        act(() => {
+          vi.advanceTimersByTime(120_000);
+          window.dispatchEvent(new Event('focus'));
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(projects).toHaveBeenCalledTimes(1);
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+
+    it('refreshes after a successful workspace add, but not after a failed one', async () => {
+      const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+      const add = vi.spyOn(api, 'workspaceAdd')
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('refused'));
+      const store = makeStore();
+      render(<><FleetScreen store={store} /><ToastHost /></>);
+      seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+      await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+      await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByText(/refused/)).toBeInTheDocument());
+      expect(projects).toHaveBeenCalledTimes(2);
+    });
+
+    it('makes no account claim while pending or after the project request fails', async () => {
+      let reject!: (error: Error) => void;
+      vi.spyOn(api, 'projects').mockImplementation(
+        () => new Promise((_resolve, fail) => { reject = fail; }),
+      );
+      vi.spyOn(api, 'accounts').mockResolvedValue({
+        accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+      await act(async () => { reject(new Error('offline')); });
+      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+    });
+
+    it('drops a prior account claim while a refresh is pending and after it fails', async () => {
+      let rejectRefresh!: (error: Error) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockResolvedValueOnce({ roots: [], projects: [
+          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        ] })
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+      vi.spyOn(api, 'accounts').mockResolvedValue({
+        accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+      expect(await screen.findByRole('button', {
+        name: 'New workspace on alpha — team·alt, 91% free',
+      })).toBeInTheDocument();
+
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+
+      await act(async () => { rejectRefresh(new Error('offline')); });
+      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+    });
+
+    it('distinguishes a missing row from an old-server row that omitted placement', async () => {
+      vi.spyOn(api, 'projects').mockResolvedValue({
+        roots: [], projects: [{ name: 'legacy', workdir: '/legacy' }],
+      });
+      vi.spyOn(api, 'accounts').mockResolvedValue({
+        accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+        sessions: [
+          session({ id: 'a', project: 'legacy' }),
+          session({ id: 'b', project: 'missing' }),
+        ],
+      });
+
+      expect(await screen.findByRole('button', {
+        name: 'New workspace on legacy — team·max, 82% free',
+      })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'New workspace on missing' })).toBeInTheDocument();
+    });
+
+    it('keeps the newest placement when overlapping refreshes resolve out of order', async () => {
+      let resolveFirst!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+        .mockResolvedValueOnce({ roots: [], projects: [
+          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        ] });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        sessions: [session({ id: 'a', project: 'alpha' })],
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
+        .toBeInTheDocument();
+      await act(async () => { resolveFirst({ roots: [], projects: [
+        { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
+      ] }); });
+      expect(screen.getByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
+        .toBeInTheDocument();
+    });
+
+    it('keeps the newest placement when an older refresh rejects late', async () => {
+      let rejectFirst!: (error: Error) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+        .mockResolvedValueOnce({ roots: [], projects: [
+          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        ] });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        sessions: [session({ id: 'a', project: 'alpha' })],
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
+        .toBeInTheDocument();
+      await act(async () => { rejectFirst(new Error('stale failure')); });
+      expect(screen.getByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
+        .toBeInTheDocument();
+    });
+  });
+
   it('creates a workspace on the tapped project', async () => {
     const calls: string[] = [];
     vi.spyOn(api, 'workspaceAdd').mockImplementation(async (p: string) => {
@@ -572,6 +765,9 @@ describe('FleetScreen', () => {
           return new Response(JSON.stringify(wsAudit), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         if (String(url).includes('/api/accounts')) return accountsRoute();
+        if (String(url).includes('/api/projects')) {
+          return new Response(JSON.stringify({ roots: [], projects: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -608,6 +804,9 @@ describe('FleetScreen', () => {
             { status: 200, headers: { 'content-type': 'application/json' } });
         }
         if (String(url).includes('/api/accounts')) return accountsRoute();
+        if (String(url).includes('/api/projects')) {
+          return new Response(JSON.stringify({ roots: [], projects: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
@@ -670,6 +869,9 @@ describe('FleetScreen', () => {
           return new Promise<Response>((resolve) => { resolveBravoAudit = resolve; });
         }
         if (String(url).includes('/api/accounts')) return accountsRoute();
+        if (String(url).includes('/api/projects')) {
+          return new Response(JSON.stringify({ roots: [], projects: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();

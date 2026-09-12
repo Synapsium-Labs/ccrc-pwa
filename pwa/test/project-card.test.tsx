@@ -3,6 +3,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import type { ProjectPlacementRead } from '../src/fleet/ProjectCard';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
@@ -722,6 +723,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('names only the accounts the project\'s pool admits', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
+                        placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }}
                         roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const btn = screen.getByRole('button', { name: /New workspace on demo/ });
@@ -732,9 +734,75 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('says the pool is empty rather than listing nobody', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
+                        placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }}
                         roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
       .toBeInTheDocument();
+  });
+
+  it('uses the project placement over a truthy out-of-pool global projection (D-2643)', () => {
+    const placement: ProjectPlacementRead = {
+      kind: 'measured',
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    };
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={{ wrapper: 'claude', score: 18 }} placement={placement}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    const button = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(button).toHaveAccessibleName('New workspace on demo — team·alt, 91% free');
+    expect(button.getAttribute('aria-label')).not.toContain('team·max');
+  });
+
+  it('preserves measured none and unmeasurable without falling back to the global projection', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 },
+      roster: pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }),
+      pools: { listed: true, byProject: { demo: { state: 'tagged' as const, name: 'pool-b' } }, enforcement: 'enforced' as const },
+    };
+    const { rerender } = render(
+      <ProjectCard {...common} placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }} />,
+    );
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
+      .toContain('nothing in pool pool-b is placeable');
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
+      .not.toContain('team·max, 82% free');
+
+    rerender(<ProjectCard {...common} placement={{ kind: 'measured', placement: { kind: 'unmeasurable' } }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
+
+    rerender(<ProjectCard {...common} projected={null}
+                          placement={{ kind: 'measured', placement: { kind: 'unmeasurable' } }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
+  });
+
+  it('uses the legacy global projection only where the project pool does not narrow it', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+      placement: { kind: 'legacy' as const },
+    };
+    const { rerender } = render(<ProjectCard {...common} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
+
+    rerender(<ProjectCard {...common}
+                          pools={{ listed: true, byProject: {}, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
+
+    rerender(<ProjectCard {...common}
+                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
+
+    rerender(<ProjectCard {...common} projected={null}
+                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
   });
 });

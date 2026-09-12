@@ -517,6 +517,18 @@ export const SELF_GROUNDED_EXEMPT = {
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  'fleet.css .proj-card-pool': {
+    under: ['var(--bg-surface)'],
+    why: 'the project-pool chip sits in .proj-card-head on the project card. Its selector names no ancestor and sets no ground, so the auditor cannot recover the card background from CSS alone',
+  },
+  "fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']": {
+    under: ['var(--bg-surface)'],
+    why: 'every attention-state project-pool chip uses the same project-card ground as the base chip. The grouped selector changes the ink but still names no painted ancestor, so it needs its own registration',
+  },
+  'fleet.css .proj-card-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded count sits in .proj-card-head on the project card and inherits that surface. Its selector names no painted ancestor, leaving this attention ink in the uncovered census without this entry',
+  },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",

@@ -899,6 +899,7 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
   it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
     expect(declValue(ruleFor('.proj-card-pool'), 'cursor')).toBeNull();
     expect(declValue(ruleFor('button.proj-card-pool'), 'cursor')).toBe('pointer');
+    expect(css).not.toMatch(/\.proj-card-pool\[data-dim\]\s*\{/);
   });
 
   it('paints the worklist, both bad-tag states, and unrecognised residue in audited attention ink', () => {
@@ -911,7 +912,7 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
   });
 
   it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
-    expect(declValue(ruleFor('.proj-card-pool[data-dim]'), 'opacity')).toBeNull();
+    expect(css).not.toMatch(/\.proj-card-pool\[data-dim\][^}]*opacity\s*:/s);
   });
 
   it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {

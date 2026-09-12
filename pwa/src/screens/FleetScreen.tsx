@@ -3,7 +3,7 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -17,7 +17,7 @@ import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectCard } from '../fleet/ProjectCard';
+import { ProjectCard, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
 import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
@@ -30,7 +30,7 @@ import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscr
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 /** Section-header noun for each bucket — a heading register, not the row's
@@ -141,11 +141,46 @@ export function FleetScreen({
   // used to allow — and a settle that runs out is now a REPORT against a
   // workspace that exists, is claimed and is supervised, not an orphan.
   const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
+
+  // `/api/projects` performs one agent round trip per project, so this lifecycle
+  // has no timer. The frame identity is its invalidation signal; a successful
+  // add is the only imperative refresh. Generations keep late responses from
+  // overwriting a newer measurement.
+  const projectRequest = useRef(0);
+  const [projectRows, setProjectRows] = useState<
+    | { kind: 'pending' }
+    | { kind: 'failed' }
+    | { kind: 'ready'; rows: readonly ProjectRow[] }
+  >({ kind: 'pending' });
+  const refreshProjects = useCallback(async (): Promise<void> => {
+    const request = ++projectRequest.current;
+    setProjectRows({ kind: 'pending' });
+    try {
+      const response = await api.projects();
+      if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
+    } catch {
+      if (request === projectRequest.current) setProjectRows({ kind: 'failed' });
+    }
+  }, []);
+  useEffect(() => {
+    void refreshProjects();
+  }, [pools, refreshProjects]);
+
+  const placementFor = (project: string): ProjectPlacementRead => {
+    if (projectRows.kind !== 'ready') return projectRows;
+    const row = projectRows.rows.find((candidate) => candidate.name === project);
+    if (row === undefined) return { kind: 'missing' };
+    return Object.hasOwn(row, 'placement') && row.placement !== undefined
+      ? { kind: 'measured', placement: row.placement }
+      : { kind: 'legacy' };
+  };
+
   const addWorkspace = async (project: string): Promise<void> => {
     if (adding.has(project)) return;
     setAdding((s) => new Set(s).add(project));
     try {
       await api.workspaceAdd(project);
+      void refreshProjects();
     } catch (err) {
       toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
     } finally {
@@ -480,6 +515,7 @@ export function FleetScreen({
                 selectedId={selectedId}
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
+                placement={placementFor(g.project)}
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}

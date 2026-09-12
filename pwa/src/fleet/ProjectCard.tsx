@@ -14,7 +14,7 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { poolLabelList, projectPoolOf } from '../lib/pools';
 import { navigate } from '../lib/router';
@@ -52,6 +52,16 @@ export const NEST_BRACKET = '└─';
  *
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
+
+/** One project's authoritative placement read. Request state, row absence and
+ *  legacy omission stay distinct so the card never turns ignorance into a
+ *  per-account claim. */
+export type ProjectPlacementRead =
+  | { kind: 'pending' }
+  | { kind: 'failed' }
+  | { kind: 'missing' }
+  | { kind: 'legacy' }
+  | { kind: 'measured'; placement: ProjectPlacement };
 
 /** The project's pool as one chip. Absence is handled by the caller: no frame
  *  means no claim. Unrecognised residue means this app is older than the fleet,
@@ -134,6 +144,7 @@ export function ProjectCard({
   selectedId = null,
   onAddWorkspace,
   projected,
+  placement = { kind: 'legacy' },
   adding = false,
   collapsed = false,
   onToggle,
@@ -158,6 +169,9 @@ export function ProjectCard({
    *  (every home-able lane disabled) — collapsing the two would let "I don't
    *  know yet" and "the fleet says no" render the identical claim. */
   projected?: ProjectedHome | null;
+  /** The matching `/api/projects` row's server-computed placement, with every
+   *  way that read can be unavailable kept explicit. */
+  placement?: ProjectPlacementRead;
   /** This project's own ws-add is in flight. ccd DOES serialise concurrent
    *  ws-adds per project now (a `flock -n` in `cmd_ws_add`, refusing with
    *  `busy: …`), so this is a courtesy that saves a round trip — see
@@ -198,26 +212,32 @@ export function ProjectCard({
    *  which is the correct degrade for a card nobody is ticking. */
   nowMs?: number;
 }): ReactNode {
-  // Headroom, not load: "91% free" is the question being asked ("can this
-  // workspace actually run?"), and the answer stays legible when the score is
-  // above the swap ceiling — which ccd's rule permits, since it returns the
-  // least-loaded account even when every account is pinned.
-  const headroom = projected ? 100 - projected.score : null;
-
   // The project's pool is derived from the fleet-level frame by name, never
   // carried per session. `null` means nobody has told this bundle anything.
   const pool = projectPoolOf(pools, group.project);
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
 
-  // Three JS values still mean three placement facts. `poolLabelList` is the
-  // pooled form of the established account list and is byte-identical whenever
-  // no readable named project pool narrows the candidates. A known empty named
-  // pool has its own sentence instead of a missing list mid-clause.
+  // A legacy server's global projection is honest only while no readable tag
+  // narrows the project. Pending/failed/missing reads make no account claim.
+  const legacySafe = pool === null || pool.state === 'untagged';
+  const forecast = placement.kind === 'measured' && placement.placement.kind === 'projected'
+    ? placement.placement
+    : placement.kind === 'legacy' && legacySafe
+      ? projected
+      : undefined;
+
+  // Headroom, not load: "91% free" is the question being asked ("can this
+  // workspace actually run?"), and the answer stays legible when the score is
+  // above the swap ceiling — which ccd's rule permits, since it returns the
+  // least-loaded account even when every account is pinned.
+  const headroom = forecast ? 100 - forecast.score : null;
   const placeableNames = poolLabelList(roster, pool);
-  const addLabel = projected
-    ? `New workspace on ${group.project} — ${accountLabel(roster, projected.wrapper)}, ${headroom}% free`
-    : projected === null
+  const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
+  const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
+  const addLabel = forecast
+    ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
+    : measuredNone || legacyNone
       ? poolName === null
         ? placeableNames === ''
           ? `New workspace on ${group.project} — all disabled`
@@ -343,12 +363,10 @@ export function ProjectCard({
           <button
             type="button"
             className="proj-card-add"
-            /* The projection lives in the accessible name and the tooltip, not
-               in the layout: it is the SAME string on every card (where the
-               next workspace lands is global, not per project), it was 41% of
-               this header's width, and it was clipped in the desktop sidebar.
-               The headroom % is dropped from the visible UI entirely — the
-               accounts strip above says it, for every account, in more detail. */
+            /* The project-specific forecast lives in the accessible name and
+               tooltip, not in the layout: its visible form took 41% of this
+               header and clipped in the desktop sidebar. The accounts strip
+               above already shows headroom for every account in more detail. */
             aria-label={addLabel}
             title={addLabel}
             onClick={() => onAddWorkspace(group.project)}
