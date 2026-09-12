@@ -237,28 +237,31 @@ export function MailScreen({
         <p className="mail-empty" data-state="ok">Nothing yet.</p>
       ) : (
         <>
-          {shown.map(([key, g]) => (
-            <div key={key} className="mail-group">
-              <p className="mail-group-head">{g.head}</p>
-              <ul className="mail-list">
-                {g.rows.map((ev) => (
-                  <li
-                    key={recordKey(ev)}
-                    className="mail-row"
-                    data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
-                  >
-                    <span className="mail-kind">
-                      <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
-                      {KIND_WORD[ev.kind]}
-                    </span>
-                    <span className="mail-row-title">{ev.title}</span>
-                    <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
-                    {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          {shown.map(([key, g]) => {
+            const headingId = `mail-group-${encodeURIComponent(key)}`;
+            return (
+              <div key={key} className="mail-group">
+                <p id={headingId} className="mail-group-head">{g.head}</p>
+                <ul className="mail-list" aria-labelledby={headingId}>
+                  {g.rows.map((ev) => (
+                    <li
+                      key={recordKey(ev)}
+                      className="mail-row"
+                      data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
+                    >
+                      <span className="mail-kind">
+                        <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
+                        {KIND_WORD[ev.kind]}
+                      </span>
+                      <span className="mail-row-title">{ev.title}</span>
+                      <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
+                      {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
         </>
       )}
     </div>
