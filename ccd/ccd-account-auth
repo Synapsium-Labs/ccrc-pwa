@@ -290,8 +290,33 @@ _auth_close_pipes() {
 }
 
 # ── the pump ──────────────────────────────────────────────────────────────
-_auth_line() {   # <raw line from the child> — classify, substitute, forward
-  local raw="$1" clean url
+_auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never on stdout
+  # ONLY while the child has actually asked. Forwarding earlier would put a
+  # line into a stdin the child is not reading yet, and the code is single-use.
+  [[ "$AUTH_STATE" == waiting-code ]] || return 0
+  local code=''
+  # A NON-BLOCKING PEEK, then a real read. `read -t 0` answers "is there input
+  # on this descriptor" WITHOUT consuming it, so a tick with nothing waiting
+  # costs nothing and the pump keeps forwarding the child's own output while
+  # the operator reads the URL. Without the peek this call spends a whole TICK
+  # blocked on fd 7 every time round the loop, which halves the rate at which
+  # the child's stream reaches the pane for the entire minutes-long wait.
+  IFS= read -t 0 -u 7 2>/dev/null || return 0
+  IFS= read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
+  [[ -n "$code" ]] || return 0
+  # NOTHING NAMED THE CODE REACHES A STREAM. It goes down fd 9 and nowhere
+  # else; the pane and the transcript get the substitution line instead — the
+  # same policy the token capture applies, applied here to a value that is not
+  # even a secret, because a CALLER cannot tell the two apart and the surfaces
+  # this stdout feeds (tmux scrollback, the terminal drawer, `Dialog.raw`, the
+  # push payload) are the same surfaces either way.
+  printf '%s\n' "$code" >&9 || _auth_die 'could not forward the code to the child'
+  printf '[code written to stdin by ccrc — not shown]\n'
+  _auth_state exchanging
+}
+
+_auth_line() {   # <raw line from the child> [prefix already classified] — classify, substitute, forward
+  local raw="$1" already="${2-}" clean url fresh
   # CARRIAGE RETURN FIRST, and it is not cosmetic. Two of the three methods
   # run their child under `script(1)`, which gives it a pty — and a tty's line
   # discipline translates NL to CR-NL on output. `read -r` splits on NL only,
@@ -302,6 +327,8 @@ _auth_line() {   # <raw line from the child> — classify, substitute, forward
   # method — Task 54's token capture is where deleting it goes red.
   clean="${raw%$'\r'}"
   clean="$(_auth_strip_osc8 "$clean")"
+  already="${already%$'\r'}"
+  [[ -z "$already" ]] || already="$(_auth_strip_osc8 "$already")"
   # THE TOKEN BRANCH IS FIRST, unconditionally, so no later branch can print a
   # line that carries one. It ships as `return 1` and a later task gives it
   # eyes; here it never fires, and a `command not found` in its place would put
@@ -314,7 +341,21 @@ _auth_line() {   # <raw line from the child> — classify, substitute, forward
   if [[ -z "$AUTH_URL" ]] && url="$(_auth_url_of "$clean")"; then
     AUTH_URL="$url"; _auth_state url
   fi
-  case "$clean" in
+  # CLASSIFY ONLY WHAT IS NEW. A partial the pump already forwarded comes back
+  # with its completion appended — `Paste code here if prompted > ` then, once
+  # the code has gone down fd 9 and the child has answered, the same text plus
+  # `done`. Re-running the prompt match over a prefix that was matched a tick
+  # ago walks the machine BACKWARDS from `exchanging` to `waiting-code`,
+  # telling every watcher the child is asking for a second code it never asked
+  # for. MEASURED before this guard: the observed sequence was
+  # starting, url, exchanging, waiting-code, done.
+  #
+  # A prefix, not a latch, because a re-prompt after a WRONG code is a real
+  # thing and must still be seen: that arrives as text this line did not
+  # already carry, so it lands in `fresh` and fires normally.
+  fresh="$clean"
+  [[ -n "$already" && "$clean" == "$already"* ]] && fresh="${clean#"$already"}"
+  case "$fresh" in
     *'Paste code here'*|*'Enter the code'*) _auth_state waiting-code ;;
   esac
   _auth_user_code "$clean"
@@ -327,7 +368,7 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
     line=''
     IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
     if (( rc == 0 )); then
-      _auth_line "$pending$line"; pending=''; shown=''
+      _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
       # A TIMEOUT, and this branch is the whole reason `read -t` is here: bash
       # saves whatever arrived WITHOUT a newline into the variable, so
@@ -336,17 +377,28 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       # tick; a partial that later completes IS forwarded again with its full
       # text, deliberately, because the alternative is holding back output the
       # operator is waiting to see.
+      # EVERY TICK, not only the tick that emitted the prompt. `_auth_line`
+      # sets `waiting-code`, and `_auth_line` fires ONCE per distinct partial
+      # (the `shown` guard below) — so a forward attached to that one call
+      # would get exactly one chance, on the tick before the operator had even
+      # seen the URL. The code arrives minutes later.
+      #
+      # AND IT RUNS BEFORE `_auth_line`, NOT AFTER. Ordering the two the other
+      # way publishes `waiting-code` and `exchanging` inside the same pump
+      # iteration, microseconds apart, whenever a code is already waiting — so
+      # `waiting-code` exists but is never visible to anything sampling the
+      # file, which is every consumer this state machine has. Running the
+      # forward first puts a whole tick between them: the operator (and the
+      # test that measures the order) sees the machine ask before it sees it
+      # answer.
+      _auth_forward_code
       pending="$pending$line"
       if [[ -n "$pending" && "$pending" != "$shown" ]]; then
-        _auth_line "$pending"; shown="$pending"
+        _auth_line "$pending" "$shown"; shown="$pending"
       fi
-      # THE CODE FORWARD GOES HERE, one task later. Nothing reads fd 7 yet, and
-      # that is deliberate rather than an omission: the channel and its reader
-      # are two separable facts, and a reader shipped one task early would make
-      # that task's first test green before its mechanism existed.
     else
       # rc 1 = EOF: the child closed its stream.
-      [[ -n "$pending$line" && "$pending$line" != "$shown" ]] && _auth_line "$pending$line"
+      [[ -n "$pending$line" && "$pending$line" != "$shown" ]] && _auth_line "$pending$line" "$shown"
       return 0
     fi
   done

@@ -18947,3 +18947,70 @@ the lane launcher instead of the upstream one (4 red), the expiry collapsed into
 `waiting-code` branch, the signal trap, the credential check, `_auth_close_pipes` reverted to the plan's
 form (D-2562), fd 9 opened read-only instead of read-write (6 red), and first-wins made last-wins
 (D-2566).
+
+### D-2568 — the case named for a walk asserts no order, and the gate it should have pinned was an equivalent mutant
+
+Task 53's second case is named `walks starting -> url -> waiting-code -> exchanging -> done, and says
+exchanging on stdout`, and its whole body is one assertion: that the substitution line appears on stdout.
+It measures no order at all.
+
+That matters because ORDER is the entire content of `_auth_forward_code`'s first line,
+`[[ "$AUTH_STATE" == waiting-code ]] || return 0`. Measured: deleting that gate leaves all five of the
+task's cases GREEN, because the plan's feeder waits for `"state":"waiting-code"` before it writes — so
+in every fixture the task ships, there is never a code waiting early, and gated and ungated are
+indistinguishable.
+
+Added `holds an early code until the child asks`: a feeder that writes the moment the FIFO exists (the
+operator who already had the code, or a wave-2 route replaying one), an async `spawn`, and a poller that
+records each distinct state as it appears. It asserts `waiting-code` is published before `exchanging`,
+and — separately — that the machine does not go BACK (D-2569). The gate mutation is now red.
+
+### D-2569 — the completed line is classified twice, and the machine walks backwards from exchanging to waiting-code
+
+The first run of D-2568's new case failed against the SHIPPED code, not against a mutant, with the
+observed sequence:
+
+```
+["starting","url","exchanging","waiting-code","done"]
+```
+
+`waiting-code` after `exchanging`. The cause is in `_auth_pump`'s partial handling.
+`Paste code here if prompted > ` arrives with no newline, so it is forwarded from the timeout branch and
+recorded in `shown`. When the child finally answers, the rest of that line arrives and the pump calls
+`_auth_line "$pending$line"` — the prompt text PLUS the completion. `_auth_line` then re-runs
+`case "$clean" in *'Paste code here'*` over a prefix it matched a tick earlier and publishes
+`waiting-code` again, telling every watcher the child is asking for a second code it never asked for.
+A wave-2 route reading that file would act on it.
+
+Fixed by classifying only what is NEW: the pump passes what it already showed, and `_auth_line` matches
+the prompt against `fresh="${clean#"$already"}"`. **A prefix, not a latch**, deliberately — a re-prompt
+after a WRONG code is a real thing and must still be seen, and that arrives as text the line did not
+already carry. Pinned: `fresh="$clean"` reds the new case on the `lastIndexOf` assertion.
+
+`indexOf` alone could not have caught this — a return to `waiting-code` leaves the first index exactly
+where it was — which is why the case carries both.
+
+### D-2570 — two green mutations on this task, and what each one means
+
+**`read -t 0 -u 7` → `read -r -t 0 -u 7 code` is an EQUIVALENT MUTANT.** bash's `read` with a zero
+timeout "returns immediately, without trying to read any data", so naming a variable changes neither the
+peek's effect nor the variable. Measured on this box:
+
+```
+$ ... exec 7<>fifo; printf 'hello\n' >&7
+  IFS= read -r -t 0 -u 7 v  -> rc=0  v=[<unset>]
+  IFS= read -r -t 1 -u 7 got -> rc=0 got=[hello]
+```
+
+The line stays in the pipe either way. Pinned at the source instead of chased with a test.
+
+**Moving `_auth_forward_code` back after `_auth_line` is a TIMING difference, not a sequence one, and it
+is green for that reason.** Both arrangements publish `waiting-code` before `exchanging`; the difference
+is that the plan's order publishes them inside the SAME pump iteration, microseconds apart, whenever a
+code is already waiting. A state that exists for microseconds does not exist for anything sampling the
+file, which is every consumer this machine has — and the symptom was a genuinely flaky test, failing
+with `waiting-code was never published` about a helper that had published it.
+
+**The fix went in the code, not the test.** `_auth_forward_code` now runs at the top of the timeout
+branch, so a whole tick separates the ask from the answer. Recorded as argued-green rather than pinned:
+the mutant's signal is probabilistic, and a test that reds it only sometimes is not a mechanism.

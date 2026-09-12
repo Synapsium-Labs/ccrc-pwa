@@ -479,3 +479,180 @@ describe('ccd-account-auth — the two states only a live run can show', () => {
     }
   }, 60_000);
 });
+
+describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothing', () => {
+  /** A bash FEEDER, not a node timer: it must block on `open(2)` of the FIFO
+   *  exactly as a real writer does, and it must not be racing vitest's event
+   *  loop while the helper holds the read end. It waits for the FIFO to exist,
+   *  then for the status file to say `waiting-code`, then writes one line —
+   *  which is precisely what a wave-2 route will do, and what `tmux send-keys`
+   *  does for a pane lane. */
+  const plantFeeder = (): string => {
+    const feeder = path.join(h.home, 'feed.sh');
+    fs.writeFileSync(feeder,
+      '#!/usr/bin/env bash\nset -uo pipefail\n'
+      + 'for _ in $(seq 1 300); do [ -p "$1" ] && break; sleep 0.1; done\n'
+      + 'for _ in $(seq 1 300); do\n'
+      + '  grep -q \'"state":"waiting-code"\' "$2" 2>/dev/null && break; sleep 0.1\n'
+      + 'done\n'
+      + 'printf \'%s\\n\' "$3" > "$1"\n', { mode: 0o755 });
+    return feeder;
+  };
+
+  const loginWithCode = (id: string, code: string): { code: number; stdout: string; stderr: string } => {
+    const feeder = plantFeeder();
+    const runIn = path.join(REG(h.home), '.auth', `${id}.run`, 'in');
+    const statusPath = path.join(REG(h.home), '.auth', `${id}.json`);
+    const script = `"${feeder}" "${runIn}" "${statusPath}" ${JSON.stringify(code)} & `
+      + `"${HELPER}" ${JSON.stringify(id)} login; rc=$?; wait; exit $rc`;
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home, timeout: 90_000,
+      // 6, NOT 45. `vitest.config.ts` sets a 20 s linux testTimeout, so a
+      // 45 s helper deadline would be killed by vitest before the helper's own
+      // deadline fires — the run reports a TIMEOUT rather than the assertion
+      // diff, and in the RED state (nothing reads fd 7) every case here runs
+      // to the full deadline.
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '6',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+        { systemd: true, tmux: true }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', ['-c', script], opts), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('forwards the code the operator typed, and reaches done', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = loginWithCode('claude-a', 'fixture-code-123');
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-code'), 'utf8')).toBe('fixture-code-123');
+    expect(status('claude-a')).toMatchObject({ state: 'done' });
+  });
+
+  it('walks starting -> url -> waiting-code -> exchanging -> done, and says exchanging on stdout', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = loginWithCode('claude-a', 'fixture-code-123');
+    expect(r.stdout).toContain('[code written to stdin by ccrc — not shown]');
+  });
+
+  it('never prints the code itself, on any stream or in the status file', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const canary = 'CANARY-CODE-9d3f1a';
+    const r = loginWithCode('claude-a', canary);
+    expect(r.stdout).not.toContain(canary);
+    expect(r.stderr).not.toContain(canary);
+    expect(JSON.stringify(status('claude-a'))).not.toContain(canary);
+  });
+
+  it('leaves the credential where Claude Code put it, and ccrc holds NOTHING', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    loginWithCode('claude-a', 'fixture-code-123');
+    const cred = path.join(h.home, '.claude-a', '.credentials.json');
+    expect(fs.existsSync(cred)).toBe(true);
+    expect(fs.statSync(cred).mode & 0o777).toBe(0o600);
+    // The custody claim, measured: a login lane has no secrets file, so there
+    // is no ccrc-held copy of anything. `ccrc account credential` answers
+    // `not-managed` on such a lane for exactly this reason.
+    expect(fs.existsSync(path.join(h.home, '.cc-secrets'))).toBe(false);
+    // …and the run directory's FIFOs are gone: nothing is left holding a pipe
+    // a later writer could block on forever.
+    const runDir = path.join(REG(h.home), '.auth', 'claude-a.run');
+    expect(fs.existsSync(path.join(runDir, 'in'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'in.child'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'out'))).toBe(false);
+  });
+
+  it('refuses done when the child exited 0 and wrote no credentials file', () => {
+    plantLauncher('claude',
+      '#!/usr/bin/env bash\n' + REPLAY_STREAM + 'IFS= read -r got\necho done\nexit 0\n');
+    const r = loginWithCode('claude-a', 'fixture-code-123');
+    expect(r.code).toBe(1);
+    expect(status('claude-a')).toMatchObject({ state: 'failed' });
+    expect(String(status('claude-a')['error'])).toContain('wrote no');
+  });
+});
+
+describe('ccd-account-auth — the walk is an order, not a set', () => {
+  // The case above is named "walks starting -> url -> waiting-code ->
+  // exchanging -> done" and asserts only that one substitution line appears.
+  // It never measures the ORDER, and order is the whole content of the
+  // `waiting-code` gate on `_auth_forward_code`: a code that arrives before
+  // the child has asked for it must WAIT, not be pushed into a stdin nobody
+  // is reading. With a feeder that writes the moment the channel exists,
+  // removing that gate publishes `exchanging` before `waiting-code` ever
+  // happens — and nothing here could see it.
+  const settle = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+
+  /** Enough dead air at the start for the pump to take at least one tick with
+   *  nothing pending (so an ungated forward has somewhere to fire), and enough
+   *  after the code is read that `exchanging` is observable to a poller. */
+  const SLOW_REPLAY =
+    '#!/usr/bin/env bash\n'
+    + 'sleep 0.6\n'
+    + 'printf %s "$CLAUDE_CONFIG_DIR" > "$HOME/seen-config-dir"\n'
+    + REPLAY_STREAM
+    + 'IFS= read -r got\n'
+    + 'printf %s "$got" > "$HOME/seen-code"\n'
+    + 'sleep 1.5\n'
+    + 'mkdir -p "$CLAUDE_CONFIG_DIR" && printf \'{"fixture":true}\' > "$CLAUDE_CONFIG_DIR/.credentials.json"\n'
+    + 'chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"\n'
+    + 'echo done\nexit 0\n';
+
+  it('holds an early code until the child asks — waiting-code is published before exchanging', async () => {
+    plantLauncher('claude', SLOW_REPLAY);
+    const runDir = path.join(REG(h.home), '.auth', 'claude-a.run');
+    // A feeder that writes AS SOON AS THE CHANNEL EXISTS, unlike the one
+    // above: this is the operator who already had the code, or a wave-2 route
+    // replaying one. It is the only fixture that can tell the gate apart from
+    // its absence.
+    const feeder = path.join(h.home, 'feed-early.sh');
+    fs.writeFileSync(feeder,
+      '#!/usr/bin/env bash\nset -uo pipefail\n'
+      + 'for _ in $(seq 1 600); do [ -p "$1" ] && break; sleep 0.05; done\n'
+      + 'printf \'%s\\n\' "$2" > "$1"\n', { mode: 0o755 });
+
+    const child = spawn('bash', ['-c',
+      `"${feeder}" "${path.join(runDir, 'in')}" early-code-777 & "${HELPER}" claude-a login; wait`], {
+      cwd: h.home,
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '25',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+        { systemd: true, tmux: true }),
+      stdio: 'ignore',
+    });
+    const seen: string[] = [];
+    try {
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        let now: string | null = null;
+        try { now = String(status('claude-a')['state']); } catch { now = null; }
+        if (now && now !== seen[seen.length - 1]) seen.push(now);
+        if (now === 'done' || now === 'failed' || now === 'expired') break;
+        await settle(25);
+      }
+    } finally {
+      child.kill('SIGKILL');
+    }
+    expect(seen, 'the run never reached a terminal state').toContain('done');
+    expect(seen, 'waiting-code was never published').toContain('waiting-code');
+    expect(seen, 'exchanging was never published').toContain('exchanging');
+    expect(seen.indexOf('waiting-code'),
+      `the code was forwarded before the child asked for it — observed ${JSON.stringify(seen)}`)
+      .toBeLessThan(seen.indexOf('exchanging'));
+    // …and it does not go BACK. `indexOf` alone cannot see that: the machine
+    // returning to `waiting-code` after `exchanging` leaves the first index
+    // exactly where it was. This fixture's child asks once, so any later
+    // `waiting-code` is the classifier re-reading text it already read — a
+    // watcher would be told to collect a second code that was never asked
+    // for, and a wave-2 route would act on it.
+    expect(seen.lastIndexOf('waiting-code'),
+      `the machine walked BACK to waiting-code after exchanging — observed ${JSON.stringify(seen)}`)
+      .toBeLessThan(seen.indexOf('exchanging'));
+    // …and the child really did get it, so the wait was a wait and not a drop.
+    expect(fs.readFileSync(path.join(h.home, 'seen-code'), 'utf8')).toBe('early-code-777');
+  }, 60_000);
+});
