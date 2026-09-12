@@ -4382,3 +4382,49 @@ Mutation instruction: drop the generation check **one arm at a time**, never all
 
 **D-2628..D-2630 issued** (floor 2631), mail 823, question 821 acked. **Fourteen deviations in one day,
 every one the plan.**
+
+---
+
+## 2026-09-12 14:48Z — D-2631: there is no opacity that works, so the INSTRUCTION is the defect
+
+Mail 824. Task 5's prescribed `opacity: 0.55` on `.proj-card-pool[data-dim]` fails
+`node design/contrast-check.mjs`. Reproduced with **the repo's own `ratio()`** from `design/audit.mjs`,
+so the numbers are the gate's numbers rather than mine:
+
+| | plain (dark/light) | @0.55 | |
+|---|---|---|---|
+| `--ink-tertiary` on `--bg-raised` | 5.27 / 4.86 | **2.54 / 2.15** | FAIL |
+
+Small divergence from the worker's figures (2.62 / 2.29) — almost certainly a different background
+chain. Identical verdict, and said so rather than blurring whose number is whose.
+
+**The number that settles it, which the worker did not compute.** Lowest opacity still clearing 4.5 in
+the worst theme: `--ink-tertiary` **≥ 0.97**, `--ink-secondary` ≥ 0.86, `--ink-primary` ≥ 0.63. So **any
+fade a human can SEE on that text is already below the floor.** That turns the question from "which
+opacity" into "not opacity" — which is why this was ruled rather than sent back to tune a number.
+
+**The obvious escape is closed too:** `--ink-disabled` measures **2.73 / 2.25 at FULL opacity**. It
+cannot carry the word either.
+
+**The trap named for the entry:** element `opacity` composites the WHOLE subtree — there is no "fade the
+chip but not its label". Only two honest routes: (a) no element opacity anywhere carrying text, express
+unavailability through a background/border COLOUR; or (b) element opacity only on a decorative sibling
+with no text, which can then carry a truthful `noText` entry.
+
+**`noText` refused explicitly.** The chip's entire content is the pool word; a `noText` entry would be a
+false statement in the one registry whose purpose is to make fades measurable — and that file's own
+doctrine says an unmeasurable fade *"is the state every defect this gate has ever missed was in"*.
+**Registering a lie to get a green gate is strictly worse than the red.**
+
+**Ruled: the PLAN'S INSTRUCTION is the defect** — "dim rather than recolour" cannot be honoured for text
+in this palette, because no ink survives a visible fade at this size. Not "the fade was too strong".
+
+**And dropping it is cheap**, which is worth recording so nobody re-adds it: the chip's unavailability is
+already carried three ways that cost no contrast — a `<span>` not a `<button>` (no tap affordance),
+`title` carrying `POOL_UNAVAILABLE_TEXT`, and D-2624 removing the contradicting `cursor: pointer`. The
+fade was reinforcement, never the only signal. Told the worker that if route (a) cannot clear in LIGHT,
+**ship without the visual dim** — three structural signals beat a fourth cue at the cost of readability.
+
+**D-2631 issued** (floor 2632), mail 825, question 824 acked. D-2623 core committed at `6cd67dc9`.
+
+**Fifteen deviations in one day, every one the plan.**
