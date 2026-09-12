@@ -4767,3 +4767,34 @@ out. And flagged one stale citation: `useProjectedHome.ts:19` cites `FleetScreen
 
 Mail 857, status 855 acked. The worker is holding implementation until the deviation reconciliation is
 committed — D-2632's rule applied without being told.
+
+## 2026-09-12 16:23Z — 96a9f37b verified; the union gate is now a standing check and has paid twice
+
+Worker mail 859: D-2636..D-2650 definitions committed before any further implementation, per D-2632.
+**Verified rather than accepted.** All seventeen present (2634..2650), definition high-water exactly
+**2650**.
+
+**Read the 22 DELETED lines, not just the 154 added.** They are the two `D-TBD-task-5-*` provisional
+entries being replaced by their issued D-2636/D-2637 entries — the correct lifecycle for a D-TBD: it is
+SUPERSEDED by the numbered entry, never left standing beside it. Worth stating because a definitions
+commit that deletes is the shape worth opening, and this is the second one today that turned out
+benign for a different reason.
+
+**Ran the union gate — red by exactly one, and the one is MINE:**
+
+> a tracked file names a global D-ref above the ledger high-water D-2650
+> (`docs/superpowers/programs/account-pools.md` names D-2651) — expected 2701 to be 2700
+
+D-2633's property behaving precisely as described: the coordinator's ledger cites a number at issue
+time, the worker's plan defines it, and the gap exists only in the union. One definition closes it.
+
+**The union gate has now run twice and been informative both times** — once proving the wave clean at
+2633 == 2633, once naming the single outstanding number. **Adopted as a standing check: run it after
+every worker definition commit**, since it is the only surface on which the coordinator's own ledger
+discipline is falsifiable (D-2633).
+
+**Two of my mails crossed 859 in flight**, so the worker is not blocked: 854 (D-2651 supersedes
+D-2650 — it was right, the fixtures already existed; Task 3 unblocked) and 857 (D-2636 option 1
+accepted with three constraints). Confirmed both are queued for delivery before saying so.
+
+Mail 861, status 859 acked.
