@@ -691,5 +691,63 @@ describe('the orphan worker says which programme it belongs to', () => {
       <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
     const after = container.querySelectorAll('.sess-line')[1]?.outerHTML;
     expect(after).toBe(before);
+    // D-2574(a): the outerHTML compare above is blind to a WRAPPER — a `<div>`
+    // around the row does not change the row's own outerHTML, only what it sits
+    // inside. `previousElementSibling` does not catch it either (under a
+    // wrapper the row and the marker are still siblings OF EACH OTHER); the
+    // only check that reds under a wrapper is that both share `.proj-card-body`
+    // as their direct parent.
+    expect(container.querySelectorAll('.sess-line')[1]?.parentElement)
+      .toBe(container.querySelector('.proj-card-body'));
+    expect(container.querySelector('.proj-crossing')?.parentElement)
+      .toBe(container.querySelector('.proj-card-body'));
+  });
+
+  it('says nothing about home when the measured home IS the card\'s own project — coordinator archived elsewhere on this card', () => {
+    // D-2574(b): reachable in production — a programme homed in THIS repo
+    // whose coordinator session has moved to `group.archived` (not
+    // `group.sessions`) passes the parent guard exactly like a genuinely
+    // off-card coordinator would, because the `group.sessions.some(...)` check
+    // only looks in `sessions`. Measured sameness (home === the card's own
+    // project) must still silence the home clause — nothing here has proven a
+    // CROSSING, only that the coordinator is not among the live rows.
+    const archivedCoord = sess({ id: 'demo-archived-lead', workspace: 'archived-lead', bucket: 'archived' });
+    const g = grp({
+      sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
+      archived: [archivedCoord],
+    });
+    const sameHomeRun = runFor({
+      id: 12, sessionId: 'demo-still-cove', claimedBy: 'demo-archived-lead', homeProject: 'demo',
+    });
+    const { container } = render(
+      <ProjectCard group={g} runs={[sameHomeRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing');
+    expect(marker).not.toBeNull();
+    expect(marker!.textContent).toContain('build9b');
+    expect(marker!.textContent).not.toContain('home');
+  });
+
+  it('marks no row for a SELF-CLAIMED run — there is no separate coordinator to call off-card', () => {
+    // D-2574(c), first half. `claimedBy === sessionId`: a session that claimed
+    // its own run. There is no coordinator OTHER than this row to name.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const selfClaimed = runFor({ id: 13, sessionId: 'demo-still-cove', claimedBy: 'demo-still-cove' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[selfClaimed]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-crossing')).toBeNull();
+  });
+
+  it('marks no row for an UNCLAIMED run — no coordinator is a different fact from a coordinator elsewhere', () => {
+    // D-2574(c), second half. `claimedBy: null` and "the coordinator is off
+    // this card" are two conditions the operator reads differently; collapsing
+    // them would be the overloaded-silence shape this repo forbids at a seam.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const unclaimed = runFor({ id: 14, sessionId: 'demo-still-cove', claimedBy: null });
+    const { container } = render(
+      <ProjectCard group={g} runs={[unclaimed]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-crossing')).toBeNull();
   });
 });

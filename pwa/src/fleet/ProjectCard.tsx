@@ -20,7 +20,7 @@ import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, runHomeProject, waveLabel } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
 
@@ -205,14 +205,38 @@ export function ProjectCard({
   // five rules stay exactly as they are.
   //
   // TWO facts, stated only when measured. The programme and wave come off the
-  // run itself and are always available. The HOME clause needs
-  // `runHomeProject` to answer, and while it answers `null` — the legacy
-  // generation, or an older server — the marker says nothing about a home
-  // rather than naming `undefined` or guessing this card's own project.
+  // run itself and are always available. The HOME clause is Task 5's own
+  // decision — `crossingNote`, not a second copy of its predicate (D-2575) —
+  // asked against THIS CARD's project, `group.project`, not `run.project`
+  // (D-2576): the two agree today only because `FleetScreen` filters `runs` by
+  // project before handing them down, an invariant enforced in a different
+  // file and not one this component may lean on now that Task 7 adds an
+  // `abroad` list whose whole point is a run naming a DIFFERENT project.
+  // `crossingNote` answers `null` for two distinct reasons — home unknown (the
+  // legacy generation, or an older server) or home genuinely IS this card's
+  // project (measured sameness) — and both read the same way here: nothing to
+  // claim about a home, so nothing is claimed.
+  //
+  // The guard below reads as ONE two-reasons-for-one-silence statement:
+  // `parent === null` (no coordinator at all) and `parent === row.session.id`
+  // (self-claimed) are two different reasons there is no OTHER coordinator to
+  // call off-card, and collapsing either into "coordinator elsewhere" would be
+  // the overloaded silence this repo forbids at a seam. Only the FIRST half is
+  // independently load-bearing, though (D-2574(c), measured): a rendered
+  // row's own session is, by construction, always a member of
+  // `group.sessions` (rows are built from that exact array), so `parent ===
+  // row.session.id` implies the `group.sessions.some(...)` guard one line
+  // down is already true — dropping the self-claim disjunct changes nothing
+  // for any reachable row. Kept for what it documents, not for what it
+  // guards.
   //
   // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
   // and not every worker's: a child whose parent IS on this card is bracketed,
-  // and the bracket already says what this sentence would say.
+  // and the bracket already says what this sentence would say. It looks only
+  // at `group.sessions`, never `group.archived` — an archived coordinator is
+  // not a row on this card either, so a worker left behind by one still reads
+  // as an orphan (and still says nothing about home when that home is,
+  // measured, this card's own project).
   const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
     if (row.kind !== 'session' || row.depth !== 0) return null;
     const run = runForSession(runs, row.session.id);
@@ -220,13 +244,13 @@ export function ProjectCard({
     const parent = run.claimedBy;
     if (parent === null || parent === row.session.id) return null;
     if (group.sessions.some((s) => s.id === parent)) return null;
-    const home = runHomeProject(run);
+    const crossing = crossingNote({ ...run, project: group.project });
     const label = `${run.program} ${waveLabel(run)}`;
-    return home === null || home === run.project
+    return crossing === null
       ? { text: label, title: `this worker's coordinator is not on this card` }
       : {
-          text: `${label} · home ${home}`,
-          title: `this worker's coordinator is not on this card; the programme is homed in ${home}`,
+          text: `${label} · home ${crossing.home}`,
+          title: `this worker's coordinator is not on this card; the programme is homed in ${crossing.home}`,
         };
   };
 
