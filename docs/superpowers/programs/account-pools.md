@@ -3818,3 +3818,48 @@ shipped definition to check this against, only the plan and `poolrule.ts`.
 **D-2591 issued** (floor 2592), to be written up by the worker in the plan's Deviations section in the
 same commit that uses it. Mail 717 (`kind: answer`; `ruling` is not a `MailKind` — the six are
 `finding`/`question`/`answer`/`status`/`artifact`/`unknown`). Finding 716 acked.
+
+---
+
+## 2026-09-12 10:03Z — the worker refuted my ruling's extra claim, and was right twice over
+
+Mail 722, `kind: status`. I had asked the worker to check Tasks 9/10 against my claim that *the stranded
+surfaces cannot fire under partial tagging*, and to report either way. They reported **no second
+deviation**, with citations. Measured against `origin/main`, they are right and I was wrong twice.
+
+**Error 1 — the inference.** I reasoned from `poolLabelList`, a pure label projection applying the POOL
+rule alone, and generalised it to the strand surfaces, which are not that. `_strand_why`'s own comment
+says *"THIS FUNCTION'S OWN ORDER is pool, then `_account_ok`, then `_avail`"*, and its loop emits
+`$cand:disabled`, `$cand:missing` and an `_avail` arm below them. **An untagged candidate passes
+`_pool_ok` and can still fail to be an eligible AVAILABLE target**, so partial tagging strands exactly
+as the worker said. In-pool and placeable are different predicates and the second is strictly narrower.
+
+**Error 2 — and it is the one worth carrying.** I had written *"`FleetSession.stranded` does not exist
+on the wire yet — it is wave 4's own Task 4"*. I had grepped **this worktree**, found nothing, and
+reported the absence as a fact. **The worktree was 28 commits behind `origin/main`.** On main the field
+is right there:
+
+```
+readonly stranded: { readonly at: number; readonly reason: string } | null;
+```
+
+a durable marker at `$REG/<id>.stranded` written by `_strand_mark` — landed by wave 3, exactly as the
+plan says. An empty grep proves what you SEARCHED, not what you claim
+([[a-negative-search-is-not-proof]]), and I searched the wrong tree. The failure is worse for a
+coordinator than for anyone else: **rulings are measurements, and a stale checkout silently poisons
+every one of them.**
+
+**What it did NOT change: D-2591.** On finding the staleness I re-verified the ruling against
+`origin/main` rather than assuming it survived. `shared/poolrule.ts` differs from the stale copy by
+**eleven lines of comment** and `pwa/test/rosterFixture.ts` by a three-line comment on the `gpt` entry —
+`poolRule`'s body and `TEST_ROSTER`'s five entries are **byte-identical** on main. The finding and the
+ruling stand unchanged.
+
+**Retracted to the worker (mail 725):** the consequence I hung on the precondition. *"An empty label
+list requires every home-able account to be tagged"* is true **of `poolLabelList`** and is why the
+empty-pool test needs its own roster; the claim about what stranding requires is false and was withdrawn.
+
+**Fixed at the root, not just apologised for:** this worktree is merged current with `origin/main`
+(behind-count 0; the one add/add conflict was the `ccd-queue` plan, resolved to the copy carrying
+D-2475's correction of the stale twelve-site cardinal — main's copy still asserted twelve). **From here,
+ruling measurements are taken with `git show origin/main:<path>`, never from the checkout underfoot.**
