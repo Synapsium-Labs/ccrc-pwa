@@ -4798,3 +4798,31 @@ D-2650 — it was right, the fixtures already existed; Task 3 unblocked) and 857
 accepted with three constraints). Confirmed both are queued for delivery before saying so.
 
 Mail 861, status 859 acked.
+
+## 2026-09-12 16:31Z — union GREEN at 2651 == 2651: the issued block is reconciled
+
+Worker mail 864: D-2651 defined at `4f9e063d`, replacing the D-TBD exactly as mail 854 ruled.
+**Verified, then ran the union gate: 31/31 PASS**, definition high-water 2651 == max tracked ref 2651
+— the same exact balance `origin/main` holds. Third union run today; all three were informative
+(clean at 2633, red-by-one at 2650, green at 2651).
+
+**The entry records the corrections against me, not just the outcome** — that the green mutant "did
+not prove the fixtures absent", and that the clause survives as the local envelope-narrowing idiom
+"not as an independently load-bearing mechanism". That is the right shape for a superseding entry:
+it preserves WHY D-2650 was wrong.
+
+**Checked the two surviving `D-TBD` tokens before calling it clean** (`:3291`, `:3386`): both are prose
+inside numbered entries — "the initial D-TBD list", "the D-TBD finding's requested `.toBe` remedy".
+History, not placeholders; nothing stands in for a missing number.
+
+**Sent the work order** — Task 3 (D-2647/2648/2649 + D-2651's one comment, no new fixtures), Task 5
+(D-2637/2638, landing in Task 6's commit per D-2641), Task 6 (D-2646 + D-2640 + the `plan:1652`
+correction), then D-2636 after the `/api/projects` latency measurement.
+
+**And asked for one measurement I can check cheaply:** the auditor's `uncovered`/`measured` counts
+before and after D-2640. I measured **258/346 with all three wave colour rules in `uncovered` and zero
+in `measured`** — the fix is only real if those three MOVE, and the counts are the cheapest proof that
+they did. A coverage fix that leaves the census unchanged is the same defect wearing a repair's
+clothes.
+
+Mail 865, status 864 acked. Nothing outstanding from me.
