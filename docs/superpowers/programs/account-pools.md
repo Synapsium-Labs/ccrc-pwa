@@ -3950,3 +3950,54 @@ Task 1's verification apparatus has now been wrong three times in three inspecti
 instructed to treat the remaining steps' numbers and expected-red strings as **claims to measure, not
 instructions to follow**. That is the standing posture for the rest of wave 4, not a one-off — and it is
 the opposite of the usual default, so it is written here rather than left as a mood.
+
+---
+
+## 2026-09-12 10:59Z — Task 2: D-2606 and D-2607. File order cannot fix lexical scope.
+
+Mail 756, `kind: question`, worker stopped before any Task 2 source/test edit. Both re-measured at
+`origin/main`, checkout verified current. Both hold; both recommendations taken.
+
+### D-2606 — `asError` is describe-scoped, so NEITHER prescribed placement compiles
+
+`pwa/test/api.test.ts:710` declares `const asError` **inside the callback** of
+`describe('apiErrorText and the code translators that compose with it', …)`, with eleven uses, all
+within that describe. Plan line 657 says: *"if it is defined below the insertion point, put this
+`describe` immediately after the block that defines it rather than at the very end of the file."*
+
+**That instruction is only coherent for a MODULE-SCOPE const**, where being later in the file is the
+whole obstacle. `asError` is block-scoped to another callback, and **no sibling placement can see it** —
+EOF, immediately after, anywhere. Moving a sibling around a scope boundary never crosses it.
+
+**The plan reasoned about FILE ORDER when the problem is LEXICAL SCOPE**, and that is why the sentence
+reads plausibly. It matters for how the entry is written: an anchor that drifted is a stale citation,
+and this is a prescription that **could not have worked at any line number the file ever had**.
+
+**Ruled:** hoist `asError` to module scope, body byte-identical, existing uses untouched, then append
+the sibling describe. The alternatives are worse — nesting the pool tests inside that describe files
+them under a title about the `apiErrorText`/`uploadErrorText` composition hazard, mislabelling them;
+duplicating the helper puts a second copy of a test primitive in one file, the thing this repo spends a
+whole suite forbidding elsewhere. A helper used by two describes belongs at module scope.
+
+### D-2607 — the alphabetical import slot is wrong
+
+`pwa/src/lib/api.ts:5` reads `… PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView,
+ReapResult, RunSummary …`. The plan says place `ProjectPoolWire` between `PrView` and `ReapResult`;
+correct slot is **after `PasskeyRegisterStart`, before `ProjectRow`**.
+
+**The convention is CASE-INSENSITIVE alphabetical, and the proof is already in the file:** `ProjectRow`
+precedes `PrView`, which case-SENSITIVE ASCII would reverse (`V` = 0x56 < `o` = 0x6F). Told the worker
+to record that reasoning, because the next person will otherwise re-derive the slot wrongly.
+
+### Confirmed NOT a deviation
+
+The worker classed the `API_ERROR_TEXT`/method locator drift (now 179–196, 442–449) as locator context
+rather than a third deviation. **Correct, and confirmed so it does not get filed later.** Their brief
+already told them the plan's anchors predate this branch and to navigate by symbol — a drifted citation
+is expected wear. D-2606 is a deviation *precisely because it is not that*.
+
+**D-2606, D-2607 issued** (floor 2608), mail 757, question 756 acked. Ten direct `it(` calls, zero
+`it.each` — noted, and to be DERIVED in the step expectation rather than quoted (D-2598).
+
+**Five findings, five times the plan was the defective party.** The posture set at D-2598 is holding and
+is now clearly the right one for this wave.
