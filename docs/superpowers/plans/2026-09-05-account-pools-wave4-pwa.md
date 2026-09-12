@@ -3653,8 +3653,13 @@ deviation found while executing this plan is allocated in its own call at the mo
   measurement, never re-derive it. Graph-first/current-source cost measurement
   compared a direct `api.projects` read, a fleet-store slot, and extending the
   pools frame; mail 855 recommends the direct read as the only two-production-file
-  path with no new wire or global-store seam. Implementation awaits the
-  coordinator's scope acknowledgement.
+  path with no new wire or global-store seam. The direct read landed in
+  `6a6476e3`. Its live latency remains honestly UNMEASURED: the local endpoint
+  refused connection and the tailnet endpoint returned 401, so neither timing was
+  route latency. The coordinator accepted the structural O(N) agent-side cost as
+  sufficient to forbid timer polling. D-2663 and D-2668 refine its invalidation
+  lifecycle, while D-2664 requires pool and placement to remain one route
+  measurement.
 
 - **D-2637 — The project-pool button's invisible target measures only 22.25px
   tall, and wide chips receive that vertical extension only across their centre.**
@@ -3817,3 +3822,76 @@ deviation found while executing this plan is allocated in its own call at the mo
   there can strand. Add a fixture combining `warning:'unknown-pool'` with a
   divergent measured state, apply one intent-echo mutant to the named
   assertion, and restore it exactly.
+
+- **D-2663 — Placement refresh must cover limit changes without timer polling.**
+  The Task 5 effect invalidates only when the pools-frame object changes, but a
+  project's placement also depends on roster limits. A limit change with no new
+  pools frame therefore leaves the card frozen indefinitely. Coordinator mail
+  912 ruled the app's existing visible-page `visibilitychange` idiom as a third
+  invalidation trigger: a hidden phone performs no work, while returning to a
+  visible page remeasures. Focus events and elapsed timers remain inert. Add a
+  red-first test that independently dispatches a visible `visibilitychange` and
+  observes one new projects request, with timer and focus controls remaining at
+  the prior count.
+
+- **D-2664 — Project pool and placement must come from the same projects-route
+  measurement.** The pools watcher and `/api/projects` have different budgets
+  and cadences, so reading `ProjectCard`'s pool from the frame while reading its
+  placement from the route permits a durable split-brain display. Coordinator
+  mail 912 ruled that `FleetScreen` carry `ProjectRow.pool` beside
+  `ProjectRow.placement` from the route's single `poolsRead`, and that
+  `ProjectCard` derive `pool`, `poolName`, `placeableNames`, `legacySafe`, and
+  `PoolChip` from that carried row value. The redundant `placement.pool` field is
+  not an authority and must not be read. A divergent frame-versus-row fixture
+  must prove that the row's pool and placement remain one measurement.
+
+- **D-2665 — Failed and missing placement states need an observable reader or an
+  honest collapse.** Task 5 introduced distinct `failed` and `missing` variants,
+  but the card maps both to the same absence of placement content, so callers and
+  tests cannot observe the distinction the seam claims to preserve. Coordinator
+  mail 912 ruled that each state receive actionable, truthful copy, or that the
+  type collapse them if no different response is intended. This wave retains the
+  distinction: failed tells the operator to retry the projects measurement;
+  missing says the project was absent from that measurement. Delete and
+  failed-to-missing fold mutants must independently red their named assertions.
+
+- **D-2666 — A duplicate PoolSheet test title describes the opposite behavior.**
+  The later test titled `toasts the unknown-pool warning from a successful write`
+  contains no warning response; it proves that a response from a replaced sheet
+  generation is suppressed. Coordinator mail 912 ruled a title-only correction
+  so the test names stale-response suppression rather than duplicating the real
+  warning test's title. No production behavior changes.
+
+- **D-2667 — PoolSheet's unknown-pool fixtures must be reachable from the real
+  route.** Existing tests synthesize `warning:'unknown-pool'` while the same
+  seeded roster already contains the selected pool, but the server emits that
+  warning only when its boot-time roster does not contain the submitted name.
+  Coordinator mail 912 ruled a roster-version-skew fixture: the fleet/UI roster
+  may have learned a pool after this box loaded its boot roster, so the UI can
+  offer a value that the route correctly warns is unknown locally. Keep D-2652's
+  measured-response composition and error channel unchanged; repair only the
+  reachability setup and its explanation.
+
+- **D-2668 — The initial null pools slot causes two O(N) projects sweeps on cold
+  load.** Task 5's mount effect calls `/api/projects` while `pools === null`, then
+  calls it again moments later for the first pools frame. Coordinator mail 912
+  ruled that the null-state mount request be skipped or coalesced. Preserve the
+  first real frame, each later frame, visible-page return, and successful-add
+  invalidations, plus monotonic stale-response suppression. Rewrite the existing
+  test that currently codifies the duplicate cold-load request and mutation-pin
+  the null guard.
+
+- **D-2669 — The contrast-ground explanation for `.proj-card-stranded` named a
+  false DOM relationship.** Its text sits inside `.proj-card-toggle`, not as the
+  project card's direct text child; the transparent toggle leaves the card's
+  `--bg-surface` behind it. Coordinator mail 912 ruled the audit explanation be
+  corrected without changing the measured ground or ratios. The wording fix
+  landed in `e86f5fa5` before this issued definition was appended; this
+  forward-only entry records the true chronology rather than rewriting history.
+
+- **D-2670 — Deleting the inert dimmed-pool cursor rule left its introductory
+  comment orphaned.** D-2644 removed `.proj-card-pool[data-dim]`, but the comment
+  immediately above then introduced no rule. Coordinator mail 912 ruled deletion
+  of that stale comment. The deletion landed in `e86f5fa5` before this issued
+  definition was appended; this forward-only entry records the true chronology
+  rather than amending the earlier commit.
