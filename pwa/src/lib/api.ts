@@ -501,6 +501,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  a confirm sentence that names the crossing. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
       post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+    /** The terminal drawer's scrollback — the pane's own history, read with
+     *  `capture-pane`. `lines` is the server's number, echoed back: this side
+     *  never names one, so there is nothing for the two to disagree about. */
+    paneHistory: (id: string) =>
+      getJson<{ ok: true; text: string; lines: number }>(`${sid(id)}/pane/history`),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an

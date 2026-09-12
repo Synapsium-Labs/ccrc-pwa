@@ -1,0 +1,639 @@
+// The drawer's wheel, and the console history it scrolls.
+//
+// THE DEFECT THIS PINS. `tmux attach` puts the CLIENT terminal on the ALTERNATE
+// SCREEN (the first bytes of every attach are ESC[?1049h, measured off a real
+// pty) and sets application cursor keys (ESC[?1h). xterm has no scrollback in
+// the alternate buffer, so it translates a wheel notch into arrow keys and
+// sends them to the pty — which is how "the mouse does the same thing as the
+// arrows" happened: the wheel was paging Claude Code's prompt history and
+// walking its agent blocks. `scrollback: 4000` in the drawer is inert there,
+// not insufficient.
+//
+// So the wheel must emit NOTHING to the pty, and must scroll the pane's own
+// history instead — read with `capture-pane`, which mutates nothing on the box
+// and leaves no mode behind for the next client to find.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Terminal } from '@xterm/xterm';
+import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  FakeSocket.instances.length = 0;
+});
+
+const ID = 'claude-a-MekWarLive';
+const ESC = String.fromCharCode(27);
+/** What tmux sends a fresh client, measured: alternate screen + app cursor keys. */
+const TMUX_ATTACH = `${ESC}[?1049h${ESC}[?1h${ESC}=`;
+
+class FakeSocket {
+  static instances: FakeSocket[] = [];
+  url: string;
+  sent: string[] = [];
+  closed = false;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor(url: string) {
+    this.url = url;
+    FakeSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+  }
+}
+const makeSocket = (url: string): WebSocket => new FakeSocket(url) as unknown as WebSocket;
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
+
+const wheelOn = (el: Element, deltaY: number): void => {
+  el.dispatchEvent(new WheelEvent('wheel', { deltaY, deltaMode: 0, bubbles: true, cancelable: true }));
+};
+
+/** A real xterm, attached the way tmux attaches one — the control that proves
+ *  the wheel→arrow translation this suite exists to stop is REAL in the xterm
+ *  this build ships, not a story about an older one. */
+const controlArrows = async (): Promise<string[]> => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const term = new Terminal({ cols: 80, rows: 24, scrollback: 4000 });
+  term.open(host);
+  const out: string[] = [];
+  term.onData((d) => out.push(d));
+  await new Promise<void>((r) => term.write(TMUX_ATTACH, () => r()));
+  const screenEl = host.querySelector('.xterm-screen') ?? host;
+  wheelOn(screenEl, -120);
+  wheelOn(screenEl, 120);
+  term.dispose();
+  host.remove();
+  return out;
+};
+
+describe('the wheel is not an arrow key', () => {
+  it('with tmux on the alternate screen a wheel notch sends nothing to the pty', async () => {
+    expect(await controlArrows(), 'the control: a bare xterm DOES turn the wheel into arrows')
+      .toEqual([`${ESC}OA`, `${ESC}OB`]);
+
+    render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+    act(() => ws.onmessage?.({ data: TMUX_ATTACH }));
+    await act(async () => {
+      await flush();
+    });
+    ws.sent.length = 0;
+
+    const screenEl = document.querySelector('.xterm-screen');
+    if (!screenEl) throw new Error('no xterm screen mounted');
+    act(() => {
+      wheelOn(screenEl, -120);
+      wheelOn(screenEl, 120);
+    });
+
+    expect(ws.sent, 'the wheel reached the pty as arrow keys').toEqual([]);
+    // Two REAL xterms in jsdom, each parsing and mounting: measured at 3.3 s on
+    // an idle box and 5.7 s under a concurrent suite, so the 5 s default clock
+    // is the flake here, never the guard.
+  }, 20_000);
+});
+
+// — the history view —
+
+/** Scripted DrawerTerm that records the wheel handler the drawer installs. */
+const fakeTermFactory = () => {
+  const write = vi.fn<(data: string) => void>();
+  const dispose = vi.fn<() => void>();
+  const wheelHandlers: ((ev: WheelEvent) => boolean)[] = [];
+  const hosts: HTMLElement[] = [];
+  // The KEYBOARD half of the operator's ruling. Scripted here and not only in
+  // `terminal.test.tsx` because the ruling is a statement about the two
+  // together — the wheel stops reaching the pane, the arrows go on reaching it
+  // — and a suite that can only drive one of them cannot state it.
+  let dataCb: ((data: string) => void) | null = null;
+  let grid = { cols: 48, rows: 20 };
+  const makeTerm = (host: HTMLElement): DrawerTerm => {
+    hosts.push(host);
+    return {
+      write: (d) => write(d),
+      onData: (cb) => {
+        dataCb = cb;
+      },
+      onWheel: (cb) => {
+        wheelHandlers.push(cb);
+      },
+      fit: () => ({ ...grid }),
+      focus: () => {},
+      dispose,
+    };
+  };
+  return {
+    makeTerm,
+    write,
+    dispose,
+    hosts,
+    type: (d: string) => dataCb?.(d),
+    setGrid: (c: number, r: number) => {
+      grid = { cols: c, rows: r };
+    },
+    // The LATEST handler: a re-attach builds a fresh terminal, and the wheel a
+    // reader turns after reconnecting is the new one's.
+    wheel: (deltaY: number) => wheelHandlers.at(-1)?.(new WheelEvent('wheel', { deltaY })),
+  };
+};
+
+const fakeHistoryFactory = () => {
+  const write = vi.fn<(data: string) => void>();
+  const dispose = vi.fn<() => void>();
+  const scrolled: number[] = [];
+  const madeWith: number[] = [];
+  let bottom: (() => void) | null = null;
+  return {
+    write,
+    dispose,
+    scrolled,
+    madeWith,
+    toBottom: () => bottom?.(),
+    makeHistoryTerm: (_host: HTMLElement, lines: number) => {
+      madeWith.push(lines);
+      return {
+        write: (d: string) => write(d),
+        fit: () => ({ cols: 48, rows: 20 }),
+        scrollLines: (n: number) => scrolled.push(n),
+        onBottom: (cb: () => void) => {
+          bottom = cb;
+        },
+        dispose,
+      };
+    },
+  };
+};
+
+const HISTORY = 'older output\nolder still\n';
+
+describe('the wheel scrolls the console history', () => {
+  it('a wheel-up reads the pane history over capture-pane and renders it, touching the pty not at all', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) =>
+      new Response(JSON.stringify({ ok: true, text: HISTORY, lines: 2000, asked: String(input) }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchImpl);
+    const t = fakeTermFactory();
+    const h = fakeHistoryFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={h.makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+    ws.sent.length = 0;
+
+    let handled: boolean | undefined;
+    act(() => {
+      handled = t.wheel(-120);
+    });
+    expect(handled, 'the drawer must swallow the wheel, not let xterm process it').toBe(false);
+
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    expect(fetchImpl.mock.calls.map((c) => c[0]))
+      .toEqual([`/api/sessions/${encodeURIComponent(ID)}/pane/history`]);
+    // CRLF, because a capture is LF-separated and an xterm needs the carriage
+    // return to start the next line at column 0.
+    expect(h.write).toHaveBeenCalledWith('older output\r\nolder still\r\n');
+    expect(ws.sent, 'the pane must see nothing at all — the read is capture-pane').toEqual([]);
+    // The view's own buffer is DERIVED from the number of lines the server
+    // sent, never a second constant on this side to keep in step with it.
+    expect(h.madeWith).toEqual([2000]);
+    // And the gesture visibly moves: one notch up, so a wheel-up that opened
+    // the history does not look like a wheel-up that did nothing.
+    expect(h.scrolled).toEqual([-3]);
+  });
+
+  it('scrolling back to the bottom returns to the live pane', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, text: HISTORY, lines: 2000 }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })));
+    const t = fakeTermFactory();
+    const h = fakeHistoryFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={h.makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    expect(screen.getByRole('status', { name: /history/i })).toBeTruthy();
+
+    act(() => {
+      h.toBottom();
+    });
+    await waitFor(() => expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    expect(h.dispose).toHaveBeenCalled();
+  });
+
+  it('a history read that fails says so and leaves the live view alone', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ ok: false, error: 'gone' }), {
+        status: 404, headers: { 'content-type': 'application/json' },
+      })));
+    const t = fakeTermFactory();
+    const h = fakeHistoryFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={h.makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+    ws.sent.length = 0;
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(screen.getByText(/no history/i)).toBeTruthy());
+    expect(h.write).not.toHaveBeenCalled();
+    expect(ws.sent).toEqual([]);
+  });
+});
+
+// ─── the rest of the gesture, and the ruling it must not overshoot ──────────
+//
+// The operator's ruling has TWO halves, and only one of them is a change:
+// "the MOUSE must scroll the CONSOLE HISTORY, as in a real console. Everything
+// else — paging the prompt history, moving through agent blocks — stays on the
+// ARROW KEYS, which already do it."
+//
+// The second half is why the tests below exist at all. The cheapest way to stop
+// the wheel emitting arrows is to stop the DRAWER emitting arrows, and that
+// passes every assertion above while taking away the affordance the operator
+// said to keep. So the wheel and the arrows are measured together, in one
+// mounted drawer, and the suite fails in both directions.
+
+/** A scripted `fetch` answering one JSON body — the two status arms this route
+ *  has, without each test rebuilding a Response. */
+const jsonFetch = (status: number, body: unknown) =>
+  // The parameter is ANNOTATED, not inferred: `vi.fn`'s type flows from the
+  // implementation, and an implementation taking nothing gives a mock whose
+  // `.mock.calls` are `never[]` — which quietly makes every assertion about the
+  // URL this route was asked for vacuous.
+  vi.fn(async (_input: RequestInfo | URL) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+const OK_HISTORY = { ok: true, text: HISTORY, lines: 2000 };
+
+/** The four arrows as the quick-key bar spells them (`QUICK_KEYS`) — the
+ *  affordance the ruling says keeps the job the wheel is being taken off. */
+const ARROWS: [string, string][] = [
+  ['Arrow up', '\x1b[A'],
+  ['Arrow down', '\x1b[B'],
+  ['Arrow left', '\x1b[D'],
+  ['Arrow right', '\x1b[C'],
+];
+
+/** An opened drawer on scripted doubles, with the socket's frames already
+ *  cleared: every assertion below is about what the GESTURE put there, never
+ *  about the attach that preceded it. */
+const mountDrawer = () => {
+  const t = fakeTermFactory();
+  const h = fakeHistoryFactory();
+  const view = render(
+    <TerminalDrawer
+      id={ID}
+      open
+      onClose={() => {}}
+      makeSocket={makeSocket}
+      makeTerm={t.makeTerm}
+      makeHistoryTerm={h.makeHistoryTerm}
+    />,
+  );
+  const ws = FakeSocket.instances.at(-1);
+  if (!ws) throw new Error('drawer opened no socket');
+  act(() => ws.onopen?.());
+  ws.sent.length = 0;
+  return { t, h, ws, view };
+};
+
+const lastFrame = (ws: FakeSocket): unknown => {
+  const raw = ws.sent.at(-1);
+  return raw === undefined ? undefined : JSON.parse(raw);
+};
+
+describe('the ruling: the wheel changes, the arrows do not', () => {
+  it('the arrows still send their exact sequences, and the wheel still sends none of them', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h, ws } = mountDrawer();
+
+    // 1 — THE HALF THAT MUST NOT CHANGE. From the keycap bar…
+    for (const [label, seq] of ARROWS) {
+      fireEvent.click(screen.getByRole('button', { name: label }));
+      expect(lastFrame(ws), `${label} stopped reaching the pane`).toEqual({
+        type: 'input',
+        data: seq,
+      });
+    }
+    // …and from a real keyboard, which arrives by `term.onData` instead.
+    act(() => t.type('\x1b[A'));
+    expect(lastFrame(ws)).toEqual({ type: 'input', data: '\x1b[A' });
+    expect(ws.sent).toHaveLength(ARROWS.length + 1);
+
+    // 2 — THE HALF THAT MUST. A wheel in each direction adds nothing to that
+    // count: not an arrow, not anything.
+    const before = ws.sent.length;
+    act(() => {
+      t.wheel(-120);
+      t.wheel(120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    expect(ws.sent.length, 'the wheel put a frame on the socket').toBe(before);
+  });
+
+  it('a wheel-DOWN on the live pane reads nothing — the newest line is already on screen', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { t, h, ws } = mountDrawer();
+
+    let handled: boolean | undefined;
+    act(() => {
+      handled = t.wheel(120);
+    });
+    // Still swallowed: xterm must not get this one either, or the down notch
+    // goes back to being a Down arrow at the pane.
+    expect(handled, 'a wheel-down was handed to xterm').toBe(false);
+    await act(async () => {
+      await flush();
+    });
+
+    expect(fetchImpl, 'scrolling down on the live pane asked the box for history').not
+      .toHaveBeenCalled();
+    expect(h.write).not.toHaveBeenCalled();
+    expect(ws.sent).toEqual([]);
+  });
+});
+
+describe('the read is one read', () => {
+  it('a flick of the wheel is ONE capture, and so is a wheel turned again while reading', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { t, h } = mountDrawer();
+
+    // Three notches inside one gesture, before any answer can arrive.
+    act(() => {
+      t.wheel(-120);
+      t.wheel(-120);
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+    // And one more once the history is up, which is the second state the guard
+    // has to cover — `at !== 'live'` is true for `reading` AND for `history`.
+    act(() => {
+      t.wheel(-120);
+    });
+    await act(async () => {
+      await flush();
+    });
+
+    expect(fetchImpl.mock.calls, 'each notch fired its own capture-pane').toHaveLength(1);
+    expect(h.madeWith, 'a second history terminal was built over the first').toEqual([2000]);
+  });
+});
+
+describe('the phone, which has no wheel', () => {
+  it('the scroll-back keycap does the same read, and sends nothing to the pane', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { h, ws } = mountDrawer();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll back' }));
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    expect(fetchImpl.mock.calls.map((c) => c[0])).toEqual([
+      `/api/sessions/${encodeURIComponent(ID)}/pane/history`,
+    ]);
+    // It sits in the keycap bar, but it is NOT a key: the other eight put a
+    // control sequence on the socket and this one must put nothing there.
+    expect(ws.sent, 'the scroll-back cap sent a control sequence to the pane').toEqual([]);
+  });
+});
+
+describe('the ways back to live', () => {
+  it('the live button leaves the history and disposes its terminal', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h, ws } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'live' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    expect(h.dispose).toHaveBeenCalled();
+    // Leaving the history is not a re-attach: the live socket is untouched and
+    // still the one that was open.
+    expect(ws.closed).toBe(false);
+    expect(ws.sent).toEqual([]);
+  });
+
+  it('a keystroke while reading returns to live — and still reaches the pane', async () => {
+    // `typed()` jumps to the bottom the way a console does when you type: the
+    // keys reach the session either way, and watching them land is the whole
+    // reason to press one. BOTH halves are the guard — a return-to-live that
+    // swallowed the keystroke would be a worse bug than the one it fixes.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h, ws } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Arrow up' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    expect(h.dispose).toHaveBeenCalled();
+    expect(lastFrame(ws), 'the return to live ate the keystroke').toEqual({
+      type: 'input',
+      data: '\x1b[A',
+    });
+  });
+
+  it('a ROTATION while reading is not a keystroke — the history stays up', async () => {
+    // The other side of the same guard, and the reason `refit` does not go
+    // through `typed`: a phone that turns in the reader's hand would otherwise
+    // throw away the history they were reading, having been asked nothing.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h, ws } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    t.setGrid(60, 18);
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    expect(screen.getByRole('status', { name: /history/i })).toBeTruthy();
+    expect(h.dispose, 'a rotation disposed the history the reader was in').not.toHaveBeenCalled();
+    // …and the resize itself still reached the pane, which is what a refit is for.
+    expect(lastFrame(ws)).toEqual({ type: 'resize', cols: 60, rows: 18 });
+  });
+
+  it('a re-attach drops the history, and the fresh terminal gets a fresh wheel guard', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    const first = FakeSocket.instances.at(-1);
+    act(() => first?.onclose?.());
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+    // A capture taken before the drop is a snapshot of a session that has
+    // moved on since, so the re-attach must not leave it on screen.
+    expect(screen.queryByRole('status', { name: /history/i })).toBeNull();
+    expect(h.dispose).toHaveBeenCalled();
+
+    // The guard is installed per attach. If it ever moves outside the attach
+    // effect, the SECOND terminal is the one that goes back to emitting arrows
+    // — and that is the shape nobody would notice by hand.
+    const next = FakeSocket.instances.at(-1);
+    if (!next) throw new Error('Reconnect opened no socket');
+    act(() => next.onopen?.());
+    next.sent.length = 0;
+    let handled: boolean | undefined;
+    act(() => {
+      handled = t.wheel(-120);
+    });
+    expect(handled, 'the re-attached terminal handed its wheel to xterm').toBe(false);
+    expect(next.sent, 'the re-attached terminal put the wheel on the pane').toEqual([]);
+  });
+});
+
+describe('a read that fails says WHICH failure', () => {
+  /** Open the history against a failing read; give back the word the drawer
+   *  showed the reader, and unmount so the next arm starts clean. */
+  const whyAfterFailedRead = async (fetchImpl: unknown): Promise<string> => {
+    vi.stubGlobal('fetch', fetchImpl);
+    const { t, h, ws, view } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    const bar = await screen.findByRole('status', { name: /history/i });
+    const said = bar.textContent ?? '';
+    expect(h.write, 'a failed read rendered a history anyway').not.toHaveBeenCalled();
+    expect(ws.sent, 'a failed read fell back to driving the pane').toEqual([]);
+    view.unmount();
+    return said;
+  };
+
+  it('a dead pane, an unanswerable tmux and an unreachable box stay THREE answers', async () => {
+    // The server already tells the first two apart — `CaptureHistory` is three
+    // conditions and the route spends them as 404 `gone` and 502 `unmeasured`.
+    // An adapter may not narrow a distinction it received, and this drawer is
+    // the adapter: collapsing them to one "failed" would tell the reader a
+    // session had died whenever the tmux server was merely busy.
+    const gone = await whyAfterFailedRead(jsonFetch(404, { ok: false, error: 'gone' }));
+    const unmeasured = await whyAfterFailedRead(
+      jsonFetch(502, {
+        ok: false,
+        error: 'unmeasured',
+        detail: 'error connecting to /tmp/tmux-1000/default (No such file or directory)',
+      }),
+    );
+    // The third never reaches the route at all — the fetch itself rejects, so
+    // there is no server word to carry and the drawer supplies its own.
+    const unreachable = await whyAfterFailedRead(
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    expect(gone).toContain('gone');
+    expect(unmeasured).toContain('unmeasured');
+    expect(unreachable).toContain('unreachable');
+    expect(
+      new Set([gone, unmeasured, unreachable]).size,
+      'the drawer narrowed three conditions into fewer words',
+    ).toBe(3);
+  });
+
+  it('a failed read leaves the wheel able to try again', async () => {
+    // `empty` is not `live`, so the idempotence guard would refuse a retry if
+    // the only way out were the wheel. The way back is the same live button the
+    // history view uses — measured here so the reader is never stranded on a
+    // failure they cannot clear.
+    vi.stubGlobal('fetch', jsonFetch(404, { ok: false, error: 'gone' }));
+    const { t } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await screen.findByText(/no history/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'live' }));
+    await waitFor(() => expect(screen.queryByText(/no history/i)).toBeNull());
+  });
+});
+
+// — the door a thumb can reach —
+//
+// MEASURED against the real Terminal in jsdom: a touch drag over xterm 6.0.0
+// emits NOTHING to the pty in either buffer, and xterm exposes no touch
+// equivalent of `attachCustomWheelEventHandler`. So there is no touch->arrow
+// translation to stop, and equally no touch gesture that opens anything: the
+// wheel is the only pointer door and a phone has no wheel. This key IS the
+// door touch has, and the two things that can silently take it away are its
+// place in the DOM and one CSS declaration.
+describe('the console history has a door a thumb can reach', () => {
+  it('the scroll-back key is NOT inside the strip that scrolls away', () => {
+    // ARITHMETIC, not taste. `.term-keys-seq` is `overflow-x: auto` and its
+    // eight caps measure 8x44 + 7x8 = 408px before a legend is laid out; add
+    // this bar's 2x12 padding and a ninth cap starts at x=428. A 390px phone
+    // — `.sheet-panel--full` zeroes the drawer's side padding, so that is the
+    // whole width — never shows it. Put this button back in the scroller and
+    // the only affordance touch has is off-screen at rest.
+    render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
+    const door = screen.getByRole('button', { name: 'Scroll back' });
+    expect(door.closest('.term-keys-seq'), 'the history door scrolls off the edge with the keys').toBeNull();
+    expect(door.closest('.term-keys'), 'the history door left the key bar entirely').not.toBeNull();
+    // …and every sequence cap DID stay in the scroller, so this is a split and
+    // not a bar that stopped scrolling.
+    const esc = screen.getByRole('button', { name: 'Escape' });
+    expect(esc.closest('.term-keys-seq')).not.toBeNull();
+  });
+
+  it('it is an action, not a key — its legend promises no sequence', () => {
+    // Every other legend in this bar IS the key it transmits. A `⇞` glyph
+    // would promise a PageUp that this button never sends — and PageUp would
+    // reach the Claude Code TUI, which is the prompt paging the operator's
+    // ruling puts on the arrows.
+    render(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} />);
+    const door = screen.getByRole('button', { name: 'Scroll back' });
+    expect(door.textContent).toBe('hist');
+    expect(door.className).toContain('keycap--act');
+  });
+});
