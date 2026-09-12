@@ -150,6 +150,44 @@ describe('groupFleet', () => {
     expect(g.attention).toBe(false);
     expect(g.busy).toBe(1);
   });
+
+  // Account pools, wave 4, spec §5.8.3. Ruling 6 made the silent strand loud;
+  // this is the number the folded card wears so a fold cannot hide it.
+  it('counts live members carrying a strand marker', () => {
+    const g = groupFleet([
+      s({ id: 'a', stranded: { at: 1, reason: 'no account in pool pool-a can take it' } }),
+      s({ id: 'b' }),
+      s({ id: 'c', stranded: { at: 2, reason: 'every candidate at ceiling' } }),
+    ])[0]!;
+    expect(g.stranded).toBe(2);
+  });
+
+  it('counts an UNREADABLE marker too — the fail-shut row is exactly the one to surface', () => {
+    // `server/src/registry.ts` reads `.stranded` fail-shut: a present but
+    // unreadable marker arrives as `{at: 0, reason: STRANDED_UNREADABLE}`.
+    // `at === 0` is a real row, and a truthiness test on `at` would drop it.
+    const g = groupFleet([s({ id: 'a', stranded: { at: 0, reason: 'registry field unreadable' } })])[0]!;
+    expect(g.stranded).toBe(1);
+  });
+
+  it('is zero when nothing is stranded, and survives a server that predates the field', () => {
+    // The live `fleet` frame is CAST, not revived (`stores/fleet.ts`'s
+    // `asFleetMsg`), so a row from an older server lacks the key at runtime
+    // however the type reads. The count must answer 0, not NaN and not a throw
+    // — the same discipline `graphReadCount` carries for its own field.
+    const older = { ...s({ id: 'a' }) } as Record<string, unknown>;
+    delete older['stranded'];
+    const g = groupFleet([older as unknown as FleetSession])[0]!;
+    expect(g.stranded).toBe(0);
+  });
+
+  it('does not count archived members — an archived session is stopped, so its marker is stale', () => {
+    const g = groupFleet([
+      s({ id: 'a', bucket: 'archived', stranded: { at: 1, reason: 'nowhere to go' } }),
+      s({ id: 'b', stranded: { at: 2, reason: 'nowhere to go' } }),
+    ])[0]!;
+    expect(g.stranded).toBe(1);
+  });
 });
 
 describe('pin', () => {
