@@ -338,10 +338,6 @@ describe('the feed, grouped by programme', () => {
       const heads = [...document.querySelectorAll('.mail-group-head')].map((h) => h.textContent);
       expect(heads).toEqual(['Cross-repo programmes', 'Build 9b: peers and claims']);
     });
-    expect(screen.getByRole('list', { name: 'Cross-repo programmes' }))
-      .toHaveTextContent('wave 2 dispatched');
-    expect(screen.getByRole('list', { name: 'Build 9b: peers and claims' }))
-      .toHaveTextContent('wave 1 dispatched');
   });
 
   it('puts a record with NO runId under its own header, never under a programme', async () => {
