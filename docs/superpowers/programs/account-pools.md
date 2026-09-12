@@ -4676,3 +4676,43 @@ clauses, add the tests that feed `pools: []` and `byProject: []`, and correct th
 
 **Three worker remedies reversed today, none of the findings.** The reviews are finding real things and
 proposing the wrong fix for them — which is the healthier failure of the two.
+
+## 2026-09-12 16:15Z — D-2651 supersedes D-2650: I inferred from a green mutation and the worker measured
+
+The worker refused my D-2650 order and was right. **Verified before answering:** `stores.test.ts:1046`
+is `expectPriorWireToSurvive([])` and `expectPriorWireToSurvive([{listed:false,
+enforcement:'enforced'}])` — both array envelopes, one of them CONTAINING a valid-looking payload — and
+`:1071` is `{listed:true, enforcement:'enforced', byProject: []}`. **Those are the two fixtures I
+ordered added. They already existed.** Re-adding them would have pinned nothing.
+
+**My error, precisely.** D-2650 said "deletion is green, which means nothing feeds an array envelope at
+all." That is an **inference from a green mutation**, and it is the one inference a green mutation
+never supports: a green mutant is ambiguous — the guard may be unpinned, or the behaviour may be
+**OVER-DETERMINED**. I resolved the ambiguity in the direction that suited my argument instead of
+running one grep. `a-green-mutation-needs-a-control` is my own note and I violated its mirror image.
+
+**Both reasons I gave for keeping the clause are answered by tests already in the tree:**
+- "the downstream check could be relaxed independently" — `:1046` reds on most such relaxations.
+- "a 'redundant' note invites deleting the LOAD-BEARING inner clause" — measured: deleting
+  `!Array.isArray(outer.byProject)` makes `byProject: []` pass `typeof === 'object' && !== null`, the
+  frame is accepted, and `:1071` REDS. **The inner clause is pinned**; the trap is already prevented.
+
+**Ruled: KEEP the clause as a STYLE decision, not a mechanism, and REFUSED the source-shape pin.**
+It follows this file's own envelope idiom — the `coord` branch three lines above does the identical
+`typeof === 'object' && !== null` check, so deleting only this one makes it the odd branch out for zero
+behavioural gain. And a source pin on a redundant clause pins that a LINE EXISTS, which is the exact
+thing D-2644 refused; a test protecting it would be that defect wearing a test's clothes. **Remedy is
+one comment at `:192`** naming the over-determination and pointing at `:1046` — because the hazard was
+never behavioural, it was that the two `Array.isArray` calls look identical, and a comment does what
+the test could not.
+
+**The worker's handling was correct in the way that matters**: it received a coordinator order,
+measured it, found it contradicted the tree, and STOPPED — rather than complying and adding dead
+fixtures, or quietly doing something else and reporting success. It allocated no number locally
+(clause 11). Told it so, and told it to keep treating coordinator instructions as claims.
+
+**D-2651 issued** (floor 2652), mail 854, question 852 acked.
+
+**Four of my rulings corrected today — two by an adversarial panel I convened, two by the worker.**
+Every one was a claim I could have measured and did not. The findings have held; my remedies are what
+keep failing.
