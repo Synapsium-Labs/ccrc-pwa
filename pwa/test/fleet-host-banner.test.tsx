@@ -94,6 +94,23 @@ describe('FleetHostBanner', () => {
     }
   });
 
+  it('stays silent when an older remote server omits the optional pools answer', async () => {
+    const older = health({ connected: true, downSince: null });
+    delete older.projectPools;
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(older);
+    render(<FleetHostBanner />);
+    await act(async () => {});
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
+  });
+
+  it('stays silent for a local host whose own ccd lacks pool support', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ mode: 'local', connected: true, downSince: null, projectPools: 'unavailable' }));
+    render(<FleetHostBanner />);
+    await act(async () => {});
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
+  });
+
   it('a divergent roster outranks it — one is silent damage, the other is a feature not yet arrived', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(
       health({ connected: true, downSince: null, roster: 'divergent', projectPools: 'unavailable' }));
