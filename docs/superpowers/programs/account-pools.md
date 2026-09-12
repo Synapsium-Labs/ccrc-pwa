@@ -4964,3 +4964,45 @@ D-2644's orphaned header comment.
 
 **Third remedy of mine refuted today, and the second where the tree already held the answer.** The
 findings keep holding; the fixes I reach for keep being the wrong shape.
+
+## 2026-09-12 19:00Z — D-2671/D-2672: the worker applied D-2640 to its own work before being asked
+
+Worker mails 909/911: Task 7 halted before commit because its three new colour rules
+(`.acct-pool`, `.acct-disclosure`, `.pool-note`) land in the auditor's `uncovered` census, and — in its
+own words — "the planned standalone contrast pass is baseline-green non-evidence." **That is exactly
+the trap I had to catch it in on D-2640, applied unprompted to its own new work.** Stopping before
+commit on it is the protocol working, and worth recording as such.
+
+**APPROVED as proposed, after verifying every measured point independently rather than taking it:**
+- `.sheet-panel` (`primitives.css:132`) paints `background: var(--bg-sheet)` at `:141` — the ground is
+  right.
+- Their four ratios **reproduce exactly**: `--ink-tertiary` on `--bg-sheet` **5.51 dark / 5.70 light**,
+  `--ink-secondary` **8.27 / 7.41**. No colour change needed.
+- `INHERITED_GROUNDS` is the right registry — and it is the one THEY built for D-2640: *"the GROUND is
+  hand-written (a parser cannot recover it); the COLOUR is read from the stylesheet, so retinting the
+  rule re-measures it."* That separation is why this is a registration and not an exemption. I had
+  half-remembered the registry as `GROUNDS` and was about to correct them on the name; **measured
+  first, and they were right.**
+- Census arithmetic consistent: I measured `uncovered` 255 at `38aec982`; 255 + 3 = their 258.
+
+**Three constraints attached.** (1) **Do not repeat D-2669 three more times** — that entry's `why`
+names a DOM fact that is false, so the new ones must name the ACTUAL painting ancestor (`.sheet-panel`,
+`primitives.css:141`) and why the auditor cannot recover it. A wrong `why` in that registry is worse
+than none, since recording the DOM fact is the entry's whole purpose. (2) **The deletion mutant must red
+on the CENSUS assertion, not the contrast gate** — the gate stays green with the entry deleted, which
+IS D-2640's finding; a mutant redding the gate means something else changed. (3) **Pin both
+directions** — two `measured` rows at ≥4.5 AND zero appearances in `uncovered`, because absent-from-both
+is precisely the state a silently skipped rule occupies.
+
+**D-2672 — the ratchet, as its own commit.** This is the **second** wave running in which new
+colour-bearing rules landed uncovered and a human had to notice. **Review catching it twice is not a
+mechanism.** Ruled: pin `audit().uncovered.length` as a high-water that MAY ONLY SHRINK — the idiom is
+already in this repo, `deviation-refs.test.ts`'s `GRANDFATHERED` set being built exactly that way. Kept
+out of Task 7's commit: it is a gate change and should be reviewable alone.
+
+**Also verified:** D-2652 **is** defined at `1ac6fe06`, forward-only, no amend — **the worker caught
+that gap itself before my mail 907 arrived**, the second self-correction ahead of me today. And
+`plan:1652` is corrected at `a3dd2ca8`, its replacement sentence exactly right: *"Reusing a token is not
+itself audit coverage: per D-2640, each new color-bearing selector must enter `report.measured`."*
+
+**D-2671/D-2672 issued** (floor 2673), mail 914; 906/909/911 acked.
