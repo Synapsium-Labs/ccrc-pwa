@@ -1630,4 +1630,28 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       expect(section, `the crossing section names ${forbidden}`).not.toContain(forbidden);
     }
   });
+
+  // The reference is what a coordinator reads WHILE making the call — the
+  // refusal tables wave 1 extended live here, three lines from the body being
+  // typed. A boundary stated only in SKILL.md is a boundary read once, at
+  // install time, by a session that had no run open yet.
+  const LIFECYCLE: readonly (readonly [string, string])[] = [
+    ['§1 — why sessionId is a same-project field',
+      '`sessionId` reclaims a workspace, and a workspace lives in ONE repo'],
+    ['§1 — the crossing open sends none',
+      'a wave that changes project sends no `sessionId` at all'],
+    ['§1 — homeProject rides the open body',
+      '`"homeProject":"<the home project>"`'],
+    ['§1 — the two response fields, and their null',
+      'both are null while the stored home is null'],
+    ['§2 — what a foreign-repo brief carries beyond the ordinary list',
+      'the absolute path of the home plan, at a sha, plus the contract excerpt inlined verbatim'],
+    ['§5 — Q1 at the wave boundary',
+      "read the producer run's own `state` before you dispatch a consumer wave"],
+  ];
+
+  it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
+    expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
+      .toContain(flat(sentence));
+  });
 });

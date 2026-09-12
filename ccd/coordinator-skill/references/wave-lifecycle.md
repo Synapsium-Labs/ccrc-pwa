@@ -56,6 +56,20 @@ and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
    route this run reuses an existing workspace, so the next dispatch resumes
    it instead of spawning a fresh one.
 
+   **That reclaim is SAME-PROJECT.** `sessionId` reclaims a workspace, and a
+   workspace lives in ONE repo — so a wave that changes project sends no
+   `sessionId` at all and takes wave 1's own fresh-spawn path in the target
+   project. Naming a session whose workspace belongs to another project is
+   refused `project-mismatch`, `by:` that project, before any run row exists.
+
+   **Every open carries the home**, on every wave of the programme:
+   `"homeProject":"<the home project>"` in the same body. The response answers
+   `ledgerRepo` (the home project) and `ledgerAbsPath` (the home repo's
+   programme ledger, absolute) beside the `ledgerPath` it always carried; both
+   are null while the stored home is null, which is what a legacy-generation
+   programme opened before this field existed still reads. A later open naming a
+   DIFFERENT home is refused `home-mismatch`, `by:` the stored value.
+
 **The hold, precisely.** When this call names `sessionId` (wave ≥ 2, reclaiming
 an existing workspace), the server places the hold immediately, reason
 `program:<slug> wave:<N>/M run:<id>`, naming the run it has just opened. Wave
@@ -206,6 +220,17 @@ skill the worker should invoke** (`superpowers:executing-plans` or
 `superpowers:subagent-driven-development`), the interfaces earlier waves
 settled, the deviations already ledgered, and whatever your review of the last
 handoff decided.
+
+**A brief for a wave in ANOTHER project carries two more things**, and they are
+the two the worker cannot get for itself: the absolute path of the home plan, at
+a sha, plus the contract excerpt inlined verbatim from the merged file. The path
+resolves because there is one box and one user; the sha is what keeps the
+citation meaning one thing later; and the excerpt is inlined because a worker
+that has to go and FIND its contract has been handed a brief that did not carry
+one. It reads the home plan for context, never writes to it, and commits only on
+its own workspace's branch in the repo it is running in — the branch-discipline
+sentence above, which is already in every brief, is the whole of what changes for
+it.
 
 **The execution skill is the one list item that is not merely useful.** The
 worker's own clause 6 reads "Invoke the execution skill the brief names rather
@@ -508,6 +533,15 @@ whole time, which is the only prevention this ordering rule buys.
    now has two open runs (this wave's, still `working`/`awaiting-review`/
    `merging`, and the new `planned` one) — it can never read as zero from
    here.
+
+   **If wave N+1 CONSUMES what this wave produced, read the producer run's own
+   `state` before you dispatch a consumer wave** — `GET /api/runs`, the run row,
+   the word. Anything but `done` and you do not dispatch: you report. There is no
+   `dependsOn` column and none is planned (a measured incident of the
+   phased-cutover class is what would buy one), so this measurement is the only
+   thing standing between a consumer wave and an interface that has not landed.
+   It matters most exactly when the producer is in ANOTHER repo, where "I would
+   have noticed" is not true.
 4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
    wave's** run id — re-measures the SAME facts, against the SAME codes, as
    `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
