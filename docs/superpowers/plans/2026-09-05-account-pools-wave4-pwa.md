@@ -3627,21 +3627,20 @@ deviation found while executing this plan is allocated in its own call at the mo
   remedy is stopped pending its own ruling rather than silently manufacturing
   duplicate evidence.
 
-- **D-TBD-task-3-issued-array-remedy-already-present — D-2650's issued remedy is
-  already present and cannot kill the deletion it was meant to pin.** Coordinator
-  mail 850 says no test feeds an outer array and orders cases for
-  `{type:'pools', pools:[]}` and `listed:true` with `byProject:[]`. The current
-  `pwa/test/stores.test.ts` already has both: the first test also covers a
-  non-empty outer array, and the malformed-member table includes `byProject:[]`.
-  Both pass after deleting only the outer `Array.isArray(pools)` clause because
-  the remaining exact `listed` discriminant and enforcement checks reject the
-  envelope. Re-adding the same cases therefore cannot prove that clause. This is
-  an execution-time contradiction between the issued factual premise/remedy and
-  current source. Recommended ruling: either accept D-2650 as a semantic
-  rejection invariant while explicitly recording that the dedicated clause is
-  redundant, or replace it with a source-shape pin if retaining that exact clause
-  is independently required. Task 3 remains stopped before its review-fix
-  commit; no D-number is allocated locally.
+- **D-2651 — D-2650's prescribed array fixtures already existed, and the outer
+  array rejection is intentionally over-determined.** Coordinator mail 854
+  superseded D-2650 after verifying that `pwa/test/stores.test.ts:1046` already
+  retained prior state for both an empty outer array and a non-empty array with a
+  valid-looking member, while `pwa/test/stores.test.ts:1071` already rejected
+  `listed:true` with `byProject:[]`. Deleting only the outer
+  `Array.isArray(pools)` clause remains green because the exact `listed` and
+  `enforcement` discriminants independently reject arrays; that green mutant did
+  not prove the fixtures absent. The clause remains as the local
+  envelope-narrowing idiom, not as an independently load-bearing mechanism. Add
+  one source comment distinguishing this redundant short-circuit from the
+  load-bearing inner `!Array.isArray(outer.byProject)` clause, but add no duplicate
+  fixture or source-shape test whose only property is preserving one redundant
+  line.
 
 - **D-2636 — A tagged project card announces the fleet-wide untagged projection
   even when that account is outside this project's pool.** `ProjectCard` gives a
