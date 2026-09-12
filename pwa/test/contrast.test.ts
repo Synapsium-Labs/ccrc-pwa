@@ -886,6 +886,13 @@ describe('every stylesheet under src/ is audited', () => {
       expect(report.counts.uncovered).toBe(report.uncovered.length);
     });
 
+    it('does not grow past the grandfathered blind-spot count', () => {
+      // Copied from this suite's own D-2671 green run. Existing entries may only
+      // SHRINK: a new colour-bearing rule with no measured ground must fail on
+      // arrival instead of waiting for a manual census to notice it.
+      expect(report.uncovered.length).toBeLessThanOrEqual(255);
+    });
+
     it('contains no rule whose ground the selector itself gives away', () => {
       const recoverable = report.uncovered.filter((k) => {
         const rule = rules.find((r) => ruleKey(r) === k);
