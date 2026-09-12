@@ -508,7 +508,15 @@ export function FleetScreen({
                    is false, so the failure mode without the tolerant reader
                    would have been a crossing run silently missing its abroad
                    line on an older server, never every run landing on every
-                   card. */
+                   card. And this predicate SPECIALIZES `crossingNote`'s
+                   decision rather than re-spelling it, which is the distinction
+                   D-2575 turns on: `crossingNote` asks whether a run is
+                   crossing AT ALL, judged from the run's own project, while
+                   this asks the same question from a THIRD party — the card
+                   whose project is neither necessarily the run's work nor its
+                   home. Named here so the next reader neither deletes it as a
+                   duplicate of that decision nor forks it into a second copy
+                   of it. */
                 abroad={activeRuns.filter(
                   (r) => runHomeProject(r) === g.project && r.project !== g.project)}
                 nowMs={nowMs}

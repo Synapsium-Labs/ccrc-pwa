@@ -145,7 +145,7 @@ const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
 
-/** A `to:'worker'` brief queued to `to` on `runId`, the shape a wave brief
+/** A `toId:'worker'` brief queued to `to` on `runId`, the shape a wave brief
  *  takes in the store — the mail row keeps the ROLE, the delivery the
  *  session, exactly as `POST /api/mail` writes them. Returns the delivery id. */
 const queueWorkerBrief = (coord: CoordStore, runId: number, to: string): number => tx(coord.db, () => {

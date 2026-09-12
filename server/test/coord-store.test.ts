@@ -2637,7 +2637,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     if (!('id' in r)) throw new Error('open refused');
     return r.id;
   };
-  /** One `to:'worker'` mail queued to the session that holds the run today —
+  /** One `toId:'worker'` mail queued to the session that holds the run today —
    *  the shape `POST /api/mail` mints once the role resolves. */
   const workerMail = (s: CoordStore, runId: number, toId: string, subject: string): number =>
     tx(s.db, () => {
@@ -2717,7 +2717,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
 
   it('scopes the predecessor park to the mails it actually re-issued — a session-addressed mail to the same predecessor stays OUTSTANDING', () => {
     // MUT-2 (PR #75 review round 1). `parkSupersededDeliveries` is `AND mailId
-    // IN (…)` for a reason: the predecessor may hold a `to:'worker'` brief AND
+    // IN (…)` for a reason: the predecessor may hold a `toId:'worker'` brief AND
     // a mail sent to it BY NAME, and only the first is re-issued to the heir.
     // Without the scope the second is parked `recipient rebound` too — lost to
     // both sessions. The literal-session case above drives `reissued: 0`, so
@@ -2725,7 +2725,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     const s = store();
     const runId = openOne(s);
     s.bindSession(runId, 'demo-worker');
-    workerMail(s, runId, 'demo-worker', 'the wave brief');   // to:'worker', delivered to demo-worker
+    workerMail(s, runId, 'demo-worker', 'the wave brief');   // toId:'worker', delivered to demo-worker
     tx(s.db, () => {
       const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
         runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });

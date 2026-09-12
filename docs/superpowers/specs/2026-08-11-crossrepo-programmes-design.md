@@ -424,7 +424,7 @@ in programme terms — a **role**, not a session. The run row already knows both
 derivable from `{runId, role}` — and `'coordinator'` already resolves exactly this way today.
 
 **Proposed ruling:**
-1. Programme mail addresses `to: 'coordinator' | 'worker'` + `runId`. Raw session-id addressing remains
+1. Programme mail addresses `toId: 'coordinator' | 'worker'` + `runId`. Raw session-id addressing remains
    only for ad-hoc, non-programme mail.
 2. Resolution moves from send time to **delivery time** — each sweep resolves the role against the run
    row's *current* occupant. This closes a latent bug: today's frozen `toId` keeps replaying at a dead
