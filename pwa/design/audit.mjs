@@ -557,6 +557,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the two "we do not know" verdicts drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
   },
+  'fleet.css .proj-crossing': {
+    under: ['var(--bg-surface)'],
+    why: "the rule-3 orphan's programme note (F4, cross-repo wave 2) sits directly on .proj-card-body's own ground, same register .proj-nest-bracket and .proj-pending-program already use here. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-crossing-glyph': {
+    under: ['var(--bg-surface)'],
+    why: 'the same marker\'s glyph. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the glyph half of the marker unmeasured while the report looked complete',
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

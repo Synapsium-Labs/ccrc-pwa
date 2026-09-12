@@ -1711,6 +1711,22 @@ button.sess-held {
   color: var(--ink-tertiary);
 }
 
+/* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
+   never a --glow — it explains a row, it is not a row — and it takes
+   `--ink-tertiary` on `.proj-card-body`'s own ground, the register
+   `.proj-nest-bracket` and `.proj-pending-program` already use here: the
+   quietest thing on the card, because the row above it carries the fact. */
+.proj-crossing {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-left: var(--sp-3);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
+
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);

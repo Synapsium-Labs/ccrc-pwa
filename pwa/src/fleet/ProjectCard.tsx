@@ -20,7 +20,7 @@ import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { DISPATCH_GLYPH, dispatchWindow, runForSession } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, runHomeProject, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
 
@@ -197,6 +197,39 @@ export function ProjectCard({
   // names the programme, so the operator lands looking at the right group.
   const openRunFor = (session: FleetSession): (() => void) | null =>
     runForSession(runs, session.id) === null ? null : () => navigate('/runs');
+
+  // F4. `nestFleet`'s rule 3 leaves a worker whose coordinator is NOT on this
+  // card at depth 0, unbracketed — right, and until now silent. This is the
+  // sentence that ends the silence, computed HERE (the level that holds the
+  // runs) from the run the card already has, so the tree stays pure and its
+  // five rules stay exactly as they are.
+  //
+  // TWO facts, stated only when measured. The programme and wave come off the
+  // run itself and are always available. The HOME clause needs
+  // `runHomeProject` to answer, and while it answers `null` — the legacy
+  // generation, or an older server — the marker says nothing about a home
+  // rather than naming `undefined` or guessing this card's own project.
+  //
+  // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
+  // and not every worker's: a child whose parent IS on this card is bracketed,
+  // and the bracket already says what this sentence would say.
+  const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
+    if (row.kind !== 'session' || row.depth !== 0) return null;
+    const run = runForSession(runs, row.session.id);
+    if (run === null) return null;
+    const parent = run.claimedBy;
+    if (parent === null || parent === row.session.id) return null;
+    if (group.sessions.some((s) => s.id === parent)) return null;
+    const home = runHomeProject(run);
+    const label = `${run.program} ${waveLabel(run)}`;
+    return home === null || home === run.project
+      ? { text: label, title: `this worker's coordinator is not on this card` }
+      : {
+          text: `${label} · home ${home}`,
+          title: `this worker's coordinator is not on this card; the programme is homed in ${home}`,
+        };
+  };
+
   const rowBody = (row: FleetRow): ReactNode =>
     row.kind === 'session' ? (
       <SessionLine
@@ -293,20 +326,30 @@ export function ProjectCard({
               nothing, which is the whole reason the card can afford one at
               all. `aria-hidden` on the glyph because it is the picture of an
               edge, not a fact the row does not already carry. */}
-          {rows.map((row) =>
-            row.depth === 0 ? (
+          {rows.map((row) => {
+            const note = orphanNote(row);
+            return row.depth === 0 ? (
               // A Fragment, never a wrapper element: the top-level row's DOM
-              // has to stay byte-identical to the one that shipped before this
-              // task, and `.proj-card-body`'s column flex lays out its
-              // children directly.
-              <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
+              // has to stay byte-identical to the one that shipped before the
+              // tree existed, and `.proj-card-body`'s column flex lays out its
+              // children directly. The marker is a SIBLING line for the same
+              // reason — a wrapper would change the row it explains.
+              <Fragment key={rowKey(row)}>
+                {rowBody(row)}
+                {note !== null && (
+                  <div className="proj-crossing" title={note.title}>
+                    <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+                    {note.text}
+                  </div>
+                )}
+              </Fragment>
             ) : (
               <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
                 <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
                 {rowBody(row)}
               </div>
-            ),
-          )}
+            );
+          })}
         </div>
       )}
 

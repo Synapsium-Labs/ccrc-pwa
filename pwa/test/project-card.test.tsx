@@ -6,6 +6,7 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
 import { NEST_BRACKET, ProjectCard } from '../src/fleet/ProjectCard';
+import { CROSSING_GLYPH, waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -586,5 +587,109 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     render(<ProjectCard group={grp({ sessions: [other] })} runs={[childRun]} nowMs={FROZEN}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(cell()?.tagName).toBe('SPAN');
+  });
+});
+
+// ── cross-repo wave 2: the orphan gets a sentence (spec §3 F4) ───────────────
+//
+// `nestFleet`'s rule 3 is right and stays: a worker whose coordinator sits on
+// another project's card is NOT bracketed, because a `└─` may not cross two
+// cards. What it left behind was a row at depth 0 that looks exactly like an
+// ordinary session and is not one — correct, and silent. The card has the run in
+// its hand; the marker is one sentence built from it, and the TREE does not move.
+describe('the orphan worker says which programme it belongs to', () => {
+  const orphanRun = runFor({
+    id: 11, program: 'build9b', wave: 2, waveOf: 3,
+    project: 'demo', sessionId: 'demo-still-cove', claimedBy: 'off-card-coordinator',
+    homeProject: 'home-repo',
+  });
+
+  it('explains the row rule 3 leaves flat, naming the programme, the wave and the home', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    // The tree is untouched: no bracket was drawn across cards.
+    expect(container.querySelector('.proj-nest')).toBeNull();
+    const marker = container.querySelector('.proj-crossing');
+    expect(marker).not.toBeNull();
+    expect(marker!.textContent).toContain('build9b');
+    expect(marker!.textContent).toContain(waveLabel({ wave: 2, waveOf: 3 }));
+    expect(marker!.textContent).toContain('home home-repo');
+    expect(marker!.querySelector('.proj-crossing-glyph')?.textContent).toBe(CROSSING_GLYPH);
+  });
+
+  it('says the programme and wave WITHOUT a home clause while homeProject is null', () => {
+    // The legacy generation. The orphan is still worth explaining — its
+    // coordinator IS elsewhere, measured off `claimedBy` — but nothing measured
+    // a home, so nothing claims one.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const { container } = render(
+      <ProjectCard group={g} runs={[{ ...orphanRun, homeProject: null }]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing');
+    expect(marker).not.toBeNull();
+    expect(marker!.textContent).toContain('build9b');
+    expect(marker!.textContent).not.toContain('home');
+  });
+
+  it('marks NO row when the coordinator is on this very card — the bracket already says it', () => {
+    // `pair` is the coordinator + worker fixture; `childRun` is bracketed. A
+    // marker here would be a second sentence saying what the `└─` says. This
+    // one passes on the DEPTH check alone, which is why the rule-4 case below
+    // exists: depth 0 is not proof that a coordinator is elsewhere.
+    const { container } = render(
+      <ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-nest')).not.toBeNull();
+    expect(container.querySelector('.proj-crossing')).toBeNull();
+  });
+
+  it('marks no row at RULE 4 either, where a worker that is also a parent stays flat', () => {
+    // `nestFleet` rule 4: a session that is both a child of one run and the
+    // parent of another renders at TOP level with its own children beneath it.
+    // So a depth-0 row is NOT evidence that its coordinator is off this card —
+    // and without the `group.sessions.some(...)` guard this row would carry
+    // "this worker's coordinator is not on this card" while that coordinator is
+    // rendered two lines above it. This case is the guard's only witness.
+    const coord = sess();                                             // demo-quiet-mesa
+    const middle = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
+    const leaf = sess({ id: 'demo-far-bank', workspace: 'far-bank' });
+    const g = grp({ sessions: [coord, middle, leaf] });
+    const { container } = render(
+      <ProjectCard
+        group={g}
+        runs={[
+          runFor({ id: 20, sessionId: 'demo-still-cove', claimedBy: 'demo-quiet-mesa' }),
+          runFor({ id: 21, sessionId: 'demo-far-bank', claimedBy: 'demo-still-cove' }),
+        ]}
+        nowMs={FROZEN}
+        onOpen={() => {}}
+        onActions={() => {}}
+      />);
+    // The leaf is bracketed under the middle row; the middle row stays flat.
+    expect(container.querySelectorAll('.proj-nest')).toHaveLength(1);
+    expect(container.querySelector('.proj-crossing')).toBeNull();
+  });
+
+  it('marks no row on a card with no runs at all', () => {
+    const { container } = render(
+      <ProjectCard group={pair} runs={[]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-crossing')).toBeNull();
+  });
+
+  it('leaves the marked row itself byte-identical — the marker is a SIBLING, not a wrapper', () => {
+    // The same control the bracket cases use: a row that gains an explanation
+    // must not gain a wrapper, lose its tap surface or change its own DOM.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const plain = render(
+      <ProjectCard group={g} runs={[]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    const before = plain.container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    cleanup();
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    const after = container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    expect(after).toBe(before);
   });
 });
