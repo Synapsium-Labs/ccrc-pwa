@@ -75,6 +75,31 @@ acceptance list, verbatim.
 
 ## Decisions & deviations
 
+- **D-2545's scope, and the two numbers wave 2 found while measuring it (2026-09-12, coordinator):** the
+  worker measured the ruling before writing to it and reported that "the persisted-integer read surface"
+  read at its widest is ~20 `CoordStore` methods — exactly TWO statements in the whole of `store.ts` prove
+  a persisted INTEGER representable before coercing it, both inside `openRun`. RULED: the worker's own
+  bounding stands — D-2545 closes the five the ruling named plus `insertAsk` and the sixth consumer the
+  worker found (`dispatch.ts:171` → `:247` → `routes.ts:1329`, the same uncaught shape as `close.ts`), and
+  **D-2560** carries the remaining ~15 to a later wave with the worker's file:line census in the entry, so
+  nobody re-measures. The wide reading is a wave, not an item; taking it inside wave 2 would swallow the
+  eight plan tasks beside it. **D-2561** was allocated for something the census turned up that is not about
+  integers at all: `watch.ts:852`/`:868` (and `:860`'s `refreshCaps`) dispatch their sweeps as
+  `void this.sweepX().catch(() => { /* comment only */ })` with an EMPTY catch body, so a deterministic
+  throw abandons every project's tick and is indistinguishable from a quiet fleet, indefinitely — which is
+  why D-2545's blast radius reads as "one row degrades" when it is really "the sweep stops". The
+  not-awaiting is correct and stays; what is missing is that the failure must say so once.
+
+- **A ruling of mine needed correcting, and the worker's measurement is what caught it (2026-09-12):**
+  D-2545's fail-shut clauses said the archive route answers `409 run-open` "with no row detail" and the
+  merged notice "falls back to a generic reason". Both were governed by "fail-shut at every consumer" and
+  were only ever meant to describe the NEW failure arm, but the worker measured that
+  `server.ts:2383-2398` already sends full row detail and `watch.ts:3315` already builds the specific
+  sentence — so read literally, my own clauses would have NARROWED what ships today. Corrected in writing
+  before any code moved: the success paths stay byte-identical, and only the typed read's failure arm gets
+  the empty `runs` array and the generic sentence. Recorded as a defect in the ruling rather than as the
+  worker over-reading it, because that is what it was.
+
 - **Opened without waiting for account-pools (2026-09-09, operator):** the run board's Start door refuses a
   project with an open run, and its copy names the single-active-programme fallback as the reason. Measured
   before opening: that fallback is fleet-wide and was already ambiguous with two live programmes, so the
