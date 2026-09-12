@@ -1435,6 +1435,13 @@ describe('the run row names its repo', () => {
     const marker = document.querySelector('.run-crossing');
     expect(marker).not.toBeNull();
     expect(marker!.querySelector('.run-crossing-glyph')?.textContent).toBe(CROSSING_GLYPH);
+    // Every DOM assertion above compares the rendered glyph to the imported
+    // CONSTANT, so a mutation of the constant itself (e.g. to `''`) moves
+    // both sides together and stays green — the plan's Global Constraint
+    // ("two cues on every state: a glyph AND a word, never colour alone")
+    // would then be one cue in practice while every assertion still passed.
+    // Pin the literal, not just self-consistency with it.
+    expect(CROSSING_GLYPH).toBe('⇄');
     expect(marker!.textContent).toContain('crossing');
     expect(marker!.getAttribute('title')).toContain('home-repo');
     // The glyph is decoration for the word, never the carrier of the fact.

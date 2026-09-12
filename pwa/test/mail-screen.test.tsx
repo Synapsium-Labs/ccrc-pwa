@@ -403,11 +403,34 @@ describe('the feed, grouped by programme', () => {
   it('filters to one programme on its chip, and restores on All', async () => {
     mount([e({ seq: 1, runId: 5, title: 'wave 1 dispatched' }),
            e({ seq: 2, runId: 6, title: 'wave 2 dispatched' })]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Build 9b: peers and claims' }));
+    const build9bChip = await screen.findByRole('button', { name: 'Build 9b: peers and claims' });
+    expect(screen.getByRole('group', { name: 'filter by programme' })).toBeInTheDocument();
+    const allChip = screen.getByRole('button', { name: 'All' });
+    const crossrepoChip = screen.getByRole('button', { name: 'Cross-repo programmes' });
+    // Before any tap: All carries both the accessible and the visible cue
+    // (`aria-pressed`, `data-on`); the two programme chips carry neither.
+    // Both attributes are otherwise unwitnessed anywhere in the suite, even
+    // though a CSS rule (`.mail-chip[data-on]`) and an `INHERITED_GROUNDS`
+    // entry both document the pressed chip's look.
+    expect(allChip).toHaveAttribute('aria-pressed', 'true');
+    expect(allChip).toHaveAttribute('data-on', 'true');
+    expect(build9bChip).toHaveAttribute('aria-pressed', 'false');
+    expect(build9bChip).not.toHaveAttribute('data-on');
+    fireEvent.click(build9bChip);
     expect(screen.getByText('wave 1 dispatched')).toBeInTheDocument();
     expect(screen.queryByText('wave 2 dispatched')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    // The tapped chip now carries both cues; All and its sibling carry
+    // neither.
+    expect(build9bChip).toHaveAttribute('aria-pressed', 'true');
+    expect(build9bChip).toHaveAttribute('data-on', 'true');
+    expect(allChip).toHaveAttribute('aria-pressed', 'false');
+    expect(allChip).not.toHaveAttribute('data-on');
+    expect(crossrepoChip).toHaveAttribute('aria-pressed', 'false');
+    expect(crossrepoChip).not.toHaveAttribute('data-on');
+    fireEvent.click(allChip);
     expect(screen.getByText('wave 2 dispatched')).toBeInTheDocument();
+    expect(allChip).toHaveAttribute('aria-pressed', 'true');
+    expect(build9bChip).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('a filter pinned to a group key that later vanishes never blanks the screen (D-2584)', async () => {
@@ -450,12 +473,48 @@ describe('the feed, grouped by programme', () => {
     expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('reads the runs loader exactly once per mount', async () => {
-    const spy = vi.fn(loadRuns);
+  it('resolves a CLOSED wave\'s own header through the shipping default, `api.runs(true)`', async () => {
+    // Every other case in this block supplies its own `loadRuns` fixture and
+    // never exercises `loadRunsDefault` at all — the sibling default-loader
+    // case above spies on `api.feed` for the same reason. `loadRunsDefault`'s
+    // own docstring says the WHOLE POINT of the `true` argument is that a
+    // feed record outlives its run; answer the two arguments differently so a
+    // silently dropped `true` reverts this header to "not measured" instead
+    // of naming the programme.
+    const runsSpy = vi.spyOn(api, 'runs').mockImplementation((closed?: boolean) =>
+      Promise.resolve({
+        runs: closed
+          ? [{ id: 9, program: 'build9b', programTitle: 'Build 9b: peers and claims' } as unknown as RunSummary]
+          : [],
+      }));
     const store = makeStore();
-    render(<MailScreen store={store} loadFeed={async () => ({ events: [e()] })} loadRuns={spy} />);
+    render(<MailScreen store={store}
+                        loadFeed={async () => ({ events: [e({ runId: 9, title: 'wave 5 merged' })] })} />);
+    expect(await screen.findByText('Build 9b: peers and claims')).toBeInTheDocument();
+    expect(runsSpy).toHaveBeenCalledWith(true);
+  });
+
+  it('reads the runs loader exactly once per mount, regardless of the caller\'s identity discipline', async () => {
+    // A STABLE spy alone cannot fail for the reason this effect's own comment
+    // names ("'once per mount' has to hold regardless of the CALLER's
+    // identity discipline") — it never drives a re-render at all, so `[store]`
+    // and a hypothetical `[loadRuns]` would look identical. Copy the sibling
+    // durable-feed case's shape instead: re-render with a FRESH `loadRuns`
+    // identity (an inline arrow a future caller might mint each render, same
+    // as `loadFeedRef`'s own docstring worries about) and confirm the ref-held
+    // read still does not restart.
+    let calls = 0;
+    const store = makeStore();
+    const { rerender } = render(
+      <MailScreen store={store} loadFeed={async () => ({ events: [e()] })}
+                  loadRuns={(): Promise<{ runs: RunSummary[] }> => { calls += 1; return loadRuns(); }} />);
     await screen.findByText('Not part of a programme');
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(1);
+    rerender(
+      <MailScreen store={store} loadFeed={async () => ({ events: [e()] })}
+                  loadRuns={(): Promise<{ runs: RunSummary[] }> => { calls += 1; return loadRuns(); }} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(calls).toBe(1);
   });
 
   it('protects a record that reached the renderer without going through revival (D-2585)', async () => {

@@ -1380,6 +1380,12 @@ describe('the programme tree on the fleet screen', () => {
       sessions: [
         session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
         session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove' }),
+        // Neither this run's home nor its work: a third card that must stay
+        // silent. Without it, `alpha`/`beta` alone cannot tell "runHomeProject
+        // equals g.project" apart from "runHomeProject is merely non-null" —
+        // both clauses agree on those two cards, and only a card that is
+        // NEITHER catches a filter that dropped the equality (M1).
+        session({ id: 'claude:gamma-worker', project: 'gamma', workspace: 'far-bank' }),
       ],
       runs: [runRow({
         id: 40, program: 'build9b', wave: 2, waveOf: 3,
@@ -1400,6 +1406,10 @@ describe('the programme tree on the fleet screen', () => {
     // And beta's own row carries the orphan marker (Task 6), because the
     // coordinator is on alpha's card.
     expect(beta!.querySelector('.proj-crossing')?.textContent).toContain('home alpha');
+    // …and a card that is neither the home nor the work says nothing at all.
+    const gamma = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'gamma');
+    expect(gamma, 'no card for gamma').toBeTruthy();
+    expect(gamma!.querySelector('.proj-abroad')).toBeNull();
   });
 
   it('gives a single-project programme no abroad line at all', () => {

@@ -500,9 +500,15 @@ export function FleetScreen({
                    that one asks where the work is, this one asks whose
                    programme it is — and the two never merge, because only the
                    first may reach `nestFleet`. `runHomeProject` rather than
-                   `r.homeProject`, for the reason its own docstring gives: an
-                   older server omits the key and `undefined !== g.project`
-                   would put every run on every card. */
+                   `r.homeProject`, for the house rule its own docstring
+                   gives — one reader per field — not because the tolerance is
+                   load-bearing at THIS `===` comparison: an older server's
+                   missing key makes `runHomeProject(r)` `null` and a raw
+                   `r.homeProject` `undefined`, and either one `=== g.project`
+                   is false, so the failure mode without the tolerant reader
+                   would have been a crossing run silently missing its abroad
+                   line on an older server, never every run landing on every
+                   card. */
                 abroad={activeRuns.filter(
                   (r) => runHomeProject(r) === g.project && r.project !== g.project)}
                 nowMs={nowMs}
