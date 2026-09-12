@@ -4624,3 +4624,55 @@ rewrote the other sentence to remove.
 removed.
 
 **Two of my own rulings refuted in one day, both by measurement, both on facts I could have checked.**
+
+## 2026-09-12 16:02Z — D-2646..D-2650: two remedies reversed, and a guard I refused to let them delete
+
+**842 verified first.** `de96fb26` does what 839 ruled: the fixture requests `pool-a`, measures
+`{state:'unreadable'}`, and `api.test.ts` asserts `r.pool` is the MEASUREMENT. D-2635 is docstring-only
+with no fabricated fixture. The worker reported a distinct restored SHA-256 per file unprompted —
+that is `a-mutation-restore-needs-a-distinct-sentinel` applied without being asked.
+
+**D-2646 (mail 843) — the success toast echoes intent.** UPHELD: D-2634's contract reaching the
+surface — the body was fixed and the toast kept saying `<project> is in pool <requested>`, the same
+defect one layer up. The worker offered a neutral toast OR deriving from `response.pool`. **Ruled:
+derive.** A neutral toast fixes the rare divergent case by discarding the good copy in the common one
+and folds four measured states into one word — the narrowing this repo forbids at a seam. Endorsed
+their instinct to keep `unknown-pool` naming the SUBMITTED pool, and named why: the warning's subject
+is the NAME typed, the toast's subject is the resulting STATE — one "pool" noun in both sentences is
+what makes them look interchangeable. And checked the channel rather than assuming: `ToastKind` is
+`'info' | 'error'` only (`Toast.tsx:12`), so `info` — a divergent re-measure is not a failed write, and
+the dead-red interrupting channel would be its own false claim.
+
+**D-2647 — worse than reported, and NOT fixable by deletion.** `stores.test.ts:1092`
+`expect(raw).not.toContain('pool')`. The worker called the persisted `RosterWire.pool` "intentional";
+it is also **REQUIRED** (`shared/api.ts:3200`, `pool: string | null`, whose own docstring says a
+handler dropping it "would ship a wire on which every account looks untagged"). **So every realistic
+persisted roster trips this assertion** — a tripwire that fires on correct data, green today only
+because the fixture never exercises the field. But plain deletion loses the property the substring was
+actually carrying: pool policy smuggled AT ANY DEPTH, which line 1093's exact top-level keys cannot
+see. Ruled: keep the property, make it precise — assert on **`enforcement`**, a token unique to the
+pools wire (`shared/api.ts:1812-1813`, absent from `RosterWire` and `FleetSession`).
+
+**D-2648/D-2649 — upheld as reported**, no change: the `listed:true` + `unavailable` combination and
+the documented reconnect stickiness are both the D-2634 shape — a contract in prose with no assertion
+behind it.
+
+**D-2650 — measurement right, remedy REVERSED.** The worker proposed deleting the outer
+`Array.isArray(pools)` (`fleet.ts:192`) as redundant, with "no new behavior test". Refused, for two
+reasons it could not see from its own diff:
+1. **The two `Array.isArray` calls in that block are not alike and they LOOK alike.** The outer is
+   redundant today; the inner (`:199`, `!Array.isArray(outer.byProject)`) is **load-bearing** — an
+   array has no keys, so without it `byProject: []` passes `typeof === 'object' && !== null` and an
+   array is accepted as a valid project map. A ledger entry reading "the `Array.isArray` guard here
+   was redundant" is an invitation for the next reader to delete the wrong one.
+2. **`pools` is untrusted wire input**, and the outer clause is redundant only because of a downstream
+   check that can be relaxed independently. Their own measurement proves the gap: deletion is green,
+   so **nothing feeds an array envelope at all.**
+
+So the finding is not "a redundant clause" but **an unpinned envelope rejection**. Ruled: keep both
+clauses, add the tests that feed `pools: []` and `byProject: []`, and correct the report.
+
+**D-2646..D-2650 issued** (floor 2651), mail 850; 842/843/845 acked.
+
+**Three worker remedies reversed today, none of the findings.** The reviews are finding real things and
+proposing the wrong fix for them — which is the healthier failure of the two.
