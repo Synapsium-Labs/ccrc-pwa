@@ -870,6 +870,30 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(measureCommand(unpaired, null, 'auto').fences).toBe(0);
   });
 
+  it('uses the complete Markdown backtick-fence grammar: at most three leading spaces, at least three backticks, info strings only on openers, and whitespace-only closers', () => {
+    const F2 = '\x60'.repeat(2), F3 = '\x60'.repeat(3);
+
+    // Four leading spaces make this an indented code block, not a fence. If
+    // the opening indentation widens to four, `4. Next` is hidden and the
+    // unindented run closes the mistaken fence.
+    const indented = `3. Files and Code Sections:\n    ${F3}ts\n4. Next:\n${F3}\n`;
+    expect(filesSectionChars(indented)).toBe(('3. Files and Code Sections:\n    ' + F3 + 'ts\n').length);
+    expect(measureCommand(indented, null, 'auto').fences).toBe(0);
+
+    // Two backticks are never a fence. Widening the opener to two makes the
+    // later three-backtick run a valid close and hides `4. Next` as code.
+    const two = `3. Files and Code Sections:\n${F2}ts\n4. Next:\n${F3}\n`;
+    expect(filesSectionChars(two)).toBe(('3. Files and Code Sections:\n' + F2 + 'ts\n').length);
+    expect(measureCommand(two, null, 'auto').fences).toBe(0);
+
+    // `ts` is a valid opener info string. Non-whitespace after the same run
+    // makes it INVALID as a closer: relaxing the close rule hides neither
+    // its early section terminator nor the second closed fence it creates.
+    const info = `3. Files and Code Sections:\n${F3}ts\n1. still code\n${F3} trailing\n4. still code\n${F3}\n${F3}\n4. still code too\n`;
+    expect(filesSectionChars(info)).toBe(info.length);
+    expect(measureCommand(info, null, 'auto').fences).toBe(1);
+  });
+
   it('cited counts a set file when its path appears, or a UNIQUE suffix of at least two segments does — never a bare basename', () => {
     const paths = ['server/src/pane/statusline.ts', 'server/src/watch.ts', 'pwa/src/watch.ts'];
     expect(citedCount('touched server/src/pane/statusline.ts', paths)).toBe(1);
@@ -879,7 +903,7 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(citedCount('see server/src/watch.ts and pwa/src/watch.ts', paths)).toBe(2);
   });
 
-  it('full paths and unique suffixes require both path-character boundaries (Minor 3, fix round 1)', () => {
+  it('keeps full-path and unique-suffix left boundaries distinct (Minor 3, fix round 3)', () => {
     const paths = ['a/b/c.ts', 'x/a/b/c.ts'];
     // Only the longer path is actually named; the shorter one is not a
     // standalone citation just because its characters occur in the longer
@@ -889,8 +913,17 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(citedCount('see a/b/c.ts and x/a/b/c.ts', paths)).toBe(2);
     // A full path must not be credited as the prefix of another token.
     expect(citedCount('see a/b/c.tsx', ['a/b/c.ts', 'a/b/c.tsx'])).toBe(1);
-    // Nor can a unique multi-segment suffix begin inside a larger path token.
-    expect(citedCount('see nota/b/c.ts', ['x/a/b/c.ts'])).toBe(0);
+    // A full path must not double-credit inside another full path.
+    expect(citedCount('see x/a/b/c.ts', paths)).toBe(1);
+
+    // Unlike a full path, a unique multi-segment suffix may begin immediately
+    // after `/`: its left boundary is segment alignment, not generic text.
+    expect(citedCount('see pwa/src/watch.ts', ['server/src/watch.ts'])).toBe(1);
+    // Its right boundary remains strict, so it cannot end inside a token.
+    expect(citedCount('see src/watch.tsx', ['server/src/watch.ts'])).toBe(0);
+    // Make `b/c.ts` ambiguous, leaving `a/b/c.ts` as the candidate suffix;
+    // its preceding `t` is a path character, not a segment boundary.
+    expect(citedCount('see nota/b/c.ts', ['x/a/b/c.ts', 'y/b/c.ts'])).toBe(0);
   });
 
   it('measureCommand: the fields, and null — never 0 or main — without a set or without files', () => {

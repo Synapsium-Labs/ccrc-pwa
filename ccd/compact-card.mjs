@@ -617,8 +617,9 @@ export function normalizeSummary(raw) {
 const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
 
 /** Markdown backtick fences begin at a line start with at most three spaces.
- *  A close must be at least as wide as its opener and otherwise whitespace,
- *  so inline backticks and shorter runs inside a wider fence stay code. */
+ *  An opener may carry an info string; a close must be at least as wide as its
+ *  opener and otherwise whitespace, so only the opener accepts trailing text.
+ *  This preserves both Markdown's grammar and the line scanner's linear pass. */
 const FENCE_OPEN_RE = /^(?: {0,3})(\x60{3,})/;
 const FENCE_CLOSE_RE = /^(?: {0,3})(\x60{3,})[ \t\r]*$/;
 
@@ -674,19 +675,29 @@ export function filesSectionChars(text) {
 }
 
 /** A path-continuation character: the same alphabet `tokenRegex` mines with.
- *  Used only to LEFT-bound a full-path citation, never to re-derive matches. */
+ *  Full paths need non-path characters on both sides; unique suffixes use a
+ *  segment-aligned left boundary but keep the same strict right boundary. */
 const PATH_CHAR = /[A-Za-z0-9_./-]/;
 
-/** Whether `p` occurs in `text` at a path-character-aligned position:
- *  start/end of string or non-path characters on BOTH sides. Without this,
- *  a full set path can be a substring of a longer cited path or token rather
- *  than a citation of that set member itself. */
-function hasAlignedOccurrence(text, p) {
+function hasFullPathOccurrence(text, p) {
   let i = text.indexOf(p);
   while (i >= 0) {
     const end = i + p.length;
     if ((i === 0 || !PATH_CHAR.test(text[i - 1])) && (end === text.length || !PATH_CHAR.test(text[end]))) return true;
     i = text.indexOf(p, i + 1);
+  }
+  return false;
+}
+
+function hasUniqueSuffixOccurrence(text, suffix) {
+  let i = text.indexOf(suffix);
+  while (i >= 0) {
+    const end = i + suffix.length;
+    // A suffix begins at a segment boundary: `/` is allowed here even though
+    // it is a path character. A full path deliberately does not share this.
+    if ((i === 0 || text[i - 1] === '/' || !PATH_CHAR.test(text[i - 1])) &&
+        (end === text.length || !PATH_CHAR.test(text[end]))) return true;
+    i = text.indexOf(suffix, i + 1);
   }
   return false;
 }
@@ -697,13 +708,13 @@ function hasAlignedOccurrence(text, p) {
 export function citedCount(text, paths) {
   let n = 0;
   for (const p of paths) {
-    if (hasAlignedOccurrence(text, p)) { n++; continue; }
+    if (hasFullPathOccurrence(text, p)) { n++; continue; }
     const segs = p.split('/');
     let hit = false;
     for (let k = 2; k < segs.length && !hit; k++) {
       const suffix = segs.slice(-k).join('/');
       const unique = paths.filter((q) => q === suffix || q.endsWith('/' + suffix)).length === 1;
-      if (unique && hasAlignedOccurrence(text, suffix)) hit = true;
+      if (unique && hasUniqueSuffixOccurrence(text, suffix)) hit = true;
     }
     if (hit) n++;
   }
@@ -741,13 +752,10 @@ export function measureCommand(raw, set, trigger) {
 }
 
 /** The set for `measure`: absent, unreadable, or JSON that does not parse to
- *  a plain object all read here as NO SET (spec §3.4). A malformed
- *  INDIVIDUAL `files[]` entry is not this function's concern — the set
- *  itself is well-formed JSON — and is not this document's claim: it is
- *  `measureCommand`'s path extraction that filters such an entry out, so
- *  one corrupt file entry costs that entry's own citation, never the whole
- *  measurement (fix round 1, Minor 1 — the earlier docstring here claimed
- *  that broader guarantee without the code to back it). */
+ *  a plain object all read here as NO SET (spec §3.4). Individual `files[]`
+ *  entries remain in the returned set for `measureCommand`, which treats the
+ *  whole set-derived denominator as unknown when any entry is malformed; it
+ *  never filters a bad entry into a smaller apparently complete set. */
 export function readSetForMeasure(setPath) {
   if (!setPath) return null;
   try {
