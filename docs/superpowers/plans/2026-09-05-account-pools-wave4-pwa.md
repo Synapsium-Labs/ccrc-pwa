@@ -870,7 +870,7 @@ git commit -m "feat(pwa): the tag write, the declared crossing, and three refusa
 
 **Spec:** §5.10 `stores/fleet.ts` row; §5.4.1 ("not in the PWA offline snapshot"); §5.9 ("Nothing about pools is persisted").
 
-**Mutation table:** no numbered §11 row; §10's "A cached tag renders as live policy → Nothing pooled is persisted; store slot null on load" is the guard. Goes red when the slot is hydrated from `loadFleetSnapshot()`, when `saveFleetSnapshot` grows a pools argument, or when `asFleetMsg` starts accepting a `pools` frame whose payload is not an object.
+**Mutation table:** §10's "A cached tag renders as live policy → Nothing pooled is persisted; store slot null on load" remains the persistence guard. **D-2622 adds the live-frame boundary guard:** after a valid frame, each malformed outer payload must leave that exact object in the slot. It goes red when the outer array refusal, `listed` boolean discriminant, `enforcement` vocabulary, or listed-true `byProject` non-array-object rule is weakened. Per-project members deliberately remain unvalidated here: D-2623 owns their downstream tolerance.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1021,17 +1021,20 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/stores.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 67 tests; `tsc` exits 0. The 67 is a derived
-copy-completeness check, not a decreed cardinal: this focused file has 67
-direct `it(` calls and zero `it.each` calls after the four-case block lands.
-Following D-2598, re-derive both quantities after changing the focused file;
-parameterized rows make direct calls diverge from reported tests.
+Expected: PASS, 72 tests; `tsc` exits 0. The 72 is a derived
+copy-completeness check, not a decreed cardinal: this focused file has 72
+direct `it(` calls and zero `it.each` calls after D-2622's eight pools-frame
+cases land. Following D-2598, re-derive both quantities after changing the
+focused file; parameterized rows make direct calls diverge from reported tests.
 
 - [ ] **Step 5: Prove the guard by mutation**
 
 1. Per D-2615, change the initial state to `pools: (snapshot as unknown as { pools?: ProjectPoolsWire } | null)?.pools ?? null` and have the `fleet` branch call `saveFleetSnapshot` with a third argument that a locally-widened writer writes (no new import). Expected red: `is NOT persisted, and a fresh store starts null even with a snapshot on disk` — `expected '{"savedAt":…,"pools":…}' not to contain 'pool'`. Revert all three edits by their exact inverses.
-2. Delete the `typeof … === 'object'` half of the `asFleetMsg` arm. Expected red: `drops a pools frame whose payload is missing or not an object` — `expected 'enforced' to be null`.
-3. Delete the `else if (msg.type === 'pools')` branch. Expected red: `starts null and takes a well-formed frame` — `expected null to deeply equal { listed: true, … }`.
+2. **D-2622 outer-array pin:** after a valid frame, change only the array return to `return m as FleetMsg`. Expected red: `silently retains the exact prior valid state for an outer array payload` receives the array instead of the exact prior object. Restore by exact inverse.
+3. **D-2622 listed-discriminant pin:** change only `outer.listed === true` to `outer.listed !== false`. Expected red: `silently retains the exact prior valid state for a missing or invalid listed discriminant` accepts `{listed:'true', byProject:{}}`. Restore by exact inverse.
+4. **D-2622 enforcement-vocabulary pin:** replace only the three-value comparison with `typeof outer.enforcement === 'string'`. Expected red: `silently retains the exact prior valid state for a missing or unrecognised enforcement value` accepts `enforcement:'future'`. Restore by exact inverse.
+5. **D-2622 listed-true map-shape pin:** remove only `&& !Array.isArray(outer.byProject)`. Expected red: `silently retains the exact prior valid state for every invalid listed:true byProject shape` accepts `byProject:[]`. Restore by exact inverse.
+6. Delete the `else if (msg.type === 'pools')` branch. Expected red: `starts null and takes a well-formed frame without discarding additive fields` — `expected null to deeply equal { listed: true, … }`.
 
 - [ ] **Step 6: Commit**
 
@@ -1385,13 +1388,9 @@ Add above `PendingSpawn` (`:47`):
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-/** The project's pool, as one chip. FIVE renderings for five conditions, and
- *  the fifth — "no frame has arrived" — is handled by the CALLER not rendering
- *  this at all, because a chip is a claim and absence is not one (§11 row 24).
- *
- *  `malformed` and `unreadable` are two chips, not one: rewrite the file and
- *  fix its permissions are different remedies, and each aria-label carries the
- *  full path so either is actionable from a phone with no shell. */
+/** The project's pool as one chip. Absence is handled by the caller: no frame
+ *  means no claim. Per D-2623, unrecognised residue means this app is older
+ *  than the fleet, not a tag that may be folded into any declared diagnosis. */
 function PoolChip({ pool, project, dim, onTap }: {
   pool: ProjectPoolWire;
   project: string;
@@ -1399,24 +1398,27 @@ function PoolChip({ pool, project, dim, onTap }: {
   onTap: ((project: string) => void) | undefined;
 }): ReactNode {
   const path = `~/.cc-sessions/pools/${project}`;
+  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
   const word =
     pool.state === 'tagged' ? pool.name
     : pool.state === 'untagged' ? 'no pool'
     : pool.state === 'malformed' ? 'pool malformed'
-    : 'pool unreadable';
+    : pool.state === 'unreadable' ? 'pool unreadable'
+    : 'app older than fleet; reload';
   const label =
     pool.state === 'tagged' ? `project pool ${pool.name}`
     : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
     : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
-    : `project pool tag could not be read — check permissions on ${path}`;
-  // A SPAN when there is nowhere to go: no handler, or a fleet whose ccd would
-  // answer 501. `.sess-held`'s own door/cell split, for its own reason — a
-  // control that cannot act is worse than a plain statement of the fact.
-  if (dim || onTap === undefined) {
+    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
+    : 'app bundle is older than the fleet; reload to understand this project pool';
+  const dataPool = unrecognised ? 'unrecognised' : pool.state;
+  // A span when there is nowhere safe to go: no handler, a fleet whose ccd
+  // would answer 501, or a newer fleet state this app cannot interpret.
+  if (dim || onTap === undefined || unrecognised) {
     return (
       <span
         className="proj-card-pool"
-        data-pool={pool.state}
+        data-pool={dataPool}
         data-dim={dim || undefined}
         aria-label={label}
         title={dim ? POOL_UNAVAILABLE_TEXT : label}
@@ -1429,7 +1431,7 @@ function PoolChip({ pool, project, dim, onTap }: {
     <button
       type="button"
       className="proj-card-pool"
-      data-pool={pool.state}
+      data-pool={dataPool}
       aria-label={label}
       title={label}
       onClick={() => onTap(project)}
@@ -1562,8 +1564,8 @@ In `pwa/src/fleet/fleet.css`, immediately after the `.proj-card-pin[data-mixed]`
   font-size: var(--text-2xs);
   white-space: nowrap;
   color: var(--ink-tertiary);
-  cursor: pointer;
 }
+button.proj-card-pool { cursor: pointer; }
 button.proj-card-pool::before {
   content: '';
   position: absolute;
@@ -1579,16 +1581,14 @@ button.proj-card-pool::before {
    name in greyscale. */
 .proj-card-pool[data-pool='untagged'],
 .proj-card-pool[data-pool='malformed'],
-.proj-card-pool[data-pool='unreadable'] {
+.proj-card-pool[data-pool='unreadable'],
+.proj-card-pool[data-pool='unrecognised'] {
   color: var(--status-attention-text);
 }
-/* Nothing on the fleet is enforcing these tags yet (§5.11). Half opacity is
-   the whole cue plus the title; the chip is a span here, so there is no
-   disabled control to explain. */
-.proj-card-pool[data-dim] {
-  opacity: 0.55;
-  cursor: default;
-}
+/* Nothing on the fleet is enforcing these tags yet (§5.11). Per D-2631 the
+   small pool word stays at full contrast; inert span, neutral cursor, and title
+   carry the distinction without fading readable text. */
+.proj-card-pool[data-dim] { cursor: default; }
 
 /* The strand — ruling 6's loud cell on the card. Same attention ink as
    `.sess-acct-away`, which is an already-audited pair on this ground
@@ -1617,19 +1617,22 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     expect(norm(rule)).toContain('var(--tap-min)');
   });
 
-  it('paints the worklist and both bad-tag states in the audited attention ink', () => {
+  it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
+    expect(declValue(ruleFor('.proj-card-pool'), 'cursor')).toBeNull();
+    expect(declValue(ruleFor('button.proj-card-pool'), 'cursor')).toBe('pointer');
+  });
+
+  it('paints the worklist, both bad-tag states, and unrecognised residue in audited attention ink', () => {
     const sel = ".proj-card-pool[data-pool='untagged']";
     expect(declValue(ruleFor(sel), 'color')).toBe('var(--status-attention-text)');
     const group = selectorsOf(css, sel).map(normSel);
-    for (const state of ['malformed', 'unreadable']) {
+    for (const state of ['malformed', 'unreadable', 'unrecognised']) {
       expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
     }
   });
 
-  it('dims, rather than recolours, when the fleet ccd predates pools', () => {
-    // A third hue would be a fourth thing to name in greyscale. Opacity plus
-    // the title is the whole cue.
-    expect(ruleFor('.proj-card-pool[data-dim]')).toContain('opacity');
+  it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
+    expect(declValue(ruleFor('.proj-card-pool[data-dim]'), 'opacity')).toBeNull();
   });
 
   it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {
@@ -1656,6 +1659,9 @@ Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `des
 4. In `PoolChip`, drop the `dim ||` from the span branch. Expected red: `dims and stops being a control when the fleet ccd predates pools` — `expected null not to be null` on the `queryByRole` assertion.
 5. In `ProjectCard`, change `poolLabelList(roster, pool)` back to `homeAbleLabelList(roster)`. Expected red: `names only the accounts the project's pool admits` — `expected '…team·max, team·alt, team·b and team·d…' not to contain 'team·max'`.
 6. Move the `{group.stranded > 0 && …}` cell into the `{collapsed && …}` branch beside `.proj-card-busy`. Expected red: `says how many members have nowhere in their pool to go, folded or not` — `Unable to find an element with the text: 2 stranded`.
+7. Per D-2623, restore the old residual tagged fallthrough in `poolRule`. Expected red: the three separate future-state rule cases return false mismatch, false named mismatch, and false permit while all six known-state controls remain green. Restore by exact inverse.
+8. Per D-2624, move `cursor:pointer` from `button.proj-card-pool` to the shared `.proj-card-pool` rule. Expected red: `reserves the pointer cursor for the button form, leaving inert spans at the default` observes pointer on the shared form. Restore by exact inverse.
+9. Per D-2631, add `opacity:0.55` to `.proj-card-pool[data-dim]`. Expected reds: `keeps unavailable chip text unfaded while its inert form carries the distinction` observes the opacity, and `node design/contrast-check.mjs` reports the unregistered failing fade. Restore by exact inverse.
 
 - [ ] **Step 9: Commit**
 
@@ -3434,6 +3440,146 @@ deviation found while executing this plan is allocated in its own call at the mo
   remains green; widening either one string check to truthiness and widening the
   code gate must each red their own assertion. Restore every mutant by exact
   inverse.
+
+- **D-2622 — Task 3's object-only `pools` cast could overwrite a good policy
+  with an unreadable envelope and crash a render path.** Coordinator mail 813
+  ruled that the existing cast posture remains acceptable for degradable row
+  fields, but not for this payload: `projectPoolOf` reads the envelope's
+  discriminated shape directly, so `{listed:true,enforcement:'enforced'}` could
+  replace a prior valid frame and then pass missing `byProject` to
+  `Object.hasOwn`. Arrays, wrong/missing `listed`, wrong/missing `enforcement`,
+  and absent/null/array/primitive `byProject` have the same overwrite path.
+  Ruling: validate only the outer `ProjectPoolsWire` envelope before accepting a
+  frame: a non-array object, `listed` exactly `true` or `false`, `enforcement`
+  exactly `enforced`, `unavailable`, or `unknown`, and for `listed:true` a
+  non-null non-array-object `byProject`. Preserve all additive outer fields and
+  do not validate member states: D-2623 owns its downstream future-member
+  tolerance. Every malformed envelope now silently retains the exact prior
+  valid state; tests establish that prior state before each malformed input, and
+  separate array, discriminant, vocabulary, and map-shape mutants each reach
+  their named post-frame assertion before exact-inverse restoration.
+
+- **D-2623 — An unrecognised per-project pool state must remain distinct and
+  fail shut, never become a false mismatch, permit, or read-failure diagnosis.**
+  Coordinator mail 813 confirmed TypeScript was the parity outlier: `ccd`
+  already fail-shuts every residual `_pool_ok` state, while the shared rule's
+  residual tagged fallthrough could produce a mismatch with `projectPool:
+  undefined`, name a carried future `name` as a plausible mismatch, or permit
+  the value when the account was untagged. Normalizing a future member to
+  `unreadable` was rejected because the tag may have been read successfully and
+  the wire contract forbids folding one measured state into another. Ruling:
+  `projectPoolOf` preserves the raw own member; `poolRule` positively recognizes
+  `tagged`, proves its residual with `const unhandled: never = projectPool`, and
+  returns `{ok:false,reason:'pool-undecidable',state:'unrecognised'}`. PWA
+  composition consequently reports unknown, preserves every candidate, creates
+  no crossing, and retains ordinary labels. `ProjectCard` and Task 6's
+  `currentCopy` give this state its own remediation: this app/bundle is older
+  than the fleet and should be reloaded. They must neither expose a carried
+  future name nor claim unreadable, malformed, or untagged. The raw runtime
+  token never becomes a CSS vocabulary; use `data-pool="unrecognised"`. Missing
+  `name` on the declared `{state:'tagged'}` arm remains deferred because `ccd`
+  has the same hole and a TypeScript-only change would create parity drift.
+  Separate future-state tests sit outside `POOL_RULE_CASES`, whose exact declared
+  state census remains unchanged; six known-state controls prove the residual
+  mutation changes only the intended mechanism.
+
+- **D-2624 — Only the actionable project-pool chip advertises a pointer
+  cursor.** The plan deliberately renders a `<span>` whenever the optional
+  `onPool` handler is absent, and also for enforcement unavailable or
+  unrecognised residue, but its original shared `.proj-card-pool` rule assigned
+  `cursor:pointer` to both forms. Task 6 later wires the FleetScreen control, yet
+  the optional inert public form remains valid and otherwise advertises a tap it
+  cannot take. Coordinator mail 813 ruled the correction low severity and
+  mechanical: keep the shared class cursor-neutral, scope pointer to
+  `button.proj-card-pool`, retain default cursor on inert spans, and pin both
+  selector forms in the stylesheet test.
+
+- **D-2631 — Task 5 must not dim readable pool-chip text with element
+  opacity.** The plan itself prescribed `.proj-card-pool[data-dim] {
+  opacity:0.55 }` while naming `node design/contrast-check.mjs` as its gate. The
+  gate correctly reports the fade as unregistered; registering it would only
+  turn the structural red into a measured contrast red. Coordinator mail 825
+  measured the repo's own contrast math on the relevant raised ground:
+  `--ink-tertiary` is 5.27:1 dark / 4.86:1 light at full strength but only
+  2.54:1 / 2.15:1 at 0.55, and needs at least 0.97 in the worst theme to clear
+  4.5:1. No human-perceptible text fade works; `--ink-disabled` also fails at
+  full opacity. Element opacity composites the whole subtree, so it cannot dim
+  the chip without dimming its word, and a `noText` registry exemption would be
+  false. Ruling: remove element opacity from the chip. Unavailability remains
+  conveyed by three non-color mechanisms already present: inert `<span>` rather
+  than button, `POOL_UNAVAILABLE_TEXT` in the title, and D-2624's absence of a
+  pointer cursor. An optional fourth cue may use an audited background/border or
+  decorative text-free sibling, but only if its worst light-theme state passes;
+  otherwise ship the three structural signals. The stylesheet test must assert
+  no opacity on `[data-dim]`, and mutating the rule back to `opacity:0.55` must
+  make both that assertion and the real contrast gate red.
+
+- **D-2628 — Task 6's toast tests are red at baseline, so their mutation rows
+  carry no evidence.** `toast()` pushes only to a module-level listener set and
+  `ToastHost` is its only subscriber, yet all ten prescribed PoolSheet render
+  sites mount the sheet alone. The warning/refusal messages therefore never
+  enter the DOM even with production branches intact. A mutation beneath a
+  baseline-red assertion remains red and conveys zero bits — the false-red
+  counterpart to a green mutant without a live control. Coordinator mail 823
+  upheld the in-tree mechanical remedy: import `ToastHost` and use one shared
+  render helper that mounts `<><ToastHost /><PoolSheet ... /></>` at every site,
+  as neighboring sheet suites do. Establish a green baseline first, then delete
+  warning and refusal toast arms independently and require each named DOM
+  assertion to become red before exact-inverse restoration.
+
+- **D-2629 — The measured route response yields to the first `pools` frame
+  newer than that response, without snapping back to a pre-write frame.** The
+  approved spec explicitly says the sheet "renders the measured `pool` from the
+  200 and settles on the next `pools` frame". The plan contradicted it by using
+  `measured ?? projectPoolOf(...)` until close. Coordinator mail 823 ruled that
+  the spec wins while preserving the plan's valid concern: a frame that predates
+  the write must not overwrite the route's fresh read-back. Implement this with
+  the same monotonic generation/frame-identity mechanism D-2630 needs, storing
+  the measured answer with the generation and frame identity it observed. Drop
+  it only when a later pools frame arrives after the response. Tests separately
+  prove a pre-write frame cannot snap the 200 back and the first post-response
+  frame replaces it without closing. Mutate each relevance check separately and
+  require the test to reach the intended assertion.
+
+- **D-2630 — A PoolSheet write continuation may update only the request,
+  project, and open generation that issued it.** The prescribed success,
+  refusal, toast, and finally arms were unconditional. With A in flight and the
+  mounted sheet closed/reopened on B, A could set B's measured state, toast A's
+  result over B, and clear the saving guard around B's newer request. Coordinator
+  mail 823 upheld the defect and ruled D-2629/D-2630 share one mechanism: one
+  monotonic generation, advanced on every write and every project change,
+  reopen, close, or unmount. Each async arm captures it and returns immediately
+  unless still current; measured state also carries the frame identity from
+  D-2629. Deferred tests start A, close/reopen on B, then resolve A and prove B's
+  rendered pool, toast surface, and saving state remain untouched; a newer-write
+  case proves ordering within one subject. Drop the generation guard in one
+  success, failure/toast, or finally arm at a time — never empty a shared helper
+  and mistake one pinned call site for proof of every continuation.
+
+- **D-2632 — An issued deviation is orphan-exposed until its definition is
+  committed, and no gate measures that working-tree window.** The definitions
+  for D-2622 through D-2624 and D-2628 through D-2631 were authored when their
+  rulings arrived but remained only in this unpushed branch's working tree while
+  later implementation continued. The ledger floor had already risen, so losing
+  that working tree would permanently orphan all seven numbers: the committed
+  reference gate can catch a committed citation without a committed definition,
+  but cannot see an uncommitted definition. No code commit carried an undefined
+  D-reference, so this was orphan exposure rather than a same-commit violation.
+  Coordinator mail 830 ruled the mitigation as ordering, not a new mechanism:
+  commit issued definitions before doing any further work with their numbers.
+  This forward-only commit records the true timing instead of amending an older
+  code commit to manufacture simultaneity.
+
+- **D-2633 — The coordinator's program ledger cites issued numbers before the
+  worker branch commits their definitions, so the coordinator branch cannot pass
+  `deviation-refs.test.ts` during that interval.** This is structural: citations
+  and definitions live on separate branches by design. The coordinator must
+  therefore measure the union of its ledger branch and the worker's committed
+  plan definitions rather than interpret its own branch's temporary red as a
+  collision. In this run, the coordinator's program ledger cited D-2622 through
+  D-2631 while this branch still held their definitions only in the working tree;
+  committing through D-2633 closes both the orphan window and the cross-branch
+  maximum imbalance without pretending the definitions landed earlier.
 
 - **D-2615 — Task 3's combined persistence mutant must be null-safe at store
   bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown
