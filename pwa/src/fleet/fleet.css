@@ -2017,6 +2017,35 @@ button.sess-held {
 }
 .mail-row .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
 
+/* The programme filter and its headers. Chips take the same ground and the same
+   inks the rest of this screen does — `--ink-secondary` for a chip that is off,
+   `--ink-primary` for the one that is on — so nothing here is read out of
+   colour: the pressed chip carries `aria-pressed` and `data-on`, and the header
+   above each list says in words what the chip selected. */
+.mail-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+.mail-chip {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: var(--text-2xs);
+}
+.mail-chip[data-on] { color: var(--ink-primary); }
+.mail-group-head {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
 /* — Build 7: the run board. Machine voice throughout (ids, slugs, waves and
    tallies are all things the fleet says, not things a person wrote), and NO
    glow, no breathe, no box-shadow: a run is a record of a lifecycle position.

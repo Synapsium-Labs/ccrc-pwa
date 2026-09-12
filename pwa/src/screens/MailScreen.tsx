@@ -13,8 +13,8 @@
 // read my mail" is one question, not one per sender.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import type { NotifyEvent } from '../../../shared/api';
-import { recordKey, reviveNotifyEvents } from '../lib/feed';
+import type { NotifyEvent, RunSummary } from '../../../shared/api';
+import { eventRunId, recordKey, reviveNotifyEvents } from '../lib/feed';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
@@ -37,6 +37,14 @@ import '../fleet/fleet.css';
  *  shipped test caught it: every one supplied its own stable `loadFeed`.) */
 const loadFeedDefault = (): Promise<{ events: NotifyEvent[] }> => api.feed(100);
 
+/** The programme titles the headers are built from. `api.runs(true)` — WITH
+ *  closed runs — because a feed record outlives its run: a wave that finished
+ *  yesterday still has its records on this screen, and the active-only default
+ *  would leave every one of them unresolved. Hoisted to module scope for
+ *  `loadFeedDefault`'s own reason (a default parameter expression is re-minted
+ *  on every render, and an effect keyed on that identity never stops firing). */
+const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
+
 /** The feed's own small vocabulary. Deliberately NOT NotifyEvent['kind']
  *  rendered raw: `merged` is a git word, `run` is a noun the board owns, and
  *  `unknown` has to read as an honest answer rather than as a bug. */
@@ -51,9 +59,11 @@ const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
 export function MailScreen({
   store = useFleetStore,
   loadFeed = loadFeedDefault,
+  loadRuns = loadRunsDefault,
 }: {
   store?: FleetStore;
   loadFeed?: () => Promise<{ events: NotifyEvent[] }>;
+  loadRuns?: () => Promise<{ runs: RunSummary[] }>;
 }): ReactNode {
   const feed = store((s) => s.feed);
   const dropped = store((s) => s.feedDropped);
@@ -67,6 +77,11 @@ export function MailScreen({
   // below; a non-empty `feed` always renders its rows regardless of this
   // screen's own read outcome.
   const [readState, setReadState] = useState<'loading' | 'ok' | 'error'>('loading');
+
+  // `null` is All. Keyed on the GROUP KEY, never on the head text: two
+  // programmes may share a title, and a title is prose that can change under a
+  // filter that is already set.
+  const [filter, setFilter] = useState<string | null>(null);
 
   // Held in a ref, not the effect's own dependency array below: "once per
   // mount" has to hold regardless of the CALLER's identity discipline, not
@@ -97,6 +112,24 @@ export function MailScreen({
     return () => { live = false; };
   }, [store]);
 
+  // The programme titles. A SEPARATE read from the feed's, and a failure here is
+  // not a failure of this screen: the records still render, under headers that
+  // say the programme was not measured. Never merged into the feed's own
+  // promise — one failing read must not take the other's data with it.
+  const [runsById, setRunsById] = useState<ReadonlyMap<number, RunSummary>>(new Map());
+  const loadRunsRef = useRef(loadRuns);
+  loadRunsRef.current = loadRuns;
+  useEffect(() => {
+    let live = true;
+    void loadRunsRef.current()
+      .then((r) => {
+        if (!live) return;
+        setRunsById(new Map(r.runs.map((run) => [run.id, run] as const)));
+      })
+      .catch(() => { /* the headers degrade; the feed does not */ });
+    return () => { live = false; };
+  }, [store]);
+
   // Opening the screen is the ack. Floored to the newest record's own instant
   // (seen.ts's `stampFor`) so a device behind the fleet host's clock does not
   // ack into the past and leave the badge stuck.
@@ -107,6 +140,32 @@ export function MailScreen({
 
   const rows = [...feed].reverse();   // newest first on screen; oldest-first in the store
   const nowSec = Math.floor(now / 1000);
+
+  // THREE kinds of key, because there are three facts (spec §4, and the
+  // no-overloaded-null rule): a record that names a run this read resolved; a
+  // record that names a run it did not; and a record that names no run at all.
+  // The middle one is not the last one — it says "I could not measure", not
+  // "there is nothing to measure" — and a reader who cannot tell them apart
+  // cannot tell a rebuilt database from an ask.
+  const groupOf = (ev: NotifyEvent): { key: string; head: string } => {
+    const runId = eventRunId(ev);
+    if (runId === null) return { key: 'none', head: 'Not part of a programme' };
+    const run = runsById.get(runId);
+    return run === undefined
+      ? { key: `run:${runId}`, head: `run ${runId} — programme not measured` }
+      : { key: `program:${run.program}`, head: run.programTitle };
+  };
+  // First-appearance order, so the groups read newest-first exactly as the flat
+  // list did. A Map preserves insertion order; nothing is sorted here, because
+  // any sort would be this screen inventing an order the feed does not have.
+  const groups = new Map<string, { head: string; rows: NotifyEvent[] }>();
+  for (const ev of rows) {
+    const { key, head } = groupOf(ev);
+    const g = groups.get(key);
+    if (g) g.rows.push(ev);
+    else groups.set(key, { head, rows: [ev] });
+  }
+  const shown = [...groups].filter(([key]) => filter === null || key === filter);
 
   return (
     <div className="mail-screen">
@@ -131,6 +190,32 @@ export function MailScreen({
         </p>
       )}
 
+      {groups.size > 1 && (
+        <div className="mail-filter" role="group" aria-label="filter by programme">
+          <button
+            type="button"
+            className="mail-chip"
+            data-on={filter === null || undefined}
+            aria-pressed={filter === null}
+            onClick={() => setFilter(null)}
+          >
+            All
+          </button>
+          {[...groups].map(([key, g]) => (
+            <button
+              key={key}
+              type="button"
+              className="mail-chip"
+              data-on={filter === key || undefined}
+              aria-pressed={filter === key}
+              onClick={() => setFilter(key)}
+            >
+              {g.head}
+            </button>
+          ))}
+        </div>
+      )}
+
       {rows.length === 0 && readState !== 'ok' ? (
         // Review finding 19: "loading" and "every attempt has failed" get
         // their own honest render — `readState === 'error'` only fires once
@@ -142,23 +227,30 @@ export function MailScreen({
       ) : rows.length === 0 ? (
         <p className="mail-empty" data-state="ok">Nothing yet.</p>
       ) : (
-        <ul className="mail-list">
-          {rows.map((ev) => (
-            <li
-              key={recordKey(ev)}
-              className="mail-row"
-              data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
-            >
-              <span className="mail-kind">
-                <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
-                {KIND_WORD[ev.kind]}
-              </span>
-              <span className="mail-row-title">{ev.title}</span>
-              <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
-              {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
-            </li>
+        <>
+          {shown.map(([key, g]) => (
+            <div key={key} className="mail-group">
+              <p className="mail-group-head">{g.head}</p>
+              <ul className="mail-list">
+                {g.rows.map((ev) => (
+                  <li
+                    key={recordKey(ev)}
+                    className="mail-row"
+                    data-unseen={isUnseenAt(FEED_ACK_KEY, ev.at, acks) ? 'true' : 'false'}
+                  >
+                    <span className="mail-kind">
+                      <span className="mail-kind-glyph" aria-hidden="true">{KIND_GLYPH[ev.kind]}</span>
+                      {KIND_WORD[ev.kind]}
+                    </span>
+                    <span className="mail-row-title">{ev.title}</span>
+                    <span className="mail-when">{formatAge(nowSec - Math.floor(ev.at / 1000))}</span>
+                    {ev.body !== '' && <p className="mail-body">{ev.body}</p>}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </>
       )}
     </div>
   );

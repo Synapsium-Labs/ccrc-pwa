@@ -79,6 +79,23 @@ describe('fleet snapshot (lib/offline)', () => {
     window.localStorage.setItem('ccrc.fleet-snapshot.v1', '{"savedAt":"no","sessions":{}}');
     expect(loadFleetSnapshot()).toBeNull();
   });
+
+  // ── cross-repo wave 2: what the snapshot does NOT hold ───────────────────────
+  //
+  // The wave brief asked for the snapshot revive to tolerate a missing `runId`
+  // and a missing `homeProject`. It holds NEITHER field, because it holds neither
+  // runs nor feed records — only `savedAt`, `sessions` and `roster`
+  // (`FleetSnapshot`, offline.ts). So the tolerance is vacuous by construction,
+  // and this pin is what keeps that TRUE rather than remembered: the day someone
+  // persists runs or the feed here, this reds and the reviver is written with it.
+  // The real tolerant readers for those two fields live where the data actually
+  // crosses a version boundary: `reviveNotifyEvent` (wave 1) for `runId`, and
+  // `runHomeProject` (`pwa/src/fleet/runWords.ts`) for `homeProject`.
+  it('persists sessions and roster only — no runs, no feed records', () => {
+    saveFleetSnapshot([session('claude:demo')], TEST_ROSTER);
+    const raw = JSON.parse(window.localStorage.getItem('ccrc.fleet-snapshot.v1')!) as Record<string, unknown>;
+    expect(Object.keys(raw).sort()).toEqual(['roster', 'savedAt', 'sessions']);
+  });
 });
 
 // Fix round 1, finding 3: a cold offline start hydrated `sessions` from the

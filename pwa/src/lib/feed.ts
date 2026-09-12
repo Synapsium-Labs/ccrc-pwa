@@ -58,6 +58,20 @@ export function reviveNotifyEvents(raw: unknown): { events: NotifyEvent[]; dropp
  *  is exactly the drift this module exists to end. */
 export const recordKey = (e: NotifyEvent): string => `${e.at}:${e.seq}`;
 
+/** The run a feed record belongs to, tolerantly — the ONE reader of the
+ *  additive `NotifyEvent.runId` in `pwa/src`, in the module that already owns
+ *  this record's identity.
+ *
+ *  `reviveNotifyEvent` normalises the field on both paths a client can see it
+ *  from (the durable read here, the catch-up tail in `notifymark.ts`), so this
+ *  is belt to that braces — but the belt is not free: a record cached by an
+ *  OLDER build of this app, or a merge that put an unrevived object in the
+ *  store, reaches the renderer with the key missing, and `undefined` used as a
+ *  Map key groups every such record together under one nonsense header. `null`
+ *  is the honest answer and the screen has a header for exactly that. */
+export const eventRunId = (e: NotifyEvent): number | null =>
+  typeof e.runId === 'number' ? e.runId : null;
+
 /** Union two feed sources on record identity (see `recordKey`), oldest first,
  *  capped from the OLD end. The later argument wins a collision: a re-read is
  *  fresher than a cached copy, and a catch-up event that also appears in a

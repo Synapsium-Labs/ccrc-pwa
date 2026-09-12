@@ -9,8 +9,8 @@
 //     `AccountsStrip` before it, must never render nothing — the state a
 //     count of zero describes is not a state the control may vanish in.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import type { NotifyEvent } from '../../shared/api';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { NotifyEvent, RunSummary } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -282,5 +282,114 @@ describe('the door', () => {
     render(<MailBadge unread={412} />);
     expect(screen.getByText('99+')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /mail — 412 unread/i })).toBeInTheDocument();
+  });
+});
+
+// ── cross-repo wave 2: the feed reads by programme (spec §4) ─────────────────
+//
+// One fleet, several programmes, and — since wave 1 — waves in more than one
+// repo per programme. A flat feed makes "what happened on build9b" a scrolling
+// exercise. The KEY is the record's own `runId`; the TITLE comes from the runs
+// read this app already makes.
+//
+// THREE cases, not two, and that is the point of the third: a record with no
+// `runId` (an ask, a merge, anything not run-scoped) and a record whose `runId`
+// names a run this read did not return (a rebuilt coord.db, a run older than
+// the read, a failed read) are DIFFERENT facts. Folding them would put "this is
+// not part of a programme" over a record that certainly is.
+const RUNS = [
+  { id: 5, program: 'build9b', programTitle: 'Build 9b: peers and claims' },
+  { id: 6, program: 'crossrepo', programTitle: 'Cross-repo programmes' },
+] as unknown as RunSummary[];
+
+const loadRuns = (): Promise<{ runs: RunSummary[] }> => Promise.resolve({ runs: RUNS });
+
+describe('the feed, grouped by programme', () => {
+  const mount = (events: NotifyEvent[], runs = loadRuns): void => {
+    const store = makeStore();
+    render(<MailScreen store={store} loadFeed={async () => ({ events })} loadRuns={runs} />);
+  };
+
+  it('puts each record under its programme’s own title', async () => {
+    // Queried by SELECTOR, not by text: the chip row (`groups.size > 1`, so it
+    // renders here) puts the exact same string on a `<button>` beside the
+    // `<p class="mail-group-head">`, and `findByText`/`getByText` throw on
+    // "Found multiple elements" the moment both are on the page. The header
+    // list is what this case is actually about; the chip's own text is
+    // asserted by role, in "filters to one programme on its chip" below.
+    //
+    // Explicit, well-separated `at` values (D-2583): the two fixtures below
+    // used to rely on `e()`'s default `at: Date.now() - 60_000`, which ties
+    // (or nearly ties) across two calls in the same tick and leaves the
+    // group ORDER hostage to `Date.now()` monotonicity and `mergeBySeq`'s
+    // seq tiebreak rather than to anything this case states. Stated here
+    // instead: wave 2 is the MORE RECENT record, so under this screen's own
+    // "newest first on screen; oldest-first in the store" convention
+    // (`MailScreen.tsx:108`, `rows = [...feed].reverse()`, backed by
+    // `mergeBySeq`'s ascending sort in `lib/feed.ts`) its programme heads the
+    // list — group order follows first-appearance in that same newest-first
+    // order, never the order the events were constructed in.
+    const now = Date.now();
+    mount([e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
+           e({ seq: 2, runId: 6, at: now - 60_000, title: 'wave 2 dispatched' })]);
+    await waitFor(() => {
+      const heads = [...document.querySelectorAll('.mail-group-head')].map((h) => h.textContent);
+      expect(heads).toEqual(['Cross-repo programmes', 'Build 9b: peers and claims']);
+    });
+  });
+
+  it('puts a record with NO runId under its own header, never under a programme', async () => {
+    // Same reason as the case above: `groups.size` is 2 here too (one
+    // programme group, one programless group), so the chip row renders and
+    // both headers' text is duplicated onto a `<button>`. Querying
+    // `.mail-group-head` directly is what keeps this a claim about the
+    // HEADERS rather than about however many elements happen to carry the
+    // string.
+    //
+    // Explicit `at`, same reason as above (D-2583): the ask is the MORE
+    // RECENT record, so under "newest first on screen" (`MailScreen.tsx:108`)
+    // its header comes first — the order below states that rather than
+    // leaning on construction order or the clock.
+    const now = Date.now();
+    mount([e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
+           e({ seq: 2, runId: null, at: now - 60_000, title: 'an ask' })]);
+    await waitFor(() => {
+      expect([...document.querySelectorAll('.mail-group-head')].map((h) => h.textContent))
+        .toEqual(['Not part of a programme', 'Build 9b: peers and claims']);
+    });
+    const programGroup = [...document.querySelectorAll('.mail-group')]
+      .find((g) => g.querySelector('.mail-group-head')?.textContent === 'Build 9b: peers and claims');
+    expect(programGroup!.textContent).not.toContain('an ask');
+  });
+
+  it('says a runId it could not resolve is UNRESOLVED, not programless', async () => {
+    mount([e({ seq: 1, runId: 99, title: 'from a run this read never saw' })]);
+    expect(await screen.findByText('run 99 — programme not measured')).toBeInTheDocument();
+    expect(screen.queryByText('Not part of a programme')).toBeNull();
+  });
+
+  it('keeps rendering every record when the runs read fails — grouping is a nicety, the feed is not', async () => {
+    mount([e({ seq: 1, runId: 5, title: 'wave 1 dispatched' })],
+      () => Promise.reject(new Error('offline')));
+    expect(await screen.findByText('wave 1 dispatched')).toBeInTheDocument();
+    expect(screen.getByText('run 5 — programme not measured')).toBeInTheDocument();
+  });
+
+  it('filters to one programme on its chip, and restores on All', async () => {
+    mount([e({ seq: 1, runId: 5, title: 'wave 1 dispatched' }),
+           e({ seq: 2, runId: 6, title: 'wave 2 dispatched' })]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Build 9b: peers and claims' }));
+    expect(screen.getByText('wave 1 dispatched')).toBeInTheDocument();
+    expect(screen.queryByText('wave 2 dispatched')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByText('wave 2 dispatched')).toBeInTheDocument();
+  });
+
+  it('reads the runs loader exactly once per mount', async () => {
+    const spy = vi.fn(loadRuns);
+    const store = makeStore();
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [e()] })} loadRuns={spy} />);
+    await screen.findByText('Not part of a programme');
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

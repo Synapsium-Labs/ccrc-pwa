@@ -573,6 +573,18 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the abroad line's glyph, same ground and same reason as .proj-crossing-glyph above",
   },
+  'fleet.css .mail-chip': {
+    under: ['var(--bg-page)'],
+    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
+  },
+  "fleet.css .mail-chip[data-on]": {
+    under: ['var(--bg-page)'],
+    why: 'the ON state of the same chip, same ground. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the pressed state — the one a reader taps to confirm — unmeasured',
+  },
+  'fleet.css .mail-group-head': {
+    under: ['var(--bg-page)'],
+    why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────
