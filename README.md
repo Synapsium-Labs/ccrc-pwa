@@ -1618,8 +1618,9 @@ buy.
    merged at the named producer SHA. A cross-project successor opens first
    without the producer's `sessionId`; close the producer with `final:true` so
    its now-distinct workspace is released, require `released:true`, then verify
-   the producer's closed row and merge provenance before dispatching the
-   consumer. Using `final:false` on that crossing would strand a synthetic
+   the producer's closed row and prove its PR merged at the named producer SHA
+   before dispatching the consumer. Using `final:false` on that crossing would
+   strand a synthetic
    next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
    ws-release`); nothing archives the workspace on its own after that — the

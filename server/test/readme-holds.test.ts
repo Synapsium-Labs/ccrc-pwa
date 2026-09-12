@@ -56,10 +56,21 @@ describe('README: run lifecycle ordering (D-2680)', () => {
       .toBeLessThan(close);
     expect(section).toMatch(/zero open runs/i);
     expect(section).toMatch(/retires (?:the program|permanently)/i);
-    expect(section).toMatch(/cross-project successor opens first/i);
-    expect(section).toMatch(/`final:true`/);
-    expect(section).toMatch(/`released:true`/);
-    expect(section).toMatch(/producer PR is\s+merged/i);
+
+    const crossingAt = section.indexOf('A cross-project successor opens first');
+    const crossing = section.slice(crossingAt, section.indexOf('\n6. ', crossingAt));
+    const opened = crossing.indexOf('opens first');
+    const closed = crossing.indexOf('close the producer with `final:true`');
+    const released = crossing.indexOf('require `released:true`');
+    const merged = crossing.indexOf('prove its PR merged at the named producer SHA');
+    const dispatched = crossing.indexOf('before dispatching the consumer');
+
+    expect(crossingAt, 'the cross-project lifecycle instruction is missing').toBeGreaterThan(-1);
+    expect(closed, 'the crossing does not close its producer with final:true').toBeGreaterThan(opened);
+    expect(released, 'the crossing does not require the producer workspace release').toBeGreaterThan(closed);
+    expect(merged, 'the crossing does not prove the producer merge at its named SHA').toBeGreaterThan(released);
+    expect(dispatched, 'the crossing dispatches before proving the producer merge').toBeGreaterThan(merged);
+    expect(crossing).toMatch(/Using `final:false` on that crossing would\s+strand a synthetic/);
   });
 });
 
