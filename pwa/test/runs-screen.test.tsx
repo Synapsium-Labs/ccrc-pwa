@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { CROSSING_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runHomeProject, runItems, waveLabel } from '../src/fleet/runWords';
+import { CROSSING_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -70,6 +70,19 @@ describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
     // `Record<RunState,…>` typing (a compile error to miss a member);
     // RUN_ORDER is a bare array and gets no such check from the type system.
     expect([...RUN_ORDER].sort()).toEqual([...RUN_STATES].sort());
+  });
+});
+
+describe('runForSession — the current wave during a boundary overlap (D-2616)', () => {
+  it('chooses the newest matching run, not the outgoing wave returned by find()', () => {
+    const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
+    const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });
+
+    expect(runForSession([outgoing, incoming], 'shared-worker')).toBe(incoming);
+  });
+
+  it('returns null when no active row names the session', () => {
+    expect(runForSession([r({ sessionId: 'someone-else' })], 'shared-worker')).toBeNull();
   });
 });
 

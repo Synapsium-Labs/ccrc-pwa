@@ -248,11 +248,19 @@ export function anyDispatchPending(
  *
  *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
  *  has no row for this session" — exactly the question a door needs answered,
- *  and not the same as "this session has never had a run". */
+ *  and not the same as "this session has never had a run".
+ *
+ *  During the required open-successor-before-close-producer boundary, two rows
+ *  can name the same session. The API orders rows oldest-first, so the last
+ *  matching id is the current wave; first-match would render the outgoing one. */
 export function runForSession(
   runs: readonly RunSummary[], sessionId: string,
 ): RunSummary | null {
-  return runs.find((r) => r.sessionId === sessionId) ?? null;
+  let current: RunSummary | null = null;
+  for (const run of runs) {
+    if (run.sessionId === sessionId && (current === null || run.id > current.id)) current = run;
+  }
+  return current;
 }
 
 /** What the board says about a wave that RESUMED its session rather than
