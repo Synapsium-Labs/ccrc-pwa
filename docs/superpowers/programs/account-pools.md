@@ -3762,3 +3762,59 @@ into N bundles pins N fleet slots until the LAST bundle merges, because a green 
 in a merge order holds its slot exactly as hard as one that is working — and the cap is invisible from a
 coordinator's own session list, which is what makes it a trap rather than an oversight. account-pools is
 six waves single-file so it has never paid this, but the same cut was available to us.
+
+---
+
+## 2026-09-12 09:53Z — worker finding on Task 1; D-2591 issued, and the defect was larger than reported
+
+Mail 716 from `ccrc-pwa-clear-meadow`, `kind: finding`, worker correctly stopped before commit with a
+`D-TBD-untagged-account-prevents-empty-pool` token (worker clause 11). **Re-measured against source
+rather than against the description**, which is this program's standing rule, and the finding holds —
+and is a size larger than the worker saw.
+
+### What the worker reported
+
+The wave-4 plan's prescribed `poolLabelList` test expects `''` for tagged `pool-c`, but leaves
+`claude-dev0` untagged; `shared/poolrule.ts` serves an untagged account into every pool, so the measured
+result is `team·d`.
+
+**Confirmed.** `pooled()` sets `pool: byId[a.id] ?? null`; TEST_ROSTER's home-able ids are `claude`,
+`claude2`, `claude-corp`, `claude-dev0` (`gpt` is `homeAble:false` and never consulted); the block tags
+only the first three. `poolRule`'s `if (accountPool === null) return { ok: true, why: 'untagged-account' }`
+does the rest.
+
+### What the worker missed, and it changed the ruling
+
+**This is not the plan disagreeing with `poolrule.ts`. The block disagrees with ITSELF**, over one
+shared `roster` const:
+
+| test | expectation | needs `claude-dev0` |
+|---|---|---|
+| `tagged('pool-b')` | `'team·alt and team·d'` | **INCLUDED** — `team·d` can only be there by the untagged rule |
+| `tagged('pool-c')` | `''` | **EXCLUDED** |
+
+So `poolrule.ts` is not the outsider: **test 1 already agrees with it.** Whichever way it resolves, one
+of the two prescribed expectations is wrong as written. Neither option the worker offered is right —
+(b) deletes the empty-pool case, whose title names the strand that Task 9's cell and Task 10's banner
+exist to surface; (a) as stated fixes test 3 by breaking test 1, trading the untagged-account case for
+the empty-pool one. Both are worth keeping, and untagged-account is poolrule's permissive arm, the one
+an implementation reasoning only about name equality drops silently.
+
+**Ruled:** leave the shared roster for tests 1 and 2; give the empty-pool test its OWN roster with every
+home-able account tagged and none `pool-c`. Both cases survive and each fixture says what its test is about.
+
+### The product fact underneath it
+
+**An empty label list requires EVERY home-able account to be tagged.** One untagged home-able account
+anywhere on the fleet and `poolLabelList` can never be empty — so **the stranded surfaces cannot fire
+under partial tagging.** The worker is to check Task 9's strand cell and Task 10's banner against that
+and report either way; if either is specified as though stranding is reachable under partial tagging
+that is a SECOND deviation with its own number, not to be folded into D-2591 and not to be self-minted
+([[a-constraint-naming-the-allocator-invites-a-mint]]).
+
+`FleetGroup.stranded` does not exist on the wire yet — it is wave 4's own Task 4 — so there was no
+shipped definition to check this against, only the plan and `poolrule.ts`.
+
+**D-2591 issued** (floor 2592), to be written up by the worker in the plan's Deviations section in the
+same commit that uses it. Mail 717 (`kind: answer`; `ruling` is not a `MailKind` — the six are
+`finding`/`question`/`answer`/`status`/`artifact`/`unknown`). Finding 716 acked.
