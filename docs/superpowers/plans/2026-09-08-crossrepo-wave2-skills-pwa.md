@@ -266,8 +266,9 @@ A programme has ONE home project — the repo whose `docs/superpowers/programs/<
 ledger you write, and whose plan every wave is measured against — and its waves
 may run in ANY project. The home is stated, never inferred. **Every `POST /api/runs`
 for this programme carries `homeProject`**, the same value on every wave; the
-response answers `ledgerRepo` and `ledgerAbsPath` for it, and `ledgerAbsPath` is
-the path you build a plan citation from. A later open naming a different home is
+response answers `ledgerRepo` and `ledgerAbsPath` for it; `ledgerAbsPath` names
+only that programme ledger, never a plan coordinate. Carry the plan separately as
+`homeRepoRoot`, `planRepoPath`, and `planSha`. A later open naming a different home is
 refused `home-mismatch` with `by:` the stored value — the fix is your body, never
 the server. (An open with no `homeProject` at all is still accepted for one
 deploy generation and recorded as a `legacy-home-project` run event, with the

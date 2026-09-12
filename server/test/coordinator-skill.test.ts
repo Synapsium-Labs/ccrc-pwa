@@ -1676,28 +1676,45 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       .toContain(flat(sentence));
   });
 
-  it('orders the producer gate after close and before consumer dispatch', () => {
+  it('orders the complete producer gate: open, close, exact done proof, dispatch', () => {
     const lifecycle = refs('wave-lifecycle.md');
     const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
       lifecycle.indexOf('## 6 — Final merge'));
+    const openAt = boundary.indexOf('POST /api/runs` for wave N+1');
     const closeAt = boundary.indexOf('POST /api/runs/:id/close');
     const checkAt = boundary.indexOf('"$API" runs list --closed 1');
     const dispatchAt = boundary.indexOf('Dispatch wave N+1');
-    expect(closeAt, 'the producer close is missing from the between-wave sequence')
+    expect(openAt, 'the successor open is missing from the between-wave sequence')
       .toBeGreaterThanOrEqual(0);
-    expect(checkAt, 'the closed-list producer check is missing from the between-wave sequence')
+    expect(closeAt, 'the producer close must follow the successor open').toBeGreaterThan(openAt);
+    expect(checkAt, 'the closed-list producer check must follow the producer close')
       .toBeGreaterThan(closeAt);
     expect(dispatchAt, 'consumer dispatch must follow the closed-list producer check')
       .toBeGreaterThan(checkAt);
+    expect(flat(boundary)).toContain('find this producer by its run id, and require its own `state` to be `done`');
+    expect(flat(boundary)).toContain('A missing producer row or any state other than `done` means report and do not dispatch');
   });
 
-  it('preserves the 2026-08-11 ruling and appends the executable correction', () => {
-    const historical = flat(readFileSync(path.join(
-      root, 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md'), 'utf8'));
-    expect(historical).toContain(flat(
-      'the SKILL gains the rule "before dispatching a consumer wave, GET /api/runs and read the producer run\'s state; not `done` → do not dispatch"'));
-    expect(historical).toContain(flat('**Operational correction, 2026-09-12.**'));
-    expect(historical).toContain(flat(
+  it('preserves the 2026-08-11 ruling byte-for-byte and appends the correction', () => {
+    const historical = readFileSync(path.join(
+      root, 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md'), 'utf8');
+    const originalQ1 = `**Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Ruled with the orchestrator's
+reasoning adopted: \`work_items.blockedBy\` already demonstrated the dead-schema class; the
+discipline is checkable, not aspirational — the SKILL gains the rule "before dispatching a
+consumer wave, GET /api/runs and read the producer run's state; not \`done\` → do not dispatch";
+and the door stays open additively (an optional \`dependsOn\` + one typed refusal) to be walked
+through only when a measured incident of the phased-cutover class justifies it. Evidence
+drives schema.
+
+`;
+    const q1At = historical.indexOf(originalQ1);
+    const correctionAt = historical.indexOf('**Operational correction, 2026-09-12.**');
+    const q2At = historical.indexOf('**Q2 — `homeProject`');
+    expect(q1At, 'the complete historical Q1 ruling changed').toBeGreaterThanOrEqual(0);
+    expect(correctionAt, 'the operational correction is missing').toBe(q1At + originalQ1.length);
+    expect(q2At, 'the correction must remain between the original Q1 and Q2 rulings')
+      .toBeGreaterThan(correctionAt);
+    expect(flat(historical.slice(correctionAt, q2At))).toContain(flat(
       'open the consumer run, successfully close the producer, then run `ccrc-api runs list --closed 1`'));
   });
 
@@ -1709,6 +1726,13 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(brief).not.toContain('show "HEAD:');
     expect(brief).not.toContain('the absolute path of the home plan');
     expect(brief).toContain('current checkout\'s plan is\nnot authoritative');
+
+    const plan = readFileSync(path.join(
+      root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave2-skills-pwa.md'), 'utf8');
+    const task = plan.slice(plan.indexOf('## Task 1:'), plan.indexOf('## Task 2:'));
+    expect(task).toContain('`ledgerAbsPath` names\nonly that programme ledger, never a plan coordinate');
+    expect(task).toContain('`homeRepoRoot`, `planRepoPath`, and `planSha`');
+    expect(task).not.toContain('`ledgerAbsPath` is\nthe path you build a plan citation from');
   });
 
   // §4. There are TWO roles now, and the asymmetry between them is the part a
