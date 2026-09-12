@@ -4826,3 +4826,52 @@ they did. A coverage fix that leaves the census unchanged is the same defect wea
 clothes.
 
 Mail 865, status 864 acked. Nothing outstanding from me.
+
+## 2026-09-12 16:44Z — D-2652: the fix commit reproduced its own defect one branch over
+
+Worker mail 873: Task 6 committed at `5def521c`, 370/370, tsc, "standalone contrast audit pass", fresh
+review dispatching. **Verified before that review starts, so it begins from a corrected baseline.**
+
+**What is right — and one item is better than what I ruled.** D-2641 honoured exactly: the `onPool`
+wiring and the tap fix are in the SAME commit, so the overlay is never live-and-broken for even one
+commit. **D-2637 was fixed at the CAUSE**: adding `line-height: var(--leading-tight)` makes the
+formula's own assumption true rather than papering over it, and the new test pins that declaration, so
+removing it reds. I had offered "declare the line-height OR compute from the measured 12px"; taking the
+first and pinning it is the stronger half. D-2638 is now per-axis `declValue` equality against exact
+expressions, with the false "narrow and unshrinkable" comment deleted. `measuredToast` derives all five
+sentences from `response.pool`.
+
+**D-2640 is NOT fixed, and their evidence for it was the exact non-evidence I warned against.**
+"Standalone contrast audit pass" is what the audit did BEFORE — it passes by SKIPPING these rules.
+Measured at their commit: **`uncovered` still 258, unchanged, all three wave colour rules still in it,
+zero in `measured`.**
+
+**Their own commit proved the mechanism, which turns the remedy from vague to concrete.** `measured`
+rose 346 → **350**: the four new `.pool-row` entries WERE measured (14.32/14.15, 7.91/6.32). One line
+separates them — `.pool-row` declares `background: var(--bg-raised)` so a ground is recoverable;
+`.proj-card-pool` declares `background: none` so `hosts.size === 0 → skipped`. Same file, same commit,
+opposite outcomes. **Remedy: `GROUNDS` (`pwa/design/audit.mjs:481`)**, keyed `'<file> <selector>'` with
+`{under, why}` — seven entries today, **none in `fleet.css`**. Verified the host chain is bare
+(`.proj-card-head`/`-title`/`-meta` declare no background), so the ground is `.proj-card`'s
+`--bg-surface`; told them to confirm it themselves and follow the existing entries' idiom of measuring
+every plausible ground and saying whether the choice is load-bearing.
+
+**D-2652 — the fix commit reproduced the very class it fixed, one branch over.** `PoolSheet.tsx:136`
+takes the `unknown-pool` branch and says **"Tagged {project}, but no account …"** — asserting `tagged`
+from the REQUEST, never consulting `response.pool`, while the `else` branch derives correctly.
+**Measured that the combination is reachable**: `server.ts:2064` computes
+`warn = body.pool !== null && !poolRostered(roster, body.pool)` from the submitted NAME alone,
+independent of `measured`, and returns both. Submit an unrostered name whose re-measure returns
+`unreadable` and the toast claims "Tagged" while the box measured that nobody can decide — exactly
+D-2646. Ruled: compose, do not copy — state clause from `measuredToast(…, response.pool)`, warning
+clause naming the SUBMITTED pool. That IS D-2646's two-referents rule; they wrote it for one branch and
+not the other. This is `refute-your-own-fix-before-pushing` in its purest form.
+
+**And one thing I deliberately did NOT reverse:** that branch fires `'error'` on a write that
+SUCCEEDED, cutting against the channel logic I gave in D-2646. Defensible — `toast`'s docstring frames
+the kinds as announce-politely vs interrupt, and "sessions will strand" is worth interrupting for. Told
+them to keep it and comment the reason, so the next reader does not quietly downgrade a strand warning
+to `info`. A taste call they made reasonably is not a defect, and I have reversed myself twice today by
+being clever.
+
+**D-2652 issued** (floor 2653), mail 875, status 873 acked.
