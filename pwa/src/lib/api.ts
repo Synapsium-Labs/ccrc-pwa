@@ -219,6 +219,15 @@ export function apiErrorText(err: unknown): string {
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
     const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-mismatch') {
+      const { accountPool, projectPool } = err.body as {
+        accountPool?: unknown;
+        projectPool?: unknown;
+      };
+      if (typeof accountPool === 'string' && typeof projectPool === 'string') {
+        return `The account pool (${accountPool}) differs from the project pool (${projectPool}).`;
+      }
+    }
     if (code === 'pool-unreadable') {
       const state = (err.body as { state?: unknown }).state;
       if (state === 'malformed') {

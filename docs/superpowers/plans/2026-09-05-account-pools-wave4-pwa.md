@@ -663,12 +663,23 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
-  it('turns pool-mismatch into a truthful sentence without promising absent controls', () => {
+  it('names both pools in a measured mismatch without promising a control', () => {
     const mismatch = apiErrorText(asError(409, {
       ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a',
     }));
-    expect(mismatch).toMatch(/different pool/i);
+    expect(mismatch).toMatch(/pool-b/);
+    expect(mismatch).toMatch(/pool-a/);
     expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('uses the unchanged generic mismatch sentence when either pool name is absent', () => {
+    const generic = 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.';
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', projectPool: 'pool-a',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b',
+    }))).toBe(generic);
   });
 
   it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
@@ -737,6 +748,15 @@ shared refusal code carries, before the static map lookup:
 
 ```ts
     const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-mismatch') {
+      const { accountPool, projectPool } = err.body as {
+        accountPool?: unknown;
+        projectPool?: unknown;
+      };
+      if (typeof accountPool === 'string' && typeof projectPool === 'string') {
+        return `The account pool (${accountPool}) differs from the project pool (${projectPool}).`;
+      }
+    }
     if (code === 'pool-unreadable') {
       const state = (err.body as { state?: unknown }).state;
       if (state === 'malformed') {
@@ -796,12 +816,12 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/api.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 64 tests; `tsc` exits 0. The 64 is a derived
-copy-completeness check, not a decreed cardinal: the focused file contains 64
-direct `it(` calls and zero `it.each` calls after D-2619 split the two distinct
-refusal facts into independently named tests. Re-derive both counts if the
-focused file changes; parameterized rows would make direct calls diverge from
-reported tests.
+Expected: PASS, 65 tests; `tsc` exits 0. The 65 is a derived
+copy-completeness check, not a decreed cardinal: the focused file contains 65
+direct `it(` calls and zero `it.each` calls after D-2619 split the distinct
+refusal facts and D-2621 added the absent-name fallback proof. Re-derive both
+counts if the focused file changes; parameterized rows would make direct calls
+diverge from reported tests.
 
 - [ ] **Step 6: Prove the guard by mutation**
 
@@ -811,7 +831,8 @@ reported tests.
 4. **D-2618 URL pin:** change only `swap`'s suffix from `/swap` to `/swop`. Expected red: both complete ordinary-request tests receive `/api/sessions/s1/swop` instead of `/api/sessions/s1/swap`. Restore by exact inverse.
 5. **D-2618 complete-init pin:** change the JSON-body `post` helper's method from `POST` to `PUT`. Expected red includes both complete ordinary-request tests receiving `method:'PUT'`; existing independent callers red too. Restore by exact inverse.
 6. **D-2619 state-preservation pin:** make the `state === 'malformed'` branch return `API_ERROR_TEXT['pool-unreadable']!`. Expected red only in the distinct-state test: unreadable copy does not match `/invalid pool name/i`. Restore by exact inverse.
-7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red only in the mismatch-copy test at `/show other pools|pick an account/i`. Restore by exact inverse.
+7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red in the absent-name fallback test because the static generic sentence changed. Restore by exact inverse.
+8. **D-2621 name-aware pin:** delete only the pre-map `code === 'pool-mismatch'` branch. Expected red only in `names both pools in a measured mismatch without promising a control`: the generic fallback does not match `/pool-b/`; the absent-name fallback test remains green. Restore the branch by exact inverse.
 
 - [ ] **Step 7: Commit**
 
@@ -3378,6 +3399,24 @@ deviation found while executing this plan is allocated in its own call at the mo
   Ruling: do not touch the sheet; make global copy truthful by directing the
   operator to a flow that can disclose and confirm crossing, or to changing the
   project's pool. The named mutation restores both false promises and must red.
+
+- **D-2621 — A measured mismatch must name both carried pool names while an
+  older or partial body keeps D-2620's static generic sentence.** The initial
+  review recorded this as reported-not-taken because interpolating names looked
+  like a map redesign and SwapSheet/NewSessionSheet already expose their local
+  pool context. Measurement refuted the cost premise: `apiErrorText` already
+  short-circuits body-aware `stderr`, D-2619 adds the same pre-map idiom for
+  `state`, and the route already carries `accountPool` plus `projectPool` for
+  this exact diagnostic. Deferral would rewrite and re-review D-2620's same
+  sentence twice while StartProgramSheet — the one pool-blind surface — shipped
+  a merely non-false dead end. Ruling: TAKEN in the same logical Task 2/D-2620
+  fix. Before the map lookup, when `code === 'pool-mismatch'` and both fields are
+  strings, return a sentence naming both and promising no control. If either
+  field is absent or non-string, fall through unchanged to D-2620's static
+  sentence so older servers permit rather than print `undefined` or crash.
+  Tests pin both paths. Deleting only the name-aware branch must red the
+  with-names assertion while the static fallback remains green, then restore by
+  exact inverse.
 
 - **D-2615 — Task 3's combined persistence mutant must be null-safe at store
   bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown

@@ -892,15 +892,30 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
-  it('turns pool-mismatch into a truthful sentence without promising absent controls', () => {
+  it('names both pools in a measured mismatch without promising a control', () => {
     const mismatch = apiErrorText(asError(409, {
       ok: false,
       error: 'pool-mismatch',
       accountPool: 'pool-b',
       projectPool: 'pool-a',
     }));
-    expect(mismatch).toMatch(/different pool/i);
+    expect(mismatch).toMatch(/pool-b/);
+    expect(mismatch).toMatch(/pool-a/);
     expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('uses the unchanged generic mismatch sentence when either pool name is absent', () => {
+    const generic = 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.';
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      projectPool: 'pool-a',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+    }))).toBe(generic);
   });
 
   it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
