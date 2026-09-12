@@ -210,10 +210,10 @@ const API_ERROR_TEXT: Record<string, string> = {
 
 /** Human-readable failure text for a caught error.
  *
- *  Order matters and is unchanged at the top: lifecycle routes fail as
- *  502 { stderr } (ccd's own words, which are more specific than anything this
- *  module could say) — prefer that. A coded failure with no stderr is next.
- *  The bare message stays the floor. */
+ *  Lifecycle send sites answer `{ ok:false, stderr }`; coded send sites answer
+ *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
+ *  branches do not express precedence between two fields on one response. The
+ *  bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const stderr = (err.body as { stderr?: unknown }).stderr;

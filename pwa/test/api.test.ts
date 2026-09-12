@@ -807,8 +807,8 @@ describe('account pools', () => {
   const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
     jsonResponse(200, { ok: true, pool, ...extra });
 
-  it('setProjectPool posts the name and reads the MEASURED state back', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'tagged', name: 'pool-a' }));
+  it('setProjectPool posts the name and returns an unreadable MEASUREMENT instead of echoing intent', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'unreadable' }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
 
     const r = await api.setProjectPool('demo', 'pool-a');
@@ -817,7 +817,7 @@ describe('account pools', () => {
     expect(url).toBe('/api/projects/demo/pool');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({ pool: 'pool-a' });
-    expect(r.pool).toEqual({ state: 'tagged', name: 'pool-a' });
+    expect(r.pool).toEqual({ state: 'unreadable' });
     expect(r.warning).toBeUndefined();
   });
 

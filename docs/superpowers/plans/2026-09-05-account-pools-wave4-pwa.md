@@ -3581,6 +3581,57 @@ deviation found while executing this plan is allocated in its own call at the mo
   committing through D-2633 closes both the orphan window and the cross-branch
   maximum imbalance without pretending the definitions landed earlier.
 
+- **D-TBD-task-5-projected-add-copy-crosses-pool — A tagged project card can
+  announce the server's global projection even when that account is outside the
+  project pool.** `ProjectCard` currently gives non-null `projected` precedence
+  over `poolLabelList`, while the server computes that projection against an
+  untagged project. A tagged card can therefore say an out-of-pool account has
+  headroom even though normal placement must refuse it. The Task 5 tests cover
+  pooled copy only when projection is null, so the conflict is green. Recommended
+  ruling: add a tagged-project fixture with an out-of-pool non-null projection;
+  whenever a known tagged pool narrows placement, derive copy from its home-able
+  labels instead of the global projection, preserving established projection copy
+  for no-frame, undecidable, and untagged states. Add an independent precedence
+  mutant and restore it exactly. Reported in mail 834; Task 5 review-fix commit is
+  stopped pending a number and ruling.
+
+- **D-TBD-task-5-pool-chip-target-height — The project-pool button's invisible
+  target is 44 pixels wide but only 24 pixels tall.** Its pseudo-element uses
+  `--tap-min` only on the horizontal axis and `--sp-6` vertically. The stylesheet
+  test merely checks that the rule contains `--tap-min`, so the 44x24 target
+  passes. Recommended ruling: use `--tap-min` on both axes and pin vertical and
+  horizontal formulas independently; mutate the vertical formula back to
+  `--sp-6` and require the named height assertion to red. Reported in mail 834
+  and stopped before a Task 5 review-fix commit.
+
+- **D-2634 — Task 2's route-response tests did not distinguish the server's
+  measured pool from the request intent.** The final isolated review mutated
+  `setProjectPool` to synthesize `response.pool` from the submitted `pool`; all
+  66 focused tests and strict TypeScript stayed green because both success
+  fixtures returned the state their request already implied. The production
+  docstring already makes measured response authoritative, so this was a
+  documented invariant with no mechanism. Coordinator mail 839 upheld the
+  test-only fix and required an honest post-write divergence: request `pool-a`
+  while the re-read returns `unreadable` or `malformed`, where echoing intent
+  would falsely announce a tagged pool after the box measured that nobody can
+  decide. Add that divergent response assertion, apply the one-mechanism
+  intent-echo mutant, record its actual failing assertion, and restore exactly.
+  Production code remains unchanged.
+
+- **D-2635 — Moving `apiErrorText`'s stderr branch below coded pool failures is
+  a real green mutant, but stderr-bearing and coded response bodies cannot
+  compete on the shipped server surface.** The initial review recommendation
+  would have fabricated a body containing both `stderr` and `error`. Coordinator
+  mail 839 measured every send site: stderr replies are `{ ok:false, stderr }`,
+  while `pool-mismatch`, `pool-unreadable`, and `unsupported` replies carry an
+  `error` with no stderr. Therefore ordering is not load-bearing and a competing
+  PWA fixture would freeze behavior for an impossible input. Correct the
+  `apiErrorText` docstring to name the measured disjoint send-site shapes rather
+  than imply precedence. A server-side assertion that no reply carries both
+  fields would protect the real invariant, but is explicitly deferred outside
+  this PWA wave. No production behavior or PWA test changes follow from this
+  entry.
+
 - **D-2615 — Task 3's combined persistence mutant must be null-safe at store
   bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown
   as { pools?: ProjectPoolsWire }).pools ?? null` while widening the offline
