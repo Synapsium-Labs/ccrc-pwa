@@ -40,7 +40,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
-import { ledgerPath } from '../../../shared/api';
+import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { accountLabel } from '../lib/accounts';
@@ -312,7 +312,7 @@ export function StartProgramSheet({
   // level (review fix round 1, Minor 2): without gating the poll, `/runs`
   // would ask `/api/accounts` every 20s whether or not the door is ever
   // tapped, the exact shape `useProjectedHome.ts`'s own docstring (citing
-  // `useDisabledWrappers`) warns against.
+  // `useAccountUsage`) warns against.
   const projected = useProjectedHome(open);
 
   const [slug, setSlug] = useState('');
@@ -575,9 +575,26 @@ export function StartProgramSheet({
   // independent measurements.
   const runVerdict: OpenRunVerdict | null =
     project === null ? null : openRunVerdict(openRunProjects, project.name);
+  const kickoffVerdict = programKickoffVerdict(slug, title);
+  // The ledger line previews a SLUG, not a kickoff: `programKickoffVerdict`
+  // also refuses a blank title, and gating the path on that would blank a
+  // perfectly good preview while the operator is still typing one. Same
+  // shared shape decision, taken at the granularity this line needs.
+  const slugPreview = shapeProgramSlug(slug);
+  const kickoffOversize = !kickoffVerdict.ok && kickoffVerdict.kind === 'oversize';
+  // Branch on the verdict's own FIELD, never on its prose. A blank title is not
+  // an error to shout while the operator is still typing one, but the two causes
+  // share `kind:'bad-request'` — comparing `detail` against the L0 sentence made
+  // this sheet's behaviour depend on that sentence's wording, with no test
+  // between a reword and a silently changed error.
+  const showKickoffError = slug !== '' && !kickoffVerdict.ok
+    && (kickoffOversize || kickoffVerdict.field !== 'title');
 
   const start = async (): Promise<void> => {
-    if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
+    // The button independently disables on this verdict, but a disabled control
+    // never invokes its handler. `start-program.test.tsx` therefore source-pins
+    // this defensive return too: either boundary becoming permissive must red.
+    if (starting || !kickoffVerdict.ok || project === null) return;
     if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
     // …and the run-board arm above it in the same `? :` chain withholds the
@@ -649,7 +666,14 @@ export function StartProgramSheet({
     }
     if (gen.current !== mine) return; // superseded while the create was in flight
 
-    waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim(), preLive };
+    waitRef.current = {
+      mine,
+      wrapper,
+      project: projectName,
+      slug: kickoffVerdict.slug,
+      title: kickoffVerdict.title,
+      preLive,
+    };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
@@ -764,14 +788,21 @@ export function StartProgramSheet({
           type="text"
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
+          aria-invalid={showKickoffError}
+          aria-describedby={showKickoffError ? 'program-kickoff-error' : undefined}
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
         />
+        {showKickoffError && (
+          <p id="program-kickoff-error" className="program-start-error">{kickoffVerdict.detail}.</p>
+        )}
         <input
           className="proj-search"
           type="text"
           placeholder="Program title"
           aria-label="Program title"
+          aria-invalid={title !== '' && kickoffOversize}
+          aria-describedby={title !== '' && kickoffOversize ? 'program-kickoff-error' : undefined}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
@@ -973,8 +1004,17 @@ export function StartProgramSheet({
                       + 'coordinator afterwards just as a pause refuses it.'}
                 </p>
               )}
+              {/* THE SHAPED SLUG, never the raw one (D-2508's own rule, which
+                  this preview was the last reader to break): `ledgerPath` is a
+                  pure interpolator, so previewing `../other` here would render a
+                  path this sheet will never send and the server would refuse —
+                  a preview that disagrees with the act it previews. The verdict
+                  is the single shape decision already computed above, so the
+                  line now shows exactly the path a successful start would use,
+                  and falls back to the placeholder while there is no valid slug
+                  to show one for. */}
               <p className="program-start-ledger">
-                {`Its ledger: ${ledgerPath(slug.trim() === '' ? '…' : slug.trim())}`}
+                {`Its ledger: ${ledgerPath(slugPreview.ok ? slugPreview.slug : '…')}`}
               </p>
               <p className="program-start-note">
                 The kickoff is queued as mail and lands at the session&rsquo;s next quiet moment,
@@ -1007,7 +1047,7 @@ export function StartProgramSheet({
                 type="button"
                 className="program-start-go"
                 disabled={
-                  slug.trim() === '' || title.trim() === '' || starting
+                  !kickoffVerdict.ok || starting
                   || projected === undefined || existing !== null
                 }
                 onClick={() => void start()}

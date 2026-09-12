@@ -38,15 +38,16 @@
 // WHAT THIS SCAN ENFORCES IS `-e`, AND ONLY `-e`. `_project_pool_state`'s own
 // comment names `-d` as sharing the same blind spot, and it does — `[[ -d X ]]`
 // is false for a dangling symlink exactly as `[[ -e X ]]` is. This scan does
-// not look at `-d` at all, and the header must not imply it does. The one live
-// `-d` on a pools path today (`ccd/ccd`'s `[[ -d "$POOLS_DIR" ]]`) is SAFE for
-// a reason no scan can see: the `-e`/`-L` pair on the two lines above it has
-// already returned for the dangling and looping cases, so by the time `-d`
-// runs the path is known to exist and false there correctly means "exists,
-// and is not a directory". A reviewer forwarded it as a live instance of this
-// class; reading the sequence refutes it. The residue is real and is stated
-// here rather than mechanised: an author who writes a FRESH `-d` on a pools
-// path with no `-e`/`-L` above it gets no warning from this file.
+// not look at `-d` at all, and the header must not imply it does. `ccd/ccd`'s
+// `[[ -d "$POOLS_DIR" ]]` is SAFE for a reason no scan can see: the `-e`/`-L`
+// pair on the two lines above it has already returned for the dangling and
+// looping cases, so by the time `-d` runs the path is known to exist and
+// false there correctly means "exists, and is not a directory". The doctor's
+// `[ ! -d "$dir" ]` (`ccd/ccrc-doctor-checks`) sits under its own `-e`/`-L`
+// pair for the same reason. A reviewer forwarded the first as a live instance
+// of this class; reading the sequence refutes it. The residue is real and is
+// stated here rather than mechanised: an author who writes a FRESH `-d` on a
+// pools path with no `-e`/`-L` above it gets no warning from this file.
 //
 // PAIRING IS NECESSARY, NOT SUFFICIENT — and that is a statement about this
 // scan's own limits, added after site 3 was found to be STILL WRONG with its
@@ -171,11 +172,11 @@
 // qualifying sites it found, function by function, rather than a count.
 //
 // A COUNT WAS NOT ENOUGH, and that is worth saying plainly: the floor this
-// replaces was "at least 2 per file", and both of `ccd/ccd`'s hits come from
-// ONE function (`_project_pool_state`). The floor was therefore satisfied
-// while `cmd_ws_add` and `cmd_project_pool` — the other two pools-relevant
-// functions in that file — were covered by nothing, and the assertion could
-// not tell the difference. The set below says where the scan LOOKED, so a
+// replaces was "at least 2 per file", and at the time both of `ccd/ccd`'s
+// hits came from ONE function (`_project_pool_state`), so the floor was
+// satisfied while the other pools-relevant functions in that file were
+// covered by nothing, and the assertion could not tell the difference. The
+// set below says where the scan LOOKED, so a
 // site that stops being scanned (a function renamed out of the block
 // pattern, a variable that stops being traceable to `$POOLS_DIR`) reds this
 // file instead of quietly shrinking its own coverage. It is not a claim that
@@ -504,6 +505,17 @@ function poolsBlocks(filePath: string): string[] {
 // and say why in the commit, which is the point: the set moves visibly or not
 // at all.
 const CCD_SITES: string[] = [
+  // `_pool_untaggable` (#69 review round 3, R3) is the FIRST function since
+  // this pin was written to move BOTH lists, which is what the note below
+  // predicted would happen and what tells the two halves apart. It answers one
+  // question — "can any project on this box be in a pool at all?" — so a
+  // caller that could not read a `.project` field knows whether the value it
+  // failed to read could have mattered. That means it tests `$POOLS_DIR` for
+  // existence itself, and so it owes the pairing rule: `-e` and `-L` in ONE
+  // statement, because `-e` alone is blind to a dangling symlink and to a
+  // symlink loop, and reading either as "no pools directory" would license a
+  // cross-pool relocation off a path nobody measured.
+  '_pool_untaggable: -e POOLS_DIR',
   // The reader's two subjects, each decided by TWO statements since the
   // same-statement pairing landed: "neither there nor a link" (untagged) and
   // "not there but a link" (unreadable).
@@ -516,12 +528,50 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e dir',
   '_check_pools: -e f',
 ];
-// `cmd_ws_add` and `cmd_project_pool` are pools-relevant and contribute NO
-// hits — the first never tests a pools path, the second decides from
-// `_project_pool_state` instead. Naming them here is the difference between
-// "the scan found two things" and "the scan read these three functions and
-// two of them hold no existence test at all".
-const CCD_BLOCKS: string[] = ['_project_pool_state', 'cmd_ws_add', 'cmd_project_pool'];
+// EVERY NAME IN `CCD_BLOCKS` BELOW THAT CONTRIBUTES NO ENTRY TO `CCD_SITES` is
+// pools-relevant and holds no existence test of its own: `cmd_ws_add` never
+// tests a pools path, `cmd_project_pool` decides from `_project_pool_state`
+// instead, and the rest only interpolate `$POOLS_DIR` into an undecidable-tag
+// MESSAGE, with nothing to pair. Naming the SET rather than a cardinal is the
+// round-5 correction (#69 review round 4 gate): this paragraph said "these
+// eight functions and seven of them", and adding `_undecidable_cause` to the
+// list directly below falsified both numbers in the same commit that added it —
+// the enumeration going stale one line above the enumeration. The lists are the
+// census; a count restated in prose beside them is a second copy that can only
+// drift. The difference this paragraph exists to make is still the one it
+// made: between "the scan found two things" and "the scan read every one of
+// these functions, and the ones holding an existence test are exactly the ones
+// `CCD_SITES` names". (The first cut of this correction wrote "all but two",
+// which is a restated cardinal two lines after the sentence forbidding one —
+// #69 review round 5, its own refute pass.)
+//
+// `_auto_swap_check` JOINED THE LIST 2026-09-09 (#69 review, D-2155), and the
+// way it joined is the point of this pin. It gained `$POOLS_DIR/$project` in
+// the strand cause the tick now writes when the pool tag cannot be read — the
+// same shape wave 2b's four have, one lane over. The scan noticed on its own
+// and this assertion went red; nothing about the change needed the pairing
+// rule, and the `CCD_SITES` half above stayed byte-identical, which is the
+// measurement that says so. A function that gains a pools path and an
+// EXISTENCE TEST would move both lists, and only one of them moved.
+// AND ROUND 3 IS THE CASE THAT PARAGRAPH DESCRIBES. `_pool_untaggable` gained a
+// pools path AND an existence test, and BOTH lists moved — the first entry to
+// do so. Read the two together: `_auto_swap_check` moved one list and owed
+// nothing, this one moved both and owes the pairing rule, and neither fact had
+// to be remembered by anyone.
+// AND ROUND 4 ADDS THE OTHER SHAPE AGAIN, which is what makes the pair of lists
+// worth having. `_undecidable_cause` (#69 review round 4, B5) interpolates
+// `$POOLS_DIR` into exactly one of its operator-facing sentences — the
+// `pool` arm — and holds no existence test at all — so it joins THIS
+// list and leaves `CCD_SITES`
+// byte-identical, exactly as `_auto_swap_check` did. Read the three together:
+// `_auto_swap_check` moved one list, `_pool_untaggable` moved both, this one
+// moves one again — and no one had to remember which obligation applies.
+const CCD_BLOCKS: string[] = [
+  '_pool_untaggable',
+  '_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_undecidable_cause',
+  '_auto_swap_check', 'cmd_start',
+  '_strand_why', 'cmd_swap', 'cmd_prefer',
+];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`
 // is now blocked out too (the hyphen fix) but is not pools-relevant, so it
 // never reaches this list — the fixture test for a hyphenated name is what

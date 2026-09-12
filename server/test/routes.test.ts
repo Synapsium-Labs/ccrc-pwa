@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -87,6 +87,128 @@ function menuPane(selected: number): string {
 }
 const DIALOG_ID = parseDialog(menuPane(1))!.id;
 
+type RouteSource = {
+  method: 'GET' | 'POST';
+  routePath: string;
+  code: string;
+};
+
+type KnownIdCall = Omit<RouteSource, 'code'> & { args: string };
+
+const withoutComments = (source: string): string =>
+  source.replace(/\/\/[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+
+/** The app registrations are two-column top-level statements in server.ts. */
+function serverRouteSources(): { src: string; routes: RouteSource[] } {
+  const src = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  expect(starts.length, 'the server route scan found no registrations').toBeGreaterThan(20);
+
+  return {
+    src,
+    routes: starts.map((start, i) => ({
+      method: start[1]!.toUpperCase() as 'GET' | 'POST',
+      routePath: start[2]!,
+      code: withoutComments(src.slice(start.index, starts[i + 1]?.index)),
+    })),
+  };
+}
+
+function knownIdCalls(): KnownIdCall[] {
+  const calls: KnownIdCall[] = [];
+  for (const { method, routePath, code } of serverRouteSources().routes) {
+    for (const call of code.matchAll(/\bknownId\(\s*([^\n)]*?)\s*\)/g)) {
+      calls.push({
+        method,
+        routePath,
+        args: call[1]!.replace(/\s+/g, ' ').trim(),
+      });
+    }
+  }
+  return calls;
+}
+
+describe('HTTP pool-reader policy census', () => {
+  it('keeps all five consumers on a callback-started ten-second aggregate deadline', () => {
+    const { src, routes } = serverRouteSources();
+    const expected = [
+      { method: 'GET', routePath: '/api/fleet', reader: 'readProjectPools' },
+      { method: 'GET', routePath: '/api/projects', reader: 'readProjectPools' },
+      { method: 'POST', routePath: '/api/sessions', reader: 'readProjectPoolsWithRoot' },
+      { method: 'POST', routePath: '/api/projects/:project/pool', reader: 'readProjectPools' },
+      { method: 'POST', routePath: '/api/sessions/:id/swap', reader: 'readProjectPools' },
+    ];
+    const calls = routes.flatMap(({ method, routePath, code }) =>
+      [...code.matchAll(/\b(readProjectPools(?:WithRoot)?)\s*\(/g)].map((match) => ({
+        method,
+        routePath,
+        reader: match[1]!,
+      })),
+    );
+
+    expect(calls).toEqual(expected);
+    expect(withoutComments(src).match(/\breadProjectPools(?:WithRoot)?\s*\(/g)).toHaveLength(expected.length);
+    expect(src.match(/const PROJECT_POOLS_REQUEST_BUDGET_MS\s*=\s*10_000;/g)).toHaveLength(1);
+
+    const callbackAndBudget = /\b(?:readProjectPools|readProjectPoolsWithRoot)\(\s*deps\.io,\s*deps\.cfg,\s*\(\s*timeoutMs\s*,\s*signal\s*\)\s*=>\s*deps\.io\.readdir\(\s*deps\.cfg\.registryDir,\s*timeoutMs,\s*signal\s*\),\s*PROJECT_POOLS_REQUEST_BUDGET_MS(?:\s*,|\s*\))/;
+    for (const expectedCall of expected) {
+      const route = routes.find(({ method, routePath }) =>
+        method === expectedCall.method && routePath === expectedCall.routePath,
+      );
+      expect(route?.code, `${expectedCall.method} ${expectedCall.routePath} lost the bounded callback root`).toMatch(callbackAndBudget);
+    }
+  });
+});
+
+describe('knownId route census', () => {
+  it('derives all request-id gates and the constructed-id revival probe', () => {
+    const calls = knownIdCalls();
+    const requestGates = calls.filter(({ args }) => args === 'id');
+
+    expect(requestGates).toEqual([
+      { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
+      { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/interrupt', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/submit', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/upload', args: 'id' },
+      { method: 'GET', routePath: '/api/sessions/:id/clip/:name', args: 'id' },
+      { method: 'GET', routePath: '/api/sessions/:id/pr', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/pr', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/archive', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/restore', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/forget', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/hold', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/release', args: 'id' },
+      { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
+    ]);
+    expect(requestGates).toHaveLength(17);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(13);
+    expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
+
+    const revivalProbes = calls.filter(({ args }) => args !== 'id');
+    expect(revivalProbes).toEqual([
+      {
+        method: 'POST',
+        routePath: '/api/sessions',
+        args: 'candidateId, measured.rootNames',
+      },
+    ]);
+    expect(calls).toHaveLength(requestGates.length + revivalProbes.length);
+
+    const src = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
+    const claim = src.match(/`knownId` gates (\d+) request-id routes \((\d+) POST, (\d+) GET/);
+    expect(claim, 'the knownId census claim was removed or changed without its guard').not.toBeNull();
+    expect(claim?.slice(1).map(Number)).toEqual([
+      requestGates.length,
+      requestGates.filter(({ method }) => method === 'POST').length,
+      requestGates.filter(({ method }) => method === 'GET').length,
+    ]);
+  });
+});
+
 describe('write routes', () => {
   it('POST prompt happy path returns 200 {ok:true}', async () => {
     // Three panes: empty box, the echo verify, then the emptied box that proves
@@ -133,8 +255,9 @@ describe('write routes', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    // The shape `remote/io.ts` produces when one op of the ~21 a session's
-    // readRegistry fires in parallel fails or times out: null, indistinguishable
+    // The shape `remote/io.ts` produces when one of the 23
+    // [registry-read-census:fields] field reads a session's `readRegistry` fires
+    // in parallel fails or times out: null, indistinguishable
     // at field() from a file that is not there (same idiom as hold-gate.test.ts's
     // `holdUnreadableIO`) — here on `workdir`, one of readRegistry's three
     // completeness fields, chosen because ITS failure is exactly what used to

@@ -24,7 +24,9 @@ const OBS: LifecycleObs = {
   pid: 4242, ppid: 4100, pane: 'ccrc-pwa-still-river', paneWhy: 'matched',
   tty: false, ssh: null,
 };
-const DEC: LifecycleDec = { surface: 'cli', actor: 'still-river', reason: 'wave 3 cleanup' };
+const DEC: LifecycleDec = {
+  surface: 'cli', actor: 'still-river', reason: 'wave 3 cleanup', crosspool: null,
+};
 const MEAS: LifecycleMeas = {
   project: 'ccrc-pwa', workspace: 'still-river', branch: 'ws/still-river',
   uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-corp',
@@ -33,6 +35,7 @@ const MEAS: LifecycleMeas = {
   workdir: '/home/you/worktrees/ccrc-pwa/still-river', base: 'main', old: null,
   rc: 0, mode: 'resume', inUnit: 1, from: null, dropped: null, registered: 0,
   state: null, bytes: null, resumed: null, tombstone: null,
+  home: null, pool: null, reason: null,
 };
 const EVENT: LifecycleEvent = {
   uid: '1755000000123456789.4242.1', at: 1_755_000_000_123,
@@ -66,26 +69,38 @@ describe('LifecycleObs — kernel-observed, unforgeable by env', () => {
 });
 
 describe('LifecycleDec — declared, self-asserted', () => {
-  it('carries exactly D2`s three fields', () => {
-    expect(Object.keys(DEC).sort()).toEqual(['actor', 'reason', 'surface']);
+  it('carries exactly D2`s three plus account pools` one — four fields', () => {
+    // `crosspool` — ADDED, account pools wave 2b (Task 6 fix round 1):
+    // `dec.crosspool` shipped (Tasks 5-6) with no member here and no scan
+    // able to see the gap — `LIFECYCLE_DEC_KEYS`'s own docstring in
+    // `shared/api.ts` has the full account. This assertion is what would
+    // have caught it immediately, had it existed then.
+    expect(Object.keys(DEC).sort()).toEqual(['actor', 'crosspool', 'reason', 'surface']);
   });
 
   it('says `none` when no flag was passed — not a default laundered into a claim', () => {
-    const silent: LifecycleDec = { surface: 'none', actor: null, reason: null };
+    const silent: LifecycleDec = { surface: 'none', actor: null, reason: null, crosspool: null };
     expect(corroboration('pane', silent.surface)).toBe('unmeasured');
   });
 });
 
 describe('LifecycleMeas — measured about the SUBJECT, before any destruction', () => {
-  it('carries exactly D2`s ten plus wave 2`s thirteen plus wave 3`s two — twenty-five fields', () => {
+  it('carries exactly D2`s ten plus wave 2`s thirteen plus wave 3`s two plus account pools` three — twenty-eight fields', () => {
     // FIX ROUND 1 (Task 24 fix round 1): `atticsrc` and `manifestBytes`
     // rejoin the list — see the inverted test below and
     // `ccd-lifecycle-contain.test.ts` for why.
+    //
+    // `home`, `pool`, `reason` — ADDED, account pools wave 2b (Task 6 fix
+    // round 1): two `rehome` emitters (the tick's re-seed, `cmd_prefer`)
+    // shipped writing these three `meas.` keys with no member here — see
+    // `shared/api.ts`'s `LifecycleMeas` docstring for the full account of
+    // why nothing caught it until the coordinator's review did.
     expect(Object.keys(MEAS).sort()).toEqual(
       ['archivedAt', 'archivedReason', 'attic', 'atticsrc', 'base', 'branch',
-       'bytes', 'dropped', 'from', 'held', 'inUnit', 'manifestBytes', 'mode',
-       'old', 'project', 'rc', 'registered', 'resumed', 'state', 'tip',
-       'tombstone', 'uuid', 'workdir', 'workspace', 'wrapper'].sort());
+       'bytes', 'dropped', 'from', 'held', 'home', 'inUnit', 'manifestBytes',
+       'mode', 'old', 'pool', 'project', 'rc', 'reason', 'registered',
+       'resumed', 'state', 'tip', 'tombstone', 'uuid', 'workdir', 'workspace',
+       'wrapper'].sort());
   });
 
   it('every field is nullable — null means NOT MEASURED, never zero or empty', () => {
@@ -95,7 +110,7 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
       archivedReason: null, manifestBytes: null, held: null,
       workdir: null, base: null, old: null, rc: null, mode: null, inUnit: null,
       from: null, dropped: null, registered: null, state: null, bytes: null,
-      resumed: null, tombstone: null,
+      resumed: null, tombstone: null, home: null, pool: null, reason: null,
     };
     expect(Object.values(nothing).every((v) => v === null)).toBe(true);
     // `attic: 0` is "the pin ran and created no refs"; `attic: null` is "no
@@ -103,12 +118,12 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // null is a row that was never archived. Different facts, different values.
   });
 
-  it('is a NAMED twenty-five, not an index signature — a 26th key is a compile error', () => {
+  it('is a NAMED twenty-eight, not an index signature — a 29th key is a compile error', () => {
     // Task 21's ruling, replacing the wave-1 "closed ten, the rest lives in
     // raw" draft: `reviveMeas` (wave 4) reads `meas.*` through THIS
     // interface's own key list, so a key not modelled here is not merely
     // deferred to `raw` — it is silently dropped from the mirror's typed
-    // shape. Widening (now with fifteen NAMED members beyond the original
+    // shape. Widening (now with eighteen NAMED members beyond the original
     // ten, not an index signature) keeps the vocabulary closed: an emit ccd
     // does not yet have is still a TS2739/TS2740 here, exactly like the
     // original ten.

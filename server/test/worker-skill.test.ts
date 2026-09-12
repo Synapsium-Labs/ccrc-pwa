@@ -31,7 +31,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The thirteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -53,7 +53,7 @@ const CONTRACT = [
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
-  "Every question for the operator rides the AskUserQuestion tool — the structured ask the session hook captures and the PWA surfaces — never free text in your pane.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
@@ -61,6 +61,7 @@ const CONTRACT = [
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
+  "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
 ];
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
@@ -68,7 +69,7 @@ const CONTRACT = [
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all twelve clauses verbatim', () => {
+  it('carries all thirteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -80,7 +81,7 @@ describe('the worker skill: its contract', () => {
   // CONTRACT pin is a SUBSET check, so appending a 13th clause to SKILL.md left
   // every assertion in this file GREEN — the contract could be extended with no
   // pin at all, which is the one thing "pinned verbatim" exists to prevent —
-  // and reverting "These twelve clauses" to "eleven" in SKILL.md, README.md or
+  // and reverting "These thirteen clauses" to "twelve" in SKILL.md, README.md or
   // CLAUDE.md was green too, because no assertion anywhere held the word. The
   // count was hand-maintained in five places and pinned in none. Both are
   // cardinality claims, so both are now derived from ONE value, `CONTRACT.length`.
@@ -105,9 +106,9 @@ describe('the worker skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it twice in its own words ("These twelve clauses", "these
-    // twelve lines"). HARVESTED, never matched literally, so a revert to
-    // "eleven" fails with the wrong word named rather than with a missing string.
+    // SKILL.md states it twice in its own words ("These thirteen clauses", "these
+    // thirteen lines"). HARVESTED, never matched literally, so a revert to
+    // "twelve" fails with the wrong word named rather than with a missing string.
     const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
@@ -382,7 +383,7 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
     new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
 
   it('names every freshness word the card can carry, and says what each licenses', () => {
-    const clause = CONTRACT[CONTRACT.length - 1]!;
+    const clause = CONTRACT[11]!;   // clause 12, by index — NOT the last entry
     for (const word of FRESHNESS) {
       expect(clause, `clause 12 branches on no card word matching \`${word}\``)
         .toMatch(wordRe(word));

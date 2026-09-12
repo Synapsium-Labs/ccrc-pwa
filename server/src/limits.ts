@@ -3,25 +3,84 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type Roster } from '../../shared/roster.js';
+import { poolEligible, poolUndecidable } from './poolrule.js';
+import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
   fiveResetAt: number | null; sevenResetAt: number | null;
   /** The window ended and nothing has measured the new one yet, so the 0 above
-   *  is inferred from the reset timestamp rather than observed. Distinct from a
-   *  measured 0 (something ran on the account and it really is empty). */
+   *  is INFERRED rather than observed. Distinct from a measured 0 (something ran
+   *  on the account and it really is empty).
+   *
+   *  TWO writers reach this state and both set the flag: a `resetAt` that has
+   *  lapsed (fact, straight from the API) and a sample older than its own window
+   *  (inference). The flag names the PROVENANCE of the number, not which rule
+   *  derived it — the age path used to write the 0 and leave this false, which
+   *  told both UIs an unmeasured account had been measured empty.
+   *
+   *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
+  /** The WIDTH of the 5h window, straight from the producer
+   *  (`x-codex-secondary-window-minutes`, carried by infra/handoff/ccgpt-usage).
+   *  `0` means THE PLAN HAS NO 5h WINDOW AT ALL — which is a different fact from
+   *  "nobody has measured the 5h window yet", though both look like `five: null`
+   *  in the row. `measured()` needs the difference: with no 5h window the weekly
+   *  figure is not half the truth, it is the whole of it, so the row ranks.
+   *
+   *  OPTIONAL, AND ABSENT MEANS APPLICABLE. Only a producer that KNOWS the width
+   *  states it; every Anthropic row omits it, and so does ccd's own 429 exclusion
+   *  row (`{"five":100,"seven":0,"ts":N}`) — which must keep scoring 100 rather
+   *  than collapsing to `seven` = 0, the emptiest account on the fleet. The key is
+   *  therefore emitted only when the raw row carried it, so a row that says
+   *  nothing keeps byte-for-byte the shape it has today.
+   *
+   *  ccd's `_limit_score` reads the same field by the same rule; the two are the
+   *  same predicate and must not drift. */
+  fiveWindowMinutes?: number | null;
   /** ccd's per-lane kill-switch (`~/.cc-sessions/<wrapper>-disabled`) is
    *  present, so this account cannot take work. A FLAG rather than omitting
    *  the account: the server knows the difference between "no telemetry" and
    *  "switched off", and collapsing them loses it. */
   disabled: boolean;
+  /** The account-health probe's durable verdict
+   *  (`~/.cc-sessions/<wrapper>-authdead`, `"<epoch> <reason>"`) is standing:
+   *  something measured this credential and it did not authenticate. A POSITIVE
+   *  FLAG for `disabled`'s exact reason — "no telemetry" and "measured dead" are
+   *  different facts, and collapsing them loses the one a person acts on.
+   *
+   *  NOT the same fact as `disabled` and never folded into it: that marker is
+   *  operator INTENT, which cannot be wrong; this is a MEASUREMENT, which can
+   *  be. That difference is why `projectHome` spends it on SCORING only, and why
+   *  ccd's `_account_ok` never sees it at all. */
+  authDead: boolean;
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
 const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+
+/** Mirrors ccd's `_authdead` (ccd:1079) marker-CONTENT gate exactly:
+ *  `"<epoch> <reason>"`, verdict iff the first whitespace-delimited field is
+ *  all digits. FAIL-OPEN on anything else, same as bash — an empty or
+ *  malformed marker is NOT a verdict.
+ *
+ *  `_ah_mark`'s atomic mktemp+rename means the PROBE itself can only ever
+ *  leave this file absent or complete, but the probe is not the only actor
+ *  near this file family: the operator is one of its three clearing owners
+ *  and touches it by hand, and a partial restore, a backup tool, or a person
+ *  testing the UI can all leave a present-but-malformed marker. Trusting the
+ *  FILENAME alone here would make the server MORE CREDULOUS than bash —
+ *  `touch $REG/<w>-authdead` would condemn the account here while
+ *  `_account_ok`'s own reader still calls it healthy — and an adapter may not
+ *  narrow OR WIDEN a distinction it received. */
+const authDeadMarkerOk = (raw: string): boolean => {
+  const trimmed = raw.replace(/\n+$/, '');
+  const sp = trimmed.indexOf(' ');
+  const first = sp === -1 ? trimmed : trimmed.slice(0, sp);
+  return /^[0-9]+$/.test(first);
+};
 
 /** An account's pressure, or `null` when NOTHING has measured it — the
  *  distinction the whole placement rule turns on (see `projectHome`). Absent
@@ -36,9 +95,51 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  nobody could read it". One known window is not enough either — the score is
  *  a MAXIMUM, so `{five: 3, seven: null}` bounds the truth only from below and
  *  could really be 99. The swap picker learned this first; placement is the
- *  other half of the same lesson. */
-const measured = (l: AccountLimits | undefined): number | null =>
-  !l || l.five === null || l.seven === null ? null : Math.max(l.five, l.seven);
+ *  other half of the same lesson.
+ *
+ *  AN INFERRED ZERO IS UNKNOWN, and that is the third site of the same magnet.
+ *  A rolled-over row carries a REAL `0` on the wire — the accounts screen
+ *  renders it as "reset" — but that 0 was derived from a timestamp, never
+ *  observed. Read as a measurement it was the best score on the fleet, so
+ *  placement went there; nothing runs on an account nothing was placed on, so
+ *  nothing ever replaced it. Unlike the two magnets above, this one fires on a
+ *  perfectly healthy fleet, every time a window turns over.
+ *
+ *  ONE rolled window is enough, for the same reason one null window is: the
+ *  score is a maximum, and the elapsed half bounds the truth only from below.
+ *  Both flags are consulted, and either one alone answers null.
+ *
+ *  ccd's mirror says this by saying nothing — `_limit_field` prints "" for a
+ *  window that has ended, and `_limit_score` (the ranking reader) answers ""
+ *  unless BOTH halves are measured, which its two callers `_ws_least_loaded`
+ *  and `_swap_target` already read as unmeasured. That `||` is term for term
+ *  this function's own rule and landed with it: a score is a MAXIMUM, so one
+ *  known half bounds the truth only from below. `_avail` deliberately does NOT
+ *  go through `_limit_score` — eligibility needs only that lower bound, so it
+ *  reads `_limit_field` itself and refuses on a known half at the ceiling,
+ *  which is what lets rank be strict without stripping the gpt lane of its
+ *  only exclusion. Two languages, one fact, half-rolled rows included;
+ *  `projected-home.test.ts` runs both over the same bytes and
+ *  `half-rolled-window` is the case that says so. */
+/** EXPORTED for the shared-fixture parity harness only (server/test/fixtures/
+ *  rollover.ts): this and ccd's `_limit_score` are one predicate in two
+ *  languages, and the only way to stop them drifting is to assert both against
+ *  the same rows. Production callers reach it through `projectHome`. */
+export const measured = (l: AccountLimits | undefined): number | null => {
+  if (!l) return null;
+  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The rule below
+  // is right that one known half bounds a max() only from below — but only when
+  // the other half EXISTS and nothing has read it. A ChatGPT/Codex Pro lane has
+  // no 5h window at all (`fiveWindowMinutes: 0`), so its weekly figure is the
+  // complete truth and ranks on its own. ccd's `_limit_score` is this, term for
+  // term; absent marker falls through to the pair rule on both sides.
+  if (l.fiveWindowMinutes === 0) {
+    return l.seven === null || l.sevenRolledOver ? null : l.seven;
+  }
+  return l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
+    ? null
+    : Math.max(l.five, l.seven);
+};
 
 /**
  * The account a new workspace would land on, and its pressure score.
@@ -62,20 +163,36 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * reports honestly and gpt is held out by `homeAble`. An unmeasured account now
  * ranks BELOW every measured one instead of above them.
  *
- * Two accounts are excluded from scoring for two different reasons, and
+ * Three accounts are excluded from scoring for two different reasons, and
  * conflating them is what produced the bug:
  *   - `telemetry: 'none'` (`shared/roster.ts`) — this account will NEVER report,
  *     so its permanent unknown must not be read as permanent emptiness.
  *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:252)
  *     gates `_ws_least_loaded` on exactly that marker.
+ *   - `authDead` — the health probe measured this credential dead, so its
+ *     telemetry describes a lane nothing can run on. It leaves SCORING and it
+ *     is DEPRIORITISED in the fallback; unlike the two above it, it never
+ *     leaves `live`, because a measurement can be wrong and ccd's own placement
+ *     rule keeps a condemned lane eligible for the same reason.
  *
  * UNKNOWN IS ALSO NOT UNPLACEABLE. On a fresh install nothing has reported yet,
  * so if excluding unmeasured accounts could empty the field, this would return
  * `null` and the PWA would announce that no account can take a workspace — on
  * the exact first-run path this whole stage exists to make work. The fallback
  * is therefore explicit: when NOTHING is measured, the first home-able account
- * in roster order, at score 0 — which is what ccd does with an empty
- * `~/.cc-limits` too.
+ * in roster order THAT THE HEALTH PROBE HAS NOT CONDEMNED, at score 0 — which
+ * is what ccd does with an empty `~/.cc-limits` too.
+ *
+ * AND THE FALLBACK HAS TWO TIERS, for the reason the scored set has none: a
+ * condemned lane must not be PREFERRED, but it must stay ELIGIBLE, because the
+ * verdict is a measurement and a measurement can be wrong. One tier cannot say
+ * both — preferring the first candidate outright places work on a lane already
+ * measured dead while a healthy one sits behind it (the shipped defect, D-1954),
+ * and filtering condemned lanes out of the fallback altogether answers `null` on
+ * an all-condemned fleet, which would wedge every `ws-add` on one bad probe run.
+ * So: first the healthy unmeasured lanes, and only if EVERY home-able lane is
+ * condemned, the first condemned one. `null` stays reserved for the case a
+ * human declared — every home-able lane disabled — exactly as ccd's `""` does.
  *
  * Note what is deliberately NOT here: `_ws_least_loaded` applies no `_avail` /
  * SWAP_CEILING filter, so it returns the minimum even when every account is
@@ -91,20 +208,75 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
  * placeable, and inventing a target would lie.
  *
+ * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
+ * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
+ * `_pool_ok "$w" "$pps" || continue` inside the loop — the FILTER moves, the
+ * scoring does not. An undecidable tag makes `poolEligible` empty and this
+ * function `null`, which is NOT the same fact as "every lane is disabled";
+ * `projectPlacement` below is what tells those two apart for the wire.
+ *
+ * Not defaulted: a default would let a caller that forgot the pool receive the
+ * unconstrained forecast, which names an out-of-pool account — the one wrong
+ * answer this function can give. `GET /api/accounts`'s global `projected` says
+ * `{state:'untagged'}` out loud, and that is what that field now MEANS.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
-export function projectHome(roster: Roster, limits: Record<string, AccountLimits>): ProjectedHome | null {
-  const live = roster.homeAble.filter((a) => limits[a.id]?.disabled !== true);
+export function projectHome(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectedHome | null {
+  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
+  // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
+  // reads `_authdead` once per candidate and spends the answer twice: a
+  // condemned lane never enters the scored comparison, and it lands in the
+  // second fallback tier rather than the first. Both sides therefore drop a
+  // condemned lane from `scored` and from the PREFERRED fallback, and neither
+  // drops it from `live` — `projected-home.test.ts` drives the two over one
+  // seeded HOME precisely to catch a side that changes its mind about either.
+  //
+  // ABSENCE PERMITS: `!== true`, so an older `readLimits` (or an older agent
+  // payload) that omits the field reads as NOT condemned, never as condemned.
+  const notCondemned = (a: { id: string }): boolean => limits[a.id]?.authDead !== true;
   const scored = scorable
+    .filter(notCondemned)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
     .filter((s): s is { wrapper: string; score: number } => s.score !== null);
-  // `scorable[0] ?? live[0]!`: a roster whose every home-able account opts out
-  // of telemetry still has to place work somewhere, and `live` is provably
-  // non-empty two lines up.
-  if (scored.length === 0) return { wrapper: (scorable[0] ?? live[0]!).id, score: 0 };
+  // THE FALLBACK CHAIN IS THE TWO TIERS, WIDENING, and every link is load-bearing:
+  // the healthy lanes that can report, then the healthy lanes that never will
+  // (a roster whose every home-able account opts out of telemetry still has to
+  // place work somewhere), then the condemned ones on the same two terms. `live`
+  // is provably non-empty above, so the final `live[0]!` always exists.
+  if (scored.length === 0) {
+    const base = scorable.find(notCondemned) ?? live.find(notCondemned)
+              ?? scorable[0] ?? live[0]!;
+    return { wrapper: base.id, score: 0 };
+  }
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
+}
+
+/**
+ * The same forecast, per PROJECT, with its three answers kept apart (spec
+ * §5.6).
+ *
+ * `unmeasurable` is a VALUE, not a null and not a `none`: an unreadable or
+ * malformed tag means nobody decided, so there is no forecast to give, and
+ * `none` there would claim the measurement "nothing can take this project".
+ * `none` carries the pool it was looking in so a renderer can name it without
+ * re-deriving the tag.
+ *
+ * COMPOSES `projectHome`; decides nothing new. The pool DECISION is
+ * `poolrule.ts`'s (L1) and is reached through `poolUndecidable`/`poolEligible`
+ * rather than by testing state tokens here.
+ */
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectPlacement {
+  if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
+  const home = projectHome(roster, limits, pool);
+  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 
 export async function readLimits(
@@ -118,6 +290,18 @@ export async function readLimits(
   const regNames = (await io.readdir(cfg.registryDir)) ?? [];
   const disabledLanes = new Set(
     regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
+  );
+  // The same `readdir`, a second suffix — but the FILENAME is only a
+  // candidate list, never the verdict: `authDeadMarkerOk` re-reads exactly the
+  // names that already matched (normally zero on a healthy fleet), never one
+  // read per account on the box.
+  const authDeadCandidates = regNames.filter((n) => n.endsWith('-authdead'))
+    .map((n) => n.slice(0, -'-authdead'.length));
+  const authDeadLanes = new Set(
+    (await Promise.all(authDeadCandidates.map(async (wrapper) => {
+      const content = await io.readFile(path.join(cfg.registryDir, `${wrapper}-authdead`));
+      return content !== null && authDeadMarkerOk(content) ? wrapper : null;
+    }))).filter((w): w is string => w !== null),
   );
   const out: Record<string, AccountLimits> = {};
   for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
@@ -139,25 +323,41 @@ export async function readLimits(
       // when a session renders its statusline, so an idle account's sample can
       // outlive its window by days: claude sat at seven=98 for 14h after its 7d
       // window reset, excluding it from the whole fleet.
-      const fiveRolledOver = five !== null && fiveResetAt !== null && now >= fiveResetAt;
-      const sevenRolledOver = seven !== null && sevenResetAt !== null && now >= sevenResetAt;
+      //
+      // `let`, not `const`: the age fallback below is the SECOND writer of the
+      // same conclusion, and it used to write the inferred 0 while leaving these
+      // false. The flag's contract is "the 0 above is inferred rather than
+      // observed" — not "a resetAt lapsed" — so a path that inferred a 0 and
+      // left the flag false was asserting a measurement it had not made.
+      let fiveRolledOver = five !== null && fiveResetAt !== null && now >= fiveResetAt;
+      let sevenRolledOver = seven !== null && sevenResetAt !== null && now >= sevenResetAt;
       if (fiveRolledOver) five = 0;
       if (sevenRolledOver) seven = 0;
 
       // Fallback for a file with no reset fields (the gpt 429 exclusion, and
       // anything written before those fields existed): a sample older than its
       // own window has certainly rolled over.
+      //
+      // The `!fiveRolledOver` guards STAY. They say the FACT wins over the
+      // INFERENCE — the resetAt rule has already reached this conclusion and the
+      // age rule may not re-derive it. They produce the same value either way
+      // today, which is exactly why deleting them would be invisible.
       if (ts !== null) {
-        if (!fiveRolledOver && five !== null && now - ts > FIVE_WINDOW) five = 0;
-        if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) seven = 0;
+        if (!fiveRolledOver && five !== null && now - ts > FIVE_WINDOW) { five = 0; fiveRolledOver = true; }
+        if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) { seven = 0; sevenRolledOver = true; }
       }
 
+      // Emitted ONLY when the producer stated it, so a row that says nothing keeps
+      // exactly the shape it has today — the wire, the fixtures and every
+      // full-row assertion are untouched for all six Anthropic accounts.
+      const fiveWindowMinutes = numOrNull(raw.fiveWindowMinutes);
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
-                       disabled: disabledLanes.has(wrapper) };
+                       ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                       disabled: disabledLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     }
   }
   // A lane can be markered off before it ever writes telemetry (fresh
@@ -178,12 +378,18 @@ export async function readLimits(
   // `ACCOUNT_ORDER` at import time — a shape runtime roster data cannot have,
   // since at import time there is no roster yet. `accounts-route.test.ts` pins
   // the phantom row's absence.
-  for (const wrapper of disabledLanes) {
+  //
+  // …the same for a lane the PROBE condemned before anything ran on it. Absent
+  // is indistinguishable from unknown, which scores as the emptiest account on
+  // the fleet — the exact self-reinforcing hole `disabled` exists to close, and
+  // an auth-dead lane falls into it identically. `inRoster` is doing the same
+  // job for both: the registry also holds dotless markers that name no account.
+  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes])) {
     if (wrapper in out) continue;
     if (!inRoster(cfg.roster, wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                     disabled: true };
+                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
   }
   return out;
 }

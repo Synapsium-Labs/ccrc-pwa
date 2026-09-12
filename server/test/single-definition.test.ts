@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
 } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -409,40 +410,39 @@ describe('Build 7 nouns', () => {
   // the mechanism it claimed to be standing on.
   //
   // Same shape as the terminal-trio scan below, and for the same reason: the
-  // shipped list is BUILT by interpolation from the two exported constants, so
+  // shipped list is BUILT by interpolation from the three exported constants, so
   // this scanner sees no literal at all in the real source, and any hand-written
-  // SQL list of the pair scores a hit. Either order, because a copy written from
-  // memory is as likely to be the other way round.
+  // SQL list of the SET scores a hit. Any order, because a copy written from
+  // memory is as likely to land in any of the three's six permutations.
   //
   // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
-  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
-    const PAIR = new RegExp(
-      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
-    // The premise, established inside the test rather than assumed: this pattern
-    // really does recognise the copy it forbids, in both orders. Without these
-    // two lines the assertion below is satisfied by a regex that matches nothing.
-    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
-    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
-    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+  it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,2}\\)`);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound')")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
-    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the two named constants, so
+    // …and the one definition is still built from the three named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
-    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
+                        'MAIL_REBIND_SUPERSEDED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
     }
-    // The two readers that must keep reaching the constant — "the copies are
-    // gone" is also satisfied by deleting the exclusion from both.
+    // The readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from all of them.
     expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
   });
@@ -748,7 +748,7 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
       'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
     expect(doc, 'the docstring does not name the in-file caller')
-      .toContain('requeueAbandonedCoordinatorMail');
+      .toContain('requeueAbandonedMail');
   });
 
   /** Statement keywords that wear a declaration's shape at two-space indent. A
@@ -960,13 +960,15 @@ describe('the account roster — config dir is data, joined in one place', () =>
 });
 
 describe('the program ledger is parsed by nothing', () => {
-  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
-  // actual mechanism is "no file under server/src mentions
-  // docs/superpowers/programs" — narrowed only as far as the shipped tree
-  // forces: nine mentions exist today, and every one but three is a comment
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4
+  // records the historical server-only claim, "no file under server/src
+  // mentions docs/superpowers/programs." The live guard scans all four source
+  // roots, narrowed only as far as the shipped tree forces: ten mentions exist
+  // today, and every one but three is a comment
   // explaining the convention (coord/db.ts's own migration-rule docstring,
   // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
-  // shared/api.ts). The three non-comment mentions are STRING VALUES the
+  // shared/api.ts, watch.ts's own build4-dogfood citation). The three
+  // non-comment mentions are STRING VALUES the
   // running system emits or throws — never a value it reads back off disk —
   // and are named below, exactly, rather than pattern-matched: a
   // `readFile(Sync)?(` check on the same line catches only the single-line
@@ -983,9 +985,6 @@ describe('the program ledger is parsed by nothing', () => {
     // message; neither reads a byte off either path.
     "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
     "'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +",
-    // coord/routes.ts:692 — POST /api/runs's response names where a
-    // coordinator should commit the ledger; the route never opens it.
-    'ledgerPath: `docs/superpowers/programs/${program}.md`,',
     // shared/api.ts's `ledgerPath` — the same category as the entry above,
     // one ring down: it NAMES the path the operator is expected to have
     // committed, before `POST /api/runs` is ever composed, and never opens it.
@@ -1195,8 +1194,50 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     expect(code.filter((l) => l.includes('$HOME/.ccrc/build.json'))).toEqual([
       'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
     ]);
-    expect(code.filter((l) => l.includes('jq -r')).length,
-      'a second jq parse of the stamp has appeared in ccrc').toBe(1);
+    // The same idiom as the assertion just above, over the VARIABLE rather
+    // than the literal: every non-comment line naming `BOX_STAMP_FILE`,
+    // trimmed (several sit inside indented function bodies), as one exact
+    // list. This is what turns "a jq parse of the stamp planted anywhere" red
+    // — a new parse of the stamp has to name the file somehow, whether through
+    // `BOX_STAMP_FILE` itself or through the one local it defaults from
+    // (`local stamp="${1:-$BOX_STAMP_FILE}"`, already row 2 below), and either
+    // shape adds a line — single- or multi-line — to this set. Re-derived from
+    // the file at HEAD, not copied from a plan: a rename of the variable would
+    // have to turn this red too, which is the point.
+    expect(code.filter((l) => l.includes('BOX_STAMP_FILE')).map((l) => l.trim())).toEqual([
+      'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
+      'local stamp="${1:-$BOX_STAMP_FILE}"',
+      '3) echo "$PROG unstamped (no $BOX_STAMP_FILE — this box has no build stamp yet)"',
+      '4) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE (not a regular file)" ;;',
+      '*) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE" ;;',
+      '3) printf \'build:     unstamped (no %s — no deploy has ever stamped this box)\\n\' "$BOX_STAMP_FILE" ;;',
+      '4) printf \'build:     unreadable (%s is not a regular file)\\n\' "$BOX_STAMP_FILE" ;;',
+      '5) printf \'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\\n\' "$BOX_STAMP_FILE" ;;',
+      '*) printf \'build:     unreadable (%s does not parse as a build stamp)\\n\' "$BOX_STAMP_FILE" ;;',
+      'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
+      '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
+      'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
+    ]);
+    // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
+    // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
+    // registries — eleven, measured 2026-09-08 (twelve non-comment `jq -r`
+    // lines file-wide, one of them this function's own) — none of them the
+    // stamp, and a file-wide count conflates "a second parse of THIS stamp"
+    // with "this file now parses other JSON too". The needle inside the
+    // function cannot be "a jq -r line that also names $BOX_STAMP_FILE" — the
+    // function reads a local `stamp` (defaulting from `$BOX_STAMP_FILE`, so a
+    // shipped stamp handed to it by `_inst_stamp`'s validate arm can be
+    // checked with the same parser), so the literal `$BOX_STAMP_FILE` never
+    // appears on the parse line itself; the function body is what the file's
+    // own structure makes exact. (The assertion above catches a parse planted
+    // OUTSIDE this function that names `$BOX_STAMP_FILE` directly — this one
+    // catches a second parse planted INSIDE it, which the outside one cannot
+    // see if it is written against the local `stamp` variable instead.)
+    const body = /_box_build_fields\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no _box_build_fields').toBeTruthy();
+    const bodyCode = body![1]!.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(bodyCode.filter((l) => l.includes('jq -r')).length,
+      'a second jq parse of the stamp has appeared inside _box_build_fields').toBe(1);
   });
 
   it('both verbs reach the stamp through that one reader, not around it', () => {
@@ -1233,6 +1274,247 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     const deploySh = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8');
     expect(deploySh.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('.ccrc/build.json')))
       .toEqual(['  install_atomic "$stamp" .ccrc/build.json 644']);
+  });
+});
+
+// — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
+describe('the model files, and who reads each one', () => {
+  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // writer/reader rows below (the models directory, the catalogue, the
+  // registry, the LiteLLM config, the ownership whitelist) — each with a
+  // writer and a set of readers, and the whole reason to register them here
+  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
+  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
+  // by bash; the effort map is written by node and read by python in another
+  // repository. None of those pairs can share a constant, so agreement has to
+  // be a red suite instead.
+  //
+  // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
+  // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
+  // `shared/modelenv.mjs` are invisible to it — and `deploy/` is not one of the
+  // bash roots, so `deploy/models-op.mjs` is invisible to `BASH` too. A rule
+  // about "who writes this file" run over either corpus alone would pass by
+  // looking at nothing at all, which is this suite's own oldest lesson.
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__') || e === 'node_modules') continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...walk(p)); continue; }
+      if (/\.(tsx?|mjs|mts)$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  const MODELS_CORPUS = [...new Set([
+    ...ALL, ...BASH,
+    ...walk(path.join(ccrcRoot, 'shared')),
+    ...walk(path.join(ccrcRoot, 'deploy')),
+  ])];
+  /** Comments stripped for bash, kept otherwise — `codeLines`' own rule, and
+   *  the reason the probe (which says in a COMMENT that it never touches the
+   *  registry) is not a holder of that path. */
+  const codeOf = (f: string): string =>
+    (BASH.includes(f) ? codeLines(f).join('\n') : readFileSync(f, 'utf8'));
+  const spell = (needle: string): string[] =>
+    MODELS_CORPUS.filter((f) => codeOf(f).includes(needle)).map(rel).sort();
+
+  it('the corpus is real: it holds the four files this design added', () => {
+    // Guards every row below: a corpus that had gone empty would make each of
+    // them pass over nothing.
+    const names = MODELS_CORPUS.map(rel);
+    for (const f of ['shared/models.mjs', 'shared/modelenv.mjs',
+      'deploy/models-op.mjs', 'ccd/ccrc-models-probe']) {
+      expect(names, `${f} is outside the corpus this describe scans`).toContain(f);
+    }
+  });
+
+  // THESE LISTS GROW WITH PLANS 2 AND 3a, deliberately and BY NAME — each of
+  // those plans has a step that edits the rows below by hand:
+  //   Plan 2 adds `'ccd/ccd'`               (the class carry's reader of the
+  //     TSV's third column and of the catalogue), beside its agreement test.
+  //   Plan 3a adds `'ccd/ccrc-doctor-checks'` (the doctor's per-lane check,
+  //     which reads the catalogue and the settings block through the shipped
+  //     `shared/models.mjs` / `shared/modelenv.mjs`).
+  // So the settled end state of the first assertion is the four-row list
+  //   ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/ccrc-models-probe']
+  // in `holdersOf`'s own sort order. It is left at TWO rows here on purpose:
+  // an exact match that is widened by the plan that widens the code is the
+  // guard; a list written ahead of the code is a list nobody measured. Turning
+  // any row into a pattern would retire the guard outright.
+
+  it('the models directory is spelled by exactly these bash tools', () => {
+    expect(holdersOf('.ccrc/models')).toEqual([
+      'ccd/ccrc',              // cmd_models and its helpers — the verbs
+      'ccd/ccrc-models-probe', // the catalogue's writer
+    ]);
+  });
+
+  it('the probe is the ONLY thing that writes a catalogue', () => {
+    // A second writer is how a box would carry a catalogue no probe stands
+    // behind — and `deriveModels` retires every model a catalogue omits, so a
+    // wrong catalogue is a warning on every surface about models that answer
+    // fine.
+    //
+    // `_probe_mv_notdir`, not a bare `mv -f`: the probe cannot source ccd's
+    // platform block (it ships as its own executable), so it cannot spell
+    // GNU's `mv -fT` either — `macos-platform.test.ts`'s GNU-only scan
+    // forbids that flag at any call site outside the block. The local helper
+    // carries the same refusal (`$OUT` a directory -> refuse, rather than
+    // "succeeding" by dropping the file inside it), so a bare
+    // `mv -f "$NORM" "$OUT"` is still no longer a substring of the file.
+    const probe = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-models-probe'), 'utf8');
+    // An exact COUNT of the call sites, not `toContain`: a `toContain` is
+    // satisfied by any one of the three (the catalogue rename, the
+    // stale-mark rewrite, the `--endpoints` answer) and stays green if a
+    // fourth staged write is added without going through the helper, or if
+    // one of the three loses it back to a bare `mv`. Measured 2026-09-08
+    // against HEAD (`grep -Fc '_probe_mv_notdir "$NORM" "$OUT"'
+    // ccd/ccrc-models-probe`): 3.
+    expect((probe.match(/_probe_mv_notdir "\$NORM" "\$OUT"/g) ?? []).length).toBe(3);
+    // A write is `mv`/`cp`/`tee` — or this repo's other two spellings of an
+    // atomic install, `install_atomic` (deploy.sh's helper) and
+    // `_inst_atomic` (ccrc's own, `_` is a word character so `\b` still
+    // anchors it) — naming the CATALOGUE path (`<id>.json`, not
+    // `<id>.classes.json`, the REGISTRY's own row below, and not
+    // `<id>.effort.json`, the materialiser's file, §6.4 — neither is a second
+    // catalogue writer), or a `>`/`>>` redirect whose TARGET is the catalogue
+    // path — not merely a line that contains both a `>` and the path
+    // anywhere in it. Without the target anchor this false-positives on
+    // Task 9's own read, already in `ccd/ccrc` today: `jq '.models | length'
+    // "$HOME/.ccrc/models/$id.json" 2>/dev/null` — a stderr redirect that
+    // shares the line with the path it is reading, not writing.
+    const CATALOGUE_PATH = /\.ccrc\/models\/[^ ]*(?<!\.classes)(?<!\.effort)\.json/;
+    const writesDirectly = (l: string): boolean => {
+      if (!CATALOGUE_PATH.test(l)) return false;
+      if (/\b(?:mv|cp|tee|install|install_atomic|_inst_atomic)\b/.test(l)) return true;
+      if (/\b(?:writeFileSync|renameSync)\b/.test(l)) return true;
+      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)(?<!\.effort)\.json/.test(l);
+    };
+    // Plan 2 adds `ccd/ccd` as a reader of the models directory — the
+    // `.classes.tsv` projection (spec §7), not the catalogue — when it lands,
+    // extend BOTH this write-scan's file list AND the readers' list in the
+    // `it()` just above, not just one; a reader that never writes belongs
+    // only in the second.
+    for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
+      const code = codeLines(path.join(ccrcRoot, f));
+      expect(code.filter(writesDirectly),
+        `${f} writes a catalogue directly instead of running the probe`).toEqual([]);
+    }
+  });
+
+  it('the REGISTRY file is named by exactly three files, and edited by one of them', () => {
+    // `<id>.classes.json` is the operator's own file (§4.1), edited only
+    // through the verbs — so the verbs' node half is the one program that
+    // writes it, and every write passes the validator. `shared/models.ts`
+    // names the path in its header because that is where the type is
+    // defined. `shared/models.mjs` names it a second time, in `parseRegistry`'s
+    // own docstring — measured 2026-09-08: the single-source ruling moved the
+    // validator ITSELF into this file, so the sentence describing what the
+    // validator validates moved with it. Neither file holds an fs call (both
+    // are L0 and import nothing) — a bash holder would be a second,
+    // unvalidated editor of the same bytes.
+    expect(spell('classes.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts']);
+  });
+
+  it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
+    // `ccgpt` (another repository) reads the same path from its own
+    // `${CCGPT_CONFIG:-…}` default, which is why the helper here honours the
+    // same override rather than hardcoding the default: two tools, one file,
+    // and only one of them is in this repo to be pinned.
+    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
+      '_models_litellm_path()     { printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }',
+    ]);
+  });
+
+  it('the ownership whitelist is read by exactly one thing in this repo', () => {
+    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // this scan cannot see. Within this repo it must stay one reader, because
+    // a second one would be a second opinion about which providers may serve.
+    expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
+  });
+
+  it('the four class names are enumerated only where a walk needs the sequence', () => {
+    // A file may list all four ONLY if it walks them in order. SIX print,
+    // and FIVE of them walk it: the TypeScript source, its bare-`node` twin,
+    // the materialiser, the verbs' node half, and `ccd/ccrc` (whose bash walk
+    // is what answers a class typo at exit 2).
+    //
+    // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
+    // file — the spec names it three times as the CURRENT hardcoded picker
+    // this design will eventually replace: §1 calls it out by path and line
+    // range ("The PWA picker is a hardcoded table keyed on the wrapper
+    // string"), §8 describes what it becomes ("Session picker … becomes
+    // data: rows are the four classes …", Plan 3a), and §13.4's migration
+    // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
+    // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
+    // Plan 3a is the task that removes it — when that lands, this row comes
+    // OUT of the list below rather than staying as a permanent exception, and
+    // the list shrinks back to five.
+    //
+    // Until then it matches through the QUOTED-literal arm — its `/model
+    // <alias>` rows quote the same four words as Claude Code CLI
+    // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
+    // contains `'opus'`), not as a classification walk — so tightening the
+    // bare-word arm (the fix for a match found in PROSE) cannot exclude it
+    // without also excluding the five real holders, which reach the quoted
+    // arm the same way. Named here rather than carved out of the corpus, per
+    // the same rule this file's header states for every other scan: the list
+    // is what the scan actually finds, honestly reconciled, not narrowed to
+    // fit a prediction written before the code existed.
+    const enumerates = (src: string): boolean =>
+      ['haiku', 'sonnet', 'opus', 'fable'].every((c) =>
+        new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
+    const holders = MODELS_CORPUS.filter((f) => enumerates(codeOf(f))).map(rel).sort();
+    expect(holders).toEqual([
+      'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'deploy/models-op.mjs',   // CLASSES — the mutation walk
+      'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
+      'shared/modelenv.mjs',    // the env block's key order and the TSV's
+      'shared/models.mjs',      // the twin's mirrored list
+      'shared/models.ts',       // CLASSES — the definition, and FAMILY_TOKENS
+    ]);
+  });
+
+  it('and the scan is looking at something — the four really are in the definition', () => {
+    // Guards the guard: an `enumerates` that had gone vacuous would turn the
+    // list above into every source in the tree.
+    const src = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
+    expect(src).toContain("export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;");
+  });
+
+  it('ANTHROPIC_SMALL_FAST_MODEL never reaches `fable`, pinned in source (fix round 2A, N4)', () => {
+    // `modelenv.test.ts`'s own guard for this chain used to be a REGISTRY
+    // (haiku and sonnet both null, opus and fable both set) that reached this
+    // exact line, so a `?? fable` added to it would red. Fix round 1, v2
+    // (2026-09-09) narrowed `subagent` to haiku/sonnet, and the registry that
+    // test built also named `subagent: 'opus'` to stay otherwise legal — a
+    // shape `parseRegistry`'s own gate refused BEFORE `modelEnvBlock` ever
+    // reached this line, so the commit correctly retired that case rather
+    // than ship a registry `parseRegistry` would refuse. Nothing else took
+    // its place: measured 2026-09-10, mutating this line to
+    // `haiku ?? sonnet ?? fable ?? sentinel('haiku')` and running the four
+    // model test files (models, modelenv, models-op, ccrc-models) reds
+    // NOTHING — `Test Files 4 passed (4)`. A source pin is the only guard
+    // left, the same
+    // shape `modelenv.test.ts`'s own static pin further down that file uses
+    // for `ANTHROPIC_MODEL`'s chain.
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'modelenv.mjs'), 'utf8');
+    expect(src).toContain("ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),");
+  });
+
+  it('SUBAGENT_CLASSES is one list spelled in two languages — shared/models.mjs and ccd/ccrc\'s MODELS_SUBAGENT_CLASSES (round 3, NEW-4)', () => {
+    // `MODELS_CLASSES` (the four) is covered by the enumeration scan above.
+    // Nothing pinned its narrower sibling — the two classes `set-subagent`
+    // accepts — before this: a divergence between the node list and the bash
+    // copy is message-text only (it cannot misroute a write), but it can
+    // still promise a class the other half refuses, or refuse one the other
+    // half still offers.
+    const models = readFileSync(path.join(ccrcRoot, 'shared', 'models.mjs'), 'utf8');
+    expect(models).toContain("export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);");
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    expect(ccrc).toContain('MODELS_SUBAGENT_CLASSES="haiku sonnet"');
   });
 });
 
@@ -1441,6 +1723,79 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
     expect(code.filter((l) => l.includes(NEEDLE))).toEqual([
       'CCRC_DDNS_UNIT="ccrc-ddns"',
     ]);
+  });
+});
+
+// — the account-health probe's token convention —
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files', () => {
+  // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
+  // so the mandatory upstream account cannot declare where its credential
+  // lives — and a roster-driven probe would silently skip the primary account.
+  // The convention closes that, and the files that spell it CANNOT share a
+  // constant: `ccd-account-health` and `ccd-telemetry-keepalive` are each
+  // installed alone into $HOME/.local/bin with no library beside them, and
+  // `ccrc-doctor-checks` is loaded by `ccrc` through ${BASH_SOURCE[0]} on a box
+  // that may not have either of them at all.
+  // So the agreement is MEASURED, the way `.ccrc/remote-control`'s four
+  // spellings are: an exact holder list, and a value comparison.
+  //
+  // THE THIRD HOLDER IS A WIDENING, and it is written down rather than waved
+  // through. `ccd-telemetry-keepalive` sources the file it names — it does not
+  // merely test for it — because the account it is about to spend a turn on
+  // must carry its own credential and the roster structurally cannot say where
+  // that lives for the upstream account. It is therefore the same convention,
+  // used by a third consumer, and the value comparison below covers it exactly
+  // as it covers the other two. A FOURTH holder should have to argue again.
+  const NEEDLE = '-oauth.env';
+
+  it('is spelled by exactly those three files, each named here BY NAME', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
+      'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
+      'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
+    ]);
+  });
+
+  it('and all three build the same path from an id', () => {
+    // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
+    // lines whose trimmed start is `#`, and each file names the file TWICE in
+    // shell — once building the path and once in an operator-facing message
+    // that quotes it back (`_ah_say`'s refusal; `bad+=(…)`'s FAIL detail). A
+    // bare `.includes(NEEDLE)` therefore counts 2 on each side and this pin
+    // would be red on arrival for a reason that is not a defect. The message
+    // copies are a feature — an operator is told the exact path — so the
+    // filter names the construction instead of forbidding the mention.
+    const probe = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-health'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('printf'));
+    const doctor = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -s '));
+    // The keepalive's constructing line is its readability TEST — `[ -r "…" ]
+    // && . "…"` — which names the path twice on ONE line. That is deliberate
+    // there (the guard and the source must not be able to disagree about which
+    // file they mean), so the filter counts LINES and `shape` reads the first
+    // quoted path on the line, which is the one the guard tests.
+    const keepalive = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-telemetry-keepalive'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -r '));
+    expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
+    expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
+    expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
+    // A REAL comparison, not a tautology. Each line is reduced to the path it
+    // BUILDS, with the two files' different spellings of "the secrets dir" and
+    // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
+    // "$SECRETS_DIR" "$1"` and the doctor's `[ -s "$HOME/.cc-secrets/$id-oauth.env" ]`
+    // both reduce to the SAME literal. A `shape` that returned a constant for
+    // anything matching the filter (the first draft of this pin did) could
+    // never fail, which is the failure mode this whole file exists to catch.
+    const shape = (l: string): string => {
+      const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
+      expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
+      return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
+        .replace('$SECRETS_DIR/$acct', '<dir>/<id>');
+    };
+    expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
+      .toBe('<dir>/<id>-oauth.env');
   });
 });
 
@@ -1770,6 +2125,86 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
     oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
   });
+
+  describe('AskState', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_STATE_MAP')).toEqual(['shared/api.ts']);
+      expect(oneDefinition('ASK_STATES')).toEqual(['shared/api.ts']);
+    });
+
+    it('derives its runtime list from the map, never a second array', () => {
+      const src = read('shared/api.ts');
+      expect(src).not.toMatch(/ASK_STATES[^=]*=\s*\[/);
+    });
+
+    it('round-trips every member and refuses non-members', () => {
+      expect(ASK_STATES.length).toBe(6);
+      expect(new Set(ASK_STATES).size).toBe(ASK_STATES.length);
+      for (const s of ASK_STATES) expect(isAskState(s)).toBe(true);
+      expect(isAskState('nope')).toBe(false);
+      expect(isAskState(null)).toBe(false);
+      expect(isAskState(7)).toBe(false);
+    });
+  });
+
+  describe('AskRefuseCode', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_REFUSE_CODE_MAP')).toEqual(['shared/api.ts']);
+    });
+
+    it('leaves no second copy of the literal set in inject/ask.ts', () => {
+      // D-2174: the union used to live here, inline, with no runtime list.
+      expect(read('server/src/inject/ask.ts')).not.toMatch(/'menu-mismatch'\s*;/);
+    });
+
+    it('round-trips every member', () => {
+      // RULING F1: fourteen, not the brief's ten — the four route-level
+      // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`,
+      // emitted by later tasks' routes in server/src/coord) share this same
+      // refusal family and so join this one union rather than a second.
+      // FIFTEEN since the whole-branch review (M2): `child-unmeasurable`
+      // split "this box could not read the child" back out of `ask-moved`,
+      // which had been carrying both — a narrowing that reached the shipped
+      // coordinator contract, not merely a taxonomy.
+      expect(ASK_REFUSE_CODES.length).toBe(15);
+      for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
+      expect(isAskRefuseCode('nope')).toBe(false);
+      expect(isAskRefuseCode(null)).toBe(false);
+    });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1: the one principal token BOTH sides act on —
+  // `server.ts` writes it into `asks.answeredBy`, the PWA renders a
+  // different sentence for it ("answered by you"). Two literals would let
+  // the writer and the reader drift into a chip that silently stops
+  // recognising the operator's own answer and falls back to naming the
+  // parent, which is exactly the defect F1 closed.
+  describe('ASK_OPERATOR_PRINCIPAL', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const definers = (): string[] =>
+      ALL.filter((f) => /export const ASK_OPERATOR_PRINCIPAL\b/.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(definers()).toEqual(['shared/api.ts']);
+    });
+
+    it("leaves no bare 'operator' literal in either file that acts on it", () => {
+      // The writer and the renderer, by name. `coord/rundefs.ts` legitimately
+      // owns the same WORD for the mail lane (`SYSTEM_MAIL_SENDER_MAP`) and is
+      // deliberately not scanned: those members answer "who sent this", a
+      // different question from "who pressed the key".
+      expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
+      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+    });
+  });
 });
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
@@ -2075,6 +2510,13 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
       // there is no private twin, and there must not be one: see the third
       // `it` below.
       ['LC_REFUSAL_TOKENS', 'LC_REFUSAL_WORD'],
+      // Account pools wave 2b: the same idiom, applied to `meas` and `dec`
+      // key vocabularies (`LIFECYCLE_MEAS_KEY_MAP`/`LIFECYCLE_DEC_KEY_MAP`,
+      // both module-private in shared/api.ts). `tsc` already pins each MAP
+      // against its interface both ways; this is what pins the exported
+      // LIST as DERIVED rather than hand-written (D-1890).
+      ['LIFECYCLE_MEAS_KEYS', 'LIFECYCLE_MEAS_KEY_MAP'],
+      ['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP'],
     ] as const) {
       expect.soft(api, `${list} must derive from ${map}`)
         .toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
@@ -2204,5 +2646,219 @@ describe('graphify — one pin, one census path', () => {
     const holders = holdersOf('graph-sweep.json');
     expect(holders).toEqual(
       ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
+  });
+});
+
+describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
+  // The same shape as "extraction finding — one path to the ccd script"
+  // above, applied to a copy that was made for a stated reason and copied
+  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
+  // both headers citing the same excuse (importing a sibling `.test.ts` module
+  // for its helpers double-registers that file's `describe` blocks). The
+  // excuse argued for a THIRD file with no `describe()` in it, not for two
+  // copies — `installTreeFixture.ts` is that file. The cost of the old shape
+  // was measured, not theoretical: an edit to one `TREE_FILES` that missed the
+  // other broke 34 tests in the file nobody touched.
+  //
+  // Scans `server/test` AND `server/test-e2e`, which `ROOTS` above
+  // deliberately does not cover, for the same reason the ccd-script-path
+  // finding does: these are TEST files, and the fixture they define is data
+  // no shipped source ring owns. The sibling directory is in scope for the
+  // same reason the ccd-script-path finding put it there — an e2e run that
+  // needs the same `ccrc install` tree is exactly the shape that would reach
+  // for its own `TREE_FILES` copy rather than importing this one, and a scan
+  // that stopped at `server/test` would score that copy no hit at all.
+  const testDir = path.join(ccrcRoot, 'server', 'test');
+  const testDirs = [testDir, path.join(ccrcRoot, 'server', 'test-e2e')];
+  const testFiles = testDirs.flatMap(sources);
+
+  // Matches the shape of an ASSIGNMENT to an array literal, not a reference or
+  // an import — an `import { … } from './installTreeFixture.js'` line has no
+  // assignment-to-a-bracket in it, so a consumer importing the shared list is
+  // not mistaken for a second holder of it. (This comment deliberately never
+  // spells the three characters the pattern hunts for adjacently, the same
+  // reason the ccd-script-path finding above avoids writing its own literal.)
+  const DEFINES_TREE_FILES = /\bTREE_FILES\s*=\s*\[/;
+  const DEFINES_TREE_STUBS = /\bTREE_STUBS\s*:\s*Record<string,\s*string>\s*=\s*\{/;
+  const DEFINES_INSTALL_FIXTURE_TREE = /(?:export\s+)?function\s+installFixtureTree\(/;
+
+  it('found the test tree it is scanning', () => {
+    // A scan over an empty list passes everything. Each directory is checked
+    // separately so a moved or renamed sibling turns this red on its own,
+    // rather than the other directory's file count silently covering for it
+    // (the same reason the ccd-script-path finding's own version of this
+    // check does it directory-by-directory rather than on the flattened sum).
+    for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
+    expect(testFiles.length).toBeGreaterThan(40);
+    expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
+  });
+
+  it('TREE_FILES is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_FILES.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('TREE_STUBS is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_STUBS.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('installFixtureTree is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_INSTALL_FIXTURE_TREE.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('is what the two former copy sites now import', () => {
+    // Not just "the copies are gone" — that is satisfied by deleting the
+    // fixture. Each former copy site must still reach the shared module.
+    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+      const src = readFileSync(path.join(testDir, f), 'utf8');
+      expect(src, f).toMatch(
+        /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
+    }
+  });
+});
+
+// ── D-2375: the scratch-slug predicate ─────────────────────────────────────
+describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+  // "Did the harness mint this slug for a throwaway directory?" is asked at
+  // three sites that cannot share a function between them:
+  //
+  //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
+  //     Its two callers (the census and `--apply`) reach it directly.
+  //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     `tableNames()`), so a `declare -F` guard would be the second spelling
+  //     with a branch in front of it. D-92's trade, unchanged.
+  //   - `session-hook.sh` is installed INTO an agent home and sources nothing
+  //     from this tree at all.
+  //
+  // So the agreement cannot be structural, and this is the mechanism that
+  // holds it instead. It matters more than the usual drift argument does: the
+  // hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can only
+  // ever be exercised on the platform the suite runs on — a Linux-only
+  // spelling was invisible to every ubuntu leg and to five task reviews, and
+  // only `test-macos` caught it. The two read-side sites read a directory
+  // NAME, so they are measurable everywhere; this pin is what carries their
+  // coverage across to the one site that is not.
+  //
+  // THE SITE LIST IS THREE BECAUSE THE HOOK ASKS IN SLUG SPACE. It holds the
+  // un-lossy value and could ask an exact question of it instead (the
+  // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
+  // records why it does not. If that is ever revisited, this list shrinks to
+  // two — a deliberate edit, not a drift.
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+
+  /** The guard line at one site, found by the one token no other line in
+   *  these tools carries. Exactly one per file, or the row that reads it is
+   *  measuring something it did not mean to. */
+  const guardLine = (f: string): string => {
+    const hits = codeLines(f).filter((l) => l.includes('-var-folders'));
+    expect(hits, `${rel(f)}: expected exactly one scratch-guard code line`).toHaveLength(1);
+    return hits[0] ?? '';
+  };
+
+  it('is spelled identically at exactly three sites, each named here BY NAME', () => {
+    expect(holdersOf(PRED)).toEqual([
+      'ccd/ccrc',                 // _mem_is_scratch — the rule, and the measurement
+      'ccd/ccrc-doctor-checks',   // _check_memory — spelled here, D-92's trade
+      'ccd/session-hook.sh',      // the hook's own case — shares nothing with either
+    ]);
+  });
+
+  it('each site carries the WHOLE alternation and nothing appended to it', () => {
+    // EQUALITY, NOT CONTAINMENT, and the difference is the whole value of this
+    // row. `holdersOf` matches with `String.includes`, so the row above stays
+    // green when a site APPENDS an alternative — measured 2026-09-10: adding
+    // `|-private-var-*` to `session-hook.sh` alone left every Linux-visible
+    // row in the tree green while, on Darwin, it would have swept up
+    // `/private/var/tmp` and skipped every fixture in `session-hook.test.ts`'s
+    // memory-convergence block. Capturing the arm closes both directions at
+    // once, and it is what makes the row above's title true.
+    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']) {
+      const m = /case "\$(?:1|slug)" in ([^)]*)\)/.exec(guardLine(path.join(ccrcRoot, f)));
+      expect(m, `${f}: the scratch guard is not a case arm this row can read`).toBeTruthy();
+      expect(m?.[1], f).toBe(PRED);
+    }
+  });
+
+  it('no site anywhere in the corpus carries the narrower Linux-only spelling', () => {
+    // The row above pins the three KNOWN sites. This one has a different
+    // population: a FOURTH site, written anywhere in these tools with the
+    // pre-D-2375 rule — which named the OS scratch root on Linux and nothing
+    // at all on Darwin.
+    for (const f of BASH) {
+      const narrow = codeLines(f).filter((l) => /in\s+-tmp\*\)/.test(l));
+      expect(narrow, rel(f)).toEqual([]);
+    }
+  });
+
+  it('no site anywhere in the corpus sweeps up /var/tmp, in either spelling', () => {
+    // The widening's UPPER BOUND, and the prefix a careless one takes first:
+    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots its
+    // memory-convergence fixtures there, and skipping it would hide a real
+    // fork from the operator.
+    //
+    // BOTH SPELLINGS, and bare rather than glob-anchored. Measured
+    // 2026-09-10, twice: an over-widening written `-var-tmp-*` — a dash before
+    // the star, which is what a hand actually writes — slipped a needle
+    // anchored as `-var-tmp*`; and `-private-var-tmp` is the spelling a real
+    // Darwin box produces, which a Linux-only control cannot see at all.
+    for (const needle of ['-var-tmp', '-private-var-tmp']) {
+      for (const f of BASH) {
+        const swept = codeLines(f).filter((l) => l.includes(needle));
+        expect(swept, `${rel(f)} (${needle})`).toEqual([]);
+      }
+    }
+  });
+
+  // KNOWN BOUND, stated rather than implied: a FOURTH site written in some
+  // other shell shape — a `[[ ]]` test, a helper of its own — is caught by
+  // neither the equality row (it reads three sites by name) nor the narrowing
+  // row (it looks for the old `case` spelling). Nothing here scans for an
+  // arbitrary re-implementation of the question.
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+    // Three suites state fixture preconditions against this rule and none can
+    // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
+    // they share. The first cut of D-2375 put a copy in each suite and pinned
+    // one of the three; this row is why that is now impossible.
+    const src = readFileSync(path.join(ccrcRoot, 'server/test/scratchSlugs.ts'), 'utf8');
+    const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
+    expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
+    const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
+    expect(mirror).toEqual(shipped);
+  });
+
+  it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
+    // The same two directories the scans above enumerate rather than name:
+    // an unscanned sibling is the "clean and unchecked becomes dirty and
+    // unchecked with nothing saying so" shape this file already refuses.
+    const holders = [path.join(ccrcRoot, 'server', 'test'),
+      path.join(ccrcRoot, 'server', 'test-e2e')]
+      .flatMap(sources)
+      // ANCHORED TO A DECLARATION, not a mention, and that is not cosmetic:
+      // the bare needle read the regex literal in the row above and reported
+      // THIS file as a second holder (measured). A declaration is what the
+      // row claims anyway.
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+        .test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/scratchSlugs.ts']);
   });
 });

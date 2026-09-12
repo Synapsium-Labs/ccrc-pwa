@@ -16,10 +16,40 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
    header and the wave-1 row, and **commit it**. The commit is the artefact; an
    uncommitted ledger is not a handoff.
 2. `POST /api/runs`
-   `{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
-   → `{"ok":true,"id":<run id>,…}`, or
-   `{"ok":false,"refused":"claimed-by-another","by":"<other coordinator id>"}`
-   if another coordinator holds this program (clause 8 — stop).
+   `{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
+   → `{"ok":true,"id":<run id>,"ledgerPath":…,"ledgerRepo":…,"ledgerAbsPath":…}`, or one of the refusals below.
+
+| refused | what it means | what you do |
+|---|---|---|
+| `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
+| `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
+| `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
+| `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
+| `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
+
+**Why `project-mismatch` exists.** A session's workspace is a git worktree in
+exactly one repository. Reusing its id for a wave in another project queues the
+brief onto a workspace bound to the wrong repo, and the mismatch used to surface
+one advance later as a `tip-unmeasurable` naming a branch you did not expect.
+The server measures it two ways — here, from the run history, and again at
+dispatch from the live registry row (§2) — and refuses both times. A session no
+run has ever named refuses nothing: absence permits, which is exactly the
+wave-1 open that adopts a workspace the operator made by hand.
+
+**`homeProject`, and the two paths it names.** `ledgerRepo` echoes the home the
+programme now stores, and `ledgerAbsPath` is that home's ledger by ABSOLUTE
+path — the file a wave running in another repository reads without guessing
+where it lives. Both are `null` while the programme stores no home. The server
+tolerates an absent `homeProject` for one deploy generation and records that it
+did; send it on every open anyway. A programme that stores no home takes the
+FIRST home any open sends — first writer wins, recorded as
+`home-project-backfilled` on that run — and nothing in the API can change it
+afterwards: a later open sending a different value is refused `home-mismatch`
+against it. Send the programme's home, the repo holding its ledger, spec and
+plan — never the repo you happen to be running in. The server trims the value
+and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
+`400 bad-request` whose `detail` names `homeProject`.
 
    For wave ≥ 2, reclaiming the workspace wave 1 held, add
    `"sessionId":"<the held session id>"` to the same call — it tells the open
@@ -28,8 +58,11 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 
 **The hold, precisely.** When this call names `sessionId` (wave ≥ 2, reclaiming
 an existing workspace), the server places the hold immediately, reason
-`program:<slug> wave:<N>/M`. Wave 1's open has no workspace yet — nothing is
-held until wave 1's own dispatch (§2) places it, same reason, `wave:1/M`. A
+`program:<slug> wave:<N>/M run:<id>`, naming the run it has just opened. Wave
+1's open has no workspace yet — nothing is held until wave 1's own dispatch
+(§2) places it, same shape, `wave:1/M run:<id>`. The only hold that carries no
+`run:` suffix is the one an ordinary close writes for wave N+1 when no
+successor run exists yet (§5, step 4) — there is no id to name at that moment. A
 coordinator that checks for a hold between wave 1's open and its dispatch and
 finds none has not found a bug — it has found the exact window before the
 workspace exists. Either way the reason is **display-only** — never parse a
@@ -52,6 +85,7 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
+| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo. Expect the programme to hold two live workspaces from then on, which costs two concurrency slots and two of the daily budget |
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's
@@ -121,14 +155,16 @@ wave's brief — that is what waves are for.
 `GET /api/runs`. `bad-transition` (409) means this run is not `planned` —
 someone already dispatched it, or it is further along than you think.
 
-**Answers that do NOT ride `refused`.** The table above is what SKILL.md
+**Answers that do NOT ride `refused`.** The table below is what SKILL.md
 calls "the refusals you will actually meet" — but this route (and `POST
-/api/runs/:id/close`) can answer four other shapes, and blindly retrying any
+/api/runs/:id/close`) can answer six other shapes, and blindly retrying any
 of them is how a workspace gets orphaned:
 
 | shape | meaning | what you do |
 |---|---|---|
 | `error:'oversize'` (413) | the mail this dispatch would queue — the worker kickoff prefix **plus** your brief, composed — exceeds the mail body byte cap (`MAIL_BODY_MAX_BYTES`). Checked EARLY, before the pause/kill-switch check, before caps, before anything is spawned or held (`dispatch.ts`'s own `MAIL_BODY_MAX_BYTES` check). Not a mail-routes-only code: this is the SAME field/status `POST /api/mail`'s own oversize body/subject/artifacts refusals use (SKILL.md), but this occurrence is dispatch's own | trim the brief and resend — the run is untouched, still `planned`, and nothing on the fleet was spawned |
+| `error:'hold-oversize'` (413) | the persisted run's complete session-card hold exceeds the hook's 127-character display window. Rechecked here for reconstructed or newer-database rows that bypassed current open-time validation | shorten the programme slug through an operator correction before retrying. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
+| `error:'hold-invalid'` (400) | the persisted run's programme or numeric fields cannot satisfy the hook's positive-decimal hold grammar | stop and report the stored defect. The run stays `planned`; no pause/cap read, spawn, ensure or hold occurs |
 | `error:'registry-unmeasurable'` (502) | the fleet's registry directory could not be listed — and this can land AFTER `ccd ws-add` already ran, before the run row records the new workspace | **stop and report; the operator resolves it** — exactly like `ambiguous-dispatch`, never a blind retry. A retry's `before` snapshot now includes the orphaned workspace, so the retry binds a SECOND one and strands the first, unheld and unrecorded, on the fleet |
 | `error:'unsupported'` (501) | this ccd build does not support a verb this route needs | stop and report — an operator/fleet-host issue, not a retryable one |
 | a bare `{"ok":false,"stderr":"<text>"}`, no `refused`/`error`/`reject.code` field at all (502) | the underlying `ccd` call itself failed for one of its ordinary reasons — `ws-add` (wave 1's fresh spawn), `ensure` (wave ≥2's resume), or `ws-hold` (either wave, the claim itself) | stop and report — the SAME as the rows above, even though none of the three fields SKILL.md's own check reads is populated. `state` always stays `planned` (this shape never advances it) — but that is NOT "nothing happened yet": `sessionId` may already be WRITTEN onto the row (a wave-1 `ws-add` success writes it before `ws-hold` can go on to fail; wave ≥2 always starts with it already there, from an earlier open or dispatch), and a workspace may already exist on the fleet, freshly spawned and unheld. Confirm no partially-spawned or partially-held workspace was left behind by an earlier attempt before ANY retry — the fleet is where that evidence lives, not the run row's own `state` |
@@ -148,7 +184,7 @@ what your brief may weigh. Trim against the ceiling, not against `limit`.
 covered where it actually bites on the ordinary path, §4 below.
 
 For wave 1, this call is also where the workspace's hold actually lands
-(reason `program:<slug> wave:1/M` — see §1's own note on this). For wave ≥ 2,
+(reason `program:<slug> wave:1/M run:<id>` — see §1's own note on this). For wave ≥ 2,
 this route itself resumes the held workspace and injects `/clear` through
 the send path before it queues the brief — recording `resumed`/`clearedAt`
 on the response. This session never sends `/clear` to a worker by any other
@@ -467,7 +503,8 @@ whole time, which is the only prevention this ordering rule buys.
    Commit it.
 3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
    session this wave's run has) — this opens wave N+1's run row and re-holds
-   the same workspace with reason `program:<slug> wave:<N+1>/M`. The program
+   the same workspace with reason `program:<slug> wave:<N+1>/M run:<id>`,
+   naming the run row it has just opened. The program
    now has two open runs (this wave's, still `working`/`awaiting-review`/
    `merging`, and the new `planned` one) — it can never read as zero from
    here.
@@ -475,8 +512,9 @@ whole time, which is the only prevention this ordering rule buys.
    wave's** run id — re-measures the SAME facts, against the SAME codes, as
    `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
    closes this wave's run row as `done`, and places the SAME hold reason
-   again (`program:<slug> wave:<N+1>/M` — idempotent; step 3 already wrote
-   it). The response SHAPE differs from §4's table, though: a mismatch here
+   again (`program:<slug> wave:<N+1>/M run:<id>` — idempotent; step 3 already
+   wrote it, and close takes its SURVIVOR arm here, so it re-writes that same
+   run's reason byte for byte). The response SHAPE differs from §4's table, though: a mismatch here
    answers `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
    `reject.code` — so read `$body.error` on this route, not `$body.reject`.
    Two refusals besides the re-measurement codes: `not-dispatched` (this
@@ -484,7 +522,13 @@ whole time, which is the only prevention this ordering rule buys.
    to re-measure or mail) and `prhistory-unreadable` (`.prhistory` could not
    be read — the route refuses to close on a ledger it cannot verify; retry
    once the file is readable again) — both of THESE two ride `refused`, the
-   third shape this one route can answer with.
+   third shape this one route can answer with. A re-hold that would exceed
+   the hook's 127-character display window instead answers
+   `error:'hold-oversize'` (413): no fleet act runs and the run remains open.
+   Shorten the programme slug through an operator correction before retrying.
+   `error:'hold-invalid'` (400) has the same no-act/no-close guarantees, but
+   means the stored programme or numeric domain cannot satisfy the hook grammar;
+   stop and report it rather than retrying unchanged.
 5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
 
 ## 6 — Final merge
@@ -492,20 +536,24 @@ whole time, which is the only prevention this ordering rule buys.
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold
 (`ws-release`) **only when no other open run names this session**. The response
-carries `released`. `released: true` means the claim is gone and the ordinary
-sweep will archive the workspace once its PR merges. `released: false` means the
+carries `released`. `released: true` means the claim is gone — this workspace is
+an ordinary unheld, unclaimed row again, and nothing archives it: it stays live
+and supervised until a human archives it. `released: false` means the
 claim was **handed over**, not dropped: another run still owns this workspace,
 so the hold was rewritten with that run's own reason and nothing was archived.
 That is not an error — it is the ordinary consequence of opening wave N+1
 before closing wave N — but the program is not finished until that run closes
 too. The same field rides the abandon response.
 
-Since Build 8 the archive sweep asks the same question the close does: a
-workspace whose hold is absent but whose run is still open is **not** archived.
-Releasing a hold by hand no longer re-arms the sweep on its own.
+Since Build 8 the merged sweep asks the same question the close does, before it
+picks which notice to push: a workspace whose hold is absent but whose run is
+still open is announced as **still claimed**, naming that run. Releasing a hold
+by hand only changes which of the two notices the next sweep sends.
 
-When the claim really is released, the ordinary sweep archives the workspace on
-its own clock and its manifest carries the whole PR lineage. You do not reap, ever (clause 3); cleanup is the operator's ceremony
+Neither notice archives anything, and nothing else does either. A merged
+workspace stays where it is — live, supervised, its PR merged — until a human
+archives it, and when a human does, its manifest carries the whole PR lineage.
+You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
 
 ## What happened to a workspace that is gone
@@ -538,3 +586,52 @@ route-parity suite binds each registration to this corpus from the commit that r
 - `POST /api/ledger/deviations` — allocate the program's D-number block at run-open; never
   invent a number, and never reuse one.
 - `GET /api/ledger` — the allocation record and the floor for a project.
+
+## The ask lane — pre-empting a child's question (Tasks 9-11)
+
+Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route that types into
+a child's pane, and this session never does it by any other means. All three routes in the
+lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
+entry, not an invitation like the operator-only doors above.
+
+- `POST /api/asks/:id/answer` — press an answer in. Body `{"fromId":"<your id>","fromUuid":"<your
+  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of THREE different
+  conditions, and none of them is interchangeable with another. Nothing was pressed in any of
+  the three — every gate on this route runs before the keystroke.
+  - `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
+    endings, not one: another principal is mid-answer, the grace window lapsed and the operator
+    was notified after all, the child's dialog went away, or someone already ruled. Only the
+    first is a race a retry could win, and you cannot tell which from this code alone — read the
+    row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
+    against another principal that already took the row" for one wave, naming one of the four:
+    the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+  - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
+    on its screen right now may be a different instance of what looks like the same question.
+    This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
+    same call — a blind retry risks pressing a digit into a menu that has since moved on.
+  - `child-unmeasurable` — the server could not read the child's live state at all (no session
+    record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
+    wrong with your call: re-reading the ask will show you the same `held` row it showed before,
+    so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
+    the operator's own notification on schedule regardless.
+- `POST /api/asks/:id/release` — decline to rule on it. Body `{"fromId":"<your
+  id>","fromUuid":"<your uuid>"}`. A decline is not a failure: it is what turns the grace window
+  into a CEILING rather than a flat tax on every question you cannot answer — the operator's
+  notification fires AT ONCE on release, instead of the child's question sitting quiet until the
+  window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
+  words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+  guessing at it.
+- `GET /api/asks?parent=<your id>&fromUuid=<your uuid>` — read your own children's open asks, to
+  see whether two of them are asking contradictory things before either grace window lapses.
+  **`&fromUuid=` is not optional the moment `CCRC_AUTH` is armed on the box you are running on.**
+  The box token alone proves only "a process on this box", never WHICH parent is asking, so an
+  armed box additionally requires the same attribution proof `/answer` and `/release` already
+  take above — omit it and the call answers `400` on every armed box, not just some. A dark box
+  (the shipped default) accepts the bare `?parent=` form, but nothing here tells you which kind
+  of box you are on, so always send both.
+
+What the ask row does NOT carry is the reason to answer it. `question` and `options` are its
+entire evidentiary surface — no rationale, no chat history, no transcript of the child's
+reasoning is readable through any route in this tree. Rule only from what you can already read
+elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
+program. If answering would require guessing rather than reading, decline it.

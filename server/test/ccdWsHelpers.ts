@@ -291,7 +291,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // The wrappers a bare binary on $PATH must exist for (`_account_ok`'s
   // `-x "$WRAPPER_DIR/$w"` check, `_spawn`'s `command -v "$w"`): the roster's
   // home-able set, i.e. exactly ccd's `CCRC_HOME_ABLE`. A non-home-able account
-  // deliberately gets NO stub — an opt-in lane nobody installed is the ordinary
+  // deliberately gets NO stub — an overflow lane nobody installed is the ordinary
   // state of a box, and `ccd-account-ok.test.ts` asserts `_account_ok gpt` is
   // false straight out of this harness for exactly that reason.
   for (const w of HOME_ABLE_WRAPPERS) {

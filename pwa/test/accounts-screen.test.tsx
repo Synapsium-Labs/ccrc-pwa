@@ -22,17 +22,17 @@ const nowSec = Math.floor(Date.now() / 1000);
 const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   wrapper: 'claude', five: 0, seven: 0, ts: nowSec - 3600,
   fiveResetAt: null, sevenResetAt: null,
-  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
   workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: null,
+  branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: null,
   archivedBytes: null, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 const stubAccounts = (
@@ -97,7 +97,7 @@ describe('AccountsScreen — a roster entry the operator declared plumbing', () 
     const roster = TEST_ROSTER.map((a) => (a.id === 'claude' ? { ...a, hidden: true } : a));
     stubAccounts([acct({ wrapper: 'claude2', five: 12, seven: 4 })], null, roster);
     render(<AccountsScreen />);
-    // The real accounts, including the opt-in lane and ones telemetry has
+    // The real accounts, including the overflow lane and ones telemetry has
     // never mentioned — the invariant below, unchanged.
     expect(await screen.findByText('team·alt')).toBeInTheDocument();
     expect(screen.getByText('team·b')).toBeInTheDocument();
@@ -311,5 +311,41 @@ describe('AccountsScreen — tap targets', () => {
     }));
     render(<AccountsScreen />);
     expect(await screen.findByRole('button', { name: 'alpha work' })).toHaveClass('accounts-session');
+  });
+});
+
+describe('an auth-dead lane', () => {
+  it('renders switched off through the SAME data-disabled attribute, not a second one', async () => {
+    // The affordance is EXTENDED, deliberately: `.accounts-row[data-disabled]`
+    // already carries the greyed fill (fleet.css) and `.accounts-disabled-note`
+    // already carries the note's type. A second attribute would mean a second
+    // CSS rule, a second selector in every test, and two vocabularies for one
+    // idea — "this lane cannot take work".
+    stubAccounts([acct({ wrapper: 'claude', authDead: true })]);
+    render(<AccountsScreen />);
+    const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(row).toHaveAttribute('data-disabled', 'true');
+  });
+
+  it('says WHY it is off, and says something different from the operator switch', async () => {
+    stubAccounts([acct({ wrapper: 'claude', authDead: true })]);
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/sign-in expired/)).toBeInTheDocument();
+    expect(screen.queryByText('disabled on the fleet host')).toBeNull();
+  });
+
+  it('names BOTH when both are true — an operator switch does not hide a measurement', async () => {
+    stubAccounts([acct({ wrapper: 'claude', disabled: true, authDead: true })]);
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/disabled on the fleet host; sign-in expired/)).toBeInTheDocument();
+  });
+
+  it('an older server that omits the field renders the lane as normal', async () => {
+    // Absence-permits, at the one reader. The offline snapshot and every stale
+    // build depend on this: `=== true`, never truthiness.
+    stubAccounts([{ ...acct({ wrapper: 'claude' }), authDead: undefined } as unknown as AccountUsage]);
+    render(<AccountsScreen />);
+    const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(row).toHaveAttribute('data-disabled', 'false');
   });
 });

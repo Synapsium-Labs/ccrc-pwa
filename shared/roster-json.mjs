@@ -275,9 +275,9 @@ function checkAccount(raw, index) {
   }
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'none') {
+  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
-      `Set "telemetry" for account "${id}" to "anthropic" or "none".`);
+      `Set "telemetry" for account "${id}" to "anthropic", "codex" or "none".`);
   }
 
   // Optional — `parseRoster` auto-assigns one when it is absent, and the

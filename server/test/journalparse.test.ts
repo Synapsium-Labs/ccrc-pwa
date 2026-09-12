@@ -364,11 +364,14 @@ describe('parseJournalLine: the three families never merge', () => {
   // this branch before this task ran — so `workdir` (and `rc`) are now
   // MODELLED members, not residuals, and a `reviveMeas` restricted to ten
   // keys fails to typecheck against the interface it imports. This case is
-  // rewritten to assert the shipped twenty-five (via `LIFECYCLE_MEAS_KEYS`,
+  // rewritten to assert the shipped set (via `LIFECYCLE_MEAS_KEYS`,
   // derived rather than hand-listed a third time — `single-definition.
   // test.ts`'s own idiom) and to prove the residual mechanism still exists
-  // for a key genuinely outside that closed set.
-  it('models the twenty-five declared meas keys, and leaves anything beyond them in `raw`', () => {
+  // for a key genuinely outside that closed set. (Widened again since —
+  // account pools wave 2b, Task 6 fix round 1, added `home`/`pool`/`reason`
+  // — but the assertion below derives from `LIFECYCLE_MEAS_KEYS` and needs
+  // no edit for that: it is exactly as current as the interface it imports.)
+  it('models the twenty-eight declared meas keys, and leaves anything beyond them in `raw`', () => {
     const raw = line({
       meas: { project: 'demo', workdir: '/w/demo-quiet-basin', rc: '0', notAKey: 'nope' },
     });
@@ -376,13 +379,13 @@ describe('parseJournalLine: the three families never merge', () => {
     expect(Object.keys(r.meas!).sort()).toEqual([...LIFECYCLE_MEAS_KEYS].sort());
     expect(r.meas!.project).toBe('demo');
     expect(r.meas!.workdir).toBe('/w/demo-quiet-basin');   // now modelled, not a residual
-    // `rc` IS one of the twenty-five, but the wire sent it as a STRING
+    // `rc` IS one of the twenty-eight, but the wire sent it as a STRING
     // ('0'); `n()` requires `typeof === 'number'`, so a wrong-typed `rc`
     // still degrades to null rather than silently coercing "0" to 0 — a
     // coerced value here would be indistinguishable from a genuinely
     // measured zero.
     expect(r.meas!.rc).toBeNull();
-    // `notAKey` is outside the closed twenty-five altogether — this is the
+    // `notAKey` is outside the closed twenty-eight altogether — this is the
     // brief's residual mechanism, still alive, just for a key past the
     // (now much larger) modelled set rather than for `workdir`.
     expect(r.raw).toContain('"notAKey":"nope"');

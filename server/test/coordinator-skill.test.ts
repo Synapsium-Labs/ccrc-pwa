@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// ten contract clauses, the routes it names, the refusal codes it promises,
+// eleven contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -89,7 +89,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The ten clauses, verbatim. Kept as a literal array rather than a regex per
+// The eleven clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -112,12 +112,87 @@ const CONTRACT = [
   'One coordinator per program. If `POST /api/runs` answers `claimed-by-another`, stop — another coordinator owns this program.',
   'This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.',
   'This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.',
+  'When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all ten clauses verbatim', () => {
+  it('carries all eleven clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
+    }
+  });
+
+  // ── the COUNT, which the verbatim pin above structurally cannot see ──────
+  //
+  // D-2175: the loop above is a SUBSET check (`toContain`), so a twelfth
+  // clause appended to SKILL.md left every assertion in this file green — the
+  // contract could be extended with no pin at all, which is the one thing
+  // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
+  // carries this guard; this ports it, with two adaptations the worker's
+  // version does not need. First, the coordinator states its count in prose as
+  // "These eleven sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // worker skill says, so the in-file harvest is widened to accept all three.
+  // Second, README.md's own mention line-wraps the count word onto the line
+  // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
+  // marker scan matches across whitespace rather than a single literal space.
+  // Third, unlike the worker skill, the contract is NOT the only ordered list
+  // this file carries (measured — "## The wave lifecycle" numbers its own six
+  // steps), so the in-file harvest is scoped to the "## The contract" section
+  // rather than the whole document.
+
+  /** Number words, index-addressed — the same idiom `worker-skill.test.ts` and
+   *  `box-token-census.test.ts` use, aimed here at the one count this file's
+   *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
+  const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen', 'twenty'];
+  const COUNT_WORD = WORDS[CONTRACT.length];
+
+  it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
+    // Scoped to the "## The contract" section alone (see the comment above):
+    // "## The wave lifecycle" numbers a second, unrelated six-step list
+    // further down the same file, and an unscoped `^\d+\. ` harvest would
+    // append its 1..6 onto the contract's own 1..11 and red on every run.
+    const contractStart = skill.indexOf('## The contract');
+    expect(contractStart, 'SKILL.md should have a "## The contract" section').toBeGreaterThanOrEqual(0);
+    const nextHeading = skill.indexOf('\n## ', contractStart + 1);
+    const contractSection = skill.slice(contractStart, nextHeading === -1 ? undefined : nextHeading);
+    const numbered = [...contractSection.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered, 'SKILL.md numbers a different set of clauses than the CONTRACT pins')
+      .toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('spells that same count, as one derived word, everywhere prose states it', () => {
+    expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
+      .toBeTruthy();
+    // SKILL.md states it once in its own words ("These eleven sentences").
+    // HARVESTED, never matched literally, so a revert to "ten" fails with the
+    // wrong word named rather than with a missing string. The filter against
+    // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
+    // 5 discussion) from counting as a hit.
+    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+      .map((m) => m[1]!).filter((w) => WORDS.includes(w));
+    expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
+      .toBeGreaterThanOrEqual(1);
+    for (const w of stated) {
+      expect(w, `SKILL.md says ${w} where the CONTRACT pins ${CONTRACT.length}`).toBe(COUNT_WORD);
+    }
+    // README.md and CLAUDE.md each describe this skill BY PATH, with the count
+    // in the same sentence. The sites are derived from that path rather than
+    // listed by line number, so a moved paragraph does not silently stop being
+    // checked.
+    const marker = 'ccd/coordinator-skill/SKILL.md';
+    for (const rel of ['README.md', 'CLAUDE.md']) {
+      const text = readFileSync(path.join(root, rel), 'utf8');
+      let hits = 0;
+      for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
+        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
+        expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
+          .toBe(COUNT_WORD);
+        hits++;
+      }
+      expect(hits, `${rel} no longer names ${marker} at all`).toBeGreaterThan(0);
     }
   });
 
@@ -862,7 +937,14 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
     // The no-graph arm returns SILENTLY unless the sweep census carries a row
     // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
     // told every session prints a card reads a missing one as a fault.
-    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    //
+    // Anchored on the BUILDER assignment (`CARD_GRAPH="graphify: ..."`), not on
+    // `_hook_emit_context` directly — Task 3's refactor moved this sentence from
+    // an inline emit into `CARD_GRAPH`, composed with the rest of `CARD` and
+    // emitted once, later, from a variable (`_hook_emit_context "$CARD"`, which
+    // this regex cannot match). The sentence itself is unchanged; only the
+    // statement holding it moved. If it moves again, move this anchor with it.
+    const m = /CARD_GRAPH="graphify: ([^"$]+?) —/.exec(hook);
     expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
       'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
     expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')

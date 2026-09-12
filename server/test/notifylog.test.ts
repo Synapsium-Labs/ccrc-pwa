@@ -11,7 +11,7 @@ describe('NotifyLog', () => {
     const p = path.join(await dir(), 'n.json');
     const log = new NotifyLog(p);
     await log.load();
-    log.record({ kind: 'ask', sessionId: 'cc-a', title: 't', body: 'b' });
+    log.record({ kind: 'ask', sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     await log.flush();
     const raw = JSON.parse(await readFile(p, 'utf8')) as { epoch: string; seq: number };
     // ONE object. A seq without its counter's lifetime is meaningless: written
@@ -24,7 +24,7 @@ describe('NotifyLog', () => {
   it('keeps its epoch across a reload, so a client seq stays trustworthy', async () => {
     const p = path.join(await dir(), 'n.json');
     const a = new NotifyLog(p); await a.load();
-    a.record({ kind: 'ask', sessionId: 'cc-a', title: 't', body: 'b' });
+    a.record({ kind: 'ask', sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     await a.flush();
     const b = new NotifyLog(p); await b.load();
     expect(b.epoch).toBe(a.epoch);
@@ -43,8 +43,8 @@ describe('NotifyLog', () => {
 
   it('returns the events strictly after the client seq', async () => {
     const log = new NotifyLog(path.join(await dir(), 'n.json')); await log.load();
-    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '' });
-    log.record({ kind: 'done', sessionId: 'cc-b', title: '2', body: '' });
+    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '', runId: null });
+    log.record({ kind: 'done', sessionId: 'cc-b', title: '2', body: '', runId: null });
     const r = log.catchUp(log.epoch, 1);
     expect(r).toMatchObject({ resync: false });
     expect(r.events.map((e) => e.title)).toEqual(['2']);
@@ -52,13 +52,13 @@ describe('NotifyLog', () => {
 
   it('demands a resync when the epoch differs — the seq means nothing', async () => {
     const log = new NotifyLog(path.join(await dir(), 'n.json')); await log.load();
-    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '' });
+    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '', runId: null });
     expect(log.catchUp('some-other-epoch', 0)).toMatchObject({ resync: true, events: [] });
   });
 
   it('demands a resync when the client seq predates the ring', async () => {
     const log = new NotifyLog(path.join(await dir(), 'n.json'), 3); await log.load();
-    for (let i = 0; i < 5; i++) log.record({ kind: 'done', sessionId: 'cc-a', title: String(i), body: '' });
+    for (let i = 0; i < 5; i++) log.record({ kind: 'done', sessionId: 'cc-a', title: String(i), body: '', runId: null });
     // seq 1 was evicted, so "everything after 1" cannot be proven complete.
     expect(log.catchUp(log.epoch, 1)).toMatchObject({ resync: true });
     expect(log.catchUp(log.epoch, 3)).toMatchObject({ resync: false });
@@ -77,7 +77,7 @@ describe('NotifyLog', () => {
     // that watermark would be silently dropped forever — the exact failure
     // the epoch exists to prevent.
     const log = new NotifyLog(path.join(await dir(), 'n.json')); await log.load();
-    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '' });
+    log.record({ kind: 'ask', sessionId: 'cc-a', title: '1', body: '', runId: null });
     expect(log.catchUp(log.epoch, 5)).toMatchObject({ resync: true, events: [] });
   });
 
@@ -89,7 +89,7 @@ describe('NotifyLog', () => {
     // looks like from the outside.
     const flushes: Promise<void>[] = [];
     for (let i = 0; i < 5; i++) {
-      log.record({ kind: 'done', sessionId: 'cc-a', title: String(i), body: '' });
+      log.record({ kind: 'done', sessionId: 'cc-a', title: String(i), body: '', runId: null });
       flushes.push(log.flush());
     }
     await Promise.all(flushes);

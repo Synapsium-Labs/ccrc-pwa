@@ -6,7 +6,13 @@ import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
-import { HANDOFF_SHA, holdReason, queueSystemMail, releaseIsSafe } from './rundefs.js';
+import {
+  HANDOFF_SHA,
+  holdReasonVerdict,
+  queueSystemMail,
+  releaseIsSafe,
+  type HoldReasonVerdict,
+} from './rundefs.js';
 import { RUN_TRANSITIONS, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
 
 /**
@@ -52,6 +58,7 @@ export type CloseOutcome =
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused'; code: Extract<RunRefuseCode, 'not-dispatched' | 'prhistory-unreadable'> }
   | { ok: false; kind: 'doneVerdict'; code: DoneRejectCode; detail: string }
+  | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
   | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
@@ -174,9 +181,15 @@ export async function closeRun(
       // Spelled hand-over-first so the compiler narrows `survivor` on the arm
       // that reads it; `survivor !== null && !release` is exactly `!release`
       // (`release` already absorbs `survivor === null`).
-      const argv = survivor !== null && !release
-        ? CCD_ARGV.wsHold(run.sessionId,
-            holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id),
+      let handoff: HoldReasonVerdict | null = null;
+      if (survivor !== null && !release) {
+        handoff = holdReasonVerdict(
+          survivor.program, survivor.wave, survivor.waveOf, survivor.id,
+        );
+        if (!handoff.ok) return handoff;
+      }
+      const argv = handoff !== null && handoff.ok
+        ? CCD_ARGV.wsHold(run.sessionId, handoff.reason,
             sweepDec(deps.fleetState, `run:${id} close`))
         : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
       if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
@@ -251,6 +264,20 @@ export async function closeRun(
     }
   }
 
+  // Decide and validate the hold before any close-path write. In particular,
+  // `foldPrLineage` persists measured history, so it must not run when the
+  // subsequent hold boundary is already known to be unrepresentable.
+  const siblings = siblingsOf(run.sessionId);
+  const survivor = survivorOf(siblings);
+  const safe = releaseIsSafe(siblings);
+  const needsHold = !((state === 'failed' && archive && safe) || (final && safe));
+  const nextHold: HoldReasonVerdict | null = needsHold
+    ? survivor === null
+      ? holdReasonVerdict(run.program, run.wave + 1, run.waveOf, null)
+      : holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id)
+    : null;
+  if (nextHold !== null && !nextHold.ok) return nextHold;
+
   // 2: `.prhistory` — refuse to close on an unreadable ledger; nothing
   // closes.
   const history = await readPrHistory(deps.io, deps.cfg.registryDir, run.sessionId);
@@ -274,9 +301,6 @@ export async function closeRun(
   // recoverable by the same hands — `POST /api/sessions/:id/archive` with
   // `{force:true}` — and the corrective act is the one every other arm
   // implies anyway: close the sibling first.
-  const siblings = siblingsOf(run.sessionId);
-  const survivor = survivorOf(siblings);
-  const safe = releaseIsSafe(siblings);
   let released = false;
   if (state === 'failed' && archive && safe) {
     const argv = CCD_ARGV.wsArchive(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
@@ -299,10 +323,13 @@ export async function closeRun(
     //     run's own reason wins. Before Wave 2 the non-final arm wrote its
     //     OWN row's `wave + 1` unconditionally, silently rewriting the live
     //     run's claim whenever the two rows disagree.
-    const nextReason = survivor === null
-      ? holdReason(run.program, run.wave + 1, run.waveOf, null)
-      : holdReason(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
-    const argv = CCD_ARGV.wsHold(run.sessionId, nextReason, sweepDec(deps.fleetState, `run:${id} close`));
+    if (nextHold === null || !nextHold.ok) {
+      throw new Error('closeRun invariant: hold verdict was not available');
+    }
+    const argv = CCD_ARGV.wsHold(
+      run.sessionId, nextHold.reason,
+      sweepDec(deps.fleetState, `run:${id} close`),
+    );
     if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };

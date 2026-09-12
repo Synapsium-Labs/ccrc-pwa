@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { readLimits } from '../src/limits.js';
+import { readLimits, measured } from '../src/limits.js';
 import { rolloverCases } from './fixtures/rollover.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -21,11 +21,11 @@ describe('readLimits', () => {
     writeFileSync(path.join(dir, 'gpt.json'), 'not json');
 
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
-    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
     expect(l['claude-a'].five).toBe(0);
     expect(l['claude-a'].seven).toBe(80);
     expect(l['claude-b']).toMatchObject({ five: 0, seven: 0 });
-    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
   });
 });
 
@@ -60,6 +60,40 @@ describe('readLimits — a window that has rolled over', () => {
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
     expect(l['measured']).toMatchObject({ five: 0, fiveRolledOver: false });
     expect(l['inferred']).toMatchObject({ five: 0, fiveRolledOver: true });
+  });
+
+  it('an age-inferred zero carries the same flag a resetAt-inferred one does', async () => {
+    // The flags' whole contract is "the 0 above is inferred rather than
+    // observed" (the AccountLimits docstring). TWO rules can reach that state:
+    // a lapsed resetAt, which is fact straight from the API, and a sample older
+    // than its own window, which is inference. Both write the same inferred 0,
+    // so both have to set the same flag — the flag names the PROVENANCE of the
+    // number, not which rule derived it.
+    //
+    // Left false, the age path told AccountsScreen's `Bar` (rolledOver ? 'reset'
+    // : `${pct}%`) that an account nobody had measured in six hours was measured
+    // empty — the exact collapse that component's own comment says it never
+    // makes.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    const dir = path.join(home, '.cc-limits');
+    mkdirSync(dir, { recursive: true });
+    const now = 1785231736;
+    // No resetAt fields at all — the gpt 429-exclusion shape, and anything
+    // written before those fields existed. 20000s is past the 5h window and
+    // nowhere near the 7d one, so exactly one half is inferred and the other
+    // stays a real measurement. A fixture that rolled BOTH could not tell a
+    // per-field flag from a per-row one.
+    writeFileSync(path.join(dir, 'aged.json'),
+      JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));
+
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
+    expect(l['aged'], 'the 5h half is inferred and must say so').toMatchObject({
+      five: 0, fiveRolledOver: true,
+    });
+    expect(l['aged'], 'the 7d half is a real measurement and must NOT say otherwise').toMatchObject({
+      seven: 80, sevenRolledOver: false,
+    });
   });
 });
 
@@ -110,7 +144,7 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
     expect(l['claude-a']).toEqual({
       five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null,
-      fiveRolledOver: false, sevenRolledOver: false, disabled: true,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: true, authDead: false,
     });
   });
 
@@ -132,5 +166,56 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     expect(l['autocompact']).toBeUndefined();
     expect(l['bogus-lane']).toBeUndefined();
     expect(Object.keys(l)).toEqual([]);
+  });
+
+  it('surfaces an auth-dead lane the same way a disabled one is surfaced', () => {
+    // A lane can be condemned before it has ever written telemetry, and a lane
+    // absent from `out` is indistinguishable from one nobody measured — which
+    // scores as the emptiest account on the fleet. Same hole, same closure.
+    const home = mkTmp('ccrc-limits-authdead-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'claude-a-authdead'), '1757203200 auth-401');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return readLimits(localIO, cfg).then((l) => {
+      expect(l['claude-a']).toMatchObject({ authDead: true, disabled: false, five: null });
+    });
+  });
+
+  it('never fabricates a row for an -authdead marker that names no account', () => {
+    // `inRoster`'s job, and the reason the `-disabled` loop already has it: the
+    // registry holds dotless fleet-wide switches too, and a marker for an
+    // account the roster does not have must not become a phantom row on
+    // GET /api/accounts.
+    const home = mkTmp('ccrc-limits-authdead-phantom-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'not-an-account-authdead'), '1757203200 auth-401');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return readLimits(localIO, cfg).then((l) => {
+      expect(Object.keys(l)).not.toContain('not-an-account');
+    });
+  });
+});
+
+describe('measured() — the rank ccd derives too', () => {
+  it('scores every shared fixture exactly as _limit_score does', async () => {
+    // Same rows, same expectations, other language. ccd-limits.test.ts asserts
+    // the shell half; together they are the anti-drift harness for the
+    // single-window rule as well as the rollover rule.
+    const now = Math.floor(Date.now() / 1000);
+    const home = mkTmp('ccrc-measured-');
+    seedRoster(home);
+    const dir = path.join(home, '.cc-limits');
+    mkdirSync(dir, { recursive: true });
+    const cases = rolloverCases(now);
+    for (const c of cases) writeFileSync(path.join(dir, c.file), c.content);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
+    for (const c of cases) {
+      const wrapper = c.file.slice(0, -'.json'.length);
+      expect(measured(l[wrapper]), `${c.file}: ${c.why}`).toBe(c.score);
+    }
   });
 });

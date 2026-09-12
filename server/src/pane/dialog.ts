@@ -2,6 +2,15 @@ import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
 
 const BUSY_RE = /esc to interrupt/;
+/** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
+ *  reached · continuing automatically at HH:MM · esc or type to cancel" (or
+ *  "continuing shortly"). ANY keystroke cancels it — bundle 2.1.267,
+ *  `tengu_quota_auto_resume_cancelled` reason `manual_submit` — and the
+ *  continuation is discarded. The literal is ccd's `_pane_auto_continue_armed`
+ *  verbatim; `auto-continue-armed.test.ts` reads that line and fails on drift
+ *  (D-2367). */
+export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
+export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
 const MENU_RE = /Enter to (confirm|select)/;
 const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:76
 const MULTISELECT_RE = /Space to select/;

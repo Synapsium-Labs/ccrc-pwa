@@ -33,13 +33,12 @@ export interface LiveState {
  * value that reads as idle and everything else is busy.
  *
  * `waiting` COLLAPSES TO BUSY HERE, DELIBERATELY, and the fix for it is not
- * in this function. Three consumers read `SessionStatus` to answer "may I act
- * on this session right now" — the mail delivery gate and the archive-safety
- * verdict (`watch.ts`) and the per-session socket — and a human-blocked
- * session is one all three must keep their hands off, exactly like a busy
- * one. Answering `idle` here would let mail inject into an open dialog and
- * let auto-archive kill a session sitting on a permission prompt. What
- * `waiting` actually needs is the ATTENTION bucket, and it reaches that
+ * in this function. Two consumers read `SessionStatus` to answer "may I act
+ * on this session right now" — the mail delivery gate (`watch.ts`) and the
+ * per-session socket — and a human-blocked session is one both must keep
+ * their hands off, exactly like a busy one. Answering `idle` here would let
+ * mail inject into an open dialog. What `waiting` actually needs is the
+ * ATTENTION bucket, and it reaches that
  * through `fleet.ts`'s `dialogPending` (which reads `waitingFor`, kept above)
  * — a field, not a status word. `livestate.test.ts` pins this collapse.
  *
@@ -78,9 +77,9 @@ export function liveSessionStatus(status: string): SessionStatus {
  *
  * AND THE FOLD IS STILL RIGHT FOR MOST CALLERS, which is why `readLiveState`
  * below keeps its signature rather than being replaced. `watch.ts`'s mail gate
- * and `archiveSafety` both require an AFFIRMATIVE idle (`!live || … !== 'idle'`
- * continues; `!live` returns `unknown`), so an unreadable file already fails
- * shut there through the null. `commands.ts` wants a cwd and has a registry
+ * requires an AFFIRMATIVE idle (`!live || … !== 'idle'` gates the delivery and
+ * moves on), so an unreadable file already fails shut there through the null.
+ * `commands.ts` wants a cwd and has a registry
  * fallback for not having one. And `fleet.ts`'s `liveStatus` answers `'idle'`
  * on this same failure ON PURPOSE: its sole consumer is the interrupt route's
  * `… === 'busy'`, which REFUSES on idle, so there the reassuring word is the

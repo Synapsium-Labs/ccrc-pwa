@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~2165 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~2485 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -168,12 +168,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
-  `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
-  argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
-  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
-  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
-  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
+  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`,
+  call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each with
+  its own argument — are the census, not this bullet. What does need saying here are the
+  coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST
+  /api/coord/caps` (wave 6) are session-gated only — armed, they sit behind the auth gate like every other
+  PWA-surface write. The first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
@@ -190,13 +191,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its ten clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its eleven clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twelve clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, thirteen clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
@@ -210,8 +211,16 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
 two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
 that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
-`markDelivered`, `markIngested`, `backOff`, `noteGate` and `rejectDelivery`. Their guard is invisible to the
-caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered` as the archetype of,
+`markDelivered`, `markIngested`, `backOff`, `noteGate`, `rejectDelivery` and `parkSupersededDeliveries`.
+The last is Task 6 of the crossrepo-programmes wave-1-server plan, carrying D-2059's worker-arm park —
+but its EXTRACTION into its own method is a separate departure from the brief's own text (which put this
+`UPDATE` inline), recorded as its own number, **D-2338**, because D-2059 argues the park's role-generalised
+SQL and says nothing about this method's existence. Split into its own single-line-signature method rather
+than inlined in the method that calls it — a write inlined there would have this file's own writer census
+walk back past that caller's DECLARED multi-line-signature exemption and mis-attribute it, the failure mode
+that exemption's own comment warns about. Their guard is
+invisible to the caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered`
+as the archetype of,
 and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
 replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
 that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,

@@ -138,6 +138,15 @@ describe('generateAccountsSh — the statusline projection', () => {
     expect(sh(home, 'echo "${CCRC_MEASURED[@]}"')).toBe('a a-b-c');
   });
 
+  it('lists the ANTHROPIC-BACKEND accounts separately from the placeable ones', () => {
+    // WHERE WORK MAY GO vs WHAT THE LANE SPEAKS. These coincided while every
+    // home-able account was an Anthropic one, and four things in ccd quietly
+    // relied on that: Remote Control, the spawn-time effort injection, the
+    // cross-backend transcript sanitiser, and the 429 exclusion writer. A
+    // placeable Codex lane separates them, so the generator has to answer both.
+    expect(sh(home, 'echo "${CCRC_ANTHROPIC_BACKEND[@]}"')).toBe('a a-b-c');
+  });
+
   it('maps a config dir back to its account — the direction a statusline needs', () => {
     for (const acc of roster.accounts) {
       expect(sh(home, `_ccrc_dir_id "$HOME/${acc.configDirSuffix}"`)).toBe(acc.id);

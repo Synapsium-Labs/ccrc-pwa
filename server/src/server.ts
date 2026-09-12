@@ -10,7 +10,12 @@ import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
-import { readLimits, projectHome } from './limits.js';
+import { readLimits, projectHome, projectPlacement } from './limits.js';
+import {
+  poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
+} from './pools.js';
+import { poolRostered, poolVerdict } from './poolrule.js';
+import { POOL_NAME_RE } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -21,7 +26,7 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
          type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -32,7 +37,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
@@ -45,7 +50,7 @@ import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
-import { toRunSummary, type CoordStore } from './coord/store.js';
+import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -58,14 +63,15 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState,
+  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
+  programKickoffVerdict,
 } from '../../shared/api.js';
 
 /**
@@ -86,6 +92,9 @@ function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
   if (o['type'] !== 'visible' || typeof o['visible'] !== 'boolean') return null;
   return { type: 'visible', visible: o['visible'] };
 }
+
+/** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
+const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -429,9 +438,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
-   * `GET /api/runs` is the one caller (D-149), and it needs the whole decision
-   * rather than a boolean so its refusal can carry the same `AuthVerdict` the
-   * gate would have sent.
+   * the EXEMPT-BUT-AUTHENTICATED coordination GETs need the whole decision,
+   * rather than a boolean, so each refusal can carry the same `AuthVerdict` the
+   * gate would have sent (the class began with `GET /api/runs`, D-149).
    *
    * Passed as a FUNCTION rather than by exposing `authStore` on `Deps`: the
    * store must be loaded exactly once at boot, and putting it on `Deps` is the
@@ -1016,9 +1025,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/fleet', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
+      // NO `pools` KEY on this arm, deliberately: nothing about pools is
+      // persisted (spec §5.4.1), so there is nothing measured to serve, and a
+      // cached tag rendered as live policy would lie. Absence reads as
+      // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
-    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()) };
+    // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
+    // the watcher tick, so a client connecting into a quiet fleet would
+    // otherwise see no tags until one moved; this is where it gets the
+    // measured answer, off its own root listing. The request supplies its own
+    // aggregate ten-second budget rather than inheriting watcher policy; the
+    // race also bounds localIO, which ignores per-operation timeouts (D-2484).
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
+    return {
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord),
+      pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
+    };
   });
 
   // The digest of the projection THIS box's roster produces, computed once:
@@ -1059,6 +1087,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // scripts) — an absent stamp and a null one are the same condition,
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
       };
     }
@@ -1072,6 +1101,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return {
       mode: deps.cfg.fleetMode, connected: true, downSince: null,
       roster: 'unknown', build: 'unknown',
+      // Local mode measures its OWN ccd at boot (`readLocalCcdCaps`), so
+      // `unknown` here is "not measured yet", never "local mode cannot tell".
+      projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
       // BOTH ARMS. Local mode drives ccd on this same box and mirrors the same
       // journal — there is no second box to disagree with, but there is still a
       // journal, and a block that appeared only in remote mode would make the
@@ -1166,7 +1198,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         wrapper, five: l.five, seven: l.seven, ts: l.ts,
         fiveResetAt: l.fiveResetAt, sevenResetAt: l.sevenResetAt,
         fiveRolledOver: l.fiveRolledOver, sevenRolledOver: l.sevenRolledOver,
-        disabled: l.disabled,
+        // Spread, not a plain key: a row whose producer said nothing must reach
+        // the wire with the shape it has always had.
+        ...(typeof l.fiveWindowMinutes === 'number'
+              ? { fiveWindowMinutes: l.fiveWindowMinutes } : {}),
+        disabled: l.disabled, authDead: l.authDead,
       }))
       .sort((a, b) => rank(a.wrapper) - rank(b.wrapper) || (a.wrapper < b.wrapper ? -1 : 1));
     // Where a new workspace would land, computed HERE from the same telemetry
@@ -1182,7 +1218,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // stay server-side.
     return {
       accounts,
-      projected: projectHome(deps.cfg.roster, limits),
+      // THE UNTAGGED FORECAST, said out loud (account pools, spec §5.6): this
+      // field answers "where would a new workspace land on a project with no
+      // pool tag", which is what it has always meant and is now the only thing
+      // it can mean. Per-project placement rides `ProjectRow.placement` on
+      // `GET /api/projects`.
+      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }),
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
@@ -1205,6 +1246,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
     const onCoord = (coord: CoordStatus) =>
       socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+    const onPools = (pools: ProjectPoolsWire) =>
+      socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1219,7 +1262,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()).then((sessions) => {
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord).then((sessions) => {
       onFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
@@ -1254,18 +1297,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "running" for a state nobody has looked at (Build 4, spec §4.2).
       const coordNow = watcher?.currentCoord();
       if (coordNow) onCoord(coordNow);
+      // Chained AFTER `coord`, so the wire order is hello, fleet, runs, coord,
+      // pools. A `null` current value sends NOTHING, `coord`'s rule verbatim:
+      // this process has never measured, and an invented empty map would tell
+      // the phone that nothing on the fleet is tagged.
+      const poolsNow = watcher?.currentPools();
+      if (poolsNow) onPools(poolsNow);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
     bus.on('coord', onCoord);
     bus.on('divergence', onDivergence);
+    bus.on('pools', onPools);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
       bus.off('coord', onCoord);
       bus.off('divergence', onDivergence);
+      bus.off('pools', onPools);
     });
   });
 
@@ -1308,16 +1359,68 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return { ok: true };
   });
 
+  // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
+  // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
+  // routes further down this file (where they used to live) — Task 9's
+  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
+  // both routes agree on the one per-session lock. `knownId` stays where it
+  // was: nothing here depends on it.
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
+  // serialize through the ONE per-session lock, not independent ones.
+  const askDeps: AskDeps = {
+    ...sendDeps,
+    // C0.3: one session's own row, not the whole registry — see
+    // `registry.ts`'s `readSessionRecord`.
+    readAsk: async (id: string) => {
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) return null;
+      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
+      // look up hookstate under a value that matches no real file, reading
+      // as "no ask" rather than "we don't know" — null here is the honest
+      // answer and this route is polled, so it heals on the next read.
+      const identity = measuredIdentity(read.record);
+      if (identity === null) return null;
+      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
+      return hs === null ? null : { ask: hs.ask, state: hs.state };
+    },
+  };
+
+  // `freshAskAt` (D-2170's fail-shut re-measurement `takeAskForAnswer`'s CAS
+  // is checked against) is `registry.ts`'s export, fix round 1 finding 2 —
+  // this route and `coord/routes.ts`'s `POST /api/asks/:id/answer` both
+  // close over the SAME `Deps` object (`registerCoordRoutes` below is
+  // handed this function's own `deps`, unmodified), so a security-relevant
+  // fail-shut guard had no business existing as two copies that could
+  // silently drift. See `registry.ts`'s own doc comment on it for the full
+  // reasoning, and this route's own comment below for why a lost CAS here
+  // never refuses the operator regardless of which unmeasurable arm fired.
+
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
   // sharing one token+attribution gate inline here would be a second copy of
   // that gate. 501 `{ok:false,error:'not-configured'}` without `deps.coord`,
   // the same shape as the push routes and `/api/notifications/catchup` above.
-  // The 4th argument is D-149: `GET /api/runs` is EXEMPT from the session gate
-  // and authenticates for itself, because the coordinator skill reads it
-  // cookieless from the fleet host with the box token. The session half of that
-  // decision can only be made here, where `authStore` lives.
-  registerCoordRoutes(app, deps, bus, sessionAuth);
+  // The 4th argument serves the EXEMPT-BUT-AUTHENTICATED coordination GETs:
+  // each handler accepts either the box token from a cookieless fleet caller or
+  // a live PWA session. The session half can only be decided here, where
+  // `authStore` lives (the class began with `GET /api/runs`, D-149).
+  //
+  // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
+  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
+  // independent queues would let a parent's pre-emption race a child's own
+  // in-flight prompt against the identical tmux pane.
+  //
+  // The 6th argument (Task 10) is this function's own `watcher` parameter,
+  // passed straight through: `POST /api/asks/:id/release` calls
+  // `watcher?.releaseHeldAsk` to drop the in-memory hold and fire the
+  // deferred push the moment a parent declines, rather than making the
+  // operator wait out the rest of the grace window. `Deps` deliberately does
+  // not carry the watcher (this function's own third argument), so there is
+  // no second place this wiring could come from.
+  registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -1377,11 +1480,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
-  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
-  // C0.2: `knownId` gates 16 routes on this id (12 POST, 4 GET — every one of
-  // them a per-request check, not a periodic sweep) and previously called
-  // `readRegistry` — up to 505 agent-WS round trips on a 24-session fleet, in
-  // remote mode, in front of every human keystroke — purely to answer "does
+  // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
+  // `registerCoordRoutes` — see that call site's own comment.
+  //
+  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // them a per-request check, not a periodic sweep) plus the constructed-id
+  // revival probe below, and previously called `readRegistry` — a 24-session
+  // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+  // per call in remote mode, before conditional reconfirmation, in front of
+  // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
   // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
   // the box regardless. One
@@ -1392,33 +1499,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (21 fields, each dropped whole on ANY single field read failing — see
-  // `registry.ts`'s "incomplete registry entry" comment), so a transient
+  // (23 [registry-read-census:fields] field reads; identity failures follow
+  // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
-  const knownId = async (id: string): Promise<boolean> => {
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    return names !== null && names.includes(`${id}.uuid`);
-  };
-
-  // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
-  // serialize through the ONE per-session lock, not independent ones.
-  const askDeps: AskDeps = {
-    ...sendDeps,
-    // C0.3: one session's own row, not the whole registry — see
-    // `registry.ts`'s `readSessionRecord`.
-    readAsk: async (id: string) => {
-      const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) return null;
-      // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
-      // look up hookstate under a value that matches no real file, reading
-      // as "no ask" rather than "we don't know" — null here is the honest
-      // answer and this route is polled, so it heals on the next read.
-      const identity = measuredIdentity(read.record);
-      if (identity === null) return null;
-      const hs = await readHookState(deps.io, deps.cfg.registryDir, id, identity.uuid, Date.now());
-      return hs === null ? null : { ask: hs.ask, state: hs.state };
-    },
+  const knownId = async (id: string, names?: readonly string[] | null): Promise<boolean> => {
+    // `names` PASSED IN by a caller that already listed (the sessions route,
+    // which needs the same listing for `readProjectPools`): one readdir, one
+    // membership test, and the two answers cannot disagree. `undefined` — every
+    // other caller — takes its own, exactly as before.
+    const listed = names === undefined ? await deps.io.readdir(deps.cfg.registryDir) : names;
+    return listed !== null && listed.includes(`${id}.uuid`);
   };
 
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
@@ -1500,62 +1591,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     const body = (req.body ?? {}) as
       { slug?: unknown; title?: unknown; runId?: unknown; wave?: unknown };
-    if (typeof body.slug !== 'string' || body.slug.trim() === ''
+    if (typeof body.slug !== 'string'
       || typeof body.title !== 'string' || body.title.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    // ONE reader for the new pair (the wire rule), computed once and handed on as
-    // a value that CANNOT be half-formed — the refusal below is the only place a
-    // half-formed pair can reach. Shape borrowed from `coord/routes.ts`'s own
-    // integer body checks: `typeof === 'number'` AND `Number.isInteger`, because
-    // `NaN` and 1.5 are both numbers and neither is a wave.
-    //
-    // …AND THE LOWER BOUND THAT SHIPS IN THE SAME CONJUNCTION THERE (D-1151,
-    // wave-5 review MINOR 8). The borrow was one term short: `POST /api/runs`
-    // reads `!Number.isInteger(wave) || wave < 1` (`coord/routes.ts:894`), and
-    // only the integer half made the trip. Written positively here to fit the
-    // ternary, the missing term is `>= 1`, and it belongs on BOTH fields: a run
-    // id is `INTEGER PRIMARY KEY AUTOINCREMENT` (`coord/schema.ts:66`) and a wave
-    // is refused below 1 at open, so the smallest either can be is 1. Without it
-    // `{runId:-5, wave:0}` IS a pair — it composes `programResumeKickoff(…, -5, 0)`
-    // and durably queues a brief telling a revived coordinator to find run -5 at
-    // wave 0 in `GET /api/runs` and pick that wave up. Nothing downstream catches
-    // it: the composer interpolates, `queueSystemMail` writes, and the recipient
-    // is a session reading prose.
-    //
-    // The expensive half is not the false sentence, it is the DEDUPE KEY. That
-    // key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — one outstanding
-    // kickoff per session whatever program it names — so the nonsense brief takes
-    // the slot, and the operator's corrected re-kickoff a second later answers
-    // `queued:false`, which the sheet renders as "one is already waiting". True,
-    // and useless: the one waiting names run -5. A refusal writes nothing, so it
-    // cannot occupy anything, which is why the range test lives HERE, before the
-    // queue, and not as a repair downstream.
-    //
-    // Failing the range makes `resume` `undefined` — the same value an ABSENT
-    // pair produces — so this term alone would demote `{runId:-5, wave:0}` to
-    // wave 4's kickoff rather than refusing it. It does not, because the
-    // both-or-neither guard below tests the RAW body keys and not the computed
-    // value; the two are one mechanism and `kickoff-route.test.ts` reds on either
-    // half being removed.
-    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId) && body.runId >= 1
-      && typeof body.wave === 'number' && Number.isInteger(body.wave) && body.wave >= 1
-      ? { runId: body.runId, wave: body.wave }
-      : undefined;
-    // BOTH OR NEITHER (D-1126). Absent-both is wave 4's kickoff, byte for byte —
-    // absence permits. Half-present is refused rather than completed: no build
-    // ever sent a lone field, so it is a caller that meant something, and the
-    // default that would complete it (wave 1) is the one instruction a REVIVED
-    // coordinator must not be given. A silent fallback would answer `queued:true`
-    // to an operator whose revive had just been briefed to open a second run.
-    //
-    // It reads the RAW body keys, not `resume`, which is what lets it carry a
-    // second duty for free (D-1151): an OUT-OF-RANGE pair also arrives here as
-    // `undefined` with its keys present, so it is refused on the same line and by
-    // the same argument — a caller that meant something, and a default that would
-    // complete it into the one instruction a revived coordinator must not get.
-    if (resume === undefined && (body.runId !== undefined || body.wave !== undefined)) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // The route distinguishes absent-both from any attempted resume, but makes
+    // no numeric decision. The shared verdict alone rejects half-present,
+    // fractional, non-positive, unsafe, and exponent-scale pairs; its success
+    // arm carries the normalized pair used by the authoritative queue seam.
+    // That keeps shaping, resume validation, composer selection, and UTF-8
+    // measurement in one browser/server-compatible decision before registry I/O.
+    const resumeInput = body.runId === undefined && body.wave === undefined
+      ? undefined
+      : { runId: body.runId, wave: body.wave };
+    const kickoff = programKickoffVerdict(body.slug, body.title, resumeInput);
+    if (!kickoff.ok) {
+      return reply.code(kickoff.kind === 'oversize' ? 413 : 400).send({
+        ok: false,
+        error: kickoff.kind,
+        ...('limit' in kickoff ? { limit: kickoff.limit } : {}),
+        detail: kickoff.detail,
+      });
     }
     // Deliberately NOT `knownId` (above), whose `names !== null &&` folds an
     // unlistable registry into "unknown" — right for a keystroke route that
@@ -1571,7 +1627,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       });
     }
     const out = queueProgramKickoff({ coord }, id,
-      { slug: body.slug.trim(), title: body.title.trim() }, resume);
+      { slug: kickoff.slug, title: kickoff.title }, kickoff.resume);
     // 413 in the shape every other cap on this server answers in (claims paths,
     // claim intent, ledger title, and `POST /api/mail` itself). The seam
     // MEASURED it and named it; this maps, and decides nothing — `out.kind` is
@@ -1596,6 +1652,42 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
+  /**
+   * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
+   * lock-screen route every ask goes through, PWA and pre-emption lane
+   * alike. Before this task it never consulted the `asks` table at all: if
+   * the operator answered first, the row stayed `'held'`, the parent's
+   * later `POST /api/asks/:id/answer` CAS'd it to `'answering'`, got
+   * refused by `answerAsk` below (the menu was already gone), and rolled
+   * back to `'held'` via `untakeAsk` — asserting the question was STILL
+   * pre-emptible when it had in fact just been answered, and never naming
+   * who answered it. Both routes serialize through the ONE per-session
+   * `KeyedQueue` (`askDeps`, built once per server, above), so exactly one
+   * digit ever reaches the pane regardless of this route's own logic — this
+   * is a RECORD defect, not a safety one, and everything below is in
+   * service of the record alone.
+   *
+   * `heldAskFor` returning null — no row for this child, the overwhelming
+   * majority of asks — takes EXACTLY the pre-Task-12 path: one `answerAsk`
+   * call, same refusal shape, no added read once a row exists nowhere to
+   * look up (a coord-less box skips `heldAskFor` entirely). This is the
+   * single most important property of this route: it is not new behaviour
+   * layered onto the common case, it is new behaviour reached only on the
+   * lane's own minority path.
+   *
+   * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
+   * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
+   * `registry.ts`'s `freshAskAt`, imported above, shared with that route)
+   * BEFORE the keystroke: the row is the mutex, so
+   * taking it after the press would be decorative. Unlike the parent's own
+   * route, though, a LOST race here never refuses the caller — the operator
+   * is the authority this row exists to protect against being locked out
+   * of, not a third party mediated by it, so losing the CAS only means this
+   * request cannot claim the record; the press still goes through on its
+   * own merits (`answerAsk`'s own twelve pre-send guards plus its two
+   * post-send `sendKey` checks, D-2177, are the only refusal that still
+   * applies).
+   */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -1605,8 +1697,133 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         !body.optionIndexes.every((n) => typeof n === 'number')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const res = await answerAsk(askDeps, id, body.askKey, body.optionIndexes);
-    return res.ok ? res : reply.code(409).send(res);
+    const optionIndexes = body.optionIndexes as number[];
+    // Narrowed to `string` by the guard above, but that narrowing does not
+    // cross into `pressPlain`'s own closure below — a fresh `const` of the
+    // narrowed type carries it there.
+    const key = body.askKey;
+
+    // The plain press, byte-identical to every line this route ran before
+    // Task 12 existed — reached by BOTH "no coord configured" and "coord
+    // configured, nothing held for this child" below, deliberately the same
+    // call rather than two copies that could drift apart.
+    const pressPlain = async () => {
+      const res = await answerAsk(askDeps, id, key, optionIndexes);
+      return res.ok ? res : reply.code(409).send(res);
+    };
+
+    const coord = deps.coord;
+    if (coord === undefined) return pressPlain();
+
+    // GUARDED, BOTH OF THEM (whole-branch review F3). `heldAskFor` is an
+    // ordinary read and `takeAskForAnswer` runs `tx()` -> `BEGIN IMMEDIATE`,
+    // and `node:sqlite` throws SYNCHRONOUSLY — a closed handle, a lock race,
+    // a corrupt file. Both sit BEFORE `answerAsk`, so an unguarded throw
+    // turns THE OPERATOR'S OWN LOCK-SCREEN ANSWER into a 500 with no
+    // keystroke — the one path the design doc promises is untouched (§2.7)
+    // and whose degradation is supposed to be free (D-2169: "its loss is
+    // free: every held ask degrades to an immediate push"). Every other new
+    // coord touchpoint on this branch already fails this way on purpose
+    // (`sweepAsks`, both `detectDialogs` writes, `settleAsk` on both routes,
+    // `recordFeedEvent`, `fleet.ts`'s `readCurrentAsks`); these two did not,
+    // and they are the pair carrying a shipped promise.
+    //
+    // The degrade is `pressPlain()` — the byte-identical pre-Task-12 path,
+    // the same call the "no coord configured" and "nothing held" arms take.
+    // What is lost is the RECORD (the row is not taken, not settled, and no
+    // second feed event is written); what is NOT lost is the digit. That is
+    // exactly the trade D-2169 rules on, applied to a database that is
+    // present but broken rather than absent.
+    let held: AskRow | null;
+    try {
+      held = coord.heldAskFor(id);
+    } catch (err) {
+      console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    if (held === null) return pressPlain();
+
+    let taken: AskTakeResult;
+    try {
+      // `freshAskAt` is inside the guard too: it is registry+hookstate IO,
+      // not `node:sqlite`, but a throw from it would refuse the operator for
+      // exactly the same non-reason.
+      taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
+    } catch (err) {
+      console.warn(`ccrc-server: takeAskForAnswer(${held.id}) failed ` +
+        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
+        'unrecorded rather than refusing it');
+      return pressPlain();
+    }
+    const res = await answerAsk(askDeps, id, key, optionIndexes);
+
+    if (!taken.ok) {
+      // Lost the CAS — another principal already holds the row (mid-answer)
+      // or the instance moved since the mint. Nothing was taken, so there is
+      // nothing to roll back and nothing this request may settle. The
+      // operator is never refused for this: the press above already ran on
+      // its own merits.
+      return res.ok ? res : reply.code(409).send(res);
+    }
+
+    if (!res.ok) {
+      // No digit landed here either — not because every `answerAsk` guard
+      // returns before its send loop (since D-2177 a failed `sendKey`
+      // refuses too), but because a HELD row only ever exists for a
+      // single-select ask (`askActions` returns null on `multiSelect`, the
+      // sole eligibility gate `hold` checks before minting one — D-2173),
+      // which makes exactly one `sendKey` call and no Enter. Roll the row
+      // back to `held`, not stranded `answering`: the same rollback verb
+      // `/api/asks/:id/answer` uses on its own refused press; see
+      // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
+      if (!coord.untakeAsk(held.id)) {
+        console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
+          "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return reply.code(409).send(res);
+    }
+
+    // The digit landed. D-2172's second durable record — written BEFORE
+    // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
+    // `settleAsk` then throws, at least one durable trace of the answer
+    // survives. Independently optional, same as that route: a box with no
+    // `notifyLog` configured still answers the request.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: id, runId: null,
+          title: 'question answered',
+          body: `operator answered ${id}'s question: ${held.question} → ` +
+                `${held.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    // GUARDED (Task 9's own lesson): the digit already landed above, so a
+    // failure to record it must never turn a successful press into a 500.
+    // The row is held exclusively by this request (CAS'd to `'answering'`
+    // above), so this is a genuine infra fault if it throws, not a lost
+    // race — but left unguarded it would strand the row `'answering'` and
+    // 500 a press that actually succeeded. The digit is pressed either way,
+    // so the response below is unconditional.
+    try {
+      coord.settleAsk(held.id, ASK_OPERATOR_PRINCIPAL, held.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +
+        'the feed record above (if it landed) is the surviving audit trace');
+    }
+
+    return res;
   });
 
   app.get('/api/sessions/:id/commands', async (req, reply) => {
@@ -1643,6 +1860,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `deps.runCcd` is the call, and routes needing another shape (a 200 carrying
   // `phase:unknown`, a parsed WsAudit/ReapResult, a 501 hoisted out of a queued
   // fn) compose from `deps.runCcd` directly rather than reaching for a runner.
+  /**
+   * The pool pre-check every placement route makes (account pools, spec §5.6).
+   * Returns `null` when the caller may proceed, or a REPLY that has already
+   * been sent. The routes call `poolVerdict` through this and never re-derive
+   * the rule — L4 owns fastify and does not DECIDE.
+   *
+   * 409 is "this account is wrong for this project", overridable with
+   * `crossPool`. 503 is "nobody can decide", which is NOT overridable here:
+   * the tag is unreadable or malformed, and `ccd` refuses it too.
+   */
+  const refusePool = (
+    reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
+  ): FastifyReply | null => {
+    const v = poolVerdict(deps.cfg.roster, wrapper, pool);
+    if (v.ok) return null;
+    return v.reason === 'pool-mismatch'
+      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
+      : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
+  };
+
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
@@ -1667,9 +1904,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // never report the day it becomes reachable.
   app.get('/api/projects', async () => {
     const listed = await listProjects(deps.io, deps.cfg);
+    // The pool half, composed HERE and never inside `listProjects`: that is the
+    // fleet read (a readdir of the projects root unioned with registry
+    // workdirs) and this is policy off the registry, exactly the split
+    // `readiness` already draws. One root readdir feeds `readProjectPools`,
+    // which needs the PARENT listing to tell an absent `pools/` from an
+    // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
+    // request-lane budget rather than inheriting the watcher's cadence slice.
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
+    const limits = await readLimits(deps.io, deps.cfg);
+    const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
+      const pool = poolFor(poolsRead, p.name);
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+    };
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
-      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null })) };
+      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p) })) };
     }
     const coord = deps.coord;
     return {
@@ -1687,21 +1942,57 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p) };
       }),
     };
   });
 
   app.post('/api/sessions', async (req, reply) => {
-    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
+    // ONE bounded registry listing, two questions: is this a revival, and, only
+    // for an ordinary creation, what is this project's tag. The predicate keeps
+    // revivals CREATION-ONLY and declared crossings authoritative on the fleet
+    // box without starting marker I/O that either verdict never uses.
+    // `cmd_start` makes the same distinction (spec §5.5.5): on revival THE
+    // REGISTRY WINS over the wrapper argument, and ruling 5's auto path moves an
+    // already-running wrong-pool session at the next boundary.
+    const candidateId = `${body.wrapper}-${body.project}`;
+    const measured = await readProjectPoolsWithRoot(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+      (names) => body.crossPool !== true
+        && (names === null || !names.includes(`${candidateId}.uuid`)),
+    );
+    const revival = await knownId(candidateId, measured.rootNames);
+    if (!revival) {
+      if (body.crossPool === true) {
+        // REFUSE ON NO EVIDENCE — `capSupported`, never `verbSupported`. A flag
+        // an old ccd mis-binds exits 0 and records nothing, which
+        // `runCcdOr502` renders as success.
+        if (!capSupported(deps.fleetState, POOLS_CAP)) {
+          return reply.code(501).send({ ok: false, error: 'unsupported' });
+        }
+        return runCcdOr502(reply, body.enable === false
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+      }
+      const pool = poolFor(
+        measured.poolsRead ? measured.pools : { listed: false },
+        body.project,
+      );
+      const refused = refusePool(reply, body.wrapper, pool);
+      if (refused) return refused;
+    }
     // enable = start + systemd enable. The ternary picks the ENTRY rather than
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
-    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     return runCcdOr502(reply, body.enable === false
       ? CCD_ARGV.start(body.wrapper, body.project, workdir)
       : CCD_ARGV.enable(body.wrapper, body.project, workdir));
@@ -1715,6 +2006,63 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
     return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+  });
+
+  /**
+   * The project's pool tag (account pools, spec §5.4.2). `{ pool: string }`
+   * tags, `{ pool: null }` clears.
+   *
+   * THE TERNARY PICKS THE ENTRY, not a verb interpolated into an array —
+   * `start`/`enable`'s rule (`ccdargv.ts:180`), so both spellings are
+   * enumerated by `whitelist-subset.test.ts`.
+   *
+   * `:project` GOES THROUGH UNVALIDATED, exactly as `/workspaces` above sends
+   * it: `_ws_project_valid` on the box is the grammar and the authority, and
+   * this server's own reader never joins a request-supplied name into a path
+   * (`poolFor` is a Map lookup against names a LISTING returned), so nothing
+   * here can escape `pools/`. `isSafeProjectSegment`'s stricter grammar
+   * deliberately does not enter — it refuses a leading `-`/`_` that ccd
+   * accepts, and applying it would make some taggable projects untaggable from
+   * the phone.
+   *
+   * THE 200 IS MEASURED, NOT ECHOED. Unlike `$REG/coordinator-paused`, this
+   * file IS under the agent's read roots, so the truthful answer is available
+   * before the reply leaves — and `requested` would report a tag the box may
+   * have declined to write. The re-read is a fresh `readdir` + one read, on a
+   * route a human taps.
+   *
+   * NOT in `auth/gate.ts`'s EXEMPT table — session-gated when armed, open dark,
+   * like `/workspaces` and `/swap`. NO BOX TOKEN: this is fleet control, not a
+   * coordination write.
+   */
+  app.post('/api/projects/:project/pool', async (req, reply) => {
+    const { project } = req.params as { project: string };
+    const body = (req.body ?? {}) as { pool?: unknown };
+    if (body.pool !== null && typeof body.pool !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (body.pool !== null && !POOL_NAME_RE.test(body.pool)) {
+      return reply.code(400).send({ ok: false, error: 'bad-pool-name' });
+    }
+    const argv = body.pool === null
+      ? CCD_ARGV.projectPoolClear(project)
+      : CCD_ARGV.projectPoolSet(project, body.pool);
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    const measured = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), project);
+    // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
+    // hand-owned copies and can lag the fleet's, so "no account carries that
+    // name" is a thing worth saying and not a thing worth blocking on.
+    const warn = body.pool !== null && !poolRostered(deps.cfg.roster, body.pool);
+    return { ok: true, pool: measured, ...(warn ? { warning: 'unknown-pool' as const } : {}) };
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
@@ -1850,11 +2198,97 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { wrapper?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
+    // ONE queued invocation for both arms (D-2177, below), but that is the only
+    // server-side preflight they share. A declared crossing gets the 501 skew
+    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // ccd re-measures session and tag on the fleet box. The ordinary arm owns
+    // the early 404/503 ladder and pool refusal. Every applicable refusal is
+    // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
+    // `swap-route-pool.test.ts` pins crossing-arm queueing and each arm's
+    // applicable held-slot refusals (D-1684, D-2468, D-2481).
+    let argv: CcdArgv;
+    if (body.crossPool === true) {
+      // The declared crossing skips the verdict entirely — that IS the
+      // override. It does not skip the SKEW gate: `capSupported` refuses on no
+      // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
+      // undecidable tag still stops the swap, one box over: `cmd_swap`'s own
+      // guard dies on it with or without the flag, and that reaches the caller
+      // as a 502 carrying ccd's sentence.
+      if (!capSupported(deps.fleetState, POOLS_CAP)) {
+        return reply.code(501).send({ ok: false, error: 'unsupported' });
+      }
+      argv = CCD_ARGV.swapCross(id, body.wrapper);
+    } else {
+      // The row, for its `project`, is a best-effort early refusal: it avoids
+      // queueing a swap that is already known to violate the pool rule. The
+      // queue wait can stale this snapshot, so `cmd_swap` re-measures and is the
+      // authoritative gate at execution time. `readSessionRecord` reads one id,
+      // not the fleet; the ladder is `/stop`'s because an unlistable registry
+      // proves nothing about THIS id and 404 would be a lie.
+      const read = await readSessionRecord(deps.io, deps.cfg, id);
+      if (!read.found) {
+        return reply.code(read.reason === 'unlistable' ? 503 : 404)
+          .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+      }
+      const pool = poolFor(await readProjectPools(
+        deps.io,
+        deps.cfg,
+        (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+        PROJECT_POOLS_REQUEST_BUDGET_MS,
+      ), read.record.project);
+      const refused = refusePool(reply, body.wrapper, pool);
+      if (refused) return refused;
+      argv = CCD_ARGV.swap(id, body.wrapper);
+    }
+    // D-2177: `cmd_swap` stops the supervisor unit and kills the tmux pane
+    // (`remote/runner.ts`'s own comment on its budget), so it must never run
+    // between `answerAsk`'s pane capture and its keystroke — it would tear the
+    // pane down mid-answer. Through the SAME per-session `KeyedQueue` key
+    // (`id`) that every other write (`sendPrompt`, `answerDialog`,
+    // `answerAsk`) already shares via `sendDeps`/`askDeps` above, it cannot
+    // run until any in-flight write for this session has finished, exactly
+    // like the PR-open route below — deterministically, for a swap that
+    // arrives here. BOTH ARMS ride it: a declared crossing is serialized
+    // exactly like an ordinary swap.
+    //
+    // CORRECTED AGAINST THIS TREE. D-2177's own entry — and this comment,
+    // before this line — called `cmd_swap` "the one live-pane-destroying
+    // operation" not routed through the queue. It is not.
+    // `POST /api/sessions/:id/stop` runs `cmd_stop`, which ends in `tmux
+    // kill-session` (`grep -n '^cmd_stop()' ccd/ccd`), through `runCcdOr502`
+    // with no queue at all — and `POST /api/sessions/:id/archive` is a
+    // SECOND: `cmd_ws_archive` ends in the same `_ws_unsupervise` + `tmux
+    // kill-session` pair (`grep -n '^cmd_ws_archive()' ccd/ccd`, whose own
+    // header calls the pane "its one cost"), and it too goes straight through
+    // `runCcdOr502`. The PR-open, forget and reap routes below were already
+    // queued; `/restore` is unqueued but `cmd_ws_restore` kills no pane.
+    // What is true is narrower, and is still why this one was worth
+    // closing: a swap is the pane-destroying write that is supposed to
+    // PRESERVE the conversation it interrupts, so an answer lost to it is
+    // lost for nothing. Both the `/stop` and the `/archive` gap are real
+    // and unclosed.
+    //
+    // And this closes only the IN-PROCESS path. `cmd_swap` also fires from
+    // `_auto_swap_check` (`grep -n '^_auto_swap_check()' ccd/ccd` — stated as
+    // a grep, not a line number, for the reason `_dispatch_swap`'s own
+    // comment gives: the number this said was already stale), which does not
+    // call it directly but hands `ccd swap` to `_dispatch_swap`, i.e. its OWN
+    // transient systemd unit, on `cmd_supervise`'s 5-second tick, on the
+    // fleet box, entirely outside this server and this queue — the HTTP
+    // chokepoint this queue lives behind is a contract the PWA honours, not
+    // an OS wall around the tmux pane (CLAUDE.md's own words for the exec
+    // whitelist apply here just as much). Nothing server-side can queue a
+    // swap that never asks the server. `answerAsk`'s own `sendKey` return
+    // check (`inject/ask.ts`, same commit) is what actually covers that
+    // box-local case: it is what turns the auto-swap's keystroke loss into a
+    // refusal instead of a false ok:true, and it is the only one of the two
+    // halves that reaches it.
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────
@@ -1921,10 +2355,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * session actions sheet.
    *
    * WAVE 2: it now knows about coordination, because `ws-archive` has no hold
-   * rung in ccd (deliberately: this route is the reason) and `archiveMerged`'s
-   * own gate cannot help a request that never goes through it. An open run
-   * naming this session is refused `409 run-open`, NAMING the runs so the
-   * client can render a sentence rather than a slug.
+   * rung in ccd (deliberately: this route is the reason), so a request that
+   * arrives HERE meets no coordination check anywhere else on its way to the
+   * box — and nothing else on the server archives unasked, so there is no
+   * second gate to fall back on. An open run naming this session is refused
+   * `409 run-open`, NAMING the runs so the client can render a sentence rather
+   * than a slug.
    *
    * NOT a hard refusal — that would reverse a stated policy: README's holds
    * section blesses archiving a held workspace by hand, and this sheet is
@@ -2061,11 +2497,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // :456, :499 had it, the audit route did not)". That was FALSE, and the
     // measurement it cited is why: it grepped for the routes that ALREADY HAD
     // a gate, not for the routes that NEEDED one. `/archive`, `/restore` and
-    // `FleetWatcher.archiveMerged` were all missing theirs, all three are the
+    // `FleetWatcher`'s merge sweep were all missing theirs, all three are the
     // same verb generation as this route, and all three were added by this
-    // same branch. All three are gated now. The claim of completeness is no
-    // longer made in prose: `verb-gate.test.ts` parses `server/src` for every
-    // `CCD_ARGV.*` call site and fails on an ungated one it has not been told
+    // same branch. All three were gated. (Two still are; the merge sweep makes
+    // no ccd call at all now, so there is nothing left of it to gate.) The
+    // claim of completeness is no longer made in prose: `verb-gate.test.ts`
+    // parses `server/src` for every `CCD_ARGV.*` call site and fails on an
+    // ungated one it has not been told
     // about, so the next omission breaks a test instead of being asserted away
     // by a comment.
     if (!verbSupported(deps.fleetState, argv)) {

@@ -4,9 +4,9 @@
 //
 // Pure and import-free, like every other file in `shared/`: this bundles
 // into the PWA, so it imports nothing — not even `node:*`. `parseRoster`
-// therefore takes already-parsed JSON (`unknown`), never a path; whoever
-// reads `~/.ccrc/accounts.json` off disk (a later task) does the `readFile`
-// and hands the parsed value in here.
+// therefore takes already-parsed JSON (`unknown`), never a path. The server's
+// `loadConfig` reads and parses `~/.ccrc/accounts.json`, then hands the value
+// here; deploy-side bare-Node tooling uses the parity-pinned `.mjs` parser.
 //
 // Written in Task 2 of the stage-2a plan; live since Task 5, when `loadConfig`
 // began reading `~/.ccrc/accounts.json` into `CcrcConfig.roster`, and sole
@@ -23,9 +23,10 @@
  * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
- * auto-assignment walk below needs an actual sequence to walk — and because
- * a later doctor/adopt tool needs the identical order, not a second copy of
- * it, to report a collision the same way this parser resolves one.
+ * auto-assignment walk below needs an actual sequence to walk; exported because
+ * `pwa/src/lib/offline.ts` uses it to validate cached roster entries. The
+ * deploy-side parser and `ccd/ccrc-adopt` currently repeat the literal; any
+ * consolidation must reuse this order rather than introduce another copy.
  */
 export const HUES = ['cyan', 'violet', 'blue', 'magenta', 'amber', 'green'] as const;
 export type Hue = (typeof HUES)[number];
@@ -85,7 +86,14 @@ export interface AccountDef {
    *  with "measured zero" (design spec §3) — `'none'` opts an account like
    *  `gpt` out of that scoring entirely, rather than letting a permanent
    *  zero win it every placement. */
-  telemetry: 'anthropic' | 'none';
+  /** `'codex'` is an account that DOES report usage, but in the Codex shape: a
+   *  weekly window and no 5h window at all. It is deliberately its own member
+   *  rather than `'anthropic'`, because `CCRC_MEASURED` (shared/generate.mjs) is
+   *  `telemetry === 'anthropic'` and drives the STATUSLINE writer — calling a
+   *  Codex lane 'anthropic' would enlist a second writer racing ccgpt-usage on
+   *  the same `~/.cc-limits/<id>.json`. It scores like a real account (it is not
+   *  `'none'`) and is written by its own publisher. */
+  telemetry: 'anthropic' | 'codex' | 'none';
   /** The operator's declaration that this entry is roster PLUMBING rather than
    *  one of their accounts.
    *
@@ -99,8 +107,10 @@ export interface AccountDef {
    *  is stating something false.
    *
    *  DECLARED, NEVER DERIVED. The tempting derivation — `homeAble: false` plus
-   *  `telemetry: 'none'` — is exactly `gpt`: a REAL opt-in account a session
-   *  reaches on purpose with `ccd prefer`, which
+   *  `telemetry: 'none'` — is exactly `gpt`: a REAL account — an overflow lane
+   *  the auto-swapper rotates onto as a last resort while it is installed and
+   *  not kill-switched, and one an operator can send a session to with
+   *  `ccd prefer`/`ccd swap` — which
    *  `pwa/test/accounts-screen.test.tsx`'s "every account, never hidden"
    *  invariant requires a row for. No predicate over the other fields can tell
    *  the two apart, so only the operator can say which this is.
@@ -236,9 +246,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * The pool-name charset — deliberately `ID_RE`'s exact shape, and for `ID_RE`'s
  * exact reason. That sentence is an ASSERTION, not a claim on trust:
  * `server/test/gen-accounts.test.ts` requires `ID_RE`'s literal, extracted from
- * this file's text, to equal this object's `.source` and `.flags`. A later wave
- * with a reason to diverge the two changes that sentence and that assertion in
- * one act — the pin exists to make a divergence deliberate, not to forbid one.
+ * this file's text, to equal this object's `.source` and `.flags`. Any future
+ * change with a reason to diverge the two changes that sentence and assertion
+ * in one act — the pin exists to make a divergence deliberate, not to forbid one.
  *
  * A pool name is embedded UNQUOTED in a generated bash `case` arm
  * (`_ccrc_pool`, `shared/generate.mjs`) and printed with `echo`: a leading
@@ -253,10 +263,10 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * BOUNDARY — the 32-character cap and the shapes just outside it — and
  * `server/test/gen-accounts.test.ts` value-imports it to hold the bare-`node`
  * mirror's hand-copied literal equal to this one, both being assertions only a
- * reader of the one definition can make. One more importer is coming: the
- * project-pool route (wave 3) will validate a request body against this object.
- * Wave 2a's parity scan will read `POOL_NAME_RE.source` the same way, to pin
- * `ccd`'s own hand-typed `POOL_NAME_RE=` bash literal equal to it.
+ * reader of the one definition can make. The wave-3 project-pool route now
+ * imports it to validate request bodies, while wave 2a's parity scan reads
+ * `POOL_NAME_RE.source` the same way to pin `ccd`'s hand-typed
+ * `POOL_NAME_RE=` bash literal equal to it (D-2480).
  *
  * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT why this is exported:
  * it hand-COPIES the literal, because a bare `node` cannot import TypeScript
@@ -534,11 +544,11 @@ function parseAccount(raw: unknown, index: number): Draft {
   const pool = poolRaw === undefined ? null : poolRaw;
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'none') {
+  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
     throw new RosterError(
       `account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}: it must be ` +
-        '"anthropic" or "none".',
-      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic" or "none".`,
+        '"anthropic", "codex" or "none".',
+      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex" or "none".`,
     );
   }
 
@@ -589,10 +599,10 @@ function parseAccount(raw: unknown, index: number): Draft {
  * choice, so this at least still spreads collisions round-robin rather than
  * concentrating them.
  *
- * A resulting collision is not reported here — design spec §3 puts that on
- * a later `doctor` task, which sees the finished roster and can name both
- * colliding accounts; this function's only job is to never leave a `hue`
- * unset.
+ * A resulting collision is not reported here: this parser's job is to return
+ * a complete roster or a validation error, and repeated hues are valid once
+ * the finite palette cycles. Any operator-facing collision diagnosis belongs
+ * to tooling that sees the finished roster, not this assignment helper.
  */
 function assignHues(accounts: Draft[]): void {
   const explicit = new Set<Hue>();

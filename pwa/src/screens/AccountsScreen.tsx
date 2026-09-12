@@ -191,7 +191,28 @@ export function AccountsScreen(): ReactNode {
           </section>
         ) : order.map((wrapper) => {
           const a = accounts.find((x) => x.wrapper === wrapper) ?? null;
+          // TWO facts, ONE affordance. `disabled` is the operator's kill-switch
+          // (`~/.cc-sessions/<w>-disabled`, touched by hand); `authDead` is the
+          // health probe's measurement (`<w>-authdead`). They are never folded
+          // into one boolean upstream — the server keeps them apart for exactly
+          // the reason the note below says both when both are true — but on this
+          // screen they answer the same question, "can this lane take work?", so
+          // they render through the attribute and the note that already exist
+          // rather than a second vocabulary beside them.
+          //
+          // `=== true` on both, never truthiness: a server built before
+          // `authDead` omits it, and absence must read as "not condemned".
           const disabled = a?.disabled === true;
+          const authDead = a?.authDead === true;
+          const off = disabled || authDead;
+          // Both, when both — an operator switch does not hide a measurement,
+          // and a measurement does not explain away a switch. The two are
+          // cleared by different acts.
+          const offNote = disabled && authDead
+            ? 'disabled on the fleet host; sign-in expired'
+            : disabled
+              ? 'disabled on the fleet host'
+              : 'sign-in expired on the fleet host';
           const ts = a?.ts ?? null;
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
           // workspace that is archived, mid-cleanup, or whose tmux session is
@@ -205,18 +226,20 @@ export function AccountsScreen(): ReactNode {
             (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
           );
           return (
-            <section key={wrapper} className="accounts-row" data-disabled={disabled ? 'true' : 'false'}>
+            <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
               <div className="accounts-row-head">
                 <span
                   className="account-gauge-label"
-                  style={{ color: disabled ? 'var(--ink-tertiary)' : `var(${accountColorVar(roster, wrapper)})` }}
+                  style={{ color: off ? 'var(--ink-tertiary)' : `var(${accountColorVar(roster, wrapper)})` }}
                 >
                   {accountLabel(roster, wrapper)}
                 </span>
                 {/* Disabled lanes are shown switched off, never hidden — the
                     strip's compact filter (AccountsStrip.tsx) is right for an
-                    always-on bar, wrong here. */}
-                {disabled && <span className="accounts-disabled-note">disabled on the fleet host</span>}
+                    always-on bar, wrong here. A lane whose credential the probe
+                    measured dead is shown for a sharper version of the same
+                    reason: it is the one lane an operator has to go and fix. */}
+                {off && <span className="accounts-disabled-note">{offNote}</span>}
               </div>
 
               <div className="acct-rows">

@@ -18,11 +18,11 @@ const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   id, wrapper: 'claude', home: 'claude', project: 'ccrc-pwa', workdir: '/w',
   workspace: id, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
-  started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+  started: true, spawnState: null, ask: null, ...over,
 });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
@@ -30,7 +30,12 @@ const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
  *  edge IS the subject of this file. */
 const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
-  project: 'ccrc-pwa', sessionId: null, workspace: null, branch: null,
+  // Required on `RunSummary`; `null` is the honest fixture answer — a programme
+  // with no stored home, which is what every row on a box that has not yet run
+  // a cross-repo programme says. Wave 2's crossing-marker tests build their own
+  // non-null variants by spreading this builder; they must not re-add the field
+  // here.
+  project: 'ccrc-pwa', homeProject: null, sessionId: null, workspace: null, branch: null,
   state: 'dispatched', claimedBy: 'coord', resumed: false, clearedAt: null,
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },

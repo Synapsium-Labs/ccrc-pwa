@@ -17,6 +17,7 @@ import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
+import { HOLD_REASON_MAX_CHARS, holdReason } from '../src/coord/rundefs.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
@@ -398,6 +399,58 @@ describe('POST /api/runs/:id/abandon', () => {
     const res = await postAbandon(app, id);
     expect(res.json()).toMatchObject({ ok: true, released: true });
     expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+  });
+
+  it('refuses an oversized survivor handoff before any fleet act or close commit', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-oversize-survivor`;
+    const closingId = wedged(w.coord, home, 'dispatched', sessionId, 'short');
+    const overhead = holdReason('', 22, 333, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const [survivor] = w.coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 22, of: 333, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+
+    const res = await postAbandon(app, closingId);
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(closingId)!.state).toBe('dispatched');
+    expect(w.coord.run(survivor.id)!.state).toBe('working');
+  });
+
+  it('refuses an invalid survivor handoff before any fleet act or close commit', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-invalid-survivor`;
+    const closingId = wedged(w.coord, home, 'dispatched', sessionId, 'short');
+    const [survivor] = w.coord.reconstruct({
+      ledger: { slug: 'bad program', title: 'Recovered', waves: [
+        { wave: 1, of: 1, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+
+    const res = await postAbandon(app, closingId);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(closingId)!.state).toBe('dispatched');
+    expect(w.coord.run(survivor.id)!.state).toBe('working');
   });
 
   it('a FAILED re-hold leaves the run RETRYABLE — the fleet act stays ahead of the commit (D-48)', async () => {

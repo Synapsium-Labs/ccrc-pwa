@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 68 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 72 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,17 +72,17 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The eighteen box-token machine lanes plus `/api/notify` — the fleet
+ *  2. The twenty-two box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All nineteen
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-three
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
  *     as well as in number). Most of the coordination lanes refuse every
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
- *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/lifecycle`, `/api/peers`,
- *     `/api/claims`) do NOT: they take a live session cookie OR the token
+ *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/feed`, `/api/lifecycle`,
+ *     `/api/peers`, `/api/claims`, `/api/asks`) do NOT: they take a live session cookie OR the token
  *     (D-149), which is why the coordinator can read its own wave ledger
  *     cookieless from the fleet host. And `/api/notify` still passes `'legacy'` (no token
  *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
@@ -132,8 +132,8 @@ import type { SessionStore } from './sessions.js';
  *     credential ids without which no browser can run the ceremony at all.
  *     The REGISTER pair is deliberately NOT here — see below.
  *
- *  6. `GET /api/runs` — EXEMPT-BUT-AUTHENTICATED, and the newest entry (D-149),
- *     found by the whole-branch review rather than by any task review. It is
+ *  6. The EXEMPT-BUT-AUTHENTICATED reads, introduced by `GET /api/runs`
+ *     (D-149) in the whole-branch review rather than by any task review. It is
  *     reason 3's shape — a route that authenticates for ITSELF because the gate
  *     cannot make the right decision for it — arrived at from the opposite
  *     direction: not "the gate would lock everyone out", but "the gate reads the
@@ -213,6 +213,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`unknown-run` recovery — so a gated one wedges the coordinator out of its own run at exactly ' +
     'the two moments it cannot diagnose itself. The handler requires a live session OR a valid box ' +
     'token (coord/routes.ts), so nothing is published to the tailnet that was published before'],
+  ['GET /api/feed',
+    'EXEMPT-BUT-AUTHENTICATED (D-2507), the same dual-credential arrangement as `GET /api/runs`: ' +
+    '`ccrc-api feed list` is a cookieless fleet-host caller and the PWA reads with a session. The ' +
+    'handler requires one of those credentials before revealing even `501 not-configured`, so this ' +
+    'entry restores the machine read without making the durable feed anonymous'],
   ['GET /api/runs/:id/items',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern), the same shape as `GET /api/runs` above and for " +
     'the same caller: the coordinator reads its own wave ledger COOKIELESS from the fleet host. ' +
@@ -239,6 +244,21 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern): the coordinator asks it cookieless before " +
     "splitting work (clause 10), and the PWA's HotFilesStrip reads it with a cookie. The " +
     'handler requires a live session OR a valid box token (coord/routes.ts)'],
+  ['GET /api/asks',
+    "EXEMPT-BUT-AUTHENTICATED (D-149's pattern, Task 11 — the ask pre-emption lane's READ side): " +
+    "a fleet PARENT reads its own children's open asks cookieless, to see whether two are asking " +
+    "contradictory things before either grace window lapses; the PWA reads the same record with a " +
+    'cookie for the operator\'s chip (Task 19). Unlike the other four, a bare box token is NOT ' +
+    'enough here on its own: that token is one shared secret, identical for every session on the ' +
+    "box, so the handler additionally requires a box-token caller to ATTRIBUTE itself as the " +
+    "parent it names (`?fromUuid=` against `?parent=`, the same registry check `POST /api/claims` " +
+    "and both ask-mutation routes already run) — a cookie caller (the operator) reads across " +
+    'parents with no such check. THIS IS FRESHNESS, NOT FORGERY-PROOFNESS (the same honesty ' +
+    "`requireAttribution`'s own docstring states, coord/routes.ts:427-433): every session on the " +
+    "box can read every `.uuid` file, so it closes an ACCIDENTAL cross-parent read, not a " +
+    'deliberate one — and on a DARK box (`CCRC_AUTH` off) this check does not run at all, exactly ' +
+    'like its four siblings. The handler requires a live session OR a valid box token ' +
+    '(coord/routes.ts)'],
   ['POST /api/runs/:id/dispatch',
     'the coordinator dispatches a wave — box-token gated'],
   ['POST /api/runs/:id/close',
@@ -253,6 +273,18 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/claims/:id/release',
     'the claimant releases on the final merge — box-token gated, same attribution as the claim; ' +
     'the ownership check is the route\'s own, against the live claim table'],
+  ['POST /api/asks/:id/answer',
+    'a parent presses a digit into its child\'s live menu (Task 9, the ask pre-emption lane) — ' +
+    'box-token gated, same registry attribution as the claim lanes, plus its own ' +
+    "`ask.parentId === fromId` check: only this child's derived parent may pre-empt its question. " +
+    'The caller has no cookie jar — it is a fleet-host session answering mail, not a browser'],
+  ['POST /api/asks/:id/release',
+    'a parent DECLINES to rule on its child\'s question (Task 10, the ask pre-emption lane\'s ' +
+    'decline route, RULING F12) — box-token gated, same registry attribution as `/answer` directly ' +
+    "above, plus the identical `ask.parentId === fromId` check: only this child's derived parent " +
+    'may decline its question. Task 9 discovered this class unprompted: the route is DEAD the ' +
+    'moment the flag arms unless exempted, because its only real caller is a fleet session with no ' +
+    'cookie jar, not a browser — the same argument `/answer` already makes for itself, one door over'],
   ['POST /api/ledger/deviations',
     'the coordinator allocates a D-number block at run-open — box-token gated; a session that ' +
     'cannot reach the allocator must not invent a number, so the allocator must be reachable ' +
@@ -672,8 +704,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighteen box-token machine
- * lanes plus `/api/notify` — nineteen in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-two box-token machine
+ * lanes plus `/api/notify` — twenty-three in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

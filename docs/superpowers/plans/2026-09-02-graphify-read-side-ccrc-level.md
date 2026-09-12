@@ -4856,6 +4856,31 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   before the gate arrived), and no zero-query session had searched yet, so no denial existed to read.
   The reading proper — denials beside queries across the fleet on a dated day after the deploy, read
   against D-1690's four bounded false positives — is still the act this entry names.
+  **The reading, taken 2026-09-08 11:07 UTC against the hourly series** (`~/.ccrc/graph-gate-readings.jsonl`,
+  operator plumbing outside every checkout, one JSON line per fire since 2026-09-05 23:23 UTC). The
+  carrier itself lost every fire that preceded a day's first query until 2026-09-07 14:07 UTC — a
+  `grep -c … || echo 0` that captured `0\n0` on a no-match, which `--argjson` refuses; 10 of 13 fires on
+  Sep 7 wrote nothing — repaired that day as the session-card design's B0
+  (`2026-09-07-ccrc-session-card-design.md` §8.2), and every fire since has landed, 22 consecutive at
+  this reading. The number: graphify's query log holds 4 on Sep 4, 48 on Sep 5 (the ruling at 11:08, the
+  gate at 21:57), 70 on Sep 6 (the Read nudge from 16:36), 119 on Sep 7 and 14 by 11:07 on Sep 8 —
+  against ~20 a day across Aug 22 – Sep 1 (224 in eleven days), 154 on Sep 2 (the read side's own build
+  day, not the fleet), 0 on Sep 3. The first full day with the nudge is the highest, and one day cannot
+  separate the nudge from the workload. Denials: 17, in 9 sessions (1, 1, 1, 1, 2, 2, 3, 3, 3), and all
+  9 queried afterwards — 8 inside the same hourly window as their first denial (the day-1 transcript
+  shows two queries within 7 s of it), and one, an expoAI-assistant worktree, reached the bound at 13:04
+  Sep 6, worked four more hours with no query, went idle, and queried six minutes after resuming at 11:06
+  Sep 7. Three sessions reached the bound of 3 and every one queried — that worktree sat at `gated 3`
+  with no query for thirteen hourly rows, four of them working, before it did — so no SESSION paid the
+  bound and walked on (rows do show it; sessions do not), none of D-1690's four classes is observed to
+  have cost anything, and the one fan-out case (day 1, two parallel workflow subagents) counted 1, 2, 3
+  with nothing lost. Of 18 live sessions all 18 have a graph and 16 have queried in their current
+  counter epoch; the two at zero also hold zero denials and have sat idle on a single `SessionStart`
+  since the afternoon of Sep 7 (the supervisor heartbeat, not the hookstate, is what keeps them
+  measuring live), so nothing they ran reached a search tool. **By
+  the rule recorded 2026-09-05 — "if denials are mostly followed by a query in the same session, the
+  gate works and D-1690 stays recorded" — the gate works, D-1690 stays recorded, nothing further is
+  built.** The series keeps running; the session-card design reads the same file as its B0 baseline.
 - **D-1797** (2026-09-06, REVIEW OF THE R6 BRANCH, all closed before the push) — the independent
   reviewer measured 16 mutation rows red and added two of its own, one of which was GREEN: (1) MAJOR —
   the refactor that made the gate's conditions 1–4 the nudge's too moved the denial bound into a
@@ -4930,6 +4955,12 @@ artifact), then the reading - how soon `graphQueries` leaves 0 in sessions that 
   tree produces it. All four stop at three denials. Recorded here rather than fixed because each fix
   is a design (walk to the repo root; parse `find`'s verbs; lock the hookstate) the ruling did not
   ask for, and the reading will show whether any of them is worth its cost.
+  **Read against the series 2026-09-08 (D-1613's reading):** across 17 denials in 9 sessions none of the
+  four is observed — every session that reached the bound queried (two inside the hour, one the next
+  morning), and the day-1 fan-out counted 1, 2, 3 with nothing lost. Stays recorded; no fix built. The
+  reading's own limit, so nobody over-reads it: the series carries counters, not commands, so a class
+  can hide inside a session that converted anyway; what it can say is that no session paid the bound
+  and walked on.
 - **D-1691** (2026-09-05, review of PR #54, MINORS, closed) — (a) `graphGateCount`'s `null`→`0`
   degrade was UNMECHANISED: its only consumer renders on `> 0`, so the fold passed every suite; pinned
   directly in `pwa/test/session-line.test.tsx` (mutation 1 red). (b) The README guard's whole-file

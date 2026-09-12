@@ -4,13 +4,13 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -18,9 +18,17 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
-import { holdReason } from '../src/coord/rundefs.js';
+import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
-import { MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, isSkillState } from '../../shared/api.js';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_SLUG_MAX_CHARS,
+  RUN_HOLD_NUMBER_MAX,
+  RUN_ID_MAX_DECIMAL,
+  WORK_ITEM_MAX,
+  WORK_ITEM_TITLE_MAX,
+  isSkillState,
+} from '../../shared/api.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -136,6 +144,17 @@ const tokenHeaders = (token: string | null): Record<string, string> =>
 const postOpen = (app: FastifyInstance, body: unknown = OPEN_BODY, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: '/api/runs', headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
+
+/** A `to:'worker'` brief queued to `to` on `runId`, the shape a wave brief
+ *  takes in the store — the mail row keeps the ROLE, the delivery the
+ *  session, exactly as `POST /api/mail` writes them. Returns the delivery id. */
+const queueWorkerBrief = (coord: CoordStore, runId: number, to: string): number => tx(coord.db, () => {
+  const m = coord.insertMail({ fromId: CLAIMED_BY, fromUuid: 'a'.repeat(36), toId: 'worker', runId,
+    kind: 'status', subject: 'the wave brief', body: 'b', artifacts: [] });
+  const d = coord.queueDelivery(m.id, to, '');
+  coord.setDeliveryEnvelope(d.id, `to: ${to}\nack: ccrc-api mail ack ${d.id}\n`);
+  return d.id;
+});
 const postDispatch = (
   app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
 ) =>
@@ -147,10 +166,9 @@ const postClose = (app: FastifyInstance, id: number, body: unknown, token: strin
 const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
-// GET /api/runs stays UNGATED — it is not one of the six routes PR J's
-// contract item 6 names, and this build's GET routes (`/api/runs`,
-// `/api/feed`) carry no token check either before or after review findings
-// 3/10/27's fix.
+// The fixture leaves auth disabled, so both GETs retain their dark-box
+// behavior. Armed, `/api/runs` and `/api/feed` are EXEMPT-BUT-AUTHENTICATED:
+// each handler accepts either a live session or the box token (D-149, D-2507).
 const getRuns = (app: FastifyInstance, closed = false) =>
   app.inject({ method: 'GET', url: `/api/runs${closed ? '?closed=1' : ''}` });
 const getMail = (
@@ -180,6 +198,45 @@ describe('POST /api/runs', () => {
     expect(w.coord.run(id)?.state).toBe('planned');
   });
 
+  it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const detail = `hold reason ${HOLD_REASON_MAX_CHARS + 1} characters exceeds the ` +
+      `${HOLD_REASON_MAX_CHARS} character session-card cap`;
+    vi.spyOn(w.coord, 'openRun').mockReturnValue({
+      ok: false, kind: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
+    });
+
+    const res = await postOpen(app);
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toEqual({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS, detail,
+    });
+    expect(w.coord.programs()).toEqual([]);
+    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('maps an invalid generated open-run id to 400 and rolls the insert back', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    w.coord.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'unsafe-id' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({
+      ok: false,
+      error: 'hold-invalid',
+      detail: 'generated run id is not a positive safe integer',
+    });
+    expect(w.coord.programs()).toEqual([]);
+    expect(w.coord.runs({ includeClosed: true })).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a second coordinator rather than arbitrating', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
@@ -188,6 +245,236 @@ describe('POST /api/runs', () => {
     const res = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: 'ccrc-pwa-other' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, refused: 'claimed-by-another', by: CLAIMED_BY });
+  });
+
+  it('refuses a reused sessionId bound to another project — before anything is opened', async () => {
+    // F1. The coordinator's own idiom ("same sessionId, same workspace") caught
+    // by the coordinator's own history: wave 1 in `demo` is the only record that
+    // this workspace lives in `demo`, and until this check nothing read it.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Another repo',
+      project: 'other-project', wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: PROJECT });
+    // BEFORE `coord.openRun`, so a refusal leaves no `planned` orphan…
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    // …and no hold was placed on a workspace this run was never going to get.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
+    // F2. The body guard used to test `.trim()` and then store the RAW value;
+    // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was
+    // permanent and every clean re-send was refused `home-mismatch` against a
+    // value that rendered the same.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo\n' });
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(first.json()).toMatchObject({
+      ledgerRepo: 'demo', ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+  });
+
+  it('refuses a home that is not a single path segment — 400 with a detail, and nothing is opened or homed', async () => {
+    // F4. `ledgerAbsPath` is `path.join(projectsRoot, home, …)`, and a `..`
+    // segment escapes the root; the skill tells its reader that path is the
+    // file a wave in another repository READS. Refused at the door, where an
+    // empty home is already refused, so a home is a name and never a path.
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    for (const bad of ['../x', 'a/b']) {
+      const res = await postOpen(app, { ...OPEN_BODY, homeProject: bad });
+      expect(res.statusCode, bad).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringContaining('homeProject') });
+    }
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it.each([
+    ['a forward-slash traversal', '../other'],
+    ['a nested forward-slash path', 'build4/other'],
+    ['a backslash traversal', '..\\other'],
+    ['a nested backslash path', 'build4\\other'],
+    ['the current directory component', '.'],
+    ['the parent directory component', '..'],
+    ['a dotted filename', 'build4.md'],
+    ['a space-bearing label', 'build 4'],
+    ['a query-bearing label', 'build4?wave=2'],
+  ])('refuses a programme slug shaped as %s, before any row or hold exists', async (_label, program) => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, program });
+    expect(res.statusCode, program).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toEqual([]);
+  });
+
+  it('shapes a programme slug once and uses it for storage, ledger paths, and the contained absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const projectsRoot = path.join(home, 'projects');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot } }); app = w.app;
+    const res = await postOpen(app, {
+      ...OPEN_BODY, program: '  build_4-name  ', homeProject: 'demo',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      id: number; program: string; ledgerPath: string; ledgerRepo: string; ledgerAbsPath: string;
+    };
+    expect(body).toMatchObject({
+      program: 'build_4-name',
+      ledgerPath: 'docs/superpowers/programs/build_4-name.md',
+      ledgerRepo: 'demo',
+    });
+    expect(w.coord.run(body.id)?.program).toBe('build_4-name');
+    expect(w.coord.programs().map((p) => p.slug)).toEqual(['build_4-name']);
+    expect(w.coord.programHome('build_4-name')).toBe('demo');
+    const homeRoot = path.join(projectsRoot, 'demo');
+    const relative = path.relative(homeRoot, body.ledgerAbsPath);
+    expect(relative.startsWith('..') || path.isAbsolute(relative), body.ledgerAbsPath).toBe(false);
+    expect(body.ledgerAbsPath).toBe(path.join(homeRoot, body.ledgerPath));
+  });
+
+  it('a second open of the same planned wave naming a DIFFERENT sessionId re-binds the run, hands the heir the brief, parks the predecessor, and records `session-rebound` naming both occupants', async () => {
+    // store-2 / MUT-3. `openRun`'s dup arm keys on (program, wave, waveOf,
+    // claimedBy, planned) and NOT on sessionId, so this retry finds the same
+    // row; `setSession` funnels into `bindSession`, whose re-bind branch is
+    // therefore a LIVE path — and an occupant change is now attributable on
+    // the run's own trail like every other run write.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(200);
+    expect((second.json() as { id: number }).id).toBe(id);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    // The heir holds a freshly rendered copy; the predecessor's row is parked.
+    const heir = w.coord.outstandingMailFor('demo-second');
+    expect(heir.map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.outstandingMailFor('demo-existing')).toHaveLength(0);
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    // RECORDED, naming predecessor and heir and what moved.
+    expect(w.coord.runEvents(id).map((e) => e.detail))
+      .toContain('session-rebound: demo-existing -> demo-second, 1 re-issued');
+  });
+
+  it('rolls a late re-bind failure back, then retries the whole transfer exactly once', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_session_rebound
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail LIKE 'session-rebound:%'
+      BEGIN
+        SELECT RAISE(ABORT, 'late rebound fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(failed.statusCode).toBe(500);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toEqual([]);
+    expect(w.coord.runEvents(id).filter((e) => e.detail?.startsWith('session-rebound'))).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_session_rebound');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(retried.statusCode).toBe(200);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-second');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('rejected');
+    expect(w.coord.outstandingMailFor('demo-existing')).toEqual([]);
+    expect(w.coord.outstandingMailFor('demo-second').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second').filter((m) => m.subject === 'the wave brief')).toHaveLength(1);
+    expect(w.coord.runEvents(id).map((e) => e.detail)
+      .filter((d) => d?.startsWith('session-rebound')))
+      .toEqual(['session-rebound: demo-existing -> demo-second, 1 re-issued']);
+  });
+
+  it('a refused ws-hold leaves the occupant unchanged — no re-bind, no re-issue, no park, no event', async () => {
+    // store-1. The bind used to run BEFORE the hold, in autocommit, so a 502
+    // told the coordinator the open FAILED while `runs.sessionId` had already
+    // moved, the predecessor's brief was parked and the heir held a queued
+    // delivery `sweepMail` would inject into a session nobody had held.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing'); seed(home, 'demo-second');
+    const { run } = makeRunner(home);
+    let holds = 0;
+    // The second `ws-hold` fails, the way `:656`'s runner fails a verb.
+    const failSecondHold: Runner = async (cmd, argv) => {
+      if (argv[0] === 'ws-hold' && ++holds === 2) return { code: 1, stdout: '', stderr: 'ws-hold failed' };
+      return run(cmd, argv);
+    };
+    const w = await openApp(home, failSecondHold); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const id = (first.json() as { id: number }).id;
+    const oldDelivery = queueWorkerBrief(w.coord, id, 'demo-existing');
+
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-second' });
+    expect(second.statusCode).toBe(502);
+    expect(second.json()).toEqual({ ok: false, stderr: 'ws-hold failed' });
+    expect(holds, 'the initial and refused re-bind holds were not both attempted').toBe(2);
+    expect(w.coord.run(id)!.sessionId).toBe('demo-existing');
+    expect(w.coord.delivery(oldDelivery)!.state).toBe('queued');
+    expect(w.coord.outstandingMailFor('demo-existing').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(w.coord.mailForRecipient('demo-second')).toHaveLength(0);
+    expect(w.coord.runEvents(id).map((e) => e.detail).filter((d) => d?.startsWith('session-rebound'))).toEqual([]);
+  });
+
+  it('permits a reused sessionId that stays in the same project', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses nothing for a session no run has ever named — absence permits', async () => {
+    // The wave-1 open that adopts an operator-made workspace. `sessionProject`
+    // answers null, and a null answer is not evidence of a crossing; the
+    // registry backstop at dispatch (Task 2) is the other rung.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, project: 'other-project',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
   });
 
   it('places the hold immediately when sessionId names an existing workspace, and persists it onto the row', async () => {
@@ -203,12 +490,210 @@ describe('POST /api/runs', () => {
       ['ws-hold', '--session', 'demo-existing', '--reason', `program:build4 wave:2/3 run:${id}`]);
   });
 
+  it('consumes the store-validated hold reason instead of recomposing it in the route', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const sentinel = 'program:store-validated wave:7/9 run:11';
+    vi.spyOn(w.coord, 'openRun').mockReturnValue({
+      id: 11, program: 'build4', state: 'planned', holdReason: sentinel,
+    });
+
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual([
+      'ws-hold', '--session', 'demo-existing', '--reason', sentinel,
+    ]);
+  });
+
+  it('accepts a slug at exactly the derived budget and passes the complete hold to ccd', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const expected = holdReason(program, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, 1);
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY,
+      program,
+      wave: RUN_HOLD_NUMBER_MAX,
+      waveOf: RUN_HOLD_NUMBER_MAX,
+      sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual([
+      'ws-hold', '--session', 'demo-existing', '--reason', expected,
+    ]);
+  });
+
+  it('refuses a slug one character past the budget before opening a row or calling ccd', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS + 1);
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY, program, sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      ok: false,
+      error: 'bad-request',
+      detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
+    });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    ['zero wave', { wave: 0 }],
+    ['negative wave', { wave: -1 }],
+    ['fractional wave', { wave: 1.5 }],
+    ['unsafe wave', { wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['exponent-scale wave', { wave: 1e100 }],
+    ['zero denominator', { waveOf: 0 }],
+    ['negative denominator', { waveOf: -1 }],
+    ['fractional denominator', { waveOf: 1.5 }],
+    ['unsafe denominator', { waveOf: Number.MAX_SAFE_INTEGER + 1 }],
+    ['exponent-scale denominator', { waveOf: 1e100 }],
+  ])('refuses %s before opening a row or calling ccd', async (_label, fields) => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+
+    const res = await postOpen(app, {
+      ...OPEN_BODY, ...fields, sessionId: 'demo-existing',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.runs()).toEqual([]);
+    expect(w.coord.programs()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a malformed body', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, wave: 'one' });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts homeProject, stores it, and answers with the ledger repo and its absolute path', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { cfg: { projectsRoot: '/srv/projects' } }); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      ok: true, program: 'build4', state: 'planned',
+      // UNCHANGED, deliberately: the coordinator keeps the relative path it has
+      // always had, and the two new fields sit beside it.
+      ledgerPath: 'docs/superpowers/programs/build4.md',
+      ledgerRepo: 'demo',
+      ledgerAbsPath: '/srv/projects/demo/docs/superpowers/programs/build4.md',
+    });
+    expect(w.coord.programHome('build4')).toBe('demo');
+  });
+
+  it('backfills a NULL stored home from a later open, and records the event', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app);                       // legacy: no homeProject
+    expect(first.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+    const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(second.statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    const id = (second.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('home-project-backfilled');
+  });
+
+  it('rolls home back when its event cannot be inserted, then writes both facts exactly once on retry', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+    expect(w.coord.programHome('build4')).toBeNull();
+
+    w.coord.db.exec(`
+      CREATE TRIGGER fail_home_backfill_event
+      BEFORE INSERT ON run_events
+      WHEN NEW.detail = 'home-project-backfilled'
+      BEGIN
+        SELECT RAISE(ABORT, 'home backfill event fault');
+      END
+    `);
+    const failed = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(failed.statusCode).toBe(500);
+    const failedRun = w.coord.runs().find((r) => r.wave === 2);
+    expect(failedRun).toBeDefined();
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(w.coord.runEvents(failedRun!.id).filter((e) => e.detail === 'home-project-backfilled')).toEqual([]);
+
+    w.coord.db.exec('DROP TRIGGER fail_home_backfill_event');
+    const retried = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
+    expect(retried.statusCode).toBe(200);
+    const id = (retried.json() as { id: number }).id;
+    expect(id).toBe(failedRun!.id);
+    expect(w.coord.programHome('build4')).toBe('demo');
+    expect(w.coord.runEvents(id).filter((e) => e.detail === 'home-project-backfilled')).toHaveLength(1);
+  });
+
+  it('refuses a home that differs from the stored one, naming the stored value', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'other-project' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'home-mismatch', by: 'demo' });
+    // A SECOND code, not `project-mismatch`: the two conditions are handled
+    // differently by the caller, and a seam may not collapse them.
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+  });
+
+  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app);
+    expect(res.statusCode).toBe(200);
+    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
+    // possible instead of a collision.
+    expect(w.coord.programHome('build4')).toBeNull();
+    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
+    const id = (res.json() as { id: number }).id;
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
+  });
+
+  it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: '   ' });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+  });
+
+  it('refuses a non-string homeProject as a malformed body, before anything is opened or homed', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, homeProject: 7 });
+    expect(res.statusCode).toBe(400);
+    expect(w.coord.runs()).toHaveLength(0);
+    expect(w.coord.programs()).toHaveLength(0);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
   });
 
   it('answers 501 not-configured without a coordination store', async () => {
@@ -223,6 +708,45 @@ describe('POST /api/runs', () => {
 describe('POST /api/runs/:id/dispatch', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it.each([
+    ['hold-oversize', 413],
+    ['hold-invalid', 400],
+  ] as const)('maps a reconstructed %s dispatch refusal to %i before pause, cap, or fleet work',
+    async (kind, statusCode) => {
+      const home = mkTmp('ccrc-runs-');
+      mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      const { run, calls } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const wave = 22;
+      const waveOf = 333;
+      const overhead = holdReason('', wave, waveOf, 1).length;
+      const program = kind === 'hold-oversize'
+        ? 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead)
+        : 'bad program';
+      const [reconstructed] = w.coord.reconstruct({
+        ledger: { slug: program, title: 'Recovered', waves: [
+          { wave, of: waveOf, handoffCommit: null },
+        ] },
+        registry: { sessionId: `demo-dispatch-${kind}`, project: PROJECT,
+          workspace: `dispatch-${kind}`, branch: `ws/dispatch-${kind}`, held: 'legacy hold' },
+        prHistory: [],
+      });
+      if (!reconstructed) throw new Error('reconstruct did not return a run');
+      w.coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?")
+        .run(reconstructed.id);
+
+      const res = await postDispatch(app, reconstructed.id);
+      expect(res.statusCode).toBe(statusCode);
+      expect(res.json()).toMatchObject({
+        ok: false,
+        error: kind,
+        ...(kind === 'hold-oversize' ? { limit: HOLD_REASON_MAX_CHARS } : {}),
+        detail: expect.any(String),
+      });
+      expect(calls).toEqual([]);
+      expect(w.coord.run(reconstructed.id)!.state).toBe('planned');
+    });
 
   it('refuses while $REG/coordinator-paused exists, before counting anything', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -640,6 +1164,132 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.branch).toBeNull();
   });
 
+  it('refuses a resume whose registry record names another project — before the hold, the /clear and markDispatched', async () => {
+    // F1's second rung. The open route's `sessionProject` cannot see this case:
+    // no run has ever named this session, so it answers null and permits. The
+    // registry row is the other measurement, and it disagrees with the run.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: 'other-project' });
+    // THE POSITION IS THE GUARD, not just the comparison: no second hold, no
+    // `/clear` typed into a pane bound to the wrong repo, and the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold'),
+      'the crossing was refused only AFTER the hold was placed').toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys'),
+      'a /clear was typed into a session this dispatch had no business clearing').toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+    expect(w.coord.run(id)?.dispatchedAt).toBeNull();
+  });
+
+  it("answers registry-unmeasurable — not project-mismatch — when the session's .project cannot be read", async () => {
+    // The rung measures the ONE field it decides on. `record.project` would
+    // have arrived here as the session id (`registry.ts`'s `project ?? id`
+    // over a collapsing read) and refused a crossing nobody measured, with a
+    // "do not retry" remedy that spends a second workspace. Unreadable is the
+    // registry not being measurable for THIS row — the retryable answer this
+    // arm already gives for an unmeasured identity.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io: unreadableField('demo-existing', 'project') }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // Nothing spent: no second hold, no /clear, the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+  });
+
+  it('permits a session whose registry row carries no .project at all — absence is not a crossing', async () => {
+    // A row from before the field existed (ccd writes `.project` at ws-add;
+    // older rows have none). Nothing was measured, so nothing is refused: the
+    // dispatch proceeds exactly as it did before this wave, and
+    // `record.project`'s `?? id` default never reaches the decision.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    rmSync(path.join(home, '.cc-sessions', 'demo-existing.project'));
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('permits a session whose .project reads back whitespace-only — trimmed empty is not a crossing', async () => {
+    // Review finding, fix round (task-2-fix-brief.md): the guard's
+    // `projectRead.content !== ''` clause had no test writing an empty or
+    // whitespace-only `.project`, so deleting it reds nothing even though
+    // `fieldMeasured` trims INSIDE its `ok` arm (`registry.ts`) — a
+    // whitespace-only file reads back as `content: ''`, the same "field with
+    // no name in it" case absence already permits. Without the clause this
+    // would compare `''` against the run's real project and refuse
+    // `project-mismatch` with `by: ''`, the exact empty-`by` collapse the
+    // `DispatchOutcome` docstring and this wave's design forbid.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: '   \n' });
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
+    // `record === undefined` on a LISTABLE registry is the tolerated case
+    // (`DoneRun`'s own docstring): the run falls back to its own workspace and
+    // branch, as it always has. Refusing on a fact not measured would be the
+    // same error in the other direction.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-ghost' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run } = makeRunner(home);
+    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
+    // readdir, before anything is counted) and answers `paused`, never
+    // reaching this arm at all — so this scopes the failure to the SECOND
+    // read, the resumed session's own registry listing, the same idiom the
+    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+  });
+
   it('runs ensure — never start — for wave 2 into the same workspace (D-1)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
@@ -666,6 +1316,31 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.db.prepare('SELECT briefQueued, clearError FROM runs WHERE id = ?')
       .get(opened.id)).toEqual({ briefQueued: 1, clearError: null });
     expect(row?.health.briefQueued).toBe(true);
+  });
+
+  // R7 (Task 8): `Tmux` and `runCcd` share ONE guarded runner in this fixture
+  // (`makeRunner`'s own docstring), so `calls` is a single ordered log of
+  // every fleet act this dispatch made — the seam that lets this test prove
+  // ORDER, not merely presence. A `/clear` fires a SessionStart, and the card
+  // that event emits quotes `$REG/<id>.hold` — so the hold this dispatch
+  // places must land in the pane's registry BEFORE the `/clear` that triggers
+  // that read, or the card quotes the previous wave's bytes (or nothing, on
+  // wave 1). Written to red against the pre-fix order (clear then hold) and
+  // green against the fix.
+  it('places the hold BEFORE it clears the pane, in call order, on a wave N>=2 resume (R7)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    const holdIdx = calls.findIndex((c) => c[0] === 'ws-hold');
+    const clearIdx = calls.findIndex((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'));
+    expect(holdIdx, 'no ws-hold call recorded').toBeGreaterThan(-1);
+    expect(clearIdx, 'no /clear send-keys call recorded').toBeGreaterThan(-1);
+    expect(holdIdx, 'the hold must be placed before the pane is cleared').toBeLessThan(clearIdx);
   });
 
   it('a RESUMED dispatch leaves dispatchStartedAt null — the column measures the SPAWN, and a resume ' +
@@ -720,7 +1395,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2' }))
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
@@ -839,7 +1517,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
@@ -856,7 +1537,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // inflate the exact `runEvents().length` assertion below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
     const callsAfterFirst = calls.length;
@@ -1036,6 +1720,76 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
   });
 
+  it('refuses an oversized next-wave hold before changing the fleet or closing the run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const overhead = holdReason('', 9, null, null).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+    const [reconstructed] = w.coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 9, of: 9, handoffCommit: null },
+      ] },
+      registry: { sessionId: 'demo-close-overflow', project: PROJECT,
+        workspace: 'close-overflow', branch: 'ws/close-overflow', held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+    expect(holdReason(program, 10, 9, null).length).toBe(HOLD_REASON_MAX_CHARS + 3);
+
+    const res = await postClose(app, reconstructed.id, {
+      fingerprint: { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP },
+      final: false,
+      state: 'failed',
+    });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+  });
+
+  it('refuses the next-wave hold when wave+1 leaves the safe-integer domain — the last wave a ' +
+     'programme can close from, with the overflow as the SOLE cause', async () => {
+    const home = mkTmp('ccrc-runs-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = 'demo-close-invalid';
+
+    // THE DISCRIMINATOR, stated before the route runs: every OTHER field of the
+    // hold this close would write is independently valid at this very wave, and
+    // the only thing that refuses is the successor wave the close computes. A
+    // reader (and a later edit) can therefore not mistake the dotted legacy slug
+    // or the denominator for the cause.
+    expect(holdReasonVerdict('legacy.program', RUN_HOLD_NUMBER_MAX, 1, null))
+      .toMatchObject({ ok: true });
+    expect(holdReasonVerdict('legacy.program', RUN_HOLD_NUMBER_MAX + 1, 1, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+
+    const [reconstructed] = w.coord.reconstruct({
+      ledger: { slug: 'legacy.program', title: 'Recovered', waves: [
+        { wave: RUN_HOLD_NUMBER_MAX, of: 1, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT,
+        workspace: 'close-invalid', branch: 'ws/close-invalid', held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+
+    const res = await postClose(app, reconstructed.id, {
+      fingerprint: { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP },
+      final: false,
+      state: 'failed',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
+    expect(calls).toEqual([]);
+    expect(w.coord.run(reconstructed.id)!.state).toBe('working');
+  });
+
   it('final:true with a sibling open re-holds with the SIBLING reason and answers released:false', async () => {
     const sessionId = `${PROJECT}-close-sib`;
     const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
@@ -1053,6 +1807,68 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${next.id}`]);
+  });
+
+  it('refuses an invalid ordinary-close survivor before lineage, fleet, or close writes', async () => {
+    const sessionId = `${PROJECT}-close-invalid-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const [survivor] = coord.reconstruct({
+      ledger: { slug: 'bad program', title: 'Recovered', waves: [
+        { wave: 2, of: 3, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+    const lineage = [{ pr: 91, branch: `ws/${sessionId}`, phase: 'merged' as const,
+      recordedAt: 12345 }];
+    coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?')
+      .run(JSON.stringify(lineage), id);
+    calls.length = 0;
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
+    expect(calls).toEqual([['pr-state', '--session', sessionId]]);
+    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(coord.run(id)!.prLineage).toEqual(lineage);
+    expect(coord.run(survivor.id)!.state).toBe('working');
+  });
+
+  it('refuses an oversized ordinary-close survivor before lineage, fleet, or close writes', async () => {
+    const sessionId = `${PROJECT}-close-oversize-sib`;
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { id, coord, calls } = await dispatchedRun(sessionId, root,
+      { code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'MERGED')])}\n`, stderr: '' });
+    const overhead = holdReason('', 22, 333, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const [survivor] = coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 22, of: 333, handoffCommit: null },
+      ] },
+      registry: { sessionId, project: PROJECT, workspace: sessionId,
+        branch: `ws/${sessionId}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+    const lineage = [{ pr: 92, branch: `ws/${sessionId}`, phase: 'merged' as const,
+      recordedAt: 12346 }];
+    coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?')
+      .run(JSON.stringify(lineage), id);
+    calls.length = 0;
+
+    const res = await postClose(app!, id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(calls).toEqual([['pr-state', '--session', sessionId]]);
+    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(coord.run(id)!.prLineage).toEqual(lineage);
+    expect(coord.run(survivor.id)!.state).toBe('working');
   });
 
   it('the non-final arm re-holds with the SURVIVING run, never with its own next wave', async () => {
@@ -2074,7 +2890,10 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
+    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
+    // break the exact `runEvents()` === [] assertion below (Task 4, §3 F2).
+    const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
     w.coord.addWorkItem = (runId, title, blockedBy) => {
@@ -2122,6 +2941,152 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
 });
 
 describe('the hold reason', () => {
+  it('derives the slug budget from each slot\'s OWN widest decimal — sixteen digits for the two ' +
+     'JavaScript-validated waves, nineteen for SQLite\'s run id — and reserves exactly 127', () => {
+    expect(String(RUN_HOLD_NUMBER_MAX)).toHaveLength(16);
+    expect(RUN_ID_MAX_DECIMAL).toHaveLength(19);
+    expect(PROGRAM_SLUG_MAX_CHARS).toBe(56);
+
+    // THE RESERVATION, composed through the real serializer: a budget-sized slug
+    // plus every slot at its widest lands exactly on the hook's window, and one
+    // further slug character overflows it. That pair is what makes 56 a
+    // derivation rather than a number somebody chose.
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const reserved = holdReason(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL);
+    expect(reserved).toHaveLength(HOLD_REASON_MAX_CHARS);
+    expect(holdReason(`${slug}x`, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL).length)
+      .toBeGreaterThan(HOLD_REASON_MAX_CHARS);
+
+    // The run-id placeholder is decimal TEXT precisely BECAUSE it is not a
+    // JavaScript number: coercing it changes the value it stands for, so a
+    // budget derived from the coerced form would be reserving for a width no
+    // database row can hold.
+    expect(String(Number(RUN_ID_MAX_DECIMAL))).not.toBe(RUN_ID_MAX_DECIMAL);
+    expect(Number.isSafeInteger(Number(RUN_ID_MAX_DECIMAL))).toBe(false);
+
+    // What this process will ever actually SERIALIZE stays inside that
+    // reservation, because every runtime seam still holds ids to the JavaScript
+    // domain — the reservation is headroom against the column, not a promise to
+    // write a nineteen-digit id.
+    const widest = holdReason(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX);
+    expect(widest).toHaveLength(HOLD_REASON_MAX_CHARS - 3);
+    expect(holdReasonVerdict(slug, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX))
+      .toEqual({ ok: true, reason: widest });
+  });
+
+  it('reports a hold that is BOTH malformed and over-cap as hold-invalid, never hold-oversize', () => {
+    // The two codes carry DIFFERENT remedies (SKILL.md): `hold-oversize` tells
+    // the coordinator to shorten the programme slug, `hold-invalid` to stop and
+    // report a stored defect. A malformed row that is also long would be sent to
+    // the first remedy and earn a second refusal under a different name, so the
+    // grammar and numeric domain decide before the length does.
+    const overhead = holdReason('', 1, null, null).length;
+    const long = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    expect(holdReasonVerdict(long, 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-oversize' });
+
+    // The SAME length, one illegal character in it: shortening cannot repair
+    // this row, and the code the caller receives says so.
+    const malformedAndLong = `${'x'.repeat(long.length - 1)} `;
+    expect(malformedAndLong).toHaveLength(long.length);
+    expect(holdReasonVerdict(malformedAndLong, 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+
+    // …and an over-cap hold whose NUMBERS are out of domain is invalid on the
+    // same reasoning, not merely long.
+    expect(holdReasonVerdict(long, Number.MAX_SAFE_INTEGER + 1, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+  });
+
+  it('validates the complete shell grammar and the positive-safe-integer domain', () => {
+    expect(holdReasonVerdict('legacy.program-name_1', 1, null, null)).toEqual({
+      ok: true, reason: 'program:legacy.program-name_1 wave:1',
+    });
+    const invalid = [
+      holdReasonVerdict('bad program', 1, null, null),
+      holdReasonVerdict('bad/program', 1, null, null),
+      holdReasonVerdict('bad:program', 1, null, null),
+      holdReasonVerdict('program', 0, null, null),
+      holdReasonVerdict('program', -1, null, null),
+      holdReasonVerdict('program', 1.5, null, null),
+      holdReasonVerdict('program', Number.MAX_SAFE_INTEGER + 1, null, null),
+      holdReasonVerdict('program', 1e100, null, null),
+      holdReasonVerdict('program', 1, 0, null),
+      holdReasonVerdict('program', 1, -1, null),
+      holdReasonVerdict('program', 1, Number.MAX_SAFE_INTEGER + 1, null),
+      holdReasonVerdict('program', 1, 1e100, null),
+      holdReasonVerdict('program', 1, null, 0),
+      holdReasonVerdict('program', 1, null, -1),
+      holdReasonVerdict('program', 1, null, Number.MAX_SAFE_INTEGER + 1),
+      holdReasonVerdict('program', 1, null, 1e100),
+    ];
+    for (const verdict of invalid) {
+      expect(verdict).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    }
+  });
+
+  it('accepts and refuses the complete serialized reason at each dynamic boundary', () => {
+    const lengths = (wave: number, waveOf: number | null, runId: number | null) => {
+      const overhead = holdReason('', wave, waveOf, runId).length;
+      const exact = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+      const over = `${exact}x`;
+      expect(holdReason(exact, wave, waveOf, runId)).toHaveLength(HOLD_REASON_MAX_CHARS);
+      expect(holdReasonVerdict(exact, wave, waveOf, runId)).toEqual({
+        ok: true, reason: holdReason(exact, wave, waveOf, runId),
+      });
+      expect(holdReasonVerdict(over, wave, waveOf, runId)).toMatchObject({
+        ok: false, kind: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
+      });
+      return [exact.length, over.length];
+    };
+
+    expect(lengths(1, null, null)).toEqual([112, 113]);
+    expect(lengths(1, null, 1)).toEqual([106, 107]);
+    expect(lengths(1, 1, 1)).toEqual([104, 105]);
+    expect(lengths(22, 333, 4444)).toEqual([98, 99]);
+  });
+
+  it('binds the shared cap to the hook\'s literal, and keeps every hold the server can write ' +
+     'inside what the hook displays — the SUBSET direction that must never invert', () => {
+    const hook = readFileSync(path.join(repoRoot, 'ccd', 'session-hook.sh'), 'utf8');
+    const match = hook.match(/^CCRC_HOLD_MAX=(\d+)$/m);
+    if (!match) throw new Error('session-hook.sh no longer assigns CCRC_HOLD_MAX as a decimal literal');
+    expect(Number(match[1])).toBe(HOLD_REASON_MAX_CHARS);
+    expect(hook).toContain(
+      '[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:[0-9]+(/[0-9]+)?(\' \'run:[0-9]+)?$ ]] || return 0',
+    );
+
+    // SUBSET, NOT EQUALITY, and the asymmetry is deliberate rather than a gap.
+    // The hook is a DISPLAY gate over strings already on disk — holds written by
+    // hand, or by a build older than this policy — so it accepts a wider
+    // language than this server emits: `[0-9]+` admits `wave:0` and widths past
+    // the safe-integer domain, each of which every server boundary refuses as
+    // `hold-invalid`. The property that must hold is the DIRECTION: everything
+    // the server writes renders. A hook narrowed below the server's own output
+    // would stop displaying live claims, which is the inversion this pins.
+    const hookGrammar = /^program:[A-Za-z0-9._-]+ wave:[0-9]+(\/[0-9]+)?( run:[0-9]+)?$/;
+    const writable: ReadonlyArray<[string, number, number | null, number | null]> = [
+      ['build4', 1, null, null],
+      ['build4', 2, 3, null],
+      ['build4', 2, 3, 17],
+      ['legacy.program-name_1', 1, null, 1],
+      ['x'.repeat(PROGRAM_SLUG_MAX_CHARS), RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX],
+    ];
+    for (const [program, wave, waveOf, runId] of writable) {
+      const verdict = holdReasonVerdict(program, wave, waveOf, runId);
+      expect(verdict, `${program} wave:${wave}`).toMatchObject({ ok: true });
+      if (!verdict.ok) throw new Error('unreachable — asserted above');
+      expect(verdict.reason.length).toBeLessThanOrEqual(Number(match[1]));
+      expect(hookGrammar.test(verdict.reason), verdict.reason).toBe(true);
+    }
+
+    // The wider half, measured rather than left implicit: the hook renders a
+    // legacy hold this server would never compose.
+    expect(hookGrammar.test('program:build4 wave:0')).toBe(true);
+    expect(holdReasonVerdict('build4', 0, null, null))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+  });
+
   it('the reason names its run, and NOTHING in the tree parses one back', () => {
     // DISPLAY-ONLY. `run:` exists so a human reading ~/.cc-sessions can answer
     // "whose claim is this?" from the box alone — which they could not during
@@ -2148,5 +3113,125 @@ describe('the hold reason', () => {
           `${f} looks like it parses a hold reason`).toBe(false);
       }
     }
+  });
+});
+
+describe('the programme filters on the two GET routes', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** Two programmes, one mail and one event each, plus one mail and one event
+   *  that belong to no run at all. Written against `w.coord` directly: this
+   *  suite has no fixture for mail rows, and the four statements are the whole
+   *  population every assertion below turns on. */
+  const seedTwoProgrammes = (coord: CoordStore): void => {
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = coord.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if (!('id' in r)) throw new Error('open refused');
+      coord.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(coord.db, () => {
+        const m = coord.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = coord.queueDelivery(m.id, 'demo-coordinator', '');
+        coord.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');
+    coord.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    coord.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    coord.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+  };
+
+  it('GET /api/mail?program= answers that programme, and `to` is no longer required', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await app.inject({ method: 'GET', url: '/api/mail?program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('both GET filters TRIM the programme, so a padded query names the stored programme', async () => {
+    // The write side trims (`POST /api/runs` shapes the slug before storing), so
+    // a filter binding the raw query value tested non-empty, bound `'build4 '`
+    // and matched nothing — rendering as "this programme has no mail" rather
+    // than as the typo it is. Both GET routes, because they had the same line.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+
+    const mail = await app.inject({ method: 'GET', url: '/api/mail?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(mail.statusCode).toBe(200);
+    expect((mail.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject))
+      .toEqual(['ours']);
+
+    const feed = await app.inject({ method: 'GET', url: '/api/feed?program=%20build4%20',
+      headers: tokenHeaders(TOKEN) });
+    expect(feed.statusCode).toBe(200);
+    expect((feed.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
+  });
+
+  it('GET /api/mail?to= is unchanged, and still sees the programless mail', async () => {
+    // The anti-vacuity half: a filter that answered nothing would pass the case
+    // above only if this one caught it. `peer chatter` has no run and is
+    // therefore in NO programme's list and in every mailbox it was sent to.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const res = await getMail(app, 'demo-coordinator');
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { mail: { subject: string }[] }).mail.map((m) => m.subject).sort())
+      .toEqual(['ours', 'peer chatter', 'theirs']);
+  });
+
+  it('GET /api/mail with neither `to` nor `program` is still a bad request', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail', headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/mail with BOTH `to` and `program` is also a bad request (D-2057)', async () => {
+    // The other half of "exactly one": the `(to === null) === (program ===
+    // null)` guard is symmetric, and the "neither" case above cannot prove
+    // the "both" arm — a guard degraded to `to === null && program === null`
+    // passes "neither" and silently accepts "both".
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await app.inject({ method: 'GET', url: '/api/mail?to=demo-coordinator&program=build4',
+      headers: tokenHeaders(TOKEN) });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/feed?program= answers that programme, and the unfiltered read is unchanged', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    seedTwoProgrammes(w.coord);
+    const filtered = await app.inject({ method: 'GET', url: '/api/feed?program=build4' });
+    expect((filtered.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours']);
+    const all = await app.inject({ method: 'GET', url: '/api/feed' });
+    expect((all.json() as { events: { title: string }[] }).events.map((e) => e.title))
+      .toEqual(['ours', 'theirs', 'a question']);
   });
 });

@@ -14,10 +14,10 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and
@@ -33,7 +33,7 @@ const stubFetch = (body: unknown, status = 502): void => {
  *  route this blanket stub answers still gets the bare `'{}'` 200, which is
  *  fine for a POST action that only needs to succeed. `/api/accounts` is
  *  different: `SwapSheet` mounts under every `SessionActionsSheet` and polls
- *  it via `useDisabledWrappers` whenever the sheet is open, so a bare `{}`
+ *  it via `useAccountUsage` whenever the sheet is open, so a bare `{}`
  *  here answered `roster: undefined` — a wire shape the server never sends
  *  (fix round 1: the guards this motivated should be a production boundary
  *  check, not load-bearing for the suite). */
@@ -112,7 +112,7 @@ describe('actions', () => {
     render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
     // SwapSheet is mounted (hidden) alongside every SessionActionsSheet and
-    // polls /api/accounts on its own effect (useDisabledWrappers), so the
+    // polls /api/accounts on its own effect (useAccountUsage), so the
     // restart call is no longer necessarily the first fetch recorded — find
     // it by the id it must carry, rather than assume its position.
     await waitFor(() =>
@@ -313,7 +313,7 @@ describe('hold and release', () => {
     released = [];
     // A fetch stub that RECORDS hold/release requests rather than merely
     // answering 200 — `stubFetch`'s blanket 502 above is the wrong shape
-    // here (SwapSheet's useDisabledWrappers polls /api/accounts on its own
+    // here (SwapSheet's useAccountUsage polls /api/accounts on its own
     // effect, mounted alongside every SessionActionsSheet, and that call
     // must not read as a hold/release failure).
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -361,37 +361,37 @@ describe('hold and release', () => {
   it('Release names its consequence before acting', () => {
     render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
-    // The confirm says what release re-enables BEFORE anything is sent:
-    expect(screen.getByText(/may archive it once its PR merges/)).toBeInTheDocument();
+    // The confirm says what release re-enables BEFORE anything is sent, and
+    // what it re-enables is the audited cleanup flow — the one thing the hold
+    // was gating.
+    expect(screen.getByText(/cleanup stops refusing/)).toBeInTheDocument();
     expect(released).toHaveLength(0);   // nothing sent yet — the copy precedes the act
   });
 
-  it('Release promises a MAY, not a WILL — the gate has a deferral the hold knows nothing about', () => {
-    // FIX-WAVE OBSERVATION. The copy read "released — will archive on the next
-    // sweep after its PR merges", under a comment claiming it was ccd's own
-    // fact restated. ccd's `cmd_ws_release` says the next sweep MAY archive,
-    // and `archiveMerged` still defers on `archiveSafety` (busy/attached) —
-    // which the PrSheet two taps away is careful to name as a separate reason.
-    // An operator who released to unblock a merge and then watched three
-    // sweeps go by was told a certainty that was never on offer.
+  it('Release promises no archive at all — there is no sweep left to promise one', () => {
+    // Two earlier waves had to walk this string back from a future act it
+    // could not guarantee: first "will archive on the next sweep" when ccd's
+    // own `cmd_ws_release` said MAY, then a hedged MAY that a newly added
+    // second deferral could still break. `sweepMerged` archives nothing now,
+    // so both spellings are false in the same way and neither may come back.
     render(<SessionActionsSheet session={f({ held: 'program:x' })} {...sheetProps} />);
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
     expect(screen.queryByText(/will archive on the next sweep/)).not.toBeInTheDocument();
-    // And the deferral itself is named, not merely hedged away.
-    expect(screen.getByText(/busy or attached session defers/)).toBeInTheDocument();
+    expect(screen.queryByText(/may archive it once its PR merges/)).not.toBeInTheDocument();
+    // Said outright, not merely left unsaid — an operator who released to
+    // unblock a merge is exactly the one who needs to hear it.
+    expect(screen.getByText(/No archive follows: ccrc does not archive on merge/))
+      .toBeInTheDocument();
   });
 
-  it('the release consequence no longer promises a sweep the run can veto', () => {
-    // Build 8 Wave 2: `archiveMerged` now asks coord.db as well, so an absent
-    // hold is not sufficient — releasing does NOT re-arm the sweep while a run
-    // is open. This is the PWA half of ccd's own corrected `cmd_ws_release`
-    // comment; left uncorrected, the phone tells the operator the opposite of
-    // what the box will do.
+  it('the release consequence leaves the archive with the operator, by hand', () => {
+    // The workspace outlives its merge now, so the sentence has to end
+    // somewhere true: nobody is coming to archive it.
     renderSheet(heldSession());
     fireEvent.click(screen.getByRole('button', { name: /release/i }));
     const text = screen.getByText(/released —/).textContent ?? '';
-    expect(text).toMatch(/open run/i);
-    expect(text).toMatch(/may/);              // still a MAY, never a WILL
+    expect(text).toMatch(/stays live until you archive it by hand/);
+    expect(text).not.toMatch(/sweep/);
   });
 
   it('confirming Release posts /release and closes the sheet', async () => {

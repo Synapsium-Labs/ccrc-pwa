@@ -17,7 +17,7 @@ import { reviveWsAudit, type ReapResult, type WsAudit } from '../../shared/api.j
 export const SENTENCES: Record<string, string> = {
   'no-such-session': 'ccrc has no record of this session.',
   'not-a-workspace': 'This is a project’s main checkout, not a workspace — there is nothing to remove.',
-  'not-archived': 'This workspace has not been archived yet. Archiving is the staging step; it stops the session and destroys nothing.',
+  'not-archived': 'This workspace has not been archived. Archiving is the staging step; it stops the session and destroys nothing.',
   'incomplete-registry': 'This session’s registry entry is missing its branch or workdir, so ccrc cannot tell what removing it would delete.',
   'worktree-missing': 'The worktree is already gone; the branch and the registry entry are still here. `ccd ws-attic` lists the commits ccrc pinned.',
   // The three rungs of `_ws_wt_branch` (ccd:2767-2777), which is where every

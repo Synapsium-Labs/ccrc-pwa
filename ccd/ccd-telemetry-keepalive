@@ -1,0 +1,755 @@
+#!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below.
+# ccd-telemetry-keepalive — keep an IDLE measured account's ~/.cc-limits row
+# from going stale, by taking one minimal turn on it (spec 2026-09-07 §C).
+#
+# ── IT CONSUMES THE RESOURCE IT MEASURES ─────────────────────────────────
+# Every refresh this script produces is paid for out of the same 5h/7d window
+# it refreshes, and that is inherent rather than sloppy. The ONLY writer of
+# ~/.cc-limits/<id>.json is ccd/statusline-command.sh, whose second gate
+# (`[ -n "${five_int:-}" ]`) requires a rendered payload carrying a real
+# rate_limits number — and a session that has made no API call renders
+# `rate_limits: null` (spec E6). So an idle account's usage cannot be learned
+# without spending some of it. Rather than argue the price down, every row
+# below carries fiveBefore/fiveAfter: the cost is a MEASUREMENT in the census,
+# not an estimate in a document.
+#
+# HOW MUCH. One measured turn on this fleet cost $0.19 — but that is an UPPER
+# BOUND and not the target: it was a heavyweight model at high effort with a
+# full project context loaded. This script takes the opposite of all three —
+# CCRC_KEEPALIVE_MODEL (the cheapest model), an empty prompt, and an empty
+# working directory it creates for the purpose — so the real per-turn figure is
+# far below that, and the census reports what each pass actually cost.
+#
+# That same E6 is what makes this safe: a pre-call render is SKIPPED by the
+# writer, so this mechanism can never stamp stale percentages with a fresh ts.
+# The failure mode it CAN have is doing nothing, which is loud (`no-render`).
+#
+# ── WHAT IT WILL NOT DO ──────────────────────────────────────────────────
+#   • never a turn on an account carrying $REG/<account>-authdead — spending
+#     to confirm a known-dead credential is waste, and the health probe
+#     (spec §A) already covers liveness;
+#   • never a turn on an account that reported inside CCRC_KEEPALIVE_FRESH —
+#     this is for the IDLE case, and an active account reports in seconds;
+#   • never a SECOND turn on an account inside that same window, whatever the
+#     first one did. THROTTLING IS ON THE ATTEMPT, NOT ON THE SUCCESS: a
+#     `no-render` or `failed` account never advances the telemetry it is judged
+#     by, so a success-only gate would retry it on every single tick for ever
+#     (measured: 3 passes against a no-render wrapper took 3 turns) — spending
+#     at the timer's cadence rather than at this window's;
+#   • never a turn on an account that has failed CCRC_KEEPALIVE_BACKOFF_AFTER
+#     times in a row until its widening window has elapsed. An account that can
+#     never render is a broken account, and the right spend on one is a small
+#     and shrinking number of probes, not a permanent drip;
+#   • never a turn on an account a registered session is sitting on — two
+#     `claude` processes under one CLAUDE_CONFIG_DIR is a hazard this script
+#     will not take, and an account with a live session is not idle. BOTH
+#     halves of `_session_state`'s notion of "sitting on" are asked — a live
+#     tmux pane OR a fresh supervisor heartbeat — because `KillMode=process`
+#     means a pane and its `claude` outlive their supervisor unit, and the
+#     heartbeat alone reads that session as absent. An account whose pane
+#     liveness cannot be MEASURED reads as occupied too: this gate fails shut;
+#   • never a claim about a refresh it did not measure. The turn's exit code
+#     is a CLAIM; `ts` advancing in the telemetry file is the ARTIFACT.
+#
+# ── WHAT IT COSTS, PER ACCOUNT, PER DAY ──────────────────────────────────
+# WORST CASE 48. One turn per CCRC_KEEPALIVE_FRESH (1800s) per account,
+# whatever that turn achieved — the timer may tick more often, and the attempt
+# gate is what decides. Doubling the window halves the bill.
+#
+# An account that can NEVER render does not stay at 48. It takes
+# CCRC_KEEPALIVE_BACKOFF_AFTER (3) turns at that rate, and then the backoff
+# window doubles per consecutive failure from CCRC_KEEPALIVE_BACKOFF_BASE
+# (3600s) up to CCRC_KEEPALIVE_BACKOFF_MAX (86400s) — 1h, 2h, 4h, 8h, 16h, 24h
+# — so it settles at 1/day having spent about nine wasted turns in total,
+# instead of ~96 every day for ever. One success resets the count to zero.
+#
+# ── THE TWO KNOBS AN OPERATOR REACHES FOR ────────────────────────────────
+# CCRC_KEEPALIVE_FRESH widens or narrows the spend; CCRC_KEEPALIVE_MODEL picks
+# what it is spent on. `touch $HOME/.ccrc/keepalive-paused` stops it entirely
+# without touching a unit file, and `rm` resumes it — the `coordinator-paused`
+# idiom, and the reason it is a FILE is that a wedged fleet must have a door
+# that needs no service running.
+#
+# Serialized oneshot driven by ccd-telemetry-keepalive.timer. Every knob is
+# env-overridable (the CCRC_GRAPH_* precedent); the roots are HOME-derived
+# with no override, exactly as ccd/ccd and ccd-graph-sweep do — HOME is
+# the test harness's isolation boundary.
+#
+# ── SECRETS ──────────────────────────────────────────────────────────────
+# The credential is never in argv, never echoed, never logged and never in the
+# census: it is sourced into a SUBSHELL from the 0600 secrets file and reaches
+# the child by `exec` alone. `set +x` above is part of that list rather than
+# housekeeping, for the reason `ccd-account-health`'s header argues at length:
+# bash IMPORTS SHELLOPTS from the environment, so one stray `export
+# SHELLOPTS=xtrace` turns every expansion into a stderr line — and under the
+# timer stderr is the PERSISTENT JOURNAL. Line 2, because the guarantee has to
+# be in force before the first expansion rather than after it.
+#
+# ── PORTABILITY: THIS FILE IS LINUX-ONLY, ON THE RECORD ──────────────────
+# It spells a bare `timeout` (the turn's deadline — there is no `--max-time` to
+# borrow, the way the health probe borrows curl's) and `date +%s%3N` (the
+# duration each row reports). Both are GNU, and its timer never installs on the
+# Darwin arm, so it sits in `macos-platform.test.ts`'s `unowned` list as a
+# RECORDED decision — the same carve-out `ccd-graph-sweep` has — rather than in
+# the owned corpus like the health probe, which was written to avoid both.
+set -uo pipefail
+umask 077   # the census and the log are written by a credentialed process
+
+REG="$HOME/.cc-sessions"
+LIMITS_DIR="$HOME/.cc-limits"
+WRAPPER_DIR="$HOME/.local/bin"
+SECRETS_DIR="$HOME/.cc-secrets"
+ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+CENSUS="$HOME/.ccrc/keepalive.json"
+LOG="$HOME/.ccrc/keepalive.log"
+PAUSE="$HOME/.ccrc/keepalive-paused"
+LOCK="$HOME/.ccrc/keepalive.lock"
+WORKDIR="$HOME/.ccrc/keepalive-cwd"
+# One tiny row per account: {lastAttempt, fails}. It is SEPARATE from
+# ~/.cc-limits deliberately — that file is ccd's ground truth and this script
+# is a reader of it, never a writer. Losing this directory costs one extra
+# round of turns and nothing else, which is why it needs no durability story.
+STATE_DIR="$HOME/.ccrc/keepalive-state"
+# The freshness window is `ccd/ccd`'s SWAP_FRESH by value — "telemetry younger
+# than this qualifies for pre-emptive swaps" — re-spelled because a sibling
+# executable sources nothing from ccd. Reused rather than invented: the fleet
+# already has exactly one answer to "how old is too old for this telemetry to
+# be worth acting on", and a second number would let a keepalive believe an
+# account is fresh that `cmd_swap` believes is stale.
+#
+# IT IS ALSO THE INTERVAL KNOB. The timer sets the FLOOR; this sets the real
+# spacing, because a refreshed account is skipped until its row is this old.
+# CCRC_KEEPALIVE_FRESH=7200 in a drop-in quarters the fleet's spend without
+# touching a unit file.
+: "${CCRC_KEEPALIVE_FRESH:=1800}"
+: "${CCRC_KEEPALIVE_MODEL:=haiku}"
+: "${CCRC_KEEPALIVE_PROMPT:=Reply with the single word: ok}"
+: "${CCRC_KEEPALIVE_TURN_TIMEOUT:=120}"
+# The backoff, and it is deliberately three plain numbers rather than a curve:
+# after this many CONSECUTIVE non-refreshing turns an account is skipped until
+# BASE doubled once per failure beyond the threshold has elapsed, capped at MAX.
+# A single refresh resets the count, so a transient fault costs one extra wait
+# and nothing more.
+: "${CCRC_KEEPALIVE_BACKOFF_AFTER:=3}"
+: "${CCRC_KEEPALIVE_BACKOFF_BASE:=3600}"
+: "${CCRC_KEEPALIVE_BACKOFF_MAX:=86400}"
+
+# The account-id grammar. A FOURTH spelling of `shared/roster.ts`'s ID_RE,
+# after `ccd/ccrc-wrapper-shape`'s WRAPPER_ID_RE and `ccd-account-health`'s
+# AH_ID_RE — unavoidable for the same reason theirs are: this file is installed
+# ALONE into $HOME/.local/bin with no library beside it to source. It is
+# MEASURED rather than trusted: `telemetry-keepalive.test.ts` extracts this
+# literal and WRAPPER_ID_RE's and holds them equal.
+#
+# WHAT IT IS AND IS NOT. It is NOT a trust boundary — this script SOURCES
+# accounts.sh, so a hostile projection has already run arbitrary code before
+# this line is reached, and no downstream gate can undo that. What it refuses
+# is a MALFORMED id becoming two things it must never become: an exec path
+# ($WRAPPER_DIR/$acct is run, so `../..`-shaped junk would launch something
+# else entirely) and a filename under $REG and ~/.cc-limits.
+KA_ID_RE='^[a-z][a-z0-9-]{0,31}$'
+
+ROWS=()
+
+_ka_say() { printf 'keepalive: %s\n' "$1" >&2; }
+
+mkdir -p "$HOME/.ccrc" "$WORKDIR" "$STATE_DIR" \
+  || { _ka_say 'cannot create $HOME/.ccrc — nothing was measured'; exit 1; }
+
+# PREFLIGHT BEFORE THE LOCK, and `flock` is IN it — `ccd-account-health`'s
+# argued ordering, for its argued reason: taking the lock is the first thing
+# that USES a tool, so a tool check placed after it can never report a missing
+# one. On a box without `flock`, `flock -n 9` fails and the quiet "someone else
+# holds it" arm would retire every pass, silently, forever. `jq` is here for a
+# second reason on top of that: it is what WRITES the census, so a pass that
+# discovered its absence later could not even record the discovery.
+#
+# `date` is in the list for a reason the other three do not share: it is not
+# used to DECIDE anything, it is used AFTER the money is spent. Missing, the
+# turn is taken and then `dur=$(( $(date …) - t0 ))` is a fatal arithmetic
+# error — bash abandons the whole loop, `_ka_finish ok 0` reports
+# `{"status":"ok","accounts":[]}`, and the pass exits 0 having spent on one
+# account, recorded nothing, and never reached the rest. Refusing before the
+# first turn is the only answer that does not cost money to discover.
+for tool in jq flock timeout date; do
+  command -v "$tool" >/dev/null 2>&1 \
+    || { _ka_say "$tool is not on PATH — nothing was measured"; exit 1; }
+done
+
+# ── EXISTENCE IS NOT CAPABILITY ───────────────────────────────────────────
+# `command -v` above answers "is there something by that name". It does not
+# answer "does that thing do the non-portable trick I depend on", and for three
+# of the four tools those are different questions with the same silent failure.
+# MEASURED, and this is the finding these probes exist for: a `date` correct for
+# `-u +%FT%TZ` and `+%s` but with no GNU `%3N` PASSES the existence check, the
+# turn is TAKEN, `dur=$(( $(date +%s%3N) - t0 ))` then dies with `value too
+# great for base`, and the pass still reports `{"status":"ok","accounts":[]}`
+# with rc 0 — byte for byte the "spent, recorded nothing, exit 0" defect the
+# paragraph above promises to prevent. An existence check for a tool you use a
+# non-portable flag on is not a preflight; it is a spelling check.
+#
+# THE SWEEP, ALL FOUR, INCLUDING THE ONE THAT NEEDS NOTHING:
+#
+#   date    — `+%s%3N` is GNU-only. PROBED. `%F`/`%T`/`%s` are portable and are
+#             not what breaks. This is the one that was measured breaking.
+#   jq      — `--argjson` and `--slurpfile` both arrived in jq 1.5; `-r`, `-c`,
+#             `-n`, `-s` and `--arg` predate it. PROBED through `--argjson`,
+#             which pins the whole set with one call.
+#             CORRECTED (round 3), because the sentence here was measured
+#             FALSE: this is NOT a silent row-drop. `_ka_finish`'s own census
+#             assembly passes `--argjson fresh`, so a jq without it fails that
+#             final `jq -cs` on EVERY pass — including a skip-only pass that
+#             took no turns at all — and the script exits 1 saying `census
+#             assembly failed`, writing no census file. Loud, and already
+#             refusing. Do not go looking for the dropped rows; there are none.
+#             THE PROBE IS STILL WORTH ITS LINES, for two reasons that survive
+#             the correction: it refuses BEFORE the lock and before any turn, so
+#             a box with an ancient jq stops spending instead of paying for a
+#             turn it can never record; and it names `jq` and the version it
+#             wants, where the pre-probe failure named only the last thing to
+#             break. An unattributed refusal is a support ticket; an attributed
+#             one is a fix.
+#   flock   — the `-n <fd>` form (as against `flock <file> <cmd>`) is what this
+#             script uses, and a flock that cannot do it fails EXACTLY as a held
+#             lock does, so the quiet `pass-locked` arm retires every pass for
+#             ever. PROBED against a private, never-contended file, where a
+#             working flock cannot fail.
+#   timeout — NOTHING TO PROBE **ON THIS FLEET'S TARGET**, which is the honest
+#             scope and not the universal claim this comment used to make. The
+#             spellings used are `timeout <whole seconds> <cmd>` and the rc-124
+#             convention, and BOTH are GNU coreutils' — the documented
+#             deployment target (Linux, and `ccd-telemetry-keepalive` is
+#             Linux-only by product shape besides; see PORTABILITY above).
+#             There, 124 is used ONLY to choose between two reason strings
+#             ("timeout after Ns" and "exit N"), and a probe would have to burn
+#             a real wall-clock timeout on every pass to learn something the
+#             census already says honestly.
+#             THE MEASURED EXCEPTION, recorded for whoever ports this somewhere
+#             leaner: busybox 1.36's `timeout` is NOT equivalent, and the
+#             difference is worse than a degraded sentence.
+#               • a child that IGNORES SIGTERM: busybox returns rc 0 and the
+#                 child KEEPS RUNNING past the deadline. This script would read
+#                 that as a clean turn while an orphaned `claude` process
+#                 survives the pass — a wedge, and the one failure mode the
+#                 whole deadline exists to prevent;
+#               • a child that dies from SIGTERM: busybox returns 143 (128+15),
+#                 not 124, so a genuine timeout is misclassified as
+#                 `failed "exit 143"`.
+#             A port to a busybox userland therefore needs a real capability
+#             probe here (and, for the first bullet, a `-k`-style kill escalation
+#             this script does not currently ask for). On GNU it needs neither.
+probe="$(date +%s%3N 2>/dev/null)"
+[[ "$probe" =~ ^[0-9]{13,}$ ]] \
+  || { _ka_say "date does not support GNU %3N (answered '$probe') — nothing was measured"; exit 1; }
+
+[ "$(jq -cn --argjson n 1 '$n' 2>/dev/null)" = 1 ] \
+  || { _ka_say 'jq does not support --argjson (jq 1.5+ is required) — nothing was measured'; exit 1; }
+
+# A PRIVATE FILE NOTHING ELSE CAN HOLD, so the probe has exactly one meaning.
+# Probing the real lock would be circular: a healthy concurrent pass holds it,
+# and this would refuse loudly on the one condition that is fine.
+_ka_flock_works() {
+  local f="$HOME/.ccrc/keepalive.flock-probe.$$" rc
+  ( exec 7>"$f" || exit 1; flock -n 7 ); rc=$?
+  rm -f "$f"
+  return "$rc"
+}
+_ka_flock_works \
+  || { _ka_say 'flock cannot take -n on an open fd — nothing was measured'; exit 1; }
+
+# THE KNOBS THAT CONTROL THE MONEY ARE VALIDATED LIKE ANY OTHER INPUT. An
+# operator writing CCRC_KEEPALIVE_FRESH=30m in a drop-in — the obvious spelling,
+# and systemd's own for timers — used to FAIL OPEN: `[ 30m -lt … ]` is a syntax
+# error, `[` returns 2, every account reads as not-fresh, EVERY account takes a
+# turn, and then `--argjson fresh 30m` aborts the census so the pass cannot even
+# report what it did. The one input that decides the spend must refuse as loudly
+# as a missing tool, and before the lock, for the same reason.
+for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
+            CCRC_KEEPALIVE_BACKOFF_AFTER CCRC_KEEPALIVE_BACKOFF_BASE \
+            CCRC_KEEPALIVE_BACKOFF_MAX; do
+  [[ "${!knob}" =~ ^[0-9]+$ ]] \
+    || { _ka_say "$knob must be a whole number — got '${!knob}'; nothing was measured"; exit 1; }
+done
+
+STARTED="$(date -u +%FT%TZ)"
+
+_ka_row() {   # account outcome reason five_before five_after cost_usd duration_ms
+  # UNKNOWN IS null, NEVER 0. A percentage nobody measured and a measured zero
+  # are the two things this whole design exists to keep apart; collapsing them
+  # in the census would reintroduce the defect one layer up.
+  ROWS+=("$(jq -cn --arg a "$1" --arg o "$2" --arg r "$3" \
+    --arg fb "$4" --arg fa "$5" --arg c "$6" --argjson d "${7:-0}" \
+    '{account:$a, outcome:$o, reason:$r,
+      fiveBefore:(if $fb == "" then null else ($fb|tonumber) end),
+      fiveAfter:(if $fa == "" then null else ($fa|tonumber) end),
+      costUsd:(if $c == "" then null else ($c|tonumber) end),
+      duration_ms:$d}')")
+}
+
+_ka_finish() {   # pass-status ; exit-code
+  local status="$1" rc="$2" tmp
+  tmp="$(mktemp "$CENSUS.XXXXXX")" || { _ka_say "no temp beside $CENSUS"; exit 1; }
+  # NB: printf of an EMPTY array must emit nothing — a lone newline breaks
+  # `jq -cs` (slurp of empty input is [], of "\n" is a parse error).
+  { [ "${#ROWS[@]}" -gt 0 ] && printf '%s\n' "${ROWS[@]}"; true; } | jq -cs \
+    --arg started "$STARTED" --arg finished "$(date -u +%FT%TZ)" \
+    --arg status "$status" --arg model "$CCRC_KEEPALIVE_MODEL" \
+    --argjson fresh "$CCRC_KEEPALIVE_FRESH" \
+    '{started:$started, finished:$finished, status:$status, model:$model,
+      freshSecs:$fresh, accounts:.}' > "$tmp" \
+    || { rm -f "$tmp"; _ka_say 'census assembly failed'; exit 1; }
+  # Append, keep the last 10 passes, and land it by rename so a reader never
+  # sees a half-written census. The `-cn` arm is the FIRST pass on a box (and
+  # the recovery from a census something else corrupted): `jq` reading a
+  # missing or unparseable $CENSUS fails, and the fallback starts a fresh one
+  # rather than losing the pass that just ran.
+  if ! jq -c --slurpfile p "$tmp" '.passes = ((.passes // []) + $p | .[-10:])' \
+       "$CENSUS" 2>/dev/null > "$tmp.2"; then
+    jq -cn --slurpfile p "$tmp" '{passes: $p}' > "$tmp.2" \
+      || { rm -f "$tmp" "$tmp.2"; _ka_say 'census write failed'; exit 1; }
+  fi
+  mv -f "$tmp.2" "$CENSUS" || { rm -f "$tmp" "$tmp.2"; _ka_say 'census rename failed'; exit 1; }
+  rm -f "$tmp"
+  exit "$rc"
+}
+
+_ka_num() {   # <file> <key> -> that integer field, or NOTHING
+  local v
+  v="$(jq -r --arg k "$2" '.[$k] // empty' "$1" 2>/dev/null)" || return 1
+  [[ "$v" =~ ^-?[0-9]+$ ]] || return 1
+  printf '%s' "$v"
+}
+
+# THE ATTEMPT LEDGER. `{lastAttempt, fails}` per account, and it is what makes
+# the throttle honest: freshness in ~/.cc-limits advances ONLY on a turn that
+# rendered, so gating on it alone throttles success and leaves failure running
+# at the timer's cadence. An absent or unreadable row reads 0 — "never
+# attempted, never failed" — which is the safe direction: it costs one turn, it
+# cannot wedge an account out of ever being measured.
+_ka_state_get() {   # <account> <key> -> that integer, or 0
+  local f="$STATE_DIR/$1.json" v
+  [ -f "$f" ] || { printf '0'; return 0; }
+  v="$(_ka_num "$f" "$2")" || v=""
+  [ -n "$v" ] || v=0
+  printf '%s' "$v"
+}
+
+# Written by rename, like every other stamp in this tree, so the only two
+# states a reader can observe are absent and complete.
+_ka_state_set() {   # <account> <last-attempt-epoch> <consecutive-failures>
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/$1.json.XXXXXX")" || { _ka_say "$1: cannot stage the attempt ledger"; return 1; }
+  jq -cn --argjson t "$2" --argjson f "$3" '{lastAttempt:$t, fails:$f}' > "$tmp" \
+    && mv -f "$tmp" "$STATE_DIR/$1.json" \
+    || { rm -f "$tmp"; _ka_say "$1: cannot write the attempt ledger"; return 1; }
+}
+
+# The widening window, in seconds — 0 means "not in backoff at all". Doubling
+# rather than linear so a permanently broken account reaches the daily cap in
+# about two days instead of eleven; the shift is clamped because it is the
+# SHIFT that overflows, not the clock.
+_ka_backoff_window() {   # <consecutive-failures> -> seconds
+  local fails="$1" sh win
+  [ "$fails" -ge "$CCRC_KEEPALIVE_BACKOFF_AFTER" ] || { printf '0'; return 0; }
+  sh=$(( fails - CCRC_KEEPALIVE_BACKOFF_AFTER ))
+  [ "$sh" -gt 20 ] && sh=20
+  win=$(( CCRC_KEEPALIVE_BACKOFF_BASE << sh ))
+  [ "$win" -gt "$CCRC_KEEPALIVE_BACKOFF_MAX" ] && win="$CCRC_KEEPALIVE_BACKOFF_MAX"
+  printf '%s' "$win"
+}
+
+# THE MARKER, read exactly as ccd reads `swapblocked`: the epoch is VALIDATED
+# as digits rather than trusted. A hand-edited or half-written marker must not
+# be able to stop a spend — or, worse, to be the reason an account is never
+# measured again. Content is "<epoch> <reason>"; only the epoch is read here,
+# because the reason vocabulary is the health probe's to own and this script
+# has no decision that varies with it.
+#
+# THE NAME IS THE SHARED CONTRACT'S, deliberately: `_authdead <wrapper>`, rc 0
+# iff a valid marker is there. Printing the epoch is additive on top of that
+# contract, and costs a caller that ignores stdout nothing. This is a second
+# BODY of one contract — §A owns the copy inside `ccd/ccd`, a sibling
+# executable can source nothing from it, and the two files never share a shell
+# — so what is held equal is the marker's FORMAT, by the pair of cases in this
+# plan's suite, not the text of the function.
+_authdead() {   # <wrapper> -> rc 0 iff a valid marker is there; prints the epoch
+  local f="$REG/$1-authdead" txt ts
+  [ -f "$f" ] || return 1
+  txt="$(cat "$f" 2>/dev/null)" || return 1
+  ts="${txt%% *}"
+  [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$ts"
+}
+
+# `_gs_session_on`'s shape (ccd-graph-sweep), asked of `wrapper` instead of
+# `workdir` — WITH ONE DELIBERATE DIFFERENCE, found by measurement (F1,
+# fix-wave 2026-09-07): a `.wrapper` row is ERASED only by `_reg_purge`
+# (ws-rm / reap / forget) — `ccd stop` never touches it — so a STOPPED,
+# ARCHIVED or merely IDLE workspace still carries a row whose content
+# matches, and content-matching alone reads that as "live". Measured in a
+# fixture HOME: a bare `.cc-sessions/some-stopped-session.wrapper` with no
+# process, no tmux and no unit produced a false "live" skip on every pass.
+#
+# THE FIX REUSES `_session_state`'s OWN NOTION OF LIVE (`ccd/ccd:1807`),
+# rather than inventing a second one — AND IT REUSES BOTH HALVES OF IT.
+# That function asks tmux whether the PANE is alive FIRST, and reads the
+# supervisor heartbeat only to separate `running` from `unsupervised` — two
+# names for one thing that matters here: a live `claude` process.
+#
+# THE HEARTBEAT ALONE WAS NOT ENOUGH, and the comment that used to stand here
+# defended the gap with a claim that is FALSE in the direction that costs
+# money and safety (F7, fix-wave 2026-09-08). It called the residual ambiguity
+# "the identical ambiguity `_session_state` itself accepts". It is not:
+# `_session_state` resolves a live pane with a dead supervisor by ASKING TMUX,
+# and has a name for it — `unsupervised`, "a pane with no supervisor" — while
+# a heartbeat-only reader sees that session as ABSENT. That state is the
+# opposite of exotic. `KillMode=process` (argued at length in
+# `deploy/deploy.sh`) exists precisely so the tmux pane and its `claude`
+# SURVIVE their supervisor unit; deploy's own sweep prints `warning:
+# claude-session@<id>.service is FAILED — try-restart skipped it`; and
+# `ccd/ccd` records that "on deploy day every pane a pre-fix `ccd start`
+# minted reads `unsupervised`". Nothing re-stamps `$REG/<id>.supervised`
+# after that, so 120s later the heartbeat is stale — and the account's
+# telemetry is stale too, BECAUSE that session's statusline is the very thing
+# that stopped writing. Every other gate then waves the account through and
+# the pass takes a turn beside a running `claude` on the same
+# CLAUDE_CONFIG_DIR: the one hazard this file's header refuses, reachable by
+# the most ordinary event on this fleet, an agent-lane deploy.
+#
+# SO THE ANSWER IS THE DISJUNCTION `_session_state` implies: a session is on
+# this account if its PANE IS ALIVE or its SUPERVISOR HEARTBEAT IS FRESH.
+# Neither half is redundant — the fresh-heartbeat half still covers
+# `restarting`, a dead pane whose supervisor is ticking and about to put a
+# `claude` back under that config dir, which a pane probe alone would read as
+# idle. The heartbeat is read FIRST only because it is a file read and the
+# other is an exec; a disjunction does not care about the order.
+#
+# The window is `_session_state`'s own 120s, by value, for the reason
+# `CCRC_KEEPALIVE_FRESH` above re-spells `SWAP_FRESH` by value: this file
+# sources nothing, so the number is copied, not shared. An unreadable or
+# non-numeric heartbeat is NOT fresh — two unmeasurable values comparing equal
+# is what would hand an account the wrong answer — and it no longer ENDS that
+# row's evaluation either: a row with no heartbeat at all is exactly the
+# `unsupervised` shape, so it falls through to the pane probe.
+KA_SESSION_FRESH=120
+# `ccd/ccd`'s `_tmux()` (`id -> tmux name`) by value. This is the copied value
+# a typo would silently DISARM rather than break: a prefix that does not match
+# what ccd created makes every probe answer `can't find session`, which reads
+# as `gone`, which reads as "idle, go ahead and spend". Held equal to ccd's by
+# `keepalive-freshness-parity.test.ts`, and asked of a real fixture name by
+# `telemetry-keepalive.test.ts`, which asserts the argv tmux was handed rather
+# than only the verdict it produced.
+KA_TMUX_PREFIX='cc-'
+# `SUBSTRATE_PROBE_DEADLINE_S` (`ccd/ccd:926`) by value: the bound on ONE
+# `has-session` probe. A healthy answer is ~8ms, but a SIGSTOPped tmux server
+# blocks its client FOREVER — and an unbounded probe here would hang the pass
+# while it holds the flock, so every later tick would find the lock held and
+# retire as `pass-locked`: a keepalive that has stopped without ever saying so.
+KA_PANE_DEADLINE=8
+
+# `_session_probe`'s classifier (`ccd/ccd:1424`), re-spelled WITH ITS POLARITY.
+# `tmux has-session` answers three questions with one exit status, and only ONE
+# message is evidence a session died; everything else means "I could not ask".
+# ccd refuses to map a missing substrate to `gone` because that would present
+# every live session as reapable during a cold start. This file refuses for the
+# mirror-image reason: a socket this process cannot reach — a different
+# TMUX_TMPDIR, a stale environment under the timer, a permissions fault, a
+# wording no one has seen — says NOTHING about whether a `claude` is running
+# under that config dir, and "I could not ask" must never spend.
+#
+# tmux ABSENT is in that set too, and it is why this file's preflight does NOT
+# grow a fifth tool. `command -v tmux` at the top would refuse the whole pass
+# on a box with no tmux; leaving it here refuses only the accounts a registry
+# row actually names, and says so per account. MEASURED, so the arm it lands in
+# is not a guess: with no `tmux` on PATH, `timeout 8 tmux …` answers rc 127 with
+# `timeout: failed to run command 'tmux': No such file or directory` on stderr,
+# which is neither 0 nor an empty 124 nor the death sentence — the default arm,
+# `unknown`, carrying words an operator can act on.
+#
+# TWO FACTS, NO SUBSHELL — ccd's own probe form, for its own reason: a verdict
+# returned on stdout cannot also carry tmux's words, and an unmeasured pane
+# whose census row names no reason is the one row an operator can do nothing
+# with. Both globals are assigned on every path out.
+KA_PANE_VERDICT=""
+KA_PANE_DETAIL=""
+_ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
+                     #                 KA_PANE_DETAIL (unknown only); rc 0
+  local out rc
+  # A bare `timeout`, like the turn's — this file is Linux-only on the record
+  # (see PORTABILITY above). ccd's probe carves out a `type -t tmux == function`
+  # arm for a stubbed substrate; there is nothing to carve out here, because a
+  # sibling executable spawned by a timer cannot see a caller's shell function
+  # — this script's own suite stubs tmux on PATH, where `timeout` finds it.
+  out="$(timeout "$KA_PANE_DEADLINE" tmux has-session -t "$KA_TMUX_PREFIX$1" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then KA_PANE_VERDICT=live; KA_PANE_DETAIL=""; return 0; fi
+  # rc 124 with nothing said is `timeout`'s own kill: tmux printed no words, so
+  # the reason is SYNTHESIZED rather than left empty.
+  if [ "$rc" -eq 124 ] && [ -z "$out" ]; then
+    KA_PANE_VERDICT=unknown
+    KA_PANE_DETAIL="tmux did not answer within ${KA_PANE_DEADLINE}s"
+    return 0
+  fi
+  case "$out" in
+    *"can't find session"*) KA_PANE_VERDICT=gone;    KA_PANE_DETAIL="" ;;
+    *)                      KA_PANE_VERDICT=unknown
+                            KA_PANE_DETAIL="${out:-tmux exited $rc with no message}" ;;
+  esac
+}
+
+# THREE ANSWERS, NOT TWO, and the caller must not collapse them. "A session is
+# on this account" and "I could not tell whether one is" both refuse the spend,
+# but they are different news — the same split, for the same reason, as the
+# backoff and throttle gates below, which are two `skipped` rows with two
+# reasons because "the same silence to a machine" is not the same fact to an
+# operator. FAIL SHUT is the third answer's whole point: an unmeasurable pane
+# reads as OCCUPIED. The cost is stated rather than hidden — an account whose
+# only session's pane can never be measured is never refreshed, and under §B an
+# unmeasured account ranks last rather than winning placement, so the failure
+# mode is reduced preference, not a magnet.
+_ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason on stdout)
+                     #               rc 2: pane liveness UNMEASURABLE (reason on stdout)
+                     #               rc 1: measurably clear (nothing on stdout)
+  local acct="$1" w txt b sid sup now fresh unmeasured=""
+  now="$(date +%s)"
+  for w in "$REG"/*.wrapper; do
+    [ -f "$w" ] || continue
+    txt="$(cat "$w" 2>/dev/null)" || continue
+    [ "$txt" = "$acct" ] || continue
+    b="${w##*/}"; sid="${b%.wrapper}"
+    fresh=0
+    sup="$(cat "$REG/$sid.supervised" 2>/dev/null)" || sup=""
+    [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < KA_SESSION_FRESH )) && fresh=1
+    if (( fresh )); then
+      printf 'session %s has a supervisor heartbeat under %ss old on this account' \
+        "$sid" "$KA_SESSION_FRESH"
+      return 0
+    fi
+    _ka_pane_probe "$sid"
+    case "$KA_PANE_VERDICT" in
+      live)
+        # `_session_state`'s `unsupervised` (or `unclaimed`): a live pane whose
+        # supervisor is not ticking. The `claude` process is real — that is what
+        # `KillMode=process` is for — so this is the case the probe exists for.
+        printf 'session %s has a live tmux pane (%s) on this account, with no fresh supervisor heartbeat' \
+          "$sid" "$KA_TMUX_PREFIX$sid"
+        return 0 ;;
+      unknown)
+        # REMEMBERED, NOT RETURNED, so one unmeasurable row cannot mask a
+        # measurably live one later in the same walk. The first one wins the
+        # reason; the walk continues looking for something it can measure.
+        [ -n "$unmeasured" ] || unmeasured="session $sid: could not measure whether its tmux pane is alive (${KA_PANE_DETAIL}) — refusing to spend"
+        ;;
+    esac
+  done
+  [ -n "$unmeasured" ] && { printf '%s' "$unmeasured"; return 2; }
+  return 1
+}
+
+# The turn. THE CREDENTIAL IS NEVER IN ARGV AND NEVER ECHOED: it is sourced
+# into this subshell's environment from the 0600 secrets file and handed to
+# the child by exec — the `ccrc-ddns` pattern (spec §A.7), one process further
+# in.
+#
+# Sourced HERE as well as in the wrapper, deliberately. The roster cannot
+# declare a secretsFile for the `upstream` account (spec §A.2, and
+# shared/roster.ts permits the field only on kind 'generated'), whose wrapper
+# is not one ccrc generates — but that hand-written launcher injects and
+# EXPORTS the token itself, so running the wrapper is enough today. What §A.2
+# forbids is a ROSTER-DRIVEN consumer, which this is not. This line is the
+# belt: an upstream launcher regenerated without its own injection still gets a
+# turn instead of a 401, and for a generated wrapper it is a harmless duplicate
+# of what that wrapper does one process later.
+#
+# CLAUDE_CONFIG_DIR is exported for a second, independent reason: the
+# statusline picks WHICH row to write with `_ccrc_dir_id "$cfg"`, so a turn
+# under the wrong config dir refreshes the wrong account's file, or none.
+#
+# STDIN IS /dev/null. A `claude -p` handed a terminal — or the timer's own
+# stdin — has something to wait on; this turn has nothing to say to it, and a
+# turn that blocks costs the whole CCRC_KEEPALIVE_TURN_TIMEOUT before the pass
+# moves on.
+_ka_turn() {   # <account> <config-dir> -> the child's rc; output captured
+  local acct="$1" cfg="$2"
+  (
+    cd "$WORKDIR" || exit 125
+    # `set -a` because a sourced file only reaches the child if it EXPORTS, and
+    # this script cannot see whether a given secrets file remembered to. The
+    # real ones do (ccrc-wrappers.test.ts models the live launcher's `export
+    # CLAUDE_CODE_OAUTH_TOKEN`); one that does not would otherwise hand the
+    # turn a 401 with nothing in the census naming the reason.
+    #
+    # BOTH STREAMS OF THE SOURCING ARE DISCARDED, and that redirection is a
+    # SECRETS control, not tidiness. This subshell's stderr is $TURN_ERR, and
+    # `_ka_log` copies 400 bytes of $TURN_ERR into the durable 0600 log — so a
+    # secrets file that is a BARE TOKEN rather than an assignment (a
+    # provisioning slip `ccrc doctor` cannot see: its check is `[ -s ]`) makes
+    # bash try to RUN the token and print it in `command not found`. Measured:
+    # the credential landed in ~/.ccrc/keepalive.log, in the file whose own
+    # SECRETS header promises it is never logged. Redirecting the group rather
+    # than the `.` covers everything the sourced file does, and a `{ }` group is
+    # not a subshell, so the exports still survive into the exec below.
+    # shellcheck source=/dev/null
+    { set -a
+      [ -r "$SECRETS_DIR/$acct-oauth.env" ] && . "$SECRETS_DIR/$acct-oauth.env"
+      set +a
+    } >/dev/null 2>&1
+    [ -n "$cfg" ] && export CLAUDE_CONFIG_DIR="$cfg"
+    exec timeout "$CCRC_KEEPALIVE_TURN_TIMEOUT" \
+      "$WRAPPER_DIR/$acct" -p "$CCRC_KEEPALIVE_PROMPT" \
+      --model "$CCRC_KEEPALIVE_MODEL" --output-format json
+  ) >"$TURN_OUT" 2>"$TURN_ERR" </dev/null
+}
+
+# The CLI's own diagnostic goes to the LOG, never to the census: the census is
+# machine-read and must stay a fixed vocabulary, and free text from a
+# credentialed child belongs in one 0600 place an operator reads deliberately.
+# Measured negative worth knowing (account-provisioning design §3.2): an
+# invalid token exits 1 with its message on STDOUT and stderr COMPLETELY
+# EMPTY, so a reader that scraped stderr alone would see nothing at all.
+_ka_log() {   # <account> <rc>
+  { printf 'keepalive: %s rc=%s at %s\n' "$1" "$2" "$(date -u +%FT%TZ)"
+    head -c 400 "$TURN_ERR" 2>/dev/null
+    head -c 400 "$TURN_OUT" 2>/dev/null
+    printf '\n'
+  } >> "$LOG"
+}
+
+# ── the pass ──────────────────────────────────────────────────────────────
+# TWO CONDITIONS, TWO ANSWERS — `ccd-account-health`'s split, for its reason.
+# "I could not OPEN my lock" (no ~/.ccrc, not writable, something else at that
+# path) is a broken box and must be LOUD; "another pass already holds it" is
+# the healthy overlap and is quietly fine. Collapsed — which is what a bare
+# `exec 9>"$LOCK"` does, because bash prints its own raw diagnostic, CONTINUES,
+# and leaves `flock -n 9` to fail on a bad fd — this exits recording a
+# `pass-locked` that never happened, on a box where nothing will ever run.
+exec 9>"$LOCK" \
+  || { _ka_say 'cannot open the lock at $HOME/.ccrc/keepalive.lock — nothing was measured'; exit 1; }
+flock -n 9 || { ROWS=(); _ka_finish pass-locked 0; }
+[ -e "$PAUSE" ] && _ka_finish paused 0
+
+# shellcheck source=/dev/null
+if [ ! -r "$ACCOUNTS_SH" ] || ! . "$ACCOUNTS_SH" 2>/dev/null; then
+  _ka_say "no account roster at $ACCOUNTS_SH — run: ccrc install"
+  _ka_finish no-roster 1
+fi
+# REFUSES rather than selecting nobody. An accounts.sh from a ccrc older than
+# CCRC_MEASURED parses fine and simply doesn't define it — and a keepalive that
+# quietly walked an empty set would look identical to a healthy fleet with
+# nothing to do. Those are different conditions and this says which.
+if ! declare -p CCRC_MEASURED >/dev/null 2>&1; then
+  _ka_say "$ACCOUNTS_SH defines no CCRC_MEASURED — regenerate it: ccrc install"
+  _ka_finish no-measured-set 1
+fi
+
+TURN_OUT="$(mktemp "${TMPDIR:-/tmp}/ka-stdout.XXXXXX")"
+TURN_ERR="$(mktemp "${TMPDIR:-/tmp}/ka-stderr.XXXXXX")"
+trap 'rm -f "$TURN_OUT" "$TURN_ERR"' EXIT
+
+for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
+  # Refused BY NAME rather than looked for on disk, and refused BEFORE the id
+  # is pasted into any path: see KA_ID_RE's header. No census row, because the
+  # row's own key is the thing that is not a legal account.
+  if [[ ! "$acct" =~ $KA_ID_RE ]]; then
+    _ka_say "an id in $ACCOUNTS_SH is not a legal account id ($KA_ID_RE) — skipped"
+    continue
+  fi
+  lim="$LIMITS_DIR/$acct.json"
+  fb=""; [ -f "$lim" ] && { fb="$(_ka_num "$lim" five)" || fb=""; }
+
+  if [ ! -x "$WRAPPER_DIR/$acct" ]; then
+    _ka_row "$acct" skipped "no wrapper at \$HOME/.local/bin/$acct" "$fb" "" "" 0
+    continue
+  fi
+  if dead="$(_authdead "$acct")"; then
+    _ka_row "$acct" skipped "authdead since $dead" "$fb" "" "" 0
+    continue
+  fi
+  # THE REASON IS BUILT BY THE MEASURER, not here: three conditions
+  # (`running`/`unsupervised` by pane, `restarting` by heartbeat, and
+  # unmeasurable) reach this one `skipped` row, and a reason written at the
+  # call site could only name the one the caller happened to assume. rc 1 —
+  # and ONLY rc 1 — is "measurably clear, go on and spend"; every other answer
+  # refuses, which is what makes an unmeasurable pane fail shut here rather
+  # than in a comment.
+  sess_why="$(_ka_session_on "$acct")"; sess_rc=$?
+  if [ "$sess_rc" -ne 1 ]; then
+    _ka_row "$acct" skipped "$sess_why" "$fb" "" "" 0
+    continue
+  fi
+  ts=""; [ -f "$lim" ] && { ts="$(_ka_num "$lim" ts)" || ts=""; }
+  now="$(date +%s)"
+  if [ -n "$ts" ] && [ "$((now - ts))" -lt "$CCRC_KEEPALIVE_FRESH" ]; then
+    _ka_row "$acct" skipped \
+      "reported $((now - ts))s ago, under CCRC_KEEPALIVE_FRESH=$CCRC_KEEPALIVE_FRESH" \
+      "$fb" "" "" 0
+    continue
+  fi
+  fails="$(_ka_state_get "$acct" fails)"
+  last="$(_ka_state_get "$acct" lastAttempt)"
+  # BACKOFF IS ASKED FIRST, because when both gates apply it is the one that
+  # explains the account. "skipped: attempted 400s ago" and "skipped: backoff,
+  # 5 consecutive failures" are the same silence to a machine and completely
+  # different news to an operator.
+  win="$(_ka_backoff_window "$fails")"
+  if [ "$win" -gt 0 ] && [ "$last" -gt 0 ] && [ "$((now - last))" -lt "$win" ]; then
+    _ka_row "$acct" skipped \
+      "backoff, $fails consecutive failures, next attempt in $((win - (now - last)))s" \
+      "$fb" "" "" 0
+    continue
+  fi
+  # THE THROTTLE, and it is on the ATTEMPT. See the header: gating on the
+  # telemetry's own freshness throttles only the turns that WORKED.
+  if [ "$last" -gt 0 ] && [ "$((now - last))" -lt "$CCRC_KEEPALIVE_FRESH" ]; then
+    _ka_row "$acct" skipped \
+      "attempted $((now - last))s ago, under CCRC_KEEPALIVE_FRESH=$CCRC_KEEPALIVE_FRESH" \
+      "$fb" "" "" 0
+    continue
+  fi
+
+  cfg=""
+  declare -F _ccrc_cfg_dir >/dev/null 2>&1 && cfg="$(_ccrc_cfg_dir "$acct")"
+  # STAMPED BEFORE THE SPEND, and counted as a failure until proved otherwise.
+  # A pass killed mid-turn — the timer's own timeout, a reboot, an OOM — has
+  # still SPENT, so the attempt must be on record before the money leaves. The
+  # optimistic order would let a crash loop spend at the timer's cadence with
+  # nothing throttling it, which is the defect one level up from the one this
+  # whole block closes.
+  _ka_state_set "$acct" "$now" "$((fails + 1))"
+  t0="$(date +%s%3N)"
+  _ka_turn "$acct" "$cfg"; rc=$?
+  dur=$(( $(date +%s%3N) - t0 ))
+
+  after=""; [ -f "$lim" ] && { after="$(_ka_num "$lim" ts)" || after=""; }
+  cost="$(jq -r '.total_cost_usd // empty' "$TURN_OUT" 2>/dev/null)" || cost=""
+  [[ "$cost" =~ ^[0-9]+(\.[0-9]+)?$ ]] || cost=""
+
+  # THE EXIT CODE IS A CLAIM; THE TELEMETRY FILE IS THE ARTIFACT. Whether
+  # `claude -p` renders a statusline at all is unmeasured (see the plan's
+  # background). If it does not, `no-render` is how the fleet finds out —
+  # per account, per pass, in a durable census — rather than a silent no-op
+  # that reads as success on every tick for ever.
+  #
+  # fiveAfter IS READ ONLY ON THE REFRESHED BRANCH. On every other branch the
+  # row on disk is the SAME row `fb` was read from, and reporting it as an
+  # "after" would claim a measurement this turn did not make — the exact
+  # unknown-becomes-a-number collapse `_ka_row`'s own header refuses.
+  if [ -n "$after" ] && [ "$after" != "$ts" ]; then
+    fa=""; [ -f "$lim" ] && { fa="$(_ka_num "$lim" five)" || fa=""; }
+    _ka_state_set "$acct" "$now" 0    # one success clears the whole streak
+    _ka_row "$acct" refreshed "" "$fb" "$fa" "$cost" "$dur"
+  elif [ "$rc" -eq 0 ]; then
+    _ka_log "$acct" "$rc"
+    _ka_row "$acct" no-render "the turn exited 0 and $lim did not advance" \
+      "$fb" "" "$cost" "$dur"
+  elif [ "$rc" -eq 124 ]; then
+    _ka_log "$acct" "$rc"
+    _ka_row "$acct" failed "timeout after ${CCRC_KEEPALIVE_TURN_TIMEOUT}s" \
+      "$fb" "" "" "$dur"
+  else
+    _ka_log "$acct" "$rc"
+    _ka_row "$acct" failed "exit $rc" "$fb" "" "" "$dur"
+  fi
+done
+
+_ka_finish ok 0

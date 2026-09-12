@@ -5,12 +5,19 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
-import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
+import {
+  COORDINATOR_PAUSE_MARKER,
+  MAIL_DISABLED_MARKER,
+  clearRefusedDetail,
+  holdReasonVerdict,
+  queueSystemMail,
+  type HoldReasonVerdict,
+} from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
   type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
@@ -108,10 +115,25 @@ export type DispatchOutcome =
    *  indistinguishable from a bug") applied to a total the sender cannot
    *  compute from what they sent. */
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
+  | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable'>;
-      limit?: number; running?: number; used?: number; candidates?: number }
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
+      limit?: number; running?: number; used?: number; candidates?: number;
+      /** WHICH project the measured party belongs to — `project-mismatch`'s
+       *  own field, and the only refusal on this union that carries a string.
+       *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
+       *  that differs from the run's — never `record.project`, whose
+       *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
+       *  session id on an absent or unreadable field and name a project
+       *  nobody measured, which is why the guard below reads `<id>.project`
+       *  through `fieldMeasured` itself instead. Unreadable answers
+       *  `registry-unmeasurable` instead; absent answers nothing at all; an
+       *  empty string is never sent, because presence is the distinction and
+       *  `''` would collapse "no comparison was made" into "the project is
+       *  nothing". The open route's own refusal already carries a `by`
+       *  (`routes.ts`), so the two sites of one code answer one shape. */
+      by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
    *  fresh-spawn path once §1.5 moved the `!res.ok` return PAST the AFTER read —
@@ -130,14 +152,17 @@ export type DispatchOutcome =
 
 /**
  * Dispatch a run: pause and caps checked FIRST, then either a fresh
- * workspace (wave 1) or a resumed one with an injected `/clear` (wave N>=2,
- * deviation D-1), then the hold, then the transition, then the brief — as
- * MAIL, never injected directly (a fresh pane is `working` for its first
- * seconds, and the delivery lane's own gate is exactly the thing that knows
- * when it is not). `brief` is UNKNOWN off the wire — the route's own JSON
- * parse gives it no shape guarantee, so this function validates it itself,
- * in the same order the route used to (D-46: the transition guard runs
- * BEFORE the body is even looked at).
+ * workspace (wave 1), held as soon as its session id exists, or a resumed
+ * one (wave N>=2, deviation D-1) whose hold is placed BEFORE the injected
+ * `/clear` that follows it (R7: the `/clear` fires a SessionStart, and the
+ * card that event emits quotes the hold file, so the hold must already be
+ * there) — then the transition, then the brief — as MAIL, never injected
+ * directly (a fresh pane is `working` for its first seconds, and the
+ * delivery lane's own gate is exactly the thing that knows when it is not).
+ * `brief` is UNKNOWN off the wire — the route's own JSON parse gives it no
+ * shape guarantee, so this function validates it itself, in the same order
+ * the route used to (D-46: the transition guard runs BEFORE the body is even
+ * looked at).
  */
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
@@ -214,6 +239,14 @@ export async function dispatchRun(
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
 
+  // The complete hold is known from the persisted run. Validate it after the
+  // cheaper untrusted-body checks retain their existing precedence, but before
+  // pause/cap reads and, critically, before a fresh dispatch can spawn a
+  // workspace. `openRun` checks this too; this seam rechecks authoritatively
+  // because reconstructed or newer-database rows can bypass that ingress.
+  const hold = holdReasonVerdict(run.program, run.wave, run.waveOf, run.id);
+  if (!hold.ok) return hold;
+
   // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
   // directory we cannot list is a pause we cannot rule out — fail-shut, the
   // identical idiom `watch.ts`'s mail sweep uses for its own `mail-disabled`
@@ -274,10 +307,12 @@ export async function dispatchRun(
   // MUTATED IN PLACE beneath us: `remote/client.ts`'s `onReady` rewrites it on
   // every agent re-handshake (and writes `null` for a ready frame carrying no
   // usable list), and `refreshcaps.ts`'s 60s lane overwrites it with whatever
-  // the fleet host now advertises. The hold at step 5 spends this value some
-  // seven awaits later — the `ws-add`, two registry reads, a hook read, the
-  // `/clear` — so if caps REGRESS across that window (a reconnect to a
-  // downgraded ccd, a ready frame with no `ccdVerbs`) the hold ships
+  // the fleet host now advertises. The hold spends this value a few awaits
+  // later, on either branch — the `ws-add` and two registry reads on the
+  // fresh-spawn arm, or `ensure`, a registry read and a hook read on the
+  // resume arm (R7 moved the hold ahead of that arm's `/clear`, so the clear
+  // no longer widens this window) — so if caps REGRESS across that window (a
+  // reconnect to a downgraded ccd, a ready frame with no `ccdVerbs`) the hold ships
   // `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would
   // have omitted them, at the cost `capSupported`'s no-evidence-FALSE default
   // is argued for in `ccdargv.ts`. Nothing below catches it, and the asymmetry
@@ -483,6 +518,58 @@ export async function dispatchRun(
     if (record !== undefined && recordIdentity === null) {
       return { ok: false, kind: 'registry-unmeasurable' };
     }
+    // F1's registry rung (design 2026-09-08 §3 F1) — MEASURED at the decision
+    // point, not read off `record.project`. `SessionRecord.project` is built
+    // `project ?? id` over `field()`'s collapsing read (`registry.ts`), so an
+    // absent or unreadable `.project` file would arrive here as the SESSION
+    // ID and compare unequal to every run's project: a false, non-retryable
+    // `project-mismatch` naming a session id as the offending repository, on
+    // a fact nobody measured. The design's own sentence forbids exactly that
+    // ("refusing on a fact not measured would be the same error in the other
+    // direction"), so this rung reads the one field it decides on through the
+    // D-114 ladder and tells three answers apart:
+    //   unreadable — the registry could not be measured for THIS row, which is
+    //     what `registry-unmeasurable` already means a few lines up: transient,
+    //     retryable, nothing spent.
+    //   absent, or present and empty — a PROVEN ENOENT, or a field with no
+    //     name in it. The row predates the field (ccd writes `.project` at
+    //     `ws-add`; rows from before 2026-07-28 carry none, as ccd's own
+    //     `_project_pool_state` says) and its repository is unknown to the
+    //     registry. Absence PERMITS, exactly as the open route's
+    //     `sessionProject` null does: nothing is measured, nothing is refused,
+    //     and the dispatch proceeds as it did before this wave existed.
+    //   measured — the file's content, compared to the run's project. Unequal
+    //     is the crossing this build refuses, and `by` names what was READ.
+    // `record.project` keeps its `project ?? id` default for every display
+    // consumer; only the DECISION reads measured. Putting `project` on the
+    // measured ladder inside `readRegistryMeasured` itself is the fuller
+    // remedy and reaches every consumer of `SessionRecord.project` — it is
+    // recorded as D-2342 in this wave's deviation ledger, with the fuller
+    // remedy as the follow-up, not done here.
+    //
+    // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
+    // and its identity measured, and BEFORE the hold, the injected `/clear` and
+    // `markDispatched`. Moved past the hold, a crossing costs a claim on a
+    // workspace this run is not going to use; moved past the `/clear`, it costs
+    // a live worker's context. Nothing has been spawned at this point — the
+    // resume arm only ran `ensure` — so the run is untouched and still
+    // `planned`.
+    //
+    // `record !== undefined` is load-bearing and is NOT the same condition as
+    // the refusal above it: an undefined record on a LISTABLE registry is the
+    // tolerated honest-stale case, which keeps falling back to `run.workspace`
+    // below exactly as it always has. An unlistable registry never reaches here
+    // — `readRegistryMeasured` refused it with its own code. Refusing on a
+    // fact not measured would be the same error in the other direction.
+    if (record !== undefined) {
+      const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project');
+      if (!projectRead.ok && projectRead.reason === 'unreadable') {
+        return { ok: false, kind: 'registry-unmeasurable' };
+      }
+      if (projectRead.ok && projectRead.content !== '' && projectRead.content !== run.project) {
+        return { ok: false, kind: 'refused', code: 'project-mismatch', by: projectRead.content };
+      }
+    }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;
     // `recordIdentity` is null exactly when `record` is undefined — the
@@ -530,6 +617,54 @@ export async function dispatchRun(
     if (hs !== null && hs.ok && hs.state.state !== 'done') {
       return { ok: false, kind: 'refused', code: 'worker-busy' };
     }
+  }
+
+  // 5: hold, behind `verbSupported` — the standing convention reason string,
+  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
+  // `sweepDec` call: see its declaration above, where the one measurement this
+  // function takes is explained.
+  //
+  // R7: THE HOLD IS PLACED BEFORE THE PANE IS CLEARED (D-1897). The `/clear` fires a
+  // SessionStart, and the card that SessionStart emits quotes
+  // `$REG/<id>.hold` — so a hold written after it would have the card quote
+  // the PREVIOUS wave's bytes, and wave 1 would see none at all. The refusal
+  // shapes are unchanged, and this is still net positive: a failed `ws-hold`
+  // already returned before the transaction with the `/clear` sent, so the
+  // reorder strictly reduces the window in which that happens.
+  //
+  // IT IS NOT FREE, THOUGH, AND SAYING SO IS THE POINT (fix wave, I6). This
+  // comment used to claim "the ordering costs nothing". The `worker-busy` /
+  // `hookstate-unmeasurable` gate above exists to refuse a `/clear` into an
+  // observably mid-turn pane, and that measurement is now separated from the
+  // `/clear` it guards by `verbSupported` PLUS a full `runCcd(wsHold)` round
+  // trip over the agent WebSocket. So the evidence the gate acted on is staler
+  // by exactly that much when the `/clear` finally lands, and a pane that
+  // started a turn inside that window is cleared on a reading taken before it.
+  // The window was widened deliberately, in exchange for a card that quotes
+  // this wave's bytes rather than the previous wave's; it is not an argument
+  // for moving the hold back.
+  //
+  // STILL ONE SHARED CALL SITE, positioned exactly where it always was — a
+  // fresh spawn never sends a `/clear` at all, and a resume's `/clear` moved
+  // to AFTER this point (below) rather than the hold moving to BEFORE the
+  // resume arm's own preconditions; `unattended-actor.test.ts`'s own
+  // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
+  // file, so the fix is the `/clear` relocating to meet the hold, not a
+  // second hold call meeting the `/clear`.
+  const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
+  if (!verbSupported(deps.fleetState, holdArgv)) {
+    return { ok: false, kind: 'unsupported' };
+  }
+  const holdRes = await deps.runCcd(holdArgv);
+  if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
+
+  // R7 continued: the injected `/clear` itself, now placed AFTER the hold
+  // above rather than before it — the only piece that moved. `resumed` is
+  // exactly the condition the old `else` arm's own presence used to encode
+  // (a fresh spawn never reaches this point with `resumed === true`), so
+  // gating on it here reproduces that arm's scope precisely, just on the far
+  // side of the hold.
+  if (resumed) {
     const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
     // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
     // not fatal to dispatch itself — the run still lands in `dispatched`
@@ -542,19 +677,6 @@ export async function dispatchRun(
     clearedAt = clearRes.ok ? Date.now() : null;
     clearError = clearRes.ok ? null : clearRes.error;
   }
-
-  // 5: hold, behind `verbSupported` — the standing convention reason string,
-  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
-  // `sweepDec` call: see its declaration above, where the one measurement this
-  // function takes is explained.
-  const holdArgv = CCD_ARGV.wsHold(sessionId,
-    holdReason(run.program, run.wave, run.waveOf, run.id),
-    dispatchDec);
-  if (!verbSupported(deps.fleetState, holdArgv)) {
-    return { ok: false, kind: 'unsupported' };
-  }
-  const holdRes = await deps.runCcd(holdArgv);
-  if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
   // 6: ONE call, and one transaction (D-277 (was D-B4-4)). The dispatch write, the
   // `clearedAt` stamp, the transition and the declared ledger's INSERTs used

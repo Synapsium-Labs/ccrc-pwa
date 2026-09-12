@@ -165,10 +165,17 @@ describe('the placement must land in the fleet slice, or the ceiling stops apply
     const conf = readFileSync(
       path.resolve(__dirname, '../../deploy/systemd/app-claude-session.slice.d/limits.conf'), 'utf8');
     expect(conf).toMatch(/^\[Slice\]$/m);
-    expect(conf, 'a hard aggregate ceiling is the whole point of placing the server here')
-      .toMatch(/^MemoryMax=\d+[GM]$/m);
-    expect(conf, 'the soft ceiling is what throttles before the hard one kills')
-      .toMatch(/^MemoryHigh=\d+[GM]$/m);
+    const directives = conf.split('\n').filter((line) => !line.startsWith('#'));
+    const memoryMax = directives.filter((line) => line.startsWith('MemoryMax='));
+    expect(memoryMax, 'the slice must carry exactly one hard aggregate ceiling').toHaveLength(1);
+    expect(memoryMax[0]).toMatch(/^MemoryMax=\d+[GM]$/);
+    // 2026-09-09: an aggregate MemoryHigh throttles the WHOLE slice (99% sys,
+    // oom_kill 0 — the fleet froze). Soft ceilings live per pane scope
+    // (ccd-cap-scopes); at slice level the directive must explicitly reset any
+    // inherited/vendor value instead of merely omitting the old finite one.
+    expect(directives.filter((line) => line.startsWith('MemoryHigh=')),
+      'a finite aggregate MemoryHigh freezes every session under reclaim')
+      .toEqual(['MemoryHigh=infinity']);
   });
 });
 

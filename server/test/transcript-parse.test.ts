@@ -224,3 +224,70 @@ describe('truncatedBytes', () => {
     expect(res.truncatedBytes).toBe(0);
   });
 });
+
+describe('the harness resume pair is system, not a conversation (D-2228)', () => {
+  const metaPrompt = JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off. Note: ccd restarted this session.' }] },
+    isMeta: true, uuid: 'm1', timestamp: '2026-09-09T11:25:31.906Z',
+  });
+  const synthetic = JSON.stringify({
+    parentUuid: 'm1', isSidechain: false, type: 'assistant', uuid: 'a1', timestamp: '2026-09-09T11:25:31.906Z',
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] },
+  });
+  it('the META resume prompt is a system event with origin resume-prompt, text the prefix only', () => {
+    expect(parseTranscriptLine(metaPrompt)).toEqual([
+      { kind: 'system', uuid: 'm1', ts: '2026-09-09T11:25:31.906Z', text: 'Continue from where you left off.', origin: 'resume-prompt' },
+    ]);
+  });
+  it('the synthetic No response requested. is a system event with origin no-response', () => {
+    expect(parseTranscriptLine(synthetic)).toEqual([
+      { kind: 'system', uuid: 'a1', ts: '2026-09-09T11:25:31.906Z', text: 'No response requested.', origin: 'no-response' },
+    ]);
+  });
+  it('a META user message with other content is still a user event (unchanged)', () => {
+    const other = metaPrompt.replace('Continue from where you left off. Note: ccd restarted this session.', '# Workflow authoring reference');
+    expect(parseTranscriptLine(other).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a real model saying the same words is still an assistant event (unchanged)', () => {
+    const real = synthetic.replace('"model":"<synthetic>"', '"model":"claude-fable-5-1"');
+    expect(parseTranscriptLine(real).map((e) => e.kind)).toEqual(['assistant']);
+  });
+  it('a human typing the sentence is a user event — isMeta decides, not the words', () => {
+    const human = metaPrompt.replace('"isMeta":true', '"isMeta":false');
+    expect(parseTranscriptLine(human).map((e) => e.kind)).toEqual(['user']);
+  });
+});
+
+describe('the limit banner is a system event, not the model speaking (D-2365)', () => {
+  const banner = (over: Record<string, unknown> = {}) => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: 'b1', timestamp: '2026-09-10T10:12:21.199Z',
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your weekly limit · resets Sep 15, 12am (UTC)" }] },
+    isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
+    quotaLimits: { status: 'rejected', resetsAt: 1789430400, rateLimitType: 'seven_day' },
+    ...over,
+  });
+  it('origin limit, the sentence as text, resetsAt in epoch seconds exactly as written', () => {
+    expect(parseTranscriptLine(banner())).toEqual([
+      { kind: 'system', uuid: 'b1', ts: '2026-09-10T10:12:21.199Z', text: "You've hit your weekly limit · resets Sep 15, 12am (UTC)", origin: 'limit', resetsAt: 1789430400 },
+    ]);
+  });
+  it('no quotaLimits: origin limit with no resetsAt key at all (absence-permits)', () => {
+    const [e] = parseTranscriptLine(banner({ quotaLimits: undefined }));
+    expect(e).toMatchObject({ kind: 'system', origin: 'limit' });
+    expect(e).not.toHaveProperty('resetsAt');
+  });
+  it('a resetsAt that is not a number is dropped, not coerced', () => {
+    const [e] = parseTranscriptLine(banner({ quotaLimits: { resetsAt: '1789430400' } }));
+    expect(e).not.toHaveProperty('resetsAt');
+  });
+  it('an API error that is not a rate limit stays an assistant event', () => {
+    expect(parseTranscriptLine(banner({ error: 'overloaded' })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+  it('the sentence on an ordinary assistant row stays an assistant event — the field decides', () => {
+    expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined, error: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+  it('a rate_limit error with no isApiErrorMessage flag stays an assistant event — both fields decide', () => {
+    expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+});

@@ -1,11 +1,9 @@
 // The provenance marker — lets a writer that regenerates a file tell its
-// own output apart from one a human has since hand-edited. Task 4 of the
-// stage-2a plan. Its first consumer is Task 10's `deploy/gen-accounts.mjs`,
-// which will call `markGenerated(generateAccountsSh(roster))` to produce
-// the final text of `~/.ccrc/accounts.sh`; `verifyMarker` has no caller
-// yet — it exists now because 2b's installer needs it and the brief asks
-// for both halves of the pair together, not because anything in 2a reads
-// its result.
+// own output apart from one a human has since hand-edited. Added in Task 4
+// of the stage-2a plan. `deploy/gen-accounts.mjs` stamps the generated
+// `~/.ccrc/accounts.sh`; `deploy/gen-wrappers.mjs` stamps wrappers and uses
+// `verifyMarker` to distinguish ccrc-owned output from edited or foreign
+// files. Tests exercise both halves directly.
 //
 // Plain, dependency-free-of-npm-packages ESM, like `shared/generate.mjs`
 // and for the same reason: `deploy/deploy.sh` must be able to run the
@@ -19,13 +17,10 @@
 // nothing here. Types live alongside in the hand-written
 // `shared/mark.d.mts`, exactly as with `generate.mjs`/`generate.d.mts`.
 //
-// This module ships ONLY the marker. The spec's full ownership mechanism
-// (marker + a `classify()` over real filesystem paths + an install
-// manifest) stays out on purpose: the classifier and manifest exist to
-// serve an installer that doesn't land until stage 2b, so building them now
-// would be code with no caller. `verifyMarker` below operates on TEXT it is
-// handed, never a path — no `readFile`, no `classify(path)`, no manifest
-// writer. Do not extend it to do those things as part of this task.
+// This module ships ONLY the marker. Filesystem ownership policy remains in
+// its consumers: `deploy/gen-wrappers.mjs` classifies real paths, while this
+// module's `verifyMarker` operates only on TEXT it is handed. Keeping path
+// reads and install manifests out of this shared helper preserves that seam.
 
 import { createHash } from 'node:crypto';
 

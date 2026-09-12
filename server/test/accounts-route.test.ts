@@ -85,12 +85,12 @@ describe('GET /api/accounts', () => {
     expect(byWrapper['claude']).toEqual({
       wrapper: 'claude', five: 0, seven: 93, ts: t - 120,
       fiveResetAt: t - 60, sevenResetAt: t + 200000,
-      fiveRolledOver: true, sevenRolledOver: false, disabled: false,
+      fiveRolledOver: true, sevenRolledOver: false, disabled: false, authDead: false,
     });
     expect(byWrapper['claude-a']).toEqual({
       wrapper: 'claude-a', five: 0, seven: 12, ts: t - 60,
       fiveResetAt: t + 9000, sevenResetAt: t + 400000,
-      fiveRolledOver: false, sevenRolledOver: false, disabled: false,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
     });
     // The whole point: two accounts both reading five=0, told apart only by
     // the flag. If the map drops it, these two become indistinguishable.
@@ -258,5 +258,18 @@ describe('GET /api/accounts', () => {
     const accounts = await getAccounts(home);
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
     expect(accounts.find((a) => a.wrapper === 'autocompact')).toBeUndefined();
+  });
+
+  it('carries authDead onto the wire', async () => {
+    // `AccountUsage` is restated by hand in three places, and this is the field
+    // that would go missing in the third: the route builds its rows field by
+    // field, so nothing but a test notices a dropped copy.
+    const home = seedLimits({ claude: { five: 2, seven: 3 }, 'claude-a': { five: 1, seven: 1 } });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'claude-authdead'), '1757203200 auth-401');
+    const accounts = await getAccounts(home);
+    const byWrapper = Object.fromEntries(accounts.map((a) => [a.wrapper, a]));
+    expect(byWrapper['claude'].authDead).toBe(true);
+    expect(byWrapper['claude-a'].authDead).toBe(false);
   });
 });

@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -523,12 +523,25 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const f of [
       'systemd/claude-session@.service.d/limits.conf',
       'systemd/app-claude-session.slice.d/limits.conf',
+      'systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf',
       'systemd/ccrc-agent.service.d/protect.conf',
       'systemd/ccd-cap-scopes.service',
       'systemd/ccd-cap-scopes.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, shipped the same way.
       'systemd/ccd-graph-sweep.service',
       'systemd/ccd-graph-sweep.timer',
+      // The account-health probe's pair (spec 2026-09-07 §A.7), mirroring the
+      // sweep's exactly: a `Type=oneshot` unit and a 15-minute timer.
+      'systemd/ccd-account-health.service',
+      'systemd/ccd-account-health.timer',
+      // spec 2026-09-07 §C: the telemetry keepalive pair, shipped the same way.
+      'systemd/ccd-telemetry-keepalive.service',
+      'systemd/ccd-telemetry-keepalive.timer',
+      // The model-class registry's catalogue timer (spec §5, §13.5), shipped
+      // the same way and for the same reason: a repo that cannot reproduce its
+      // own box is the defect the whole stage exists to close.
+      'systemd/ccrc-models.service',
+      'systemd/ccrc-models.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -536,6 +549,29 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the cap-scopes enforcer script is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-graph-sweep')),
       'the graph-sweep executable is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-account-health')),
+      'the account-health probe is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-telemetry-keepalive')),
+      'the telemetry keepalive executable is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccrc-models-probe')),
+      'the model catalogue probe is not in the repo').toBe(true);
+
+    // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
+    // fleet host, read-only — every `systemd --user` unit's process carries a
+    // PATH with no `~/.local/bin`, and `ccgpt`/`litellm` live only there. An
+    // unpinned PATH means the codex-lane step in `refresh --all` can't find
+    // `ccgpt`, and the unit fails every hour.
+    const modelsUnit = readFileSync(path.join(deployDir, 'systemd', 'ccrc-models.service'), 'utf8');
+    expect(modelsUnit,
+      'ccrc-models.service has no explicit PATH — ccgpt/litellm live outside the user-unit default')
+      .toMatch(/^Environment=PATH=%h\/\.local\/bin:/m);
+    // Fix round 1, Folded Minor B: `refresh --all` probes every registered
+    // lane (each curl at --max-time 30), then renders/restarts litellm for
+    // codex — a multi-lane pass can outrun systemd's 90s default and get
+    // SIGTERM'd mid-run, silently, since the writes are atomic.
+    expect(modelsUnit,
+      'ccrc-models.service has no TimeoutStartSec — the 90s default can SIGTERM a multi-lane refresh mid-run')
+      .toMatch(/^TimeoutStartSec=\d+$/m);
 
     // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
     // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
@@ -547,14 +583,30 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const buildCmd = /AGENT_BUILD_CMD='([\s\S]*?)'/.exec(deploySh);
     expect(buildCmd, 'the agent build command is no longer a single quoted block').toBeTruthy();
     const buildLinks = buildCmd![1]!.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    //
+    // The spellings are `_unit_atomic <src> <dest>`, not `cp <src> <destdir>/`,
+    // since the fix that gave the unit files the same atomicity every
+    // executable on this lane already had. `_unit_atomic`'s OWN properties are
+    // pinned by the next `it` — this list only cares that each artifact is
+    // installed at all, and by name.
     for (const needle of [
-      'cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/',
+      '_unit_atomic ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/claude-session@.service',
       'claude-session@.service.d',
       'app-claude\\x2dsession.slice.d',
+      '_unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf"',
       'ccrc-agent.service.d',
-      'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, installed the same way.
-      'cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/ccd-account-health.timer',
+      // spec 2026-09-07 §C: the keepalive pair, installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -575,6 +627,16 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // to have already picked up the unit AGENT_BUILD_CMD installed.
     const sweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-graph-sweep.timer'));
     expect(sweepTimerAt, 'the graph-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    // A third timer, needing the same daemon-reload to have already picked up
+    // the unit AGENT_BUILD_CMD installed.
+    const healthTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-account-health.timer'));
+    expect(healthTimerAt, 'the account-health timer is never enabled').toBeGreaterThan(reloadAt);
+    // spec 2026-09-07 §C: a fourth timer, needing the same daemon-reload to have
+    // already picked up the unit AGENT_BUILD_CMD installed.
+    const keepaliveTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-telemetry-keepalive.timer'));
+    expect(keepaliveTimerAt, 'the keepalive timer is never enabled').toBeGreaterThan(reloadAt);
+    const modelsTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccrc-models.timer'));
+    expect(modelsTimerAt, 'the models timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -591,8 +653,225 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755');
+    expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
+  });
+
+  it('the slice carries a last-sorting MemoryHigh=infinity drop-in, and the deploy asserts the enforced value after daemon-reload', () => {
+    // 2026-09-10: the fleet host froze three times because stale-branch deploys
+    // kept reinstalling MemoryHigh=20G on the aggregate slice. An aggregate
+    // MemoryHigh throttles EVERY allocation in the slice (99% sys, load 177,
+    // memory.events oom_kill 0) — the whole fleet frozen with nothing killed.
+    // The guard is two halves: a drop-in that sorts LAST so it overrides
+    // whatever limits.conf or a runtime set-property says, and a gate script
+    // that reads the value systemd ENFORCES after daemon-reload (never a file,
+    // never an exit status).
+    //
+    // (a) THE FILE overrides one key only — it must not carry MemoryMax, which
+    // lives in limits.conf and must stay the one place that sets it.
+    const zz = readFileSync(
+      path.join(deployDir, 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf'), 'utf8');
+    expect(zz).toMatch(/^\[Slice\]$/m);
+    expect(zz).toMatch(/^MemoryHigh=infinity$/m);
+    expect(zz, 'the zz drop-in must override MemoryHigh only, not MemoryMax')
+      .not.toMatch(/^MemoryMax=/m);
+
+    // (b) THE ORDERING RULE the file relies on: systemd applies drop-ins in
+    // filename order, last one wins. `zz-` must sort after both `limits.conf`
+    // and a runtime `50-MemoryHigh.conf`.
+    expect(
+      ['50-MemoryHigh.conf', 'limits.conf', 'zz-no-memoryhigh.conf'].sort(),
+      'zz-no-memoryhigh.conf must sort LAST among the slice drop-ins'
+    ).toStrictEqual(['50-MemoryHigh.conf', 'limits.conf', 'zz-no-memoryhigh.conf']);
+
+    // (c) AGENT_CMD wires the gate after daemon-reload and before
+    // enable --now — it must read the value the reload just made effective.
+    const agentCmd = /AGENT_CMD='([\s\S]*?)'/.exec(deploySh)![1]!;
+    const links = agentCmd.split('&&').map((s) => s.replace(/\\\s*$/, '').trim());
+    const reloadAt = links.findIndex((l) => l.includes('daemon-reload'));
+    const assertAt = links.findIndex((l) => l.includes('assert-slice-policy.sh'));
+    const enableAt = links.findIndex((l) => l.includes('enable --now ccrc-agent.service'));
+    expect(assertAt, 'assert-slice-policy.sh is not wired into AGENT_CMD').toBeGreaterThan(-1);
+    expect(reloadAt, 'AGENT_CMD no longer reloads the daemon').toBeGreaterThan(-1);
+    expect(enableAt, 'AGENT_CMD no longer enables the agent unit').toBeGreaterThan(-1);
+    expect(assertAt, 'the slice-policy gate must run after daemon-reload').toBeGreaterThan(reloadAt);
+    expect(assertAt, 'the slice-policy gate must run before enable --now ccrc-agent.service')
+      .toBeLessThan(enableAt);
+
+    // (d) BEHAVIOUR: the script reads `systemctl --user show … -p MemoryHigh
+    // --value` and fails unless the answer is `infinity`. A stub `systemctl`
+    // prints $STUB_VALUE for that exact argv and exits 3 for anything else,
+    // so the test proves the script checks the enforced value, not a file.
+    const script = path.join(deployDir, 'assert-slice-policy.sh');
+    for (const [label, stubValue, wantExit0] of [
+      ['infinity', 'infinity', true],
+      ['21474836480', '21474836480', false],
+      ['empty', '', false],
+    ] as const) {
+      const dir = mkTmp('ccrc-agent-slicepolicy-');
+      writeFileSync(path.join(dir, 'systemctl'),
+        '#!/bin/sh\n'
+        + 'case "$*" in\n'
+        + '  "--user show app-claude\\x2dsession.slice -p MemoryHigh --value")\n'
+        + '    printf "%s\\n" "$STUB_VALUE"; exit 0 ;;\n'
+        + 'esac\n'
+        + 'exit 3\n',
+        { mode: 0o755 });
+      const PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
+      const resolved = spawnSync('sh', ['-c', 'command -v systemctl'], {
+        encoding: 'utf8', env: { ...process.env, PATH },
+      }).stdout.trim();
+      expect(resolved.startsWith(`${dir}${path.sep}`),
+        `systemctl must resolve inside the stub dir; got "${resolved}" — REFUSING to run the gate`).toBe(true);
+
+      const r = spawnSync('bash', [script], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH, STUB_VALUE: stubValue },
+      });
+      if (wantExit0) {
+        expect(r.status, `STUB_VALUE=${label}: expected exit 0, got ${r.status}\nstderr:\n${r.stderr}`).toBe(0);
+        expect(r.stdout).toContain('MemoryHigh=infinity (enforced value verified)');
+      } else {
+        expect(r.status, `STUB_VALUE=${label}: expected non-zero, got 0`).not.toBe(0);
+        expect(r.stderr, `STUB_VALUE=${label}: stderr must mention "must be infinity"`)
+          .toContain('must be infinity');
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the unit files install ATOMICALLY — a copy that dies mid-write cannot leave a truncated unit live (D-1982)', () => {
+    // THE GAP THIS CLOSES. Every executable on the agent lane went through
+    // `install_atomic`; the thirteen systemd unit files and drop-ins did not —
+    // they were a chain of plain `cp` into `~/.config/systemd/user/`. `cp`
+    // opens its destination `O_TRUNC` and then writes, so a copy killed
+    // mid-write (ENOSPC — the condition `ccd` carries CCD_DISK_FLOOR_GB for —
+    // or a dropped ssh) leaves a TRUNCATED unit at its live name.
+    //
+    // "The deploy aborts before daemon-reload" is not containment: `ccd`'s own
+    // `_svc_enable`/`_svc_disable_now` reload on the next session start or
+    // stop. And the truncation that PARSES is worse than the one that fails —
+    // `claude-session@.service` carries `KillMode=process` as the last key of
+    // its `[Service]` section, six lines below `ExecStart=`, so a file cut in
+    // that gap starts fine and kills by `control-group`: the next try-restart
+    // takes the tmux pane and every in-flight turn with it.
+    //
+    // `ccrc install` has always installed these same files through
+    // `_inst_atomic` (temp, chmod, `mv -f` = rename(2)); `_unit_atomic` is that
+    // idiom on the box-side of the deploy, so the two lanes stop disagreeing.
+    const agentCmd = /AGENT_BUILD_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    const serverCmd = /REMOTE_BUILD_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(agentCmd, 'AGENT_BUILD_CMD is no longer a single quoted block').toBeTruthy();
+    expect(serverCmd, 'REMOTE_BUILD_CMD is no longer a single quoted block').toBeTruthy();
+
+    // 1. NO PLAIN `cp` INTO THE UNIT DIRECTORY, in either lane. This is the
+    //    assertion that reds when the fix is reverted by imitation of the old
+    //    shape — a new unit appended as one more `cp` line is the way this bug
+    //    comes back, and it would sail past every by-name check above.
+    for (const [lane, body] of [['agent', agentCmd![1]!], ['server', serverCmd![1]!]] as const) {
+      const plainCp = body.split('\n')
+        .filter((l) => /(^|\s)cp\s/.test(l) && l.includes('.config/systemd/user'))
+        // `_unit_atomic`'s own body spells the only sanctioned `cp`, and it
+        // copies to `$2.incoming.$$`, never to a live name.
+        .filter((l) => !l.includes('_unit_atomic() {'));
+      expect(plainCp, `${lane} lane copies a unit file straight to its live name`).toEqual([]);
+    }
+
+    // 2. ONE HELPER, TWO LANES, BYTE-EQUAL. The definition has to be repeated
+    //    because each remote command is a separate single-quoted string sent to
+    //    a separate ssh — nothing of ours exists on the box to source. Holding
+    //    the two spellings equal here is what keeps that a repetition rather
+    //    than a second, weaker idea.
+    const bodies = [agentCmd![1]!, serverCmd![1]!].map((b) => {
+      const m = /^_unit_atomic\(\) \{.*\}$/m.exec(b);
+      expect(m, 'a lane no longer defines _unit_atomic on one line').toBeTruthy();
+      return m![0];
+    });
+    expect(bodies[0], 'the two lanes spell _unit_atomic differently').toBe(bodies[1]);
+    // The three properties of that body, asserted one by one so a fix that
+    // keeps the name and drops the mechanism is still caught. `mv -f` is
+    // rename(2) — the running-readers-keep-the-old-inode property
+    // `install_atomic`'s own header argues at length.
+    expect(bodies[0], '_unit_atomic no longer stages through a temp name').toContain('"$2.incoming.$$"');
+    expect(bodies[0], '_unit_atomic no longer states the mode — cp would inherit whatever the box had')
+      .toContain('chmod 644 "$2.incoming.$$"');
+    expect(bodies[0], '_unit_atomic no longer publishes by rename').toContain('mv -f -- "$2.incoming.$$" "$2"');
+    // And no `&&` in it: this file reads AGENT_BUILD_CMD by splitting on `&&`,
+    // so a body spelled that way would be torn across the links scanned above.
+    expect(bodies[0], '_unit_atomic body carries an && — the link split above would tear it')
+      .not.toContain('&&');
+
+    // 3. IT ACTUALLY WORKS, run against a FIXTURE HOME. The quoting here is the
+    //    real risk of the change: `~` in an argument, `$1`/`$2`/`$$` that must
+    //    survive to the box unexpanded, and the slice drop-in's `\x2d` escape
+    //    sitting in remote double quotes. A text scan proves none of that.
+    //    The npm half is replaced by `true` — asserted present first, so a
+    //    rename of the build prefix reds here instead of silently skipping.
+    const BUILD_PREFIX = 'cd ~/ccrc/agent && npm ci && npm run build';
+    expect(agentCmd![1], 'the agent build prefix moved — this fixture run would silently skip it')
+      .toContain(BUILD_PREFIX);
+    const script = agentCmd![1]!.replace(BUILD_PREFIX, 'true');
+
+    const home = mkTmp('ccrc-agent-unitatomic-');
+    const src = join(home, 'ccrc');
+    mkdirSync(join(src, 'deploy', 'systemd'), { recursive: true });
+    mkdirSync(join(src, 'ccd'), { recursive: true });
+    cpSync(join(deployDir, 'systemd'), join(src, 'deploy', 'systemd'), { recursive: true });
+    cpSync(join(deployDir, 'ccrc-agent.service'), join(src, 'deploy', 'ccrc-agent.service'));
+    cpSync(join(deployDir, '..', 'ccd', 'claude-session@.service'), join(src, 'ccd', 'claude-session@.service'));
+    const scriptPath = join(home, 'units.sh');
+    writeFileSync(scriptPath, `${script}\n`);
+
+    const run = (pre: string): { status: number | null } =>
+      spawnSync('bash', ['-c', `${pre}exec bash "${scriptPath}"`], { env: { ...process.env, HOME: home } });
+    expect(run('').status, 'the extracted unit-install chain did not succeed against a fixture HOME').toBe(0);
+
+    const unitDir = join(home, '.config', 'systemd', 'user');
+    // Every artifact the by-name list above claims, present on disk with the
+    // source's bytes — including the escaped slice directory, which is the one
+    // destination no by-name scan of the source can prove.
+    const landed: Array<[string, string]> = [
+      ['ccrc-agent.service', join(src, 'deploy', 'ccrc-agent.service')],
+      ['claude-session@.service', join(src, 'ccd', 'claude-session@.service')],
+      ['claude-session@.service.d/limits.conf', join(src, 'deploy', 'systemd', 'claude-session@.service.d', 'limits.conf')],
+      ['app-claude\\x2dsession.slice.d/limits.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'limits.conf')],
+      ['app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf')],
+      ['ccrc-agent.service.d/protect.conf', join(src, 'deploy', 'systemd', 'ccrc-agent.service.d', 'protect.conf')],
+      ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']
+        .flatMap((n) => ['service', 'timer'].map((ext) =>
+          [`${n}.${ext}`, join(src, 'deploy', 'systemd', `${n}.${ext}`)] as [string, string])),
+    ];
+    for (const [dest, from] of landed) {
+      expect(existsSync(join(unitDir, dest)), `${dest} never reached the unit directory`).toBe(true);
+      expect(readFileSync(join(unitDir, dest), 'utf8'), `${dest} did not land byte-for-byte`)
+        .toBe(readFileSync(from, 'utf8'));
+    }
+
+    // 4. THE MEASUREMENT, and it is the whole point of the change: a copy that
+    //    dies MID-WRITE leaves the live unit untouched. `ulimit -f 0` is the
+    //    only deterministic way to reproduce ENOSPC-shaped death in a unit
+    //    test — the write raises SIGXFSZ after the destination has already been
+    //    opened `O_TRUNC`, which is exactly the sequence a full disk produces.
+    //    `ulimit -c 0` so the killed `cp` does not drop a core file.
+    //
+    //    MUTATION MEASURED 2026-09-08. A body that keeps every spelling
+    //    assertion 2 checks but writes the live name FIRST
+    //    (`cp -- "$1" "$2" || return 1;` prepended) reds here with
+    //    `AssertionError: a live unit was truncated by a copy that died
+    //    mid-write: expected [ 'ccrc-agent.service' ] to deeply equal []` —
+    //    the live `ccrc-agent.service` sitting at 0 bytes. The blunter
+    //    mutation (`_unit_atomic() { cp -- "$1" "$2"; }`) is caught one
+    //    assertion earlier, by the temp-name check.
+    for (const [dest] of landed) writeFileSync(join(unitDir, dest), 'SENTINEL\n');
+    expect(run('ulimit -f 0; ulimit -c 0; ').status,
+      'a chain whose every copy must fail still reported success').not.toBe(0);
+    const clobbered = landed
+      .map(([dest]) => dest)
+      .filter((dest) => readFileSync(join(unitDir, dest), 'utf8') !== 'SENTINEL\n');
+    expect(clobbered, 'a live unit was truncated by a copy that died mid-write').toEqual([]);
   });
 
   it('R-8 (fix round F1): the graphify skill arm is PIN-GATED — a pinless box defers instead of aborting the agent lane', () => {

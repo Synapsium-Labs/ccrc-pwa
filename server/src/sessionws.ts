@@ -200,6 +200,40 @@ export class SessionStream {
       } else {
         await this.sendBacklogAndTail(r.data);
       }
+      if (this.stopped) return;
+      // THE OPENING STATEMENT of a channel that otherwise only reports change.
+      // `tick()` below speaks when the reading MOVES, against the seed two
+      // branches up — a seed the client cannot see. So every reconnect used to
+      // reseed this side silently while the PWA kept whatever status a
+      // PREVIOUS connection had left in its store (one store per session id,
+      // for the life of the tab: `pwa/src/stores/session.ts`'s
+      // `getSessionStore`, written by this frame and nothing else).
+      //
+      // MEASURED 2026-09-10 on `expoAI-assistant-warm-cove`: a lane swap left
+      // the pane gone for 4.8s, the client watching it was told `dead`, and
+      // the socket that would have corrected it on its next poll was replaced
+      // rather than kept (the screen reopened, the phone woke, the agent
+      // restarted — every exec unmeasurable, D-309's collapse to dead). The
+      // operator then read "Not running — the chat is read-only" over a
+      // disabled composer for 50 minutes, in the same view that was streaming
+      // that session's live transcript.
+      //
+      // "It heals on the next change" is no answer, and the same measurement
+      // says why: that pane's reading sat at `busy` from 10:20:23 to 11:24:00
+      // — 63 minutes — because the session was inside ONE turn (a verification
+      // battery). Nothing about that is particular to a lane or a wrapper; any
+      // long turn is an hour in which this channel has nothing to say.
+      //
+      // Every sibling channel on this socket already cold-starts — backlog,
+      // dialog, tasks, hook ask, mail — and `/ws/fleet` sends a whole snapshot
+      // per connection (server.ts). This is the one that did not.
+      //
+      // AFTER the backlog, and only on `ok`. The transcript is what the screen
+      // was opened for, and the two degraded arms below have no reading to
+      // state: `status`'s own default is `dead`, so cold-starting it from an
+      // unmeasured resolve would paint the read-only banner over a session
+      // this box merely failed to read — the same defect, inverted.
+      this.send({ type: 'status', status: r.data.status, statusUpdatedAt: r.data.statusUpdatedAt });
     } else if (r.reason === 'unmeasurable') {
       // DISTINCT from "unknown session" below (registry ladder, Task 2): the
       // registry proved nothing either way this pass, so the honest word is

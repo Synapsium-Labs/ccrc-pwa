@@ -757,3 +757,45 @@ describe('the truncation cue', () => {
     }
   });
 });
+
+describe('a restart that landed idle reads as a stall, not a conversation (D-2228)', () => {
+  const sys = (uuid: string, text: string, origin?: 'resume-prompt' | 'no-response'): ChatEvent =>
+    ({ kind: 'system', uuid, ts: '2026-09-09T11:25:31.906Z', text, ...(origin ? { origin } : {}) });
+  it('the pair renders as two system lines, the second naming the stall — and no user bubble', () => {
+    const { container } = render(
+      <ChatListInner
+        id="s"
+        events={[sys('m1', 'Continue from where you left off.', 'resume-prompt'), sys('a1', 'No response requested.', 'no-response')]}
+        pending={[]}
+      />,
+    );
+    expect(screen.getByText(/restart · resume prompt/)).toBeTruthy();
+    expect(screen.getByText(/interrupted turn not re-driven/)).toBeTruthy();
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.msg-assist')).toBeNull();
+    expect(container.querySelector('.sys-divider--restart')).not.toBeNull();
+    expect(container.querySelector('.sys-divider--stalled')).not.toBeNull();
+  });
+  it('a plain system line (no origin) still renders its own text', () => {
+    render(<ChatListInner id="s" events={[sys('u3', '/clear')]} pending={[]} />);
+    expect(screen.getByText('/clear')).toBeTruthy();
+  });
+});
+
+describe('a usage limit reads as a harness line, not a reply (D-2366)', () => {
+  const SENTENCE = "You've hit your weekly limit · resets Sep 15, 12am (UTC)";
+  const limit = (resetsAt?: number): ChatEvent =>
+    ({ kind: 'system', uuid: 'b1', ts: '2026-09-10T10:12:21.199Z', text: SENTENCE, origin: 'limit', ...(resetsAt !== undefined ? { resetsAt } : {}) });
+  it('with resetsAt: "usage limit · resets HH:MM…", the sentence as the tooltip, no assistant bubble', () => {
+    const { container } = render(<ChatListInner id="s" events={[limit(1789430400)]} pending={[]} />);
+    const line = container.querySelector('.sys-divider--limit');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toMatch(/^usage limit · resets \d\d:\d\d/);
+    expect(line!.getAttribute('title')).toBe(SENTENCE);
+    expect(container.querySelector('.msg-assist')).toBeNull();
+  });
+  it('without resetsAt: the sentence itself, still a limit line', () => {
+    const { container } = render(<ChatListInner id="s" events={[limit()]} pending={[]} />);
+    expect(container.querySelector('.sys-divider--limit')!.textContent).toBe(`usage limit · ${SENTENCE}`);
+  });
+});

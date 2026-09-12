@@ -1,11 +1,17 @@
 // `ccrc install` — the graphify engine step (`_inst_graphify_engine`). This
 // file mirrors `ccrc-install.test.ts`'s fixture idiom (freshBox / ccrcEnv /
-// runInstall / installFixtureTree / healthyDoctorBox) rather than importing
-// it: that file's helpers are not exported (only `installFixtureTree` is),
-// and importing a sibling `.test.ts` module for its side-effecting
-// `describe()` blocks would register that whole suite a second time. The
-// copy is deliberate, not drift — see that file's own header comment for the
-// full reasoning behind each piece copied below.
+// runInstall / healthyDoctorBox) rather than importing it: that file's
+// helpers are not exported, and importing a sibling `.test.ts` module for its
+// side-effecting `describe()` blocks would register that whole suite a second
+// time. The copy is deliberate, not drift — see that file's own header
+// comment for the full reasoning behind each piece copied below.
+//
+// The fixture TREE itself (`TREE_FILES` / `TREE_STUBS` / `installFixtureTree`)
+// is the one piece that is NOT copied: both this file and `ccrc-install.test.ts`
+// import it from `installTreeFixture.ts`, a plain module with no `describe()`
+// in it, so importing it registers no suite twice. See that module's header
+// for why the two-copy shape it replaces was a real cost, not a style
+// preference.
 //
 // HOME is a throwaway `mkTmp` directory in every test, exactly as in
 // `ccrc-install.test.ts`: this verb writes `~/.ccrc/*` and, as of this task,
@@ -14,7 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
+  copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
   chmodSync, readdirSync, rmSync, symlinkSync, lstatSync, realpathSync, readlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
@@ -22,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
+import { installFixtureTree } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -41,81 +48,8 @@ const RSYNC = realPath('rsync');
 // `exec` an absolute path and never re-enter itself through `<home>/.local/bin`.
 const SED = realPath('sed');
 
-/** Same list `ccrc-install.test.ts` builds its fixture tree from — copied
- *  rather than imported for the reason at the top of this file. Grows only
- *  in step with that file's own list. */
-const TREE_FILES = [
-  'ccd/ccrc',
-  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
-  // refuses a tree without it, which is the point — a placed tree missing it
-  // would leave the box refusing builds over ccrc's own artifacts.
-  'ccd/graph-noise.default.list',
-  'ccd/ccrc-doctor-checks',
-  'ccd/ccrc-wrapper-shape',
-  'ccd/ccrc-adopt',
-  'deploy/gen-accounts.mjs',
-  'deploy/gen-wrappers.mjs',
-  'deploy/accounts.default.json',
-  'shared/generate.mjs',
-  'shared/mark.mjs',
-  'shared/roster-json.mjs',
-  'shared/wrapper.mjs',
-  'server/package.json',
-  'agent/package.json',
-  'ccd/ccd',
-  'ccd/ccd-cap-scopes',
-  // graphify Task 10 (O3/O6b): the fourth `_inst_bins` executable.
-  'ccd/ccd-graph-sweep',
-  'ccd/session-hook.sh',
-  'ccd/install-session-hooks.sh',
-  'ccd/tmux.conf',
-  'ccd/statusline-command.sh',
-  'deploy/notify.sh',
-  'deploy/systemd',
-  'deploy/ccrc.service',
-  'ccd/claude-session@.service',
-  'deploy/verify-service.sh',
-  'deploy/ccrc-agent.service',
-  'deploy/gen-auth-hash.mjs',
-  'ccd/coordinator-skill',
-  'ccd/worker-skill',
-  'ccd/install-coordinator-skill.sh',
-  'ccd/install-worker-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two,
-  // right after `_inst_skills`, through the same `_inst_atomic`. Without it
-  // in the fixture tree every test in this file (all of which run the full
-  // spine on a role other than `server`) dies at that step.
-  'ccd/install-graphify-skill.sh',
-];
-
-const TREE_STUBS: Record<string, string> = {
-  'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
-  // D-1159: `ccrc install` preflights the agent build for every role but
-  // `server`, and every test in this file installs a fleet-capable box.
-  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
-  'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
-};
-
 const treeRoot = (home: string): string => join(home, 'checkout');
 const ccrcIn = (root: string): string => join(root, 'ccd', 'ccrc');
-
-function installFixtureTree(home: string, sub = 'checkout'): string {
-  const root = join(home, sub);
-  for (const rel of TREE_FILES) {
-    const src = join(REPO, rel);
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    if (statSync(src).isDirectory()) { cpSync(src, dest, { recursive: true }); continue; }
-    copyFileSync(src, dest);
-    chmodSync(dest, statSync(src).mode & 0o777);
-  }
-  for (const [rel, body] of Object.entries(TREE_STUBS)) {
-    const dest = join(root, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, body);
-  }
-  return root;
-}
 
 /** `ccrc-install.test.ts`'s `healthyDoctorBox`, copied: the stub shapes a
  *  fresh box needs so the install's closing `ccrc doctor` passes. Graphify's

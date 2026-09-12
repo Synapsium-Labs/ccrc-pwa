@@ -1,7 +1,12 @@
 import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
 import type { CoordStore, OpenSibling, RunRow } from './store.js';
-import type { MailKind } from '../../../shared/api.js';
+import {
+  HOLD_REASON_MAX_CHARS,
+  holdReason as serializeHoldReason,
+  isPositiveDecimalSafeInteger,
+  type MailKind,
+} from '../../../shared/api.js';
 
 /**
  * Shared by `routes.ts` (the `POST /api/runs` open route, and
@@ -74,23 +79,60 @@ export const clearRefusedDetail = (code: string): string => `clear-refused:${cod
  */
 export const CLEAR_REFUSED_STRANDS_TEXT = clearRefusedDetail('enter-ignored');
 
-/** The standing hold-reason convention (`SessionRecord.held`, `registry.ts`; spec:120-123):
- *  DISPLAY-ONLY, never parsed back anywhere in this tree — the run row's own
- *  `program`/`wave`/`waveOf` columns are what every route and the store
- *  actually read. Shared by the open route's immediate hold, dispatch's own
- *  hold, and close's hold-reason update to the next wave, so the three
- *  places this string is built can never drift apart from one another.
- *
- *  `run:<id>` (Wave 2) is what lets a human reading `~/.cc-sessions` answer
- *  "whose claim is this?" from the box alone — the question that had no
- *  answer during the F9 incident. STILL DISPLAY-ONLY: run-awareness comes
- *  from `coord.db` (`CoordStore.openRunsForSession`), never from parsing
- *  this string, and `run-routes.test.ts` pins that nothing does. A HAND hold
- *  has no run and passes `null`, so it gets no suffix. */
-export const holdReason = (program: string, wave: number, waveOf: number | null,
-                           runId: number | null): string =>
-  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}` +
-  `${runId === null ? '' : ` run:${runId}`}`;
+/** Re-export the L0 policy and serializer from their historical server home so
+ *  existing server consumers do not grow a second spelling. */
+export { HOLD_REASON_MAX_CHARS };
+export const holdReason = serializeHoldReason;
+
+export type HoldReasonVerdict =
+  | { ok: true; reason: string }
+  | { ok: false; kind: 'hold-oversize'; limit: number; detail: string }
+  | { ok: false; kind: 'hold-invalid'; detail: string };
+
+const HOLD_REASON_PATTERN =
+  /^program:[A-Za-z0-9._-]+ wave:[0-9]+(?:\/[0-9]+)?(?: run:[0-9]+)?$/;
+
+/** Validate exactly what the hook accepts: a complete in-cap hold whose slug
+ *  and optional positive-decimal numbers satisfy its grammar. `waveOf` and
+ *  `runId` are nullable only because the two documented display forms omit
+ *  them; whenever present they share the wave's positive-safe-integer domain. */
+export const holdReasonVerdict = (
+  program: string,
+  wave: number,
+  waveOf: number | null,
+  runId: number | null,
+): HoldReasonVerdict => {
+  const reason = holdReason(program, wave, waveOf, runId);
+  // GRAMMAR AND DOMAIN FIRST, LENGTH SECOND, and the order is the whole
+  // difference between the two codes meaning what they say. A reconstructed row
+  // can be malformed AND over-cap at once; answering `hold-oversize` for it
+  // sends the coordinator to SKILL.md's remedy for that code — shorten the slug
+  // and retry — which cannot repair a stored programme the grammar rejects, so
+  // the retry earns a second refusal under a different name. Checking the
+  // grammar first means `hold-oversize` is only ever reported for a hold that
+  // is otherwise entirely valid, which is exactly the claim its remedy rests on.
+  if (!isPositiveDecimalSafeInteger(wave)
+      || (waveOf !== null && !isPositiveDecimalSafeInteger(waveOf))
+      || (runId !== null && !isPositiveDecimalSafeInteger(runId))
+      || !HOLD_REASON_PATTERN.test(reason)) {
+    return {
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'hold reason does not satisfy the session-card grammar',
+    };
+  }
+  if (reason.length > HOLD_REASON_MAX_CHARS) {
+    return {
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+      detail:
+        `hold reason ${reason.length} characters exceeds the ` +
+        `${HOLD_REASON_MAX_CHARS} character session-card cap`,
+    };
+  }
+  return { ok: true, reason };
+};
 
 /** May this close END the claim on the workspace, or must it hand the claim
  *  to whoever else still owns it?
@@ -119,10 +161,19 @@ export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
  * false statement on the face of its own envelope, and, worse, would send
  * `tellSender` through `resolveCoordinator(null)`, whose answer is whichever
  * program happens to be the single active one.
+ *
+ * WIDENED BY THE ASK LANE (whole-branch review M4). `'operator'`'s gloss below
+ * said "through a PWA-surface route", which was every one of its senders until
+ * this branch: the ask nudge is the first `'operator'` mail THE WATCHER ITSELF
+ * raises, off a pane scrape, with no request and nobody at the phone. The
+ * sender is still right — the question is the operator's to answer, and the
+ * mail exists to let a parent answer it first — but "a route" is no longer how
+ * it gets sent, so the gloss says both.
  */
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
-  operator: 'the operator, through a PWA-surface route — no session sent it',
+  operator: 'the operator — either through a PWA-surface route or raised by the ' +
+    'watcher on their behalf (the ask nudge); never a session speaking for itself',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
@@ -206,9 +257,11 @@ export function queueSystemMail(
     // happens, the whole mail is withdrawn rather than accepted with the
     // placeholder envelope, which carries no `ack:` line and so names no
     // delivery id for any recipient to ack against. The throw ESCAPES
-    // `queueSystemMail` — all four of its callers: `close.ts`'s `closeRun`,
+    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
     // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // and `routes.ts`'s `POST /api/runs/:id/advance` handler — deliberately:
+    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
+    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
+    // after this file's other four) — deliberately:
     // `{ queued: false }` already means "the dedupe guard suppressed it", a
     // different and true statement this must not borrow.
     //
@@ -223,4 +276,48 @@ export function queueSystemMail(
     out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });
   return out;
+}
+
+/** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
+ *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)
+ *  both derive from (fix round 2, item 3), so the two can no longer spell
+ *  `ask:` as two independent literals that a future edit drifts apart. */
+const ASK_NUDGE_SUBJECT_PREFIX = 'ask:';
+
+/** Build the ask pre-emption lane's nudge-mail subject for one ask id —
+ * `FleetWatcher.hold`'s own construction, moved here so `isAskNudgeMail`
+ * below has one definition to agree with instead of a second hand-spelled
+ * copy of the same shape. */
+export const askNudgeSubject = (askId: number): string => `${ASK_NUDGE_SUBJECT_PREFIX}${askId}`;
+
+/**
+ * Is this mail row the ask pre-emption lane's own nudge to a parent
+ * (`FleetWatcher.hold`, `server/src/watch.ts`) — the message that exists
+ * SOLELY to wake a parent so it can rule before the operator's phone does?
+ *
+ * Fix round 1, item 1 (CRITICAL): before this predicate existed, that nudge's
+ * own delivery fired an ordinary `kind:'mail'` push through
+ * `FleetWatcher.pushNewMail` a tick after `hold()` queued it — buzzing the
+ * operator's phone about the very question the hold exists to keep off it,
+ * with no answer buttons, no tag collapse against the eventual `ask-<child>`
+ * push, and no presence suppression for an operator watching the CHILD's
+ * pane (the mail's presence key is the PARENT, `m.toId`). The lane deferred
+ * nothing.
+ *
+ * `fromId === 'operator'` ALONE is not the shape — `queueProgramKickoff`
+ * also sends from `'operator'`, and ITS push is wanted, so this must not
+ * broaden to every `'operator'` mail. What singles out an ask nudge is the
+ * full triple: the sender, `runId === null` (deliberate — `hold`'s own
+ * reasoning: this rides the run-less peer-mail lane, never a run's
+ * lifecycle), and a subject shaped exactly `ASK_NUDGE_SUBJECT_PREFIX<n>` —
+ * matched against the SAME prefix `askNudgeSubject` builds from, not a
+ * second copy of the literal. Exported and used from BOTH sides — `hold`
+ * calls `askNudgeSubject` to construct the subject this predicate must
+ * recognise, and `pushNewMail` reads it back — so the mail QUEUE and the
+ * mail PUSH lane share one definition instead of two that can drift.
+ */
+export function isAskNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
+  return m.fromId === 'operator' && m.runId === null &&
+    m.subject.startsWith(ASK_NUDGE_SUBJECT_PREFIX) &&
+    /^\d+$/.test(m.subject.slice(ASK_NUDGE_SUBJECT_PREFIX.length));
 }

@@ -131,8 +131,9 @@ describe('ccd ws-hold / ws-release', () => {
     // `mv -f` moves the tmp INSIDE the directory and exits 0 (D-121).
     // Unguarded, `_reg_set` fails, ccd (`set -uo pipefail`, no `-e`) carries on,
     // and the verb prints `held <id>: <reason>` at exit 0 while nothing is held:
-    // the orchestrator records the claim, the next archiveMerged sweep sees no
-    // hold and archives the workspace mid-program.
+    // the orchestrator records the claim, and the next `ws-rm`/`ws-reap` call
+    // — or a human's `ws-archive` — sees no hold and can take the workspace
+    // out from under the program.
     fs.mkdirSync(path.join(h.home, '.cc-sessions', `${id}.hold`));
     const r = shFail(`cmd_ws_hold --session ${id} --reason "program:evals wave:1/4"`);
     expect(r.code).not.toBe(0);
@@ -144,8 +145,8 @@ describe('ccd ws-hold / ws-release', () => {
     // FIX-WAVE FINDING 9. ccd's guard was `[[ -n "$reason" ]]`, which passes
     // `"   "`, while the route (`body.reason.trim() === ''`) and the composer
     // both refuse it — and `registry.ts`'s `field()` trims what it reads, so
-    // the hold landed as `held: ''`: enforced by `archiveMerged`, `ws-rm` and
-    // `ws-reap`, and rendered as nothing at all on every surface. The spec's
+    // the hold landed as `held: ''`: enforced by `ws-rm` and `ws-reap`, and
+    // rendered as nothing at all on every surface. The spec's
     // lifecycle step 1 is an orchestrator invoking ccd DIRECTLY, so this is
     // the primary path into that state, not an edge one.
     const id = workspaceId();
@@ -177,8 +178,8 @@ describe('ccd ws-hold / ws-release', () => {
     //
     // The harm is honesty, not destruction: `runCcdOr502` keys on the exit
     // code, so `POST /release` answered 200 `{ok:true}` and the PWA's
-    // fire-and-forget confirm closed with no toast, while `archiveMerged` kept
-    // deferring and `ws-rm`/`ws-reap` kept refusing.
+    // fire-and-forget confirm closed with no toast, while `ws-rm`/`ws-reap`
+    // kept refusing underneath it.
     const id = workspaceId();
     fs.mkdirSync(path.join(h.home, '.cc-sessions', `${id}.hold`));
     const r = shFail(`cmd_ws_release --session ${id}`);
