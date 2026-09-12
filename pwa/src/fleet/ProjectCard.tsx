@@ -16,7 +16,7 @@ import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
-import { poolLabelList, projectPoolOf } from '../lib/pools';
+import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
@@ -61,7 +61,7 @@ export type ProjectPlacementRead =
   | { kind: 'failed' }
   | { kind: 'missing' }
   | { kind: 'legacy' }
-  | { kind: 'measured'; placement: ProjectPlacement };
+  | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
 
 /** The project's pool as one chip. Absence is handled by the caller: no frame
  *  means no claim. Unrecognised residue means this app is older than the fleet,
@@ -192,8 +192,8 @@ export function ProjectCard({
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
    *  `accountLabel`/`accountColorVar` already carry for an unknown wrapper. */
   roster?: readonly RosterWire[];
-  /** The fleet-level pool frame. `null` means no frame arrived, so this card
-   *  makes no pool claim and keeps the `+` copy it already shipped. */
+  /** The fleet-level pool frame supplies enforcement capability only. Pool and
+   *  placement come together from `ProjectPlacementRead` after the route lands. */
   pools?: ProjectPoolsWire | null;
   /** Open the pool sheet for this project. Without it, the chip remains an
    *  inert statement rather than a control with nowhere to go. */
@@ -212,9 +212,10 @@ export function ProjectCard({
    *  which is the correct degrade for a card nobody is ticking. */
   nowMs?: number;
 }): ReactNode {
-  // The project's pool is derived from the fleet-level frame by name, never
-  // carried per session. `null` means nobody has told this bundle anything.
-  const pool = projectPoolOf(pools, group.project);
+  // A measured row carries pool and placement from one `/api/projects` read.
+  // Only a legacy row falls back to the frame; mixing the frame's pool with the
+  // route's placement would let their different cadences create a split claim.
+  const pool = placement.kind === 'measured' ? placement.pool : null;
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
 
@@ -245,7 +246,11 @@ export function ProjectCard({
         : placeableNames === ''
           ? `New workspace on ${group.project} — nothing is in pool ${poolName}`
           : `New workspace on ${group.project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`
-      : `New workspace on ${group.project}`;
+      : placement.kind === 'failed'
+        ? `New workspace on ${group.project} — placement check failed; reopen ccrc to retry`
+        : placement.kind === 'missing'
+          ? `New workspace on ${group.project} — project absent from the latest placement check; reload ccrc`
+          : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state
   // that asks the reader to ACT). Busy lost it: on a one-session project the

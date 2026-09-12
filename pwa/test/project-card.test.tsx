@@ -597,6 +597,9 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
 describe('the pool chip', () => {
   const listed = (byProject: Record<string, ProjectPoolWire>, enforcement: PoolsEnforcement = 'enforced'):
     ProjectPoolsWire => ({ listed: true, byProject, enforcement });
+  const measured = (pool: ProjectPoolWire): ProjectPlacementRead => ({
+    kind: 'measured', pool, placement: { kind: 'unmeasurable' },
+  });
 
   it('renders NOTHING when no pools frame has arrived — absence is not a measurement', () => {
     // The mutant this kills: defaulting a missing pool to `untagged` flags every
@@ -608,13 +611,14 @@ describe('the pool chip', () => {
 
   it('names the pool a tagged project is in', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
                         pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} />);
     expect(screen.getByLabelText('project pool pool-a')).toHaveTextContent('pool-a');
   });
 
   it('flags a MEASURED untagged project — ruling 3\'s worklist', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
-                        pools={listed({})} />);
+                        placement={measured({ state: 'untagged' })} pools={listed({})} />);
     const chip = screen.getByText('no pool');
     expect(chip).toHaveAttribute('data-pool', 'untagged');
   });
@@ -625,6 +629,7 @@ describe('the pool chip', () => {
     // wrong one half the time.
     const { rerender } = render(
       <ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                   placement={measured({ state: 'malformed' })}
                    pools={listed({ demo: { state: 'malformed' } })} />);
     const malformed = screen.getByText('pool malformed');
     expect(malformed.getAttribute('aria-label')).toMatch(/malformed/i);
@@ -632,6 +637,7 @@ describe('the pool chip', () => {
     const malformedLabel = malformed.getAttribute('aria-label');
 
     rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                          placement={measured({ state: 'unreadable' })}
                           pools={listed({ demo: { state: 'unreadable' } })} />);
     const unreadable = screen.getByText('pool unreadable');
     expect(unreadable.getAttribute('aria-label')).toMatch(/could not be read/i);
@@ -641,6 +647,7 @@ describe('the pool chip', () => {
 
   it('reads every project as unreadable when the whole listing failed', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'unreadable' })}
                         pools={{ listed: false, enforcement: 'enforced' }} />);
     expect(screen.getByText('pool unreadable')).toBeInTheDocument();
   });
@@ -650,7 +657,7 @@ describe('the pool chip', () => {
     // still send another runtime value, so this is deliberately a raw cast.
     const residue = { state: 'archived', name: 'pool-z' } as unknown as ProjectPoolWire;
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
-                        pools={listed({ demo: residue })} />);
+                        placement={measured(residue)} pools={listed({ demo: residue })} />);
     const chip = screen.getByText(/app older than fleet; reload/i);
     expect(chip).toHaveAttribute('data-pool', 'unrecognised');
     expect(chip).toHaveAccessibleName(/app bundle is older than the fleet; reload/i);
@@ -663,12 +670,14 @@ describe('the pool chip', () => {
     const onPool = vi.fn();
     const { rerender } = render(
       <ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                   placement={measured({ state: 'tagged', name: 'pool-a' })}
                    pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} onPool={onPool} />);
     fireEvent.click(screen.getByRole('button', { name: 'project pool pool-a' }));
     expect(onPool).toHaveBeenCalledWith('demo');
 
     // No handler: the chip still STATES the pool — it just is not a control.
     rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                          placement={measured({ state: 'tagged', name: 'pool-a' })}
                           pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} />);
     expect(screen.queryByRole('button', { name: 'project pool pool-a' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('project pool pool-a')).toBeInTheDocument();
@@ -679,6 +688,7 @@ describe('the pool chip', () => {
     // a tap could only fail with 501.
     const onPool = vi.fn();
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
                         pools={listed({ demo: { state: 'tagged', name: 'pool-a' } }, 'unavailable')}
                         onPool={onPool} />);
     const chip = screen.getByLabelText('project pool pool-a');
@@ -689,6 +699,7 @@ describe('the pool chip', () => {
 
   it('stays quiet under enforcement "unknown" — a chip that dims when nothing was checked stops being read', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
                         pools={listed({ demo: { state: 'tagged', name: 'pool-a' } }, 'unknown')} />);
     expect(screen.getByLabelText('project pool pool-a')).not.toHaveAttribute('data-dim');
   });
@@ -723,7 +734,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('names only the accounts the project\'s pool admits', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
-                        placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
                         roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const btn = screen.getByRole('button', { name: /New workspace on demo/ });
@@ -734,7 +745,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('says the pool is empty rather than listing nobody', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
-                        placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
                         roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
@@ -744,6 +755,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('uses the project placement over a truthy out-of-pool global projection (D-2643)', () => {
     const placement: ProjectPlacementRead = {
       kind: 'measured',
+      pool: { state: 'tagged', name: 'pool-b' },
       placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
     };
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
@@ -755,6 +767,24 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
     expect(button.getAttribute('aria-label')).not.toContain('team·max');
   });
 
+  it('keeps a route-measured pool with its placement when the pools frame disagrees', () => {
+    const placement: ProjectPlacementRead = {
+      kind: 'measured',
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'none', pool: 'pool-a' },
+    };
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={{ wrapper: 'claude', score: 18 }} placement={placement}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+
+    expect(screen.getByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
+    const button = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(button.getAttribute('aria-label')).toContain('nothing in pool pool-b is placeable');
+    expect(button.getAttribute('aria-label')).toContain('team·alt and team·d all disabled');
+    expect(button.getAttribute('aria-label')).not.toContain('pool-a');
+  });
+
   it('preserves measured none and unmeasurable without falling back to the global projection', () => {
     const common = {
       group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
@@ -763,24 +793,44 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
       pools: { listed: true, byProject: { demo: { state: 'tagged' as const, name: 'pool-b' } }, enforcement: 'enforced' as const },
     };
     const { rerender } = render(
-      <ProjectCard {...common} placement={{ kind: 'measured', placement: { kind: 'none', pool: 'pool-b' } }} />,
+      <ProjectCard {...common} placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }} />,
     );
     expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
       .toContain('nothing in pool pool-b is placeable');
     expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
       .not.toContain('team·max, 82% free');
 
-    rerender(<ProjectCard {...common} placement={{ kind: 'measured', placement: { kind: 'unmeasurable' } }} />);
+    rerender(<ProjectCard {...common} placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'unmeasurable' } }} />);
     expect(screen.getByRole('button', { name: /New workspace on demo/ }))
       .toHaveAccessibleName('New workspace on demo');
 
     rerender(<ProjectCard {...common} projected={null}
-                          placement={{ kind: 'measured', placement: { kind: 'unmeasurable' } }} />);
+                          placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'unmeasurable' } }} />);
     expect(screen.getByRole('button', { name: /New workspace on demo/ }))
       .toHaveAccessibleName('New workspace on demo');
   });
 
-  it('uses the legacy global projection only where the project pool does not narrow it', () => {
+  it('gives failed and missing route reads distinct recovery copy', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+    };
+    const { rerender } = render(<ProjectCard {...common} placement={{ kind: 'failed' }} />);
+    const failed = screen.getByRole('button', { name: /New workspace on demo/ });
+    const failedLabel = 'New workspace on demo — placement check failed; reopen ccrc to retry';
+    expect(failed).toHaveAccessibleName(failedLabel);
+    expect(failed).toHaveAttribute('title', failedLabel);
+
+    rerender(<ProjectCard {...common} placement={{ kind: 'missing' }} />);
+    const missing = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(missing).toHaveAccessibleName(
+      'New workspace on demo — project absent from the latest placement check; reload ccrc',
+    );
+    expect(missing).toHaveAttribute('title', missing.getAttribute('aria-label'));
+    expect(missing).not.toHaveAccessibleName(failedLabel);
+  });
+
+  it('uses the legacy global projection without inventing pool state from a newer frame', () => {
     const common = {
       group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
       projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
@@ -791,18 +841,13 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
       .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
 
     rerender(<ProjectCard {...common}
-                          pools={{ listed: true, byProject: {}, enforcement: 'enforced' }} />);
+                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: /New workspace on demo/ }))
       .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
+    expect(screen.queryByLabelText('project pool pool-a')).not.toBeInTheDocument();
 
-    rerender(<ProjectCard {...common}
-                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+    rerender(<ProjectCard {...common} projected={null} />);
     expect(screen.getByRole('button', { name: /New workspace on demo/ }))
-      .toHaveAccessibleName('New workspace on demo');
-
-    rerender(<ProjectCard {...common} projected={null}
-                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
-    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
-      .toHaveAccessibleName('New workspace on demo');
+      .toHaveAccessibleName('New workspace on demo — team·max, team·alt, team·b and team·d all disabled');
   });
 });

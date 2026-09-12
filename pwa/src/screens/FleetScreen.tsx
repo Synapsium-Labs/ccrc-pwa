@@ -143,15 +143,17 @@ export function FleetScreen({
   const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
 
   // `/api/projects` performs one agent round trip per project, so this lifecycle
-  // has no timer. The frame identity is its invalidation signal; a successful
+  // has no timer. Pools-frame identity and visible-page return invalidate it;
+  // the latter remeasures changed limits when a phone is picked up. A successful
   // add is the only imperative refresh. Generations keep late responses from
   // overwriting a newer measurement.
   const projectRequest = useRef(0);
   const [projectRows, setProjectRows] = useState<
+    | { kind: 'legacy' }
     | { kind: 'pending' }
     | { kind: 'failed' }
     | { kind: 'ready'; rows: readonly ProjectRow[] }
-  >({ kind: 'pending' });
+  >({ kind: 'legacy' });
   const refreshProjects = useCallback(async (): Promise<void> => {
     const request = ++projectRequest.current;
     setProjectRows({ kind: 'pending' });
@@ -163,15 +165,24 @@ export function FleetScreen({
     }
   }, []);
   useEffect(() => {
+    if (pools === null) return;
     void refreshProjects();
+  }, [pools, refreshProjects]);
+  useEffect(() => {
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible' && pools !== null) void refreshProjects();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [pools, refreshProjects]);
 
   const placementFor = (project: string): ProjectPlacementRead => {
     if (projectRows.kind !== 'ready') return projectRows;
     const row = projectRows.rows.find((candidate) => candidate.name === project);
     if (row === undefined) return { kind: 'missing' };
-    return Object.hasOwn(row, 'placement') && row.placement !== undefined
-      ? { kind: 'measured', placement: row.placement }
+    return Object.hasOwn(row, 'pool') && row.pool !== undefined
+      && Object.hasOwn(row, 'placement') && row.placement !== undefined
+      ? { kind: 'measured', pool: row.pool, placement: row.placement }
       : { kind: 'legacy' };
   };
 

@@ -18,6 +18,14 @@ const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 const pooled = (byId: Record<string, string>): RosterWire[] =>
   TEST_ROSTER.map((account) => ({ ...account, pool: byId[account.id] ?? null }));
 
+/** The route reads the box's boot roster, while the already-open PWA can still
+ * carry a newer fleet roster. A newly added pool is therefore offered here but
+ * legitimately unknown to that route until this box restarts. */
+const rosterSkew = (uiRoster: RosterWire[], serverPools: readonly string[]) => ({
+  uiRoster,
+  routeWarning: (pool: string) => !serverPools.includes(pool),
+});
+
 const storeWith = (roster: RosterWire[]): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
   act(() => { store.setState({ conn: 'open', roster }); });
@@ -123,12 +131,16 @@ describe('PoolSheet writes', () => {
   });
 
   it('toasts the unknown-pool warning from a successful write', async () => {
-    vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+    const skew = rosterSkew(
+      pooled({ claude: 'pool-a', claude2: 'pool-b' }),
+      ['pool-a'],
+    );
+    vi.spyOn(api, 'setProjectPool').mockImplementation(async (_project, pool) => ({
       ok: true,
-      pool: { state: 'tagged', name: 'pool-b' },
-      warning: 'unknown-pool',
-    });
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+      pool: { state: 'tagged', name: pool! },
+      ...(pool !== null && skew.routeWarning(pool) ? { warning: 'unknown-pool' as const } : {}),
+    }));
+    const store = storeWith(skew.uiRoster);
     renderPoolSheet({ fleet: store });
 
     fireEvent.click(screen.getByRole('button', { name: 'pool pool-b' }));
@@ -139,12 +151,13 @@ describe('PoolSheet writes', () => {
   });
 
   it('keeps measured state distinct from submitted intent in an unknown-pool warning', async () => {
-    vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+    const skew = rosterSkew(pooled({ claude: 'pool-a' }), []);
+    vi.spyOn(api, 'setProjectPool').mockImplementation(async (_project, pool) => ({
       ok: true,
       pool: { state: 'unreadable' },
-      warning: 'unknown-pool',
-    });
-    const store = storeWith(pooled({ claude: 'pool-a' }));
+      ...(pool !== null && skew.routeWarning(pool) ? { warning: 'unknown-pool' as const } : {}),
+    }));
+    const store = storeWith(skew.uiRoster);
     renderPoolSheet({ fleet: store });
 
     fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
@@ -410,7 +423,7 @@ describe('PoolSheet request relevance', () => {
     });
   });
 
-  it('toasts the unknown-pool warning from a successful write', async () => {
+  it('suppresses stale success after replacing the sheet with another project', async () => {
     const first = deferred<{ ok: true; pool: { state: 'tagged'; name: string } }>();
     const second = deferred<{ ok: true; pool: { state: 'tagged'; name: string } }>();
     vi.spyOn(api, 'setProjectPool').mockImplementation((project) =>

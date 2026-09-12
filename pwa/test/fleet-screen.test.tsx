@@ -147,7 +147,14 @@ describe('FleetScreen', () => {
     expect(screen.getByText('idle')).toBeInTheDocument();
   });
 
-  it('opens the roster-derived pool picker from a project card', () => {
+  it('opens the roster-derived pool picker from a project card', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({
+      roots: [],
+      projects: [{
+        name: 'demo', workdir: '/demo', pool: { state: 'tagged', name: 'pool-a' },
+        placement: { kind: 'unmeasurable' },
+      }],
+    });
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, {
@@ -164,7 +171,7 @@ describe('FleetScreen', () => {
       sessions: [session({ project: 'demo' })],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'project pool pool-a' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'project pool pool-a' }));
 
     expect(screen.getByRole('heading', { name: 'Which pool runs this project?' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'pool pool-a' })).toBeInTheDocument();
@@ -342,15 +349,16 @@ describe('FleetScreen', () => {
   describe('project-specific placement refresh', () => {
     const projectRows = (projects: ProjectRow[]) => Promise.resolve({ roots: [], projects });
 
-    it('loads placements on mount and matches each row to its project card', async () => {
+    it('loads placements after the first pools frame and matches each row to its project card', async () => {
       vi.spyOn(api, 'projects').mockImplementation(() => projectRows([
-        { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
-        { name: 'beta', workdir: '/beta', placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
+        { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+        { name: 'beta', workdir: '/beta', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
       ]));
       const store = makeStore();
       render(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
         sessions: [session({ id: 'a', project: 'alpha' }), session({ id: 'b', project: 'beta' })],
       });
 
@@ -360,33 +368,41 @@ describe('FleetScreen', () => {
         .toBeInTheDocument();
     });
 
-    it('refreshes on each new pools-frame object, but not on unrelated store updates', async () => {
+    it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const store = makeStore();
       render(<FleetScreen store={store} />);
-      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+      expect(projects).not.toHaveBeenCalled();
 
       seed(store, { conn: 'open' });
-      expect(projects).toHaveBeenCalledTimes(1);
+      expect(projects).not.toHaveBeenCalled();
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
       seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
-      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
-      await waitFor(() => expect(projects).toHaveBeenCalledTimes(3));
     });
 
-    it('never timer-polls the O(N) projects route', () => {
+    it('refreshes on visible-page return, but never while hidden, on focus, or with elapsed time', async () => {
       vi.useFakeTimers();
       try {
         const projects = vi.spyOn(api, 'projects').mockReturnValue(new Promise(() => {}));
         const store = makeStore();
+        seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
         render(<FleetScreen store={store} />);
         expect(projects).toHaveBeenCalledTimes(1);
         act(() => {
           vi.advanceTimersByTime(120_000);
           window.dispatchEvent(new Event('focus'));
-          document.dispatchEvent(new Event('visibilitychange'));
         });
         expect(projects).toHaveBeenCalledTimes(1);
+
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        expect(projects).toHaveBeenCalledTimes(1);
+
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        expect(projects).toHaveBeenCalledTimes(2);
       } finally {
         cleanup();
         vi.useRealTimers();
@@ -400,7 +416,11 @@ describe('FleetScreen', () => {
         .mockRejectedValueOnce(new Error('refused'));
       const store = makeStore();
       render(<><FleetScreen store={store} /><ToastHost /></>);
-      seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
+      seed(store, {
+        conn: 'open',
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
 
       fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
@@ -411,6 +431,36 @@ describe('FleetScreen', () => {
       await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.getByText(/refused/)).toBeInTheDocument());
       expect(projects).toHaveBeenCalledTimes(2);
+    });
+
+    it('carries the row pool with its placement when the pools frame disagrees', async () => {
+      vi.spyOn(api, 'projects').mockResolvedValue({
+        roots: [],
+        projects: [{
+          name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-b' },
+          placement: { kind: 'none', pool: 'pool-a' },
+        }],
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+        })),
+        pools: {
+          listed: true,
+          byProject: { alpha: { state: 'tagged', name: 'pool-a' } },
+          enforcement: 'enforced',
+        },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      expect(await screen.findByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
+      const add = screen.getByRole('button', { name: /New workspace on alpha/ });
+      expect(add.getAttribute('aria-label')).toContain('nothing in pool pool-b is placeable');
+      expect(add.getAttribute('aria-label')).not.toContain('pool-a');
     });
 
     it('makes no account claim while pending or after the project request fails', async () => {
@@ -430,14 +480,16 @@ describe('FleetScreen', () => {
       });
       expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
       await act(async () => { reject(new Error('offline')); });
-      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+      expect(screen.getByRole('button', {
+        name: 'New workspace on alpha — placement check failed; reopen ccrc to retry',
+      })).toBeInTheDocument();
     });
 
     it('drops a prior account claim while a refresh is pending and after it fails', async () => {
       let rejectRefresh!: (error: Error) => void;
       const projects = vi.spyOn(api, 'projects')
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
         ] })
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
       vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -447,6 +499,7 @@ describe('FleetScreen', () => {
       render(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
         sessions: [session({ id: 'a', project: 'alpha' })],
       });
       expect(await screen.findByRole('button', {
@@ -458,7 +511,9 @@ describe('FleetScreen', () => {
       expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
 
       await act(async () => { rejectRefresh(new Error('offline')); });
-      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+      expect(screen.getByRole('button', {
+        name: 'New workspace on alpha — placement check failed; reopen ccrc to retry',
+      })).toBeInTheDocument();
     });
 
     it('distinguishes a missing row from an old-server row that omitted placement', async () => {
@@ -482,7 +537,9 @@ describe('FleetScreen', () => {
       expect(await screen.findByRole('button', {
         name: 'New workspace on legacy — team·max, 82% free',
       })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'New workspace on missing' })).toBeInTheDocument();
+      expect(screen.getByRole('button', {
+        name: 'New workspace on missing — project absent from the latest placement check; reload ccrc',
+      })).toBeInTheDocument();
     });
 
     it('keeps the newest placement when overlapping refreshes resolve out of order', async () => {
@@ -490,7 +547,7 @@ describe('FleetScreen', () => {
       const projects = vi.spyOn(api, 'projects')
         .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
         ] });
       const store = makeStore();
       render(<FleetScreen store={store} />);
@@ -499,11 +556,13 @@ describe('FleetScreen', () => {
         sessions: [session({ id: 'a', project: 'alpha' })],
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
       });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       expect(await screen.findByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
         .toBeInTheDocument();
       await act(async () => { resolveFirst({ roots: [], projects: [
-        { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
+        { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
       ] }); });
       expect(screen.getByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
         .toBeInTheDocument();
@@ -514,7 +573,7 @@ describe('FleetScreen', () => {
       const projects = vi.spyOn(api, 'projects')
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
         .mockResolvedValueOnce({ roots: [], projects: [
-          { name: 'alpha', workdir: '/alpha', placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
+          { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude2', score: 9 } },
         ] });
       const store = makeStore();
       render(<FleetScreen store={store} />);
@@ -523,6 +582,8 @@ describe('FleetScreen', () => {
         sessions: [session({ id: 'a', project: 'alpha' })],
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
       });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
       expect(await screen.findByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
         .toBeInTheDocument();
