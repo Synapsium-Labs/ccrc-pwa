@@ -3581,28 +3581,160 @@ deviation found while executing this plan is allocated in its own call at the mo
   committing through D-2633 closes both the orphan window and the cross-branch
   maximum imbalance without pretending the definitions landed earlier.
 
-- **D-TBD-task-5-projected-add-copy-crosses-pool — A tagged project card can
-  announce the server's global projection even when that account is outside the
-  project pool.** `ProjectCard` currently gives non-null `projected` precedence
-  over `poolLabelList`, while the server computes that projection against an
-  untagged project. A tagged card can therefore say an out-of-pool account has
-  headroom even though normal placement must refuse it. The Task 5 tests cover
-  pooled copy only when projection is null, so the conflict is green. Recommended
-  ruling: add a tagged-project fixture with an out-of-pool non-null projection;
-  whenever a known tagged pool narrows placement, derive copy from its home-able
-  labels instead of the global projection, preserving established projection copy
-  for no-frame, undecidable, and untagged states. Add an independent precedence
-  mutant and restore it exactly. Reported in mail 834; Task 5 review-fix commit is
-  stopped pending a number and ruling.
+- **D-2647 — Task 3's persistence substring assertion rejects the required
+  durable `RosterWire.pool` field while claiming to exclude project-pool
+  policy.** `expect(raw).not.toContain('pool')` is green only because its roster
+  fixture is empty; every realistic persisted roster contains its required
+  `pool` member. Deleting the assertion would also lose its depth-independent
+  tripwire against policy smuggled below the top level. Coordinator mail 850
+  therefore ruled a precise replacement: persist a realistic roster carrying
+  `pool`, assert `raw` does not contain `enforcement` (a token unique to
+  `ProjectPoolsWire`), and retain the exact top-level-key and cold-store
+  `pools === null` assertions. This accepts durable roster identity without
+  permitting live policy at any depth.
 
-- **D-TBD-task-5-pool-chip-target-height — The project-pool button's invisible
-  target is 44 pixels wide but only 24 pixels tall.** Its pseudo-element uses
-  `--tap-min` only on the horizontal axis and `--sp-6` vertically. The stylesheet
-  test merely checks that the rule contains `--tap-min`, so the 44x24 target
-  passes. Recommended ruling: use `--tap-min` on both axes and pin vertical and
-  horizontal formulas independently; mutate the vertical formula back to
-  `--sp-6` and require the named height assertion to red. Reported in mail 834
-  and stopped before a Task 5 review-fix commit.
+- **D-2648 — A readable pool census with unavailable enforcement is accepted in
+  production but not mutation-pinned.** Tests enumerate all three enforcement
+  values only for `listed:false`; the `listed:true` fixtures cover `enforced` and
+  `unknown`. A mutant rejecting `enforcement:'unavailable'` only when
+  `listed:true` leaves all 72 store tests green, so a readable directory served
+  beside pre-pools `ccd` could be dropped and an older frame retained instead of
+  rendering its tags inert. Coordinator mail 850 upheld the remedy: add a
+  `listed:true`, object `byProject`, unavailable-enforcement case; apply that
+  one-combination rejection mutant, require its named assertion to red, then
+  restore exactly.
+
+- **D-2649 — The store documents pools as sticky across reconnects, but tests
+  retain prior state only after malformed frames on one socket.** Adding
+  `set({ pools:null })` to either `disconnect()` or a fresh `connect()` leaves
+  every pool test green. In that regression, the reconnect interval before the
+  watcher remeasures temporarily erases project chips and crossing disclosure.
+  Coordinator mail 850 upheld the remedy: drive a valid frame, disconnect,
+  reconnect through the next fake socket, and assert the exact prior object
+  remains until another valid frame arrives. Mutate the disconnect and connect
+  reset sites independently and restore each exactly.
+
+- **D-2650 — Array-envelope rejection was behaviorally present but its dedicated
+  outer guard was reported as redundant and unpinned.** Deleting the outer
+  `Array.isArray(pools)` clause leaves the suite green because exact downstream
+  discriminant and enforcement checks also reject arrays. Coordinator mail 850
+  ruled that the clause remains: the neighboring `!Array.isArray(byProject)` is
+  independently load-bearing, and a statement that “the array guard here is
+  redundant” invites deletion of the wrong one. The ruled remedy was to pin both
+  `{type:'pools', pools:[]}` retaining the prior live policy and `listed:true`
+  with `byProject:[]`, while preserving both clauses. The later execution-time
+  measurement below records that those exact cases already exist, so this
+  remedy is stopped pending its own ruling rather than silently manufacturing
+  duplicate evidence.
+
+- **D-TBD-task-3-issued-array-remedy-already-present — D-2650's issued remedy is
+  already present and cannot kill the deletion it was meant to pin.** Coordinator
+  mail 850 says no test feeds an outer array and orders cases for
+  `{type:'pools', pools:[]}` and `listed:true` with `byProject:[]`. The current
+  `pwa/test/stores.test.ts` already has both: the first test also covers a
+  non-empty outer array, and the malformed-member table includes `byProject:[]`.
+  Both pass after deleting only the outer `Array.isArray(pools)` clause because
+  the remaining exact `listed` discriminant and enforcement checks reject the
+  envelope. Re-adding the same cases therefore cannot prove that clause. This is
+  an execution-time contradiction between the issued factual premise/remedy and
+  current source. Recommended ruling: either accept D-2650 as a semantic
+  rejection invariant while explicitly recording that the dedicated clause is
+  redundant, or replace it with a source-shape pin if retaining that exact clause
+  is independently required. Task 3 remains stopped before its review-fix
+  commit; no D-number is allocated locally.
+
+- **D-2636 — A tagged project card announces the fleet-wide untagged projection
+  even when that account is outside this project's pool.** `ProjectCard` gives a
+  truthy global `projected` precedence over pooled copy, but the server computes
+  that value against `{state:'untagged'}`. The original client-side suppression
+  remedy was refuted: `RosterWire` omits telemetry and cannot reproduce placement
+  honestly. The server already ships the answer as each `ProjectRow.placement`,
+  including the selected wrapper and its own score. Coordinator mail 846 ruled
+  that the card must render account and headroom from that project-specific
+  measurement, never re-derive it. Graph-first/current-source cost measurement
+  compared a direct `api.projects` read, a fleet-store slot, and extending the
+  pools frame; mail 855 recommends the direct read as the only two-production-file
+  path with no new wire or global-store seam. Implementation awaits the
+  coordinator's scope acknowledgement.
+
+- **D-2637 — The project-pool button's invisible target measures only 22.25px
+  tall, and wide chips receive that vertical extension only across their centre.**
+  The formula assumes `--leading-tight`, but the UA button's computed line height
+  is `normal`; three fixed labels are already wider than 44px. Positive horizontal
+  insets do not shrink total clickable width, but they leave outer columns only
+  the visible 12.75px high. Coordinator mail 846 ruled to declare the line height
+  the formula assumes (or compute from the measured box), use `--tap-min`
+  vertically, and clamp left/right with
+  `min(0px, calc((100% - var(--tap-min)) / 2))`. D-2641 moves this fix into the
+  Task 6 commit that first makes the button reachable.
+
+- **D-2638 — The pool-target CSS assertion can pass with `--tap-min` on neither
+  axis.** It searches the entire rule for one substring; an unused custom
+  property keeps 60/60 green after both target axes are erased. Coordinator mail
+  846 ruled per-declaration assertions for the two vertical and two horizontal
+  insets, plus deletion of the false “chip is narrow and unshrinkable” comment.
+  Mutations must remove each axis independently and reach the named assertion.
+
+- **D-2639 — Three pre-existing fleet overlays share the same whole-rule
+  substring anti-pattern.** `.sess-subagents::before`, `.sess-actions::before`
+  and `.proj-card-add::before` can lose their target formulas while an unused
+  `--tap-min` keeps the CSS suite green; the measured combined actions/add mutant
+  passed 60/60. Coordinator mail 847 defers this outside the wave unless the
+  D-2638 per-axis helper generalises trivially. This entry records the carry and
+  does not enlarge Task 6 by itself.
+
+- **D-2640 — This wave's pool-chip and stranded colours pass AA but never entered
+  the contrast auditor's measured census.** Audit measured 258 uncovered and 346
+  measured, with zero measured rows for `.proj-card-pool`, its attention variants,
+  or `.proj-card-stranded`. The actual pairs pass on the card's
+  `--bg-surface` ground: tertiary ink 5.77 dark/5.70 light, attention text
+  10.09/5.92. Coordinator mail 847 ruled to register a recoverable inherited
+  ground for every colour-bearing rule, assert each appears in `measured`, and
+  correct plan/test prose that previously claimed an audit occurred. No colour
+  changes.
+
+- **D-2641 — The broken pool-button target is dead CSS until Task 6 wires
+  `onPool`, then becomes immediately reachable.** Before Task 6 every production
+  card takes `PoolChip`'s inert span branch. Coordinator mail 847 therefore rules
+  D-2637 and D-2638 into the same Task 6 implementation commit as FleetScreen's
+  wiring; a separate later fix would ship an intermediate reachable regression.
+
+- **D-2642 — D-2620's “only fix is an account chooser” premise is superseded.**
+  `StartProgramSheet` already loads `ProjectRow[]` through `api.projects`, and
+  each row already carries its project-specific `placement`; consuming it needs
+  no chooser and does not change the sheet's two-call flow. Coordinator mail 847
+  preserves D-2620 as history and records this correction. The same ruled
+  server-measurement approach as D-2636 applies when this surface is repaired.
+
+- **D-2643 — Project-card tests never combine a tagged pool with a truthy global
+  projection, so the healthy branch could not expose D-2636.** Every truthy
+  `projected` fixture omits `pools`, while every pooled-copy fixture passes
+  `projected={null}`. Coordinator mail 847 requires a red-first crossed fixture:
+  tagged project, truthy projected wrapper outside the pool, and an assertion
+  that the project-specific placement supplies the announced account/score.
+
+- **D-2644 — `.proj-card-pool[data-dim] { cursor: default; }` is behaviorally
+  inert.** Only the span branch emits `data-dim`; it never matches the scoped
+  `button.proj-card-pool { cursor:pointer }`, and `default` is already the span's
+  UA cursor. Changing it to pointer left the relevant 120 tests green. Delete the
+  leftover rule; D-2624's load-bearing button-only pointer remains unchanged.
+
+- **D-2645 — The static `pool-mismatch` fallback promises a disclosure flow with
+  no production caller yet.** At the ruling point `crossPool` had zero callers,
+  even though Tasks 7 and 8 in this same wave are specified to land those flows.
+  Coordinator mail 847 permits either landing the disclosure callers or reducing
+  the copy to what exists. Keep this as a sequencing invariant: do not finish
+  the wave with the promise unless Tasks 7/8 make it true.
+
+- **D-2646 — `PoolSheet` renders the route's measured pool in its body but its
+  ordinary success toast echoes request intent.** A successful write can re-read
+  as unreadable, malformed, untagged, or a different tag. Coordinator mail 850
+  rules that ordinary toast copy derives from `response.pool` and stays `info`;
+  a successful divergent measurement is not an error. The `unknown-pool` warning
+  still names the submitted pool because its referent is the attempted name,
+  while ordinary success names resulting state. Add a divergent response test
+  pinning both body and toast, run one intent-echo mutant to the named failure,
+  and restore exactly.
 
 - **D-2634 — Task 2's route-response tests did not distinguish the server's
   measured pool from the request intent.** The final isolated review mutated
