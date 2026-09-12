@@ -396,3 +396,72 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
       .toMatch(/LEAD to verify/);
   });
 });
+
+// ── cross-repo wave 2: the plan may be somewhere else (spec §3 F3) ───────────
+//
+// Clause 6 says "the plan file it names" and has always meant a file in this
+// workspace, because until now there was no other kind. A programme homed in
+// another repo makes that assumption load-bearing and wrong: the path is
+// absolute, the repo is not this one, and the two things a worker must NOT do
+// there (write to the plan, commit against it) are exactly the two an
+// unqualified "your requirements are the plan" invites.
+//
+// Sentence literals, the CONTRACT's own mechanism: a paraphrase fails as a
+// deletion does. Kept OUT of the CONTRACT array on purpose — these are
+// guidance, not the twelve, and adding one there would red the count pins for a
+// change that adds no clause.
+describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
+  // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
+  // already names (`coordinator-skill.test.ts:654`): this prose wraps at 80
+  // columns, so a raw `toContain` would pin the wrap point rather than the
+  // sentence. Kept per-file on purpose — the sibling's own comment gives the
+  // reason: it touches nothing shared, so a copy costs one helper and an import
+  // would cost a seam.
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+  const FOREIGN: readonly (readonly [string, string])[] = [
+    ['the plan may be outside this workspace',
+      'the plan file your brief names can sit OUTSIDE this workspace'],
+    ['read it by the absolute path the brief gives',
+      'Read it by the ABSOLUTE PATH the brief gives'],
+    ['never write to it',
+      'never write to it'],
+    ['commit only on this workspace branch, in this repository',
+      "commit only on this workspace's own branch in THIS repository"],
+    ['the contract excerpt is inlined in the brief, and is the authority',
+      'The contract excerpt your wave depends on is INLINED in the brief'],
+    ['a reply may arrive addressed to the role',
+      'A reply may arrive addressed to the ROLE `worker`'],
+  ];
+
+  it('carries the section at all', () => {
+    expect(skill).toContain('## The plan the brief names may live in another repository');
+  });
+
+  it.each(FOREIGN)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  it('adds no new clause and no second numbered list', () => {
+    // The count pins above would catch a thirteenth clause; this catches the
+    // near-miss that would make THEM unreadable — a numbered list in the new
+    // prose, which `^\d+\. ` cannot tell from a clause.
+    const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered).toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('names no destructive verb and no run route in the new section', () => {
+    // A worker that reads "the home repo" and then reads a run route in the same
+    // breath is one prompt away from advancing someone else's run. The run
+    // routes belong to the coordinator — this skill says so in its own API
+    // section, and the new section must not quietly walk it back.
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore',
+      '/advance', '/close', '/dispatch']) {
+      expect(section, `the foreign-plan section names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});

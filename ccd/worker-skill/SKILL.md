@@ -87,6 +87,29 @@ is read first by this session's parent, if it has one and answers in time,
 before it ever reaches the operator. Free text reaches neither one. The tool
 gets answered.
 
+## The plan the brief names may live in another repository
+
+A programme is homed in ONE repo and its waves may run in any, so the plan file
+your brief names can sit OUTSIDE this workspace. Read it by the ABSOLUTE PATH the
+brief gives — one box, one user, so the path resolves from here — and take your
+requirements from it exactly as clause 6 already says. Two things you do not do
+with it: never write to it, and never treat it as the branch you are working on.
+You commit only on this workspace's own branch in THIS repository (clause 2), and
+the home repo's plan and ledger are read-only from where you are sitting.
+
+The contract excerpt your wave depends on is INLINED in the brief, verbatim from
+the merged file, and that inline copy is the authority for the interface. The home
+plan is context you may read, never somewhere to go hunting for a contract the
+brief did not hand you; if the two disagree, the plan's text governs (clause 6) and
+you say so in your `wave-done` mail so the ledger gets it. A deviation you find is
+still never a number you invent (clause 11): report it, and the coordinator mints
+it against the programme's home project.
+
+A reply may arrive addressed to the ROLE `worker` rather than to your session id.
+Nothing changes on your side: the role resolves to whichever session this run names,
+which is you, the envelope's `to:` is still your own id, you ack the DELIVERY id as
+always (clause 3), and you answer `toId:'coordinator'` as always.
+
 ## How to call the API
 
 Your mail surface is `POST /api/mail` to send, and `GET /api/mail` /
