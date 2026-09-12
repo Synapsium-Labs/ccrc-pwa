@@ -3778,3 +3778,18 @@ deviation found while executing this plan is allocated in its own call at the mo
   writer and fleet-handler third argument, with no new import. This combined
   mutant changes persistence/hydration only and reaches the structural
   snapshot assertion; restore all three temporary edits by exact inverse.
+
+- **D-2652 — The `unknown-pool` warning branch still announces request intent as
+  measured state.** D-2646 moved ordinary success copy to
+  `measuredToast(requestProject, response.pool)`, but the warning branch says
+  `Tagged <project>` without consulting `response.pool`. The server computes
+  `warning:'unknown-pool'` from the submitted name independently of its
+  post-write measurement, so a successful request can warn about an unrostered
+  submitted pool while the route reports `unreadable`, `malformed`, `untagged`,
+  or a different tag. Coordinator mail 875 issued this number and ruled one
+  composed warning: derive the state clause through `measuredToast` from the
+  route's `response.pool`, name the submitted pool only in the empty-roster
+  warning clause, and retain the interruptive error channel because sessions
+  there can strand. Add a fixture combining `warning:'unknown-pool'` with a
+  divergent measured state, apply one intent-echo mutant to the named
+  assertion, and restore it exactly.
