@@ -5044,3 +5044,44 @@ Worked around it by mailing the ruling to the worker directly (927), which unblo
 6 will time out into the operator's own notification. Recorded and reported upward.
 
 **D-2676/D-2677 issued** (floor 2678), mail 927, ask-mail 926 acked.
+
+## 2026-09-12 21:30Z — D-2678: the ratchet caught it, and registering the ground would have hidden it
+
+Worker mail 928: Task 9 halted before commit — `contrast.test.ts` census failed, `expected
+report.uncovered.length <= 255, received 256`, because Step 5 adds
+`.sess-stranded { color: var(--status-attention-text) }` and neither Step 5 nor 6 registers its ground.
+
+**D-2672 fired automatically on the very next task, two hours after I ruled it** — a specific number
+instead of a human happening to run the census by hand. Third instance of this class in this wave and
+the first that no person had to notice. **The mechanism is now doing the work review was doing.**
+
+**But the obvious remedy would have been worse than the red, and that is the ruling.** `.sess-stranded`
+sets its own `color`. On a SELECTED row `.sess-line--active` inverts the slab to
+`background: var(--ink-primary)` (`fleet.css:817-818`), and **a child's own `color` beats what it would
+inherit**, so the cell goes on painting attention ink on that slab. Measured:
+
+| ground | ratio |
+|---|---|
+| `--status-attention-text` on `--bg-surface` (card) | 10.09 dark / 5.92 light |
+| `--status-attention-text` on `--ink-primary` (selected) | **1.55 dark / 2.80 light** |
+
+Register only the card ground and the census reports the selector MEASURED and PASSING at 10.09/5.92
+while the selected row ships at **1.55:1** — exactly the trap `.sess-spawn`'s own entry names, *"the
+report then LOOKS like the block is covered"*. A half-registration is worse than the honest red.
+
+**The stylesheet already records this defect happening once.** The comment above the active-row group:
+*"Being INSIDE `.sess-meta` is not enough for them: a child's own `color` beats the colour it would
+inherit from its parent, so on the selected row they went on painting `--ink-tertiary` on the
+`--ink-primary` slab — 2.72:1 dark"*. Six cells were repaired that way. **`.sess-stranded` is the
+seventh and, at 1.55, worse than any of the six.**
+
+**Ruled, three parts in one commit:** add `.sess-stranded` to the `.sess-line--active` achromatic group
+(`fleet.css:835-844`) — I verified that group's own claimed numbers rather than trusting the comment,
+`--edge-strong` on `--ink-primary` is **9.27 / 9.91**, exactly as written; register the inherited ground
+on the project card with `.sess-spawn` as the model; and make the `why` name BOTH cases the way the
+`.sess-label` entry does with its `:not(.sess-line--active)` note — a `why` naming only the card ground
+would be a D-2669 repeat and, in this entry, actively false. Pin the census AND a selected-row
+assertion, with a mutation that reds when the cell leaves the active-row group. No colour change; both
+remedies use inks this file already audits.
+
+**D-2678 issued** (floor 2679), mail 929, finding 928 acked.
