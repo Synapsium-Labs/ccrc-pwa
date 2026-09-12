@@ -3867,6 +3867,44 @@ export const RUN_ID_MAX_DECIMAL = '9223372036854775807';
  *  binds the values. */
 export const HOLD_REASON_MAX_CHARS = 127;
 
+/**
+ * `POST /api/sessions/:id/hold`'s free-form `reason` cap (D-2546). BYTES,
+ * measured as UTF-8 — deliberately a different UNIT from `HOLD_REASON_MAX_CHARS`
+ * directly above, which counts CHARACTERS on purpose because it sizes the
+ * session hook's readable DISPLAY window. This one bounds what crosses an HTTP
+ * ingress into an argv element and a registry file, where the cost is bytes;
+ * a reader "fixing" one to match the other would change what both mean.
+ *
+ * NOT A REPAIR OF A DEFECT. Nothing on this path truncates, crashes or
+ * mis-renders at any width, and the one discriminating reader — the session
+ * hook — degrades to SILENCE by design (its own shape gate, proven at 200,000+
+ * characters by `server/test/session-hook.test.ts`). This is a BUDGET CHOICE
+ * about how much free-form operator text a registry field should carry, ruled
+ * by the operator rather than derived from a constraint.
+ *
+ * 512 mirrors `LC_REASON_MAX_BYTES` — the closest STRUCTURAL match in the tree:
+ * a free-form `--reason` written verbatim and parsed nowhere, refuse-never-
+ * truncate. SAME NUMBER, SEPARATE CONSTANT, and deliberately NOT an alias of
+ * it, for `LEDGER_TITLE_MAX_BYTES`'s stated reason: tying two seams' caps
+ * together lets a change to one silently rewrite the other's refusal threshold.
+ * `WORK_ITEM_TITLE_MAX`/`MAIL_SUBJECT_MAX_BYTES`/`LEDGER_TITLE_MAX_BYTES` are
+ * three existing precedents that are all 200 and all deliberately separate.
+ *
+ * REFUSE, NEVER TRUNCATE: a shortened hold reason is a silently altered
+ * operator statement, recorded as if the operator had written it.
+ *
+ * A CONTRACT AT THE HTTP CHOKEPOINT, NOT AN OS WALL. `ccd ws-hold` stays
+ * directly callable on the box, and a human with a shell can still write a
+ * reason of any width — ccd's own emptiness check (`ccd/ccd`'s `cmd_ws_hold`)
+ * is all that stops them, by its own stated design intent ("the reason string
+ * is the display everywhere — write it verbatim, parse it nowhere"). This is
+ * the same honesty `CLAUDE.md` already requires of the caps-and-pause
+ * chokepoint, "a contract the coordinator skill honors, not an OS wall", and
+ * it is what keeps the next reader from believing the registry field is
+ * structurally bounded when it is not.
+ */
+export const HOLD_ROUTE_REASON_MAX_BYTES = 512;
+
 /** One field rendered into a hold: a runtime JavaScript number, or the decimal
  *  TEXT of a width the budget reserves but no JavaScript number can hold. Both
  *  interpolate identically, which is exactly what lets the cap below be derived

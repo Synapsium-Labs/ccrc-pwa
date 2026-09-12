@@ -512,6 +512,25 @@ describe('Build 7 nouns', () => {
     }
   });
 
+  // ── D-2546: the hold route's own reason budget ──────────────────────────
+  //
+  // Same shape as the pair above, and here for the same reason: a cap with two
+  // homes is two thresholds nothing forces to agree. The SECOND assertion is
+  // the one that earns this its own block — 512 is deliberately the same
+  // number as `LC_REASON_MAX_BYTES` and deliberately NOT an alias of it
+  // (`LEDGER_TITLE_MAX_BYTES`'s stated argument: tying two seams' caps
+  // together lets a change to one silently rewrite the other's refusal
+  // threshold), so "one definition" here must mean an own-value literal, not
+  // a re-export of the neighbour that happens to hold the same integer.
+  it('defines HOLD_ROUTE_REASON_MAX_BYTES exactly once, in shared/, and not as an alias', () => {
+    const hits = ALL.filter((f) =>
+      /^\s*export const HOLD_ROUTE_REASON_MAX_BYTES\b/m.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel)).toEqual(['shared/api.ts']);
+    const src = readFileSync(hits[0]!, 'utf8');
+    expect(/export const HOLD_ROUTE_REASON_MAX_BYTES\s*=\s*\d+\s*;/.test(src),
+      'HOLD_ROUTE_REASON_MAX_BYTES must hold its own literal, never LC_REASON_MAX_BYTES').toBe(true);
+  });
+
   it('spells the terminal trio ONCE — TERMINAL_ITEM_STATES, and no hand-written SQL literal', () => {
     // The invariant has one home (`architecture:145-147`), so the LIST it is
     // built from must have one too: `setWorkItemState`'s `WHERE` literal is

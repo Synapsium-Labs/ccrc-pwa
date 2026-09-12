@@ -63,7 +63,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -2457,6 +2457,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `HOLD_EMPTY_REASON_TEXT`'s wording.
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // THE BUDGET, not a repair (D-2546). Nothing downstream truncates, crashes
+    // or mis-renders at any width — the census found no binding constraint, and
+    // the one discriminating reader (the session hook) degrades to silence by
+    // its own shape gate. `HOLD_ROUTE_REASON_MAX_BYTES` is an operator-ruled
+    // budget for free-form text in a registry field; its own docstring carries
+    // the warrant for the number, why it is a separate constant from the
+    // structurally identical `LC_REASON_MAX_BYTES`, and why it is a CONTRACT AT
+    // THIS CHOKEPOINT rather than an OS wall (`ccd ws-hold` stays directly
+    // callable on the box at any width).
+    //
+    // MEASURED ON THE UNTRIMMED STRING — the one `wsHold` is about to forward
+    // verbatim, not the trimmed copy the emptiness test above reads. A cap and
+    // the value it bounds must be the same value, or padding is a way to
+    // exceed it; the check above asks a different question ("did the operator
+    // say anything at all?") and is entitled to its own reading.
+    //
+    // BYTES, UTF-8, matching the constant's unit and NOT `HOLD_REASON_MAX_CHARS`'s
+    // characters — that one sizes the hook's readable display window, this one
+    // bounds an HTTP ingress.
+    //
+    // A DISTINCT CODE from the `bad-request` directly above, deliberately:
+    // "you sent the wrong shape" and "your reason is too long" are two
+    // conditions a caller acts on differently (retype versus shorten), and
+    // collapsing them is the overloaded-value-at-a-seam defect in its
+    // error-code form. `oversize` is the mail seam's own spelling for exactly
+    // this condition. REFUSED, never truncated: a shortened hold reason is a
+    // silently altered operator statement.
+    if (Buffer.byteLength(body.reason, 'utf8') > HOLD_ROUTE_REASON_MAX_BYTES) {
+      return reply.code(400).send({ ok: false, error: 'oversize',
+        limit: HOLD_ROUTE_REASON_MAX_BYTES,
+        detail: `reason exceeds ${HOLD_ROUTE_REASON_MAX_BYTES} bytes — it is written verbatim into ` +
+          'the registry hold field and refused rather than shortened' });
     }
     const argv = CCD_ARGV.wsHold(id, body.reason, pwaDec(req));
     // Same verb generation and same skew answer as `/archive`/`/restore`
