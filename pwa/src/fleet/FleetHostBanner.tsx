@@ -14,6 +14,9 @@
 //    is a deploy or an edit on one of the two boxes, neither of which the PWA
 //    can or should do. `'unknown'` renders nothing — an older agent reports no
 //    digest, and a banner that fires when nothing is wrong stops being read.
+//  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
+//    capability, so a tag this app displays is not enforced. No action button:
+//    the remedy is an agent-lane deploy. `'unknown'` remains silent.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth } from '../../../shared/api';
@@ -60,6 +63,19 @@ export function FleetHostBanner(): ReactNode {
         <span className="fleet-host-banner-msg">
           This server and the fleet host are projecting different account rosters. Redeploy both
           boxes; if it persists, reconcile <code>~/.ccrc/accounts.json</code> on each.
+        </span>
+      </div>
+    );
+  }
+
+  // Roster divergence ranks above this: it is silent damage already happening,
+  // while an unavailable pool capability is a feature absent from the host.
+  if (health && health.mode === 'remote' && health.connected && health.projectPools === 'unavailable') {
+    return (
+      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
+        <span className="fleet-host-banner-msg">
+          The fleet host's ccd does not honour project pools yet, so a tag shown here is not being
+          enforced. Redeploy the agent lane.
         </span>
       </div>
     );
