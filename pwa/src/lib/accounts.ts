@@ -26,7 +26,7 @@
 // the label, `--ink-tertiary` as the colour — never a hidden account, never a
 // guessed hue.
 import type { RosterWire } from '../../../shared/api';
-import type { Hue } from '../../../shared/roster';
+import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -62,13 +62,14 @@ export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue 
  *  "what pool is this account in" is answered in exactly one place and an
  *  older server's omission degrades once rather than five times.
  *
- *  `typeof p === 'string'`, never a truthiness test: the empty string is
- *  refused by `parseRoster` on the way in (`POOL_NAME_RE`), so it cannot be a
- *  real pool, and a bad JSON body that produced one must read as untagged
- *  rather than as a pool named "". */
+ *  The canonical server parser refuses off-grammar values, but its API client
+ *  is a cast and the same-origin offline cache validates only roster shape. A
+ *  malformed value can therefore arrive here despite trusted canonical output
+ *  never carrying one. Treat it as untagged: `poolRule`'s permissive forecast
+ *  is for an absent account tag, not a tag this client cannot validate. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
   const p = entryFor(roster, wrapper)?.pool;
-  return typeof p === 'string' ? p : null;
+  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
 }
 
 /** Token custom-property name for the account's chip colour, e.g. 'claude' →

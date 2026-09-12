@@ -47,6 +47,16 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
     // own docstring). Not being able to name its pool is not a mismatch.
     expect(accountPool(pooled({ claude: 'pool-a' }), 'claude-unrostered')).toBeNull();
   });
+
+  it('normalizes an empty pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? '' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
+
+  it('normalizes an off-grammar pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? 'Pool A' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
 });
 
 describe('poolSide — the rule, composed and never restated', () => {
@@ -140,6 +150,20 @@ describe('projectPoolOf — the frame, read by project name', () => {
     expect(projectPoolOf(
       { listed: true, byProject: { demo: tagged('pool-a') }, enforcement: 'enforced' }, 'quiet-basin',
     )).toEqual({ state: 'untagged' });
+  });
+
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf'])(
+    'reads an absent prototype-named project as UNTAGGED',
+    (project) => {
+      expect(projectPoolOf({ listed: true, byProject: {}, enforcement: 'enforced' }, project))
+        .toEqual({ state: 'untagged' });
+    },
+  );
+
+  it('reads an own tagged prototype-named project rather than its inherited property', () => {
+    expect(projectPoolOf(
+      { listed: true, byProject: { constructor: tagged('pool-a') }, enforcement: 'enforced' }, 'constructor',
+    )).toEqual(tagged('pool-a'));
   });
 
   it('reads every project as UNREADABLE when the listing itself failed', () => {

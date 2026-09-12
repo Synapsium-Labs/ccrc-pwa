@@ -85,7 +85,9 @@ export function projectPoolOf(
 ): ProjectPoolWire | null {
   if (pools === null) return null;
   if (!pools.listed) return { state: 'unreadable' };
-  return pools.byProject[project] ?? { state: 'untagged' };
+  return Object.hasOwn(pools.byProject, project)
+    ? pools.byProject[project]!
+    : { state: 'untagged' };
 }
 
 /** The distinct pool names this roster actually carries, in roster order.

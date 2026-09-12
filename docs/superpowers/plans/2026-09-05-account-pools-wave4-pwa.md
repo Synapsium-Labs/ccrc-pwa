@@ -161,6 +161,16 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
     // own docstring). Not being able to name its pool is not a mismatch.
     expect(accountPool(pooled({ claude: 'pool-a' }), 'claude-unrostered')).toBeNull();
   });
+
+  it('normalizes an empty pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? '' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
+
+  it('normalizes an off-grammar pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? 'Pool A' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
 });
 
 describe('poolSide — the rule, composed and never restated', () => {
@@ -256,6 +266,20 @@ describe('projectPoolOf — the frame, read by project name', () => {
     )).toEqual({ state: 'untagged' });
   });
 
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf'])(
+    'reads an absent prototype-named project as UNTAGGED',
+    (project) => {
+      expect(projectPoolOf({ listed: true, byProject: {}, enforcement: 'enforced' }, project))
+        .toEqual({ state: 'untagged' });
+    },
+  );
+
+  it('reads an own tagged prototype-named project rather than its inherited property', () => {
+    expect(projectPoolOf(
+      { listed: true, byProject: { constructor: tagged('pool-a') }, enforcement: 'enforced' }, 'constructor',
+    )).toEqual(tagged('pool-a'));
+  });
+
   it('reads every project as UNREADABLE when the listing itself failed', () => {
     // `listed:false` is "present at the root and unlistable", never "nothing
     // is tagged" — the polarity §6 disclosed. Untagged here would silently
@@ -310,7 +334,9 @@ Expected: FAIL — `Failed to resolve import "../src/lib/pools"` and `"accountPo
 
 - [ ] **Step 4: Add `accountPool` and extract `joinLabels`**
 
-In `pwa/src/lib/accounts.ts`, add after `accountHue` (currently ending at `:53`):
+In `pwa/src/lib/accounts.ts`, import `POOL_NAME_RE` as a value from
+`../../../shared/roster` beside the `Hue` type, then add after `accountHue`
+(currently ending at `:53`):
 
 ```ts
 /** This account's POOL NAME, or `null` for an untagged account, an account
@@ -323,13 +349,13 @@ In `pwa/src/lib/accounts.ts`, add after `accountHue` (currently ending at `:53`)
  *  "what pool is this account in" is answered in exactly one place and an
  *  older server's omission degrades once rather than five times.
  *
- *  `typeof p === 'string'`, never a truthiness test: the empty string is
- *  refused by `parseRoster` on the way in (`POOL_NAME_RE`), so it cannot be a
- *  real pool, and a bad JSON body that produced one must read as untagged
- *  rather than as a pool named "". */
+ *  The canonical parser refuses off-grammar values, but this client receives a
+ *  cast `/api/accounts` body and a shape-only offline roster cache. An invalid
+ *  string can therefore arrive here; it must forecast permissively as an
+ *  untagged account rather than inventing a crossing. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
   const p = entryFor(roster, wrapper)?.pool;
-  return typeof p === 'string' ? p : null;
+  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
 }
 ```
 
@@ -446,7 +472,9 @@ export function projectPoolOf(
 ): ProjectPoolWire | null {
   if (pools === null) return null;
   if (!pools.listed) return { state: 'unreadable' };
-  return pools.byProject[project] ?? { state: 'untagged' };
+  return Object.hasOwn(pools.byProject, project)
+    ? pools.byProject[project]!
+    : { state: 'untagged' };
 }
 
 /** The distinct pool names this roster actually carries, in roster order.
@@ -495,17 +523,23 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/accounts-pool.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 24 tests; `tsc` exits 0. The 24 is a derived copy-completeness check, not a decreed cardinal: it equals the number of `it(` calls in the test block above (24 as written). After changing that block, re-derive it with `grep -cE '^\s*it\(' test/accounts-pool.test.ts`. If the block gains `it.each`, its rows make the `it(` call count and test count diverge, so measure the test count rather than carrying this derivation forward.
+Expected: PASS, 33 tests; `tsc` exits 0. The 33 is a derived
+copy-completeness check, not a decreed cardinal: 27 direct `it(` calls plus
+six `it.each` prototype-name rows = 33 tests as written. After changing that
+block, re-derive both the direct call count and any parameterized rows;
+`it.each` means the direct `it(` count alone is not a test count.
 
 - [ ] **Step 7: Prove the guard by mutation**
 
 Run each mutation, confirm the named red, then revert it:
 
-1. In `splitByPool`, delete the `poolSide(null, projectPool) === 'unknown'` early return. Expected red: `offers EVERYTHING and flags unknown when the project pool is null` — `TypeError` or `expected false to be true` on `split.unknown`, and `does the same on an unreadable and on a malformed tag` fails with `expected [] to equal [ 'claude', 'claude2', 'claude-corp', 'claude-dev0' ]`.
+1. In `splitByPool`, delete the `poolSide(null, projectPool) === 'unknown'` early return. Expected red only: `offers EVERYTHING and flags unknown when the project pool is null` and `does the same on an unreadable and on a malformed tag` each fail with `expected false to be true` on `split.unknown`. The eligible and crossing arrays are identical through the fallthrough; this guard's observable contribution is `unknown: true`.
 2. In `poolSide`, change the last line to `return 'crossing';` (folding `pool-undecidable` into a mismatch). Expected red: `is unknown on an unreadable or malformed tag, for a TAGGED account too` — `expected 'crossing' to be 'unknown'`.
 3. In `projectPoolOf`, change the `!pools.listed` arm to `return { state: 'untagged' };`. Expected red: `reads every project as UNREADABLE when the listing itself failed` — `expected { state: 'untagged' } to deeply equal { state: 'unreadable' }`.
 4. In `accountPool`, change the return to `return p;`. Expected red in TWO independent mechanisms: `tsc --noEmit` fails with `Type 'string | null | undefined' is not assignable to type 'string | null'`, and the focused Vitest suite's `an older server is untagged, not unknown` case fails because `undefined` is not `null`.
 5. In `poolLabelList`, change `!== 'crossing'` to `=== 'eligible'`. Expected red: `is byte-identical to homeAbleLabelList when nothing is known` — `expected '' to be 'team·max, team·alt, team·b and team·d'`.
+6. **D-2609 named mutation:** in `accountPool`, revert the predicate to `typeof p === 'string'`. Expected red: the empty and off-grammar malformed-wire cases each receive their string rather than `null`.
+7. **D-2610 named mutation:** in `projectPoolOf`, replace the `Object.hasOwn` ternary with `pools.byProject[project] ?? { state: 'untagged' }`. Expected red: all six absent prototype-name rows receive inherited values instead of `{ state: 'untagged' }`. For each named mutation, restore by its exact inverse and verify source sentinels before the final green run.
 
 - [ ] **Step 8: Commit**
 
@@ -3189,3 +3223,47 @@ deviation found while executing this plan is allocated in its own call at the mo
   that it equals the block's `it(` calls, tells editors to re-derive it after
   changing that block, and warns that `it.each` rows make call count and test
   count diverge.
+
+- **D-2608 — Task 1 mutation 1 overstated what deleting the unknown early
+  return changes.** The loop after `splitByPool`'s early return routes each
+  wrapper to `eligible` unless `poolSide` says `crossing`. For a null,
+  unreadable, or malformed project pool every side remains `unknown`; the
+  fallthrough therefore preserves the same eligible array and empty crossing
+  array as the early return. The guard's only observable contribution is
+  `unknown: true` instead of `false`. The external isolated verifier measured
+  the prior baseline at 24 passes and the deletion mutant at 2 failures / 22
+  passes, both `expected false to be true` on the null and
+  unreadable/malformed `split.unknown` assertions; no array assertion failed.
+  Ruling: retain the array assertions as the unknown-state contract but correct
+  Step 7 item 1 to name only those two `split.unknown` reds.
+
+- **D-2609 — The PWA must normalize a malformed account-pool string at its
+  own reader boundary.** Canonical server output cannot carry an off-grammar
+  pool because `parseRoster` rejects it, but the `/api/accounts` client casts
+  its JSON and the same-origin offline-cache reviver validates roster shape,
+  not `pool`; an empty or off-grammar string can therefore reach
+  `accountPool`. `typeof p === 'string' ? p : null` returned that string as a
+  real pool, putting it into `poolOptions` and falsely classifying the account
+  as crossing against a tagged project. Ruling: import the already-exported
+  `POOL_NAME_RE` from `shared/roster` and return a string only when it matches;
+  otherwise return `null`. This deliberately does NOT broaden server or
+  offline validation: the server's strict parser remains the canonical
+  refusal, while this PWA adapter safely normalizes stale/malformed trusted
+  data. That permissive forecast is the same `poolRule` rationale for an
+  absent account tag: a client that cannot validate a constraint may not claim
+  a crossing. The focused tests cover both `''` and an off-grammar string; the
+  named predicate-revert mutation must red those tests.
+
+- **D-2610 — `projectPoolOf` must distinguish an absent own tag from an
+  inherited JavaScript property.** A listed `byProject` map is a normal object
+  serialized from `Object.fromEntries`; direct indexing reads inherited values
+  for legal ccd project names including `constructor`, `__proto__`, `toString`,
+  `valueOf`, `hasOwnProperty`, and `isPrototypeOf`. An absent `constructor`
+  then yielded the inherited `Object` constructor rather than the untagged
+  fallback, making a tagged account look crossing. Ruling: use
+  `Object.hasOwn(pools.byProject, project) ? pools.byProject[project]! :
+  { state: 'untagged' }`. Focused tests prove all six names are untagged when
+  absent and that an own tagged `constructor` entry still wins; the named
+  mutation back to direct lookup must red the six absent-name rows. This is a
+  High finding because it is reachable through canonical output, not only a
+  malformed wire.
