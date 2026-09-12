@@ -19662,3 +19662,44 @@ commit.
 
 Recorded rather than fixed, and recorded as a MEASUREMENT with its control, because the green half on
 its own is exactly the shape that gets mistaken for coverage.
+
+### D-2679 — D-2673 alone makes macOS WORSE: a fast failure becomes an indefinite hang. DO NOT SHIP IT WITHOUT D-2661
+
+**Measured on `295c876c`, macos-latest, and it reverses this branch's own claim one commit earlier.**
+
+D-2673 was reported as working on the strength of one number: `the mint exited 1` went from **9** to
+**0**. That number is real and the refusal is genuinely gone. The conclusion drawn from it was not.
+
+| | before D-2673 (`42e31622`) | after D-2673 (`295c876c`) |
+|---|---|---|
+| `the mint exited 1` | 9 | **0** |
+| pane-bound cases that FINISH | all of them, in ~50 ms each | **none — 2 started, 0 completed in 24 min** |
+| leg outcome | completed, red | **cut at the deadline, no verdict** |
+
+**The mechanism, and it is a consequence of the fix rather than a coincidence.** Before, BSD `script`
+died instantly on the FIFO, so `_auth_spawn_pty_child`'s child was already gone when the helper reached
+`wait "$child"` — the deadline never mattered because nothing was alive to need cutting. Now the child
+genuinely runs, so the ONLY thing that can end the run is `_auth_timeout`'s deadline, and D-2661 says
+that deadline intermittently does not fire on this runner. When it does not, `wait` blocks forever, the
+helper never returns, and `execFileSync` — SYNCHRONOUS, so vitest cannot time it out either — blocks the
+worker thread. One hung case stalls the whole file. The two orphan `cat`s in the same cleanup are
+D-2673's copier, left parented to init by the same never-closed pipes.
+
+**Why this is not merely a test-harness problem.** The suite is only where it is visible. The same shape
+on a real macOS fleet box is `ccrc account add … --method setup-token` never returning — a
+credential-minting verb that hangs instead of failing. **A loud fast failure is strictly better than a
+silent hang on this path**, so D-2673 in isolation is a regression even though it removes the defect it
+was written for.
+
+**What has to happen before D-2673 ships:** either D-2661 is closed so the deadline fires, or the helper
+gains a bound of its own that cannot depend on it — a `wait` that cannot block forever. The second is
+the more honest fix regardless of D-2661, because `_auth_setup_token`'s contract already promises
+`expired` as a terminal state and today that promise rests entirely on an external `gtimeout`
+behaving. Not attempted here: it is a third change to a credential path in one branch, and the
+branch that has just been wrong once about this code should not guess twice.
+
+**Recorded as a self-correction, deliberately.** The error was not the fix; it was reading ONE metric
+going to zero as "works", when the question was whether the method completes. `the mint exited 1`
+disappearing is equally consistent with "the mint now succeeds" and with "the mint never returns", and
+the run that produced it had ALREADY been cut without finishing a single pane-bound case — the evidence
+for the stronger claim was absent in the very log that supplied the weaker one.

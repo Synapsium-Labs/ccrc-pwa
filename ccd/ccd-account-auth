@@ -370,6 +370,16 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
 }
 
 _auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set AUTH_CHILD
+  # ⚠ THIS FUNCTION IS NOT SAFE TO SHIP ON DARWIN ON ITS OWN (D-2679).
+  # It removes D-2614's refusal, which means the child now RUNS — and once it
+  # runs, the only thing that can end this is `_auth_timeout`'s deadline.
+  # D-2661 says that deadline intermittently does not fire on macOS, and when
+  # it does not, `wait` below never returns and the verb hangs instead of
+  # failing. Measured: 2 pane-bound cases started and 0 finished in 24 minutes,
+  # where before the fix all of them failed in ~50 ms. A loud fast failure is
+  # better than a silent hang on a credential path, so D-2661 (or a bound here
+  # that does not depend on it) has to land with this, not after it.
+
   # THE DARWIN ARM PIPES, THE LINUX ARM REDIRECTS, AND BOTH HAND THE CHILD THE
   # SAME FIFO (D-2673). The difference is only how `$AUTH_RUN/in.child` reaches
   # `script`'s stdin, so the code channel does not move: the operator's code
