@@ -1654,4 +1654,36 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
       .toContain(flat(sentence));
   });
+
+  // §4. There are TWO roles now, and the asymmetry between them is the part a
+  // coordinator gets wrong: `coordinator` has a fallback (the single active
+  // programme) and `worker` cannot have one, because a worker is per RUN and
+  // there is nothing to fall back to. Carry the runId always and the asymmetry
+  // never bites — which is exactly why it has to be written where the send is.
+  const ROLES: readonly (readonly [string, string])[] = [
+    ['mail-envelope.md', 'There are two role names, `coordinator` and `worker`'],
+    ['mail-envelope.md', 'a `worker` mail names the `runId` of the run whose worker it wants'],
+    ['mail-envelope.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+    ['wave-lifecycle.md', 'carry the `runId` on every mail you send, whichever role you address'],
+    ['wave-lifecycle.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+  ];
+
+  it.each(ROLES)('%s carries the role rule: %s', (file, sentence) => {
+    expect(flat(refs(file)), `${file} no longer states: ${sentence}`).toContain(flat(sentence));
+  });
+
+  it('SKILL.md tells the coordinator how to address a worker, in the crossing section', () => {
+    expect(flat(skill)).toContain(
+      flat("Address the worker as `to: 'worker'` with this run's `runId`"));
+  });
+
+  it('keeps the resolved-recipient promise while adding the second role', () => {
+    // The envelope's `to:` is still ALWAYS a session id. A second role is a
+    // second thing the INGRESS resolves, never a second thing that can appear
+    // on the face of a rendered envelope — and the byte-identity test above
+    // (renderEnvelope's real output) is what would catch the alternative.
+    const env = flat(refs('mail-envelope.md'));
+    expect(env).toContain('**`to:` is always the resolved recipient.**');
+    expect(env).toContain('resolveWorker');
+  });
 });

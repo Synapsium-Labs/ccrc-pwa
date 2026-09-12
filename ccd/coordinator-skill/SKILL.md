@@ -367,6 +367,12 @@ defined in the home plan, because that is where the plan lives. The allocator
 takes the project from the caller and cannot cross-check it, so this one is
 discipline rather than a mechanism, which is exactly why it is written down.
 
+**Address the worker as `to: 'worker'` with this run's `runId`**, and the
+coordinator as you do today. Carry the `runId` either way: it is what makes a
+crossing programme's mail unambiguous when two of its waves are live in two
+repos, and it is what keeps a `worker` mail resolvable at all
+(`references/mail-envelope.md`).
+
 ## What stays discipline
 
 Handoffs are commits. Briefs are prose reviewed like code. The ledger is for

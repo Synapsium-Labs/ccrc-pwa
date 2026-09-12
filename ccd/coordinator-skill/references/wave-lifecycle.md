@@ -372,6 +372,18 @@ worker's `status`/`wave-done`, whose four fingerprint fields the coordinator
 submits unchanged. The worked example is in §4 — a worker sent here by its own
 skill should read that block before it writes its first done-claim.
 
+**Addressing, and the one rule that keeps it boring.** A worker is addressed
+either by its session id or as `to:"worker"` with the run — the role resolves to
+whatever session that run currently names, which is what makes a replacement
+reachable without anyone re-typing an id. So carry the `runId` on every mail you
+send, whichever role you address: with it, `coordinator` resolves off that run's
+own claim regardless of programme state and `worker` resolves off its `sessionId`;
+without it, `coordinator` falls back to the single active programme and a `worker`
+mail with no `runId` is refused `unknown-recipient`. One habit, no asymmetry to
+remember. Reading a programme's whole lane is `GET /api/mail?program=<slug>` and
+its records are `GET /api/feed?program=<slug>` — the filters that make a
+cross-repo programme legible from one call instead of two per repo.
+
 ## 4 — Advance the run as the wave progresses
 
 `RunState` reaches `awaiting-review` only from `working`, and `merging` only
