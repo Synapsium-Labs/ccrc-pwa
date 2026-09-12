@@ -1237,6 +1237,116 @@ button.metachip:active {
   padding: var(--sp-3);
   border-top: 1px solid var(--edge-subtle);
 }
+/* …and the same card for a `system` row that carries a BODY rather than a
+   label — a harness-injected skill, a slash command's own multi-line output.
+   Its label is that body's FIRST LINE, which can be any length, so it clamps;
+   the compaction card's label is two words and its rule above is untouched.
+   `min-width: 0` is load-bearing: `.compaction-label` is `flex: 1`, and a flex
+   item's `min-width: auto` floors it at its content and defeats the ellipsis
+   on its own. */
+.compaction--sys .compaction-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The body of that card is the record's own text, not Markdown — the parser
+   declares no format for a `system` row's `text`, and `pre-wrap` is what keeps
+   the line structure the pill destroyed. */
+.compaction-raw {
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Task card — the harness's report of a finished background task.    *
+ *  Mirrors .mail-card's shell deliberately: both are a machine's own  *
+ *  structured record, and a reader should recognise the genus before  *
+ *  reading a word. The left rule is the phosphor rather than          *
+ *  --edge-strong, which is what separates "the fleet did something"   *
+ *  from "another session said something".                             *
+ * ------------------------------------------------------------------ */
+.task-card {
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.task-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  min-width: 0;
+}
+.task-card-glyph { color: var(--ink-tertiary); flex: none; }
+/* The summary runs to 209 bytes at its longest and is the one line worth
+   reading, so it WRAPS rather than clipping — the status chip beside it is
+   what must never be pushed out, hence flex:none there and min-width:0 here. */
+.task-card-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+.task-card-status {
+  flex: none;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  padding: 3px var(--sp-2);
+}
+.task-card-status--ok  { color: var(--status-busy-text); border-color: var(--status-busy); }
+.task-card-status--bad { color: var(--status-dead-text); border-color: var(--status-dead); }
+.task-card-toggle {
+  justify-self: start;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--ink-tertiary);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.task-card-toggle:hover { color: var(--accent); }
+/* The machinery: ids, paths, the result payload. A definition list because
+   that is what it is — every member keeps its own name beside its value. */
+.task-card-fields {
+  margin: 0;
+  display: grid;
+  gap: var(--sp-2);
+  border-top: 1px solid var(--edge-subtle);
+  padding-top: var(--sp-2);
+}
+.task-card-field { display: grid; gap: 2px; min-width: 0; }
+.task-card-field dt {
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.task-card-field dd {
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
 
 /* Streaming caret — the blinking block that means "still talking". */
 .stream-caret {
