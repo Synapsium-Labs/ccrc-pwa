@@ -1553,3 +1553,138 @@ describe('the coordinator skill triggers and resumes on the RUN RECORD, not a ho
     expect(skill).toContain('`references/resume.md`');
   });
 });
+
+// ── cross-repo wave 2: the project boundary, in the skill (spec §3 F3) ───────
+//
+// Wave 1 made the boundary MECHANICAL (`project-mismatch`, `home-mismatch`) and
+// named both codes in the refusal list. That is the server refusing; this is the
+// coordinator knowing. The two are not the same guard and the difference is
+// measurable: a coordinator that meets `project-mismatch` has already queued a
+// brief onto the wrong repo's workspace in its own head, and the refusal is what
+// stops the fleet — not what tells it what to do instead.
+//
+// Sentence-literal pins, the same mechanism `CONTRACT` uses and for the same
+// reason: the SENTENCE is the instruction, so a paraphrase must fail exactly as
+// a deletion does. Each row carries what it is FOR, so a red names the rule that
+// went missing rather than a 90-character string.
+describe('the coordinator learns the project boundary (cross-repo wave 2, spec §3 F3)', () => {
+  const CROSSING: readonly (readonly [string, string])[] = [
+    ['the reuse rule — a sessionId is a same-project idiom',
+      'Reuse `sessionId` ONLY when the next wave stays in the same project.'],
+    ['what a crossing wave does instead',
+      'A wave that CHANGES project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo'],
+    ['the caps arithmetic, so a cap refusal reads as arithmetic',
+      'two concurrency slots and two of the daily budget'],
+    ['homeProject on every open',
+      'Every `POST /api/runs` for this programme carries `homeProject`'],
+    ['the brief cites the home plan by absolute path at a sha',
+      "cites the home repo's plan by ABSOLUTE PATH at a named sha"],
+    ['the brief inlines the contract excerpt verbatim',
+      'INLINES the contract excerpt the wave depends on, verbatim from the merged file'],
+    ['Q1 — the producer run is READ, not remembered',
+      "read the producer run's own `state`. Anything but `done` — do not dispatch, report."],
+    ['deviations are minted against the home project',
+      'minted against the HOME project'],
+  ];
+
+  it('carries the crossing section at all', () => {
+    expect(skill).toContain('## When a wave crosses into another project');
+  });
+
+  // `flat` is this file's own helper (`const flat = (s: string) => s.replace(/\s+/g, ' ')`,
+  // the `readme-holds.test.ts` idiom):
+  // both corpora wrap mid-clause at 80 columns, so a raw `toContain` would pin
+  // the WRAP POINT rather than the sentence and would red on a re-flow that
+  // changed nothing. A paraphrase still fails exactly as a deletion does.
+  it.each(CROSSING)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  it('names BOTH new refusal codes where the rule that provokes them is stated', () => {
+    // Not the refusal-list sentence (wave 1's, pinned by its own test above):
+    // this is the section that tells a coordinator what it did to earn them, and
+    // a rule stated without its refusal leaves the reader to guess which one
+    // they are looking at.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    expect(start, 'the crossing section is gone').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const code of ['project-mismatch', 'home-mismatch']) {
+      expect(section, `the crossing section never names ${code}`).toContain(code);
+    }
+    // And the caps it warns about are the real ones, spelled as the codes the
+    // dispatch actually answers with.
+    for (const cap of ['cap-concurrency', 'cap-daily']) {
+      expect(section, `the crossing section never names ${cap}`).toContain(cap);
+    }
+  });
+
+  it('does not let the crossing section teach a second /clear writer or a reap', () => {
+    // The census tests above count `ws-reap`/`ws-rm`/`ws-gc` over `allSkillText`
+    // and clause 9 owns `/clear`; a new section is exactly where a well-meant
+    // recovery sentence gets added. Asserted HERE too, scoped to the section, so
+    // the failure names the section rather than a whole-file count.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-reap', 'ws-rm', 'ws-gc', '/clear']) {
+      expect(section, `the crossing section names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  // The reference is what a coordinator reads WHILE making the call — the
+  // refusal tables wave 1 extended live here, three lines from the body being
+  // typed. A boundary stated only in SKILL.md is a boundary read once, at
+  // install time, by a session that had no run open yet.
+  const LIFECYCLE: readonly (readonly [string, string])[] = [
+    ['§1 — why sessionId is a same-project field',
+      '`sessionId` reclaims a workspace, and a workspace lives in ONE repo'],
+    ['§1 — the crossing open sends none',
+      'a wave that changes project sends no `sessionId` at all'],
+    ['§1 — homeProject rides the open body',
+      '`"homeProject":"<the home project>"`'],
+    ['§1 — the two response fields, and their null',
+      'both are null while the stored home is null'],
+    ['§2 — what a foreign-repo brief carries beyond the ordinary list',
+      'the absolute path of the home plan, at a sha, plus the contract excerpt inlined verbatim'],
+    ['§5 — Q1 at the wave boundary',
+      "read the producer run's own `state` before you dispatch a consumer wave"],
+  ];
+
+  it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
+    expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
+      .toContain(flat(sentence));
+  });
+
+  // §4. There are TWO roles now, and the asymmetry between them is the part a
+  // coordinator gets wrong: `coordinator` has a fallback (the single active
+  // programme) and `worker` cannot have one, because a worker is per RUN and
+  // there is nothing to fall back to. Carry the runId always and the asymmetry
+  // never bites — which is exactly why it has to be written where the send is.
+  const ROLES: readonly (readonly [string, string])[] = [
+    ['mail-envelope.md', 'There are two role names, `coordinator` and `worker`'],
+    ['mail-envelope.md', 'a `worker` mail names the `runId` of the run whose worker it wants'],
+    ['mail-envelope.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+    ['wave-lifecycle.md', 'carry the `runId` on every mail you send, whichever role you address'],
+    ['wave-lifecycle.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+  ];
+
+  it.each(ROLES)('%s carries the role rule: %s', (file, sentence) => {
+    expect(flat(refs(file)), `${file} no longer states: ${sentence}`).toContain(flat(sentence));
+  });
+
+  it('SKILL.md tells the coordinator how to address a worker, in the crossing section', () => {
+    expect(flat(skill)).toContain(
+      flat("Address the worker as `toId: 'worker'` with this run's `runId`"));
+  });
+
+  it('keeps the resolved-recipient promise while adding the second role', () => {
+    // The envelope's `to:` is still ALWAYS a session id. A second role is a
+    // second thing the INGRESS resolves, never a second thing that can appear
+    // on the face of a rendered envelope — and the byte-identity test above
+    // (renderEnvelope's real output) is what would catch the alternative.
+    const env = flat(refs('mail-envelope.md'));
+    expect(env).toContain('**`to:` is always the resolved recipient.**');
+    expect(env).toContain('resolveWorker');
+  });
+});

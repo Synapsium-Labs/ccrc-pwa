@@ -225,6 +225,13 @@ export async function measureClaimant(
 export type ReclaimOutcome =
   | { ok: true; program: string; runIds: number[]; from: string; to: string }
   | { ok: false; kind: 'unknown-run' }
+  /** D-2545. The run row exists and its integers are unrepresentable — NOT
+   *  `unknown-run`, whose whole meaning is that the row is not there, and not
+   *  `registry-unmeasurable`, which names the registry rather than this
+   *  store. A reclaim is the operator's act on a program whose coordinator is
+   *  dead; telling them the run does not exist would send them looking for a
+   *  program instead of for a database. */
+  | { ok: false; kind: 'run-unreadable'; detail: string }
   | { ok: false; kind: 'no-claimant' }
   | { ok: false; kind: 'unknown-session' }              // the NEW claimant has no registry row
   | { ok: false; kind: 'registry-unmeasurable'; detail: string }
@@ -280,7 +287,9 @@ export async function reclaimRun(
   deps: ReclaimDeps, runId: number, to: string,
 ): Promise<ReclaimOutcome> {
   const now = Date.now();
-  const run = deps.coord.run(runId);
+  const read = deps.coord.run(runId);
+  if (!read.ok) return { ok: false, kind: 'run-unreadable', detail: read.detail };
+  const run = read.run;
   if (run === null) return { ok: false, kind: 'unknown-run' };
   const from = run.claimedBy;
   if (from === null) return { ok: false, kind: 'no-claimant' };

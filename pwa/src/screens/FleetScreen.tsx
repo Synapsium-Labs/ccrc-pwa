@@ -19,7 +19,7 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed, runHomeProject } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
@@ -489,6 +489,36 @@ export function FleetScreen({
                    the worker's card, where `nestFleet`'s rule 3 leaves it
                    unbracketed: a `└─` never crosses two cards. */
                 runs={activeRuns.filter((r) => r.project === g.project)}
+                /* The SECOND list (spec §3 F4): the runs this project is the
+                   HOME of, working somewhere else. NOT the exact complement of
+                   the filter above (D-2582): a run homed on a third project
+                   and working on a fourth is in NEITHER of this card's lists,
+                   and a crossing run appears in `runs` on the working card and
+                   in `abroad` on the home card — two different cards' lists —
+                   so there is no partition across cards either; the two
+                   filters are merely disjoint on this one card. What is true:
+                   that one asks where the work is, this one asks whose
+                   programme it is — and the two never merge, because only the
+                   first may reach `nestFleet`. `runHomeProject` rather than
+                   `r.homeProject`, for the house rule its own docstring
+                   gives — one reader per field — not because the tolerance is
+                   load-bearing at THIS `===` comparison: an older server's
+                   missing key makes `runHomeProject(r)` `null` and a raw
+                   `r.homeProject` `undefined`, and either one `=== g.project`
+                   is false, so the failure mode without the tolerant reader
+                   would have been a crossing run silently missing its abroad
+                   line on an older server, never every run landing on every
+                   card. And this predicate SPECIALIZES `crossingNote`'s
+                   decision rather than re-spelling it, which is the distinction
+                   D-2575 turns on: `crossingNote` asks whether a run is
+                   crossing AT ALL, judged from the run's own project, while
+                   this asks the same question from a THIRD party — the card
+                   whose project is neither necessarily the run's work nor its
+                   home. Named here so the next reader neither deletes it as a
+                   duplicate of that decision nor forks it into a second copy
+                   of it. */
+                abroad={activeRuns.filter(
+                  (r) => runHomeProject(r) === g.project && r.project !== g.project)}
                 nowMs={nowMs}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for

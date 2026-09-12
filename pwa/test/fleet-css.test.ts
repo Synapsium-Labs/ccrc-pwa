@@ -616,7 +616,12 @@ describe('runs are not living panes', () => {
       // one new class on this row that carries an attention hue, which is exactly
       // the shape that tends to acquire a glow next.
       '.run-row .run-warn', '.run-row .run-warn-item', '.run-row .run-warn-glyph',
-      '.run-row .run-abandon']) {
+      '.run-row .run-abandon',
+      // F4's crossing badge/marker (cross-repo wave 2) join the same list:
+      // grounded for the contrast gate by the named-ancestor route, so they
+      // need no `INHERITED_GROUNDS` entry of their own, but that route is
+      // silent about glow — nothing else asserted these rules exist at all.
+      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');

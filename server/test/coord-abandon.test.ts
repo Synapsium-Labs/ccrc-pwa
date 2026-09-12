@@ -23,6 +23,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { RunState } from '../../shared/api.js';
+import { okRun } from './coordReadHelpers.js';
 
 const PROJECT = 'demo';
 const TOKEN = 'f'.repeat(64);
@@ -82,7 +83,7 @@ const wedged = (
     // only writer of `runs.state` (`store.ts`'s own docstring), so the walk
     // starts at `dispatched` rather than assuming it.
     for (const to of ['dispatched', 'working', 'awaiting-review', 'merging'] as const satisfies readonly RunState[]) {
-      if (coord.run(id)!.state === state) break;
+      if (okRun(coord.run(id))!.state === state) break;
       const adv = coord.advance(id, to, 'coordinator');
       if (!adv.ok) throw new Error(`fixture could not reach ${state}: ${JSON.stringify(adv)}`);
     }
@@ -121,7 +122,7 @@ describe('POST /api/runs/:id/abandon', () => {
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, id, state: 'failed' });
-    expect(w.coord.run(id)!.state).toBe('failed');
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
     // Nothing to release: a `planned` run that never dispatched holds no
     // workspace, so the ccd call is ABSENT, not merely tolerated-if-it-fails.
     expect(calls).toEqual([]);
@@ -140,7 +141,7 @@ describe('POST /api/runs/:id/abandon', () => {
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(200);
     expect(calls).toContainEqual(['ws-release', '--session', `${PROJECT}-reclaim`]);
-    expect(w.coord.run(id)!.state).toBe('failed');
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
     expect(w.coord.runEvents(id).map((e) => e.toState)).toEqual(['failed']);
   });
 
@@ -155,7 +156,7 @@ describe('POST /api/runs/:id/abandon', () => {
       const res = await postAbandon(app, id);
       expect(res.statusCode).toBe(200);
       expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
-      expect(w.coord.run(id)!.state).toBe('failed');
+      expect(okRun(w.coord.run(id))!.state).toBe('failed');
       const hops = w.coord.runEvents(id).map((e) => e.toState);
       expect(hops.slice(-2)).toEqual(['closing', 'failed']);
     });
@@ -201,7 +202,7 @@ describe('POST /api/runs/:id/abandon', () => {
     expect(calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
     // D-48: the fleet act is ahead of the commit, so a refusal leaves the run
     // exactly where it was — retryable, never wedged terminal.
-    expect(w.coord.run(id)!.state).toBe('dispatched');
+    expect(okRun(w.coord.run(id))!.state).toBe('dispatched');
   });
 
   it('502 with stderr, leaving the run RETRYABLE — the fleet act stays ahead of the commit (D-48)', async () => {
@@ -213,8 +214,8 @@ describe('POST /api/runs/:id/abandon', () => {
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ ok: false, stderr: 'ws-release failed on the box' });
-    expect(w.coord.run(id)!.state).toBe('working');
-    expect(w.coord.run(id)!.closedAt).toBeNull();
+    expect(okRun(w.coord.run(id))!.state).toBe('working');
+    expect(okRun(w.coord.run(id))!.closedAt).toBeNull();
   });
 
   it('records causedBy=operator in run_events, never coordinator', async () => {
@@ -238,7 +239,7 @@ describe('POST /api/runs/:id/abandon', () => {
     await postAbandon(app, id);
     // An abandon carries no claim, so there is nothing to write — exactly what
     // the existing `HANDOFF_SHA` guard would have produced anyway (D-274 (was D-B4-1)).
-    expect(w.coord.run(id)!.handoffCommit).toBeNull();
+    expect(okRun(w.coord.run(id))!.handoffCommit).toBeNull();
   });
 
   it("cancels the run's own outstanding deliveries and retires the program when it was the last run", async () => {
@@ -332,7 +333,7 @@ describe('POST /api/runs/:id/abandon', () => {
     expect(res.json()).not.toMatchObject({ refused: 'prhistory-unreadable' });
     // Not merely "it tolerated an unreadable ledger": it never opened one.
     expect(reads).toEqual([]);
-    expect(w.coord.run(id)!.prLineage).toEqual([]);
+    expect(okRun(w.coord.run(id))!.prLineage).toEqual([]);
   });
 
   it('never answers not-dispatched on this path', async () => {
@@ -369,7 +370,7 @@ describe('POST /api/runs/:id/abandon', () => {
     expect(res.statusCode).toBe(200);
     // The abandoned run still transitions — the workspace just stays claimed.
     expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: false });
-    expect(w.coord.run(id)!.state).toBe('failed');
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
     expect(calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', `program:build4 wave:2/3 run:${other}`]);
@@ -425,8 +426,8 @@ describe('POST /api/runs/:id/abandon', () => {
       ok: false, error: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS,
     });
     expect(calls).toEqual([]);
-    expect(w.coord.run(closingId)!.state).toBe('dispatched');
-    expect(w.coord.run(survivor.id)!.state).toBe('working');
+    expect(okRun(w.coord.run(closingId))!.state).toBe('dispatched');
+    expect(okRun(w.coord.run(survivor.id))!.state).toBe('working');
   });
 
   it('refuses an invalid survivor handoff before any fleet act or close commit', async () => {
@@ -449,8 +450,8 @@ describe('POST /api/runs/:id/abandon', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'hold-invalid' });
     expect(calls).toEqual([]);
-    expect(w.coord.run(closingId)!.state).toBe('dispatched');
-    expect(w.coord.run(survivor.id)!.state).toBe('working');
+    expect(okRun(w.coord.run(closingId))!.state).toBe('dispatched');
+    expect(okRun(w.coord.run(survivor.id))!.state).toBe('working');
   });
 
   it('a FAILED re-hold leaves the run RETRYABLE — the fleet act stays ahead of the commit (D-48)', async () => {
@@ -462,7 +463,7 @@ describe('POST /api/runs/:id/abandon', () => {
     sibling(w.coord, sessionId, 2);
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(502);
-    expect(w.coord.run(id)!.state).toBe('dispatched');   // UNCHANGED
+    expect(okRun(w.coord.run(id))!.state).toBe('dispatched');   // UNCHANGED
   });
 });
 
@@ -497,7 +498,7 @@ describe("closeRun's abandon arm, called directly", () => {
     // Refused BEFORE any act: a caller that has confused two acts gets an
     // answer, not half of one.
     expect(calls).toEqual([]);
-    expect(coord.run(id)!.state).toBe('dispatched');
+    expect(okRun(coord.run(id))!.state).toBe('dispatched');
   });
 
   it('refuses bad-request for {intent:"abandon", fingerprint:{…}} likewise', async () => {

@@ -10,7 +10,7 @@ import { ccdRunner } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
-import type { SessionStreamMsg } from '../../shared/api.js';
+import { HOLD_ROUTE_REASON_MAX_BYTES, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { unreadableField } from './ioDoubles.js';
@@ -942,6 +942,86 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     expect(calls.find((c) => c[1] === 'ws-release')?.slice(1)).toEqual(['ws-release', '--session', ID]);
     await app.close();
   });
+
+  // D-2546. The census measured this route as the FOURTH producer of a `.hold`
+  // reason and the only one D-2518 left unbounded: four validations, none of
+  // them a width, and the raw UNTRIMMED string handed to `wsHold` verbatim.
+  // The bound is a ruled BUDGET, not a repair — nothing downstream truncates,
+  // crashes or mis-renders at any width — so what these tests pin is the
+  // refusal's SHAPE, its UNIT, and that it happens before the fleet act.
+  it('accepts a reason at exactly the byte cap, forwarded verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude-a');
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const app = await buildServer(testDeps(home, run));
+    const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(200);
+    // VERBATIM, not merely accepted: the cap is refuse-never-truncate, so an
+    // at-the-cap reason must reach ccd byte-for-byte.
+    expect(calls.find((c) => c[1] === 'ws-hold')?.slice(1))
+      .toEqual(['ws-hold', '--session', ID, '--reason', reason]);
+    await app.close();
+  });
+
+  it('refuses one byte over the cap with `oversize`, and never calls ws-hold', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES + 1);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize', limit: HOLD_ROUTE_REASON_MAX_BYTES });
+    // THE SEAM, not just the status. A refusal that still fires the fleet act
+    // is the failure worth catching: the whole point of refusing here is that
+    // the registry file is never written.
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('measures BYTES, not characters — a multi-byte reason under the cap in ' +
+     'characters and over it in bytes is refused', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    // '€' is three UTF-8 bytes. This string is well under the cap in
+    // characters and over it in bytes, so it passes a character-counting cap
+    // and fails a byte-counting one. Without this case the constant could be
+    // switched to `.length` and every other test here would stay green.
+    const reason = '€'.repeat(Math.floor(HOLD_ROUTE_REASON_MAX_BYTES / 3) + 1);
+    expect(reason.length).toBeLessThan(HOLD_ROUTE_REASON_MAX_BYTES);
+    expect(Buffer.byteLength(reason, 'utf8')).toBeGreaterThan(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('measures the UNTRIMMED string the route forwards, not the trimmed one it ' +
+     'tests for emptiness', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    // In the cap's own units this is `HOLD_ROUTE_REASON_MAX_BYTES + 2` bytes;
+    // trimmed it would be one byte under. `wsHold` receives the untrimmed
+    // string, so the cap must read the untrimmed string too — otherwise
+    // padding is a way to exceed it.
+    const reason = ` ${'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES)} `;
+    expect(reason.trim().length).toBeLessThanOrEqual(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('still answers `bad-request`, never `oversize`, for the empty/whitespace/' +
+     'non-string shapes — two conditions a caller acts on differently', async () => {
+    const { app } = await makeApp(['❯ \n']);
+    for (const payload of [{}, { reason: '' }, { reason: '   ' }, { reason: 5 }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    await app.close();
+  });
 });
 
 describe('layer 1 — the guard runner', () => {
@@ -1043,6 +1123,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     return { code: 0, stdout: '', stderr: '' };
   };
 
+  // D-2545 REGRESSION PIN, and the reason it is called out by name: the
+  // wave-1 ruling described this 409 as carrying "no row detail", which was a
+  // premise about the FAILURE arm read as a description of today's behaviour.
+  // The success path carries FULL row detail and must stay byte-identical —
+  // narrowing it would be the unauthorised regression that change was most
+  // likely to cause. This test is that byte-for-byte assertion.
   it('refuses 409 run-open, NAMING the run ids — never a bare slug', async () => {
     const home = seededHome('demo-claimed');
     const calls: string[][] = [];
@@ -1053,6 +1139,28 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
       ok: false, error: 'run-open',
       runs: [{ id: runId, program: 'build4', wave: 2, waveOf: 3 }],
     });
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await app.close();
+  });
+
+  it('refuses 409 run-open with an EMPTY runs array when the sibling rows are ' +
+     'UNREADABLE — refused as claimed, and still not archived (D-2545)', async () => {
+    const home = seededHome('demo-claimed');
+    const calls: string[][] = [];
+    const { app, coord } = await withCoord(home, recording(calls), 'demo-claimed');
+    // A second open run on the same workspace whose `wave` is wider than the
+    // JavaScript safe domain — the shape a newer build writes and a rollback
+    // leaves behind.
+    coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'build4', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'demo', 'demo-claimed',
+      'planned', 'ccrc-pwa-coordinator', Date.now());
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
+    expect(res.statusCode).toBe(409);
+    // The SHAPE does not change with the condition — `runs` is present and
+    // empty, because no row was read. Fail-shut at a destructive act.
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

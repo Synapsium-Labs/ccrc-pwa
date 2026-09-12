@@ -50,13 +50,29 @@ THIS session sends mail of its own (`POST /api/mail`, `references/wave-
 lifecycle.md` §3), its own `artifacts` entries must be absolute paths too.
 
 **`to:` is always the resolved recipient.** The fixture above shows
-`ccrc-pwa-still-water`, a concrete session id — never the literal role name
-`coordinator`, even when the mail was addressed that way (`toId:"coordinator"`
-on the sending side): the ingress resolves the role to whichever session
-actually holds the program's coordinator run (`resolveCoordinator`) before
-this envelope is ever rendered, and stores the rendered bytes. Reading `to:`
-tells you who this envelope was actually delivered to, not the role the
-sender named.
+`ccrc-pwa-still-water`, a concrete session id — never a literal role name, even
+when the mail was addressed that way. There are two role names, `coordinator` and
+`worker`, and the ingress resolves either to a session before this envelope is
+ever rendered, then stores the rendered bytes: `resolveCoordinator` answers the
+session holding the programme's coordinator run, and `resolveWorker` answers the
+`sessionId` of the run named on the mail. Reading `to:` tells you who this
+envelope was actually delivered to, not the role the sender named.
+
+**The two roles are not symmetrical, and that is deliberate.** A coordinator is
+per PROGRAMME, so `toId:"coordinator"` with no `runId` falls back to the single
+active programme — and fails shut the moment two are active. A worker is per RUN,
+so a `worker` mail names the `runId` of the run whose worker it wants; there is
+nothing to fall back to, and a `worker` mail with no `runId` is refused
+`unknown-recipient`, as is one naming a run that has no worker yet (its `detail`
+says which run). Raw session-id addressing is unchanged and is still right for
+ad-hoc mail to a session you have already identified.
+
+**A replacement occupant inherits its predecessor's undelivered mail.** When a run
+is re-bound to a different session, every OUTSTANDING delivery of a role-addressed
+mail on that run is re-issued to the heir as a NEW row, freshly rendered — never a
+replay, because the stored envelope names the session that is gone — and the
+predecessor's row is parked as the true record that it was never delivered. That is
+the same act a coordinator handover already performs, now parameterised by role.
 
 ## When YOUR message is the one that cannot land
 

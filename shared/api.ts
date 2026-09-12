@@ -3544,9 +3544,18 @@ export interface NotifyEvent {
    * WHICH RUN this notification is about, or `null` when it is about none.
    *
    * ADDITIVE (design 2026-09-08 §4); `FLEET_PROTO` is deliberately not bumped.
-   * The ONE tolerant reader is `reviveNotifyEvent` below — an older server's
-   * frame carries no `runId` at all, and that absence becomes `null` there and
-   * nowhere else.
+   * TWO tolerant readers at two different boundaries, deliberately, not one
+   * reader total and not a duplicate: `reviveNotifyEvent` below is what a
+   * `NotifyEvent` crosses coming IN — an older server's frame carries no
+   * `runId` at all, and that absence becomes `null` there, at the wire. The
+   * render boundary has its own reader, `pwa/src/lib/feed.ts`'s `eventRunId`,
+   * for a store row that reached a renderer WITHOUT having crossed that wire
+   * check just now — an older build's cached record, or a merge that put an
+   * unrevived object back in the store — and it turns that same absence into
+   * the same `null` there. Neither reaches past its own boundary: every
+   * `pwa/src` render site reads `eventRunId(ev)`, never `ev.runId` directly,
+   * so the wire's normalisation is never re-derived, only covered where it
+   * could still be missed.
    *
    * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
    * `coord` are about a SESSION or about the config; they belong to no
@@ -3857,6 +3866,44 @@ export const RUN_ID_MAX_DECIMAL = '9223372036854775807';
  *  shell keeps a literal because it cannot import TypeScript; a server test
  *  binds the values. */
 export const HOLD_REASON_MAX_CHARS = 127;
+
+/**
+ * `POST /api/sessions/:id/hold`'s free-form `reason` cap (D-2546). BYTES,
+ * measured as UTF-8 — deliberately a different UNIT from `HOLD_REASON_MAX_CHARS`
+ * directly above, which counts CHARACTERS on purpose because it sizes the
+ * session hook's readable DISPLAY window. This one bounds what crosses an HTTP
+ * ingress into an argv element and a registry file, where the cost is bytes;
+ * a reader "fixing" one to match the other would change what both mean.
+ *
+ * NOT A REPAIR OF A DEFECT. Nothing on this path truncates, crashes or
+ * mis-renders at any width, and the one discriminating reader — the session
+ * hook — degrades to SILENCE by design (its own shape gate, proven at 200,000+
+ * characters by `server/test/session-hook.test.ts`). This is a BUDGET CHOICE
+ * about how much free-form operator text a registry field should carry, ruled
+ * by the operator rather than derived from a constraint.
+ *
+ * 512 mirrors `LC_REASON_MAX_BYTES` — the closest STRUCTURAL match in the tree:
+ * a free-form `--reason` written verbatim and parsed nowhere, refuse-never-
+ * truncate. SAME NUMBER, SEPARATE CONSTANT, and deliberately NOT an alias of
+ * it, for `LEDGER_TITLE_MAX_BYTES`'s stated reason: tying two seams' caps
+ * together lets a change to one silently rewrite the other's refusal threshold.
+ * `WORK_ITEM_TITLE_MAX`/`MAIL_SUBJECT_MAX_BYTES`/`LEDGER_TITLE_MAX_BYTES` are
+ * three existing precedents that are all 200 and all deliberately separate.
+ *
+ * REFUSE, NEVER TRUNCATE: a shortened hold reason is a silently altered
+ * operator statement, recorded as if the operator had written it.
+ *
+ * A CONTRACT AT THE HTTP CHOKEPOINT, NOT AN OS WALL. `ccd ws-hold` stays
+ * directly callable on the box, and a human with a shell can still write a
+ * reason of any width — ccd's own emptiness check (`ccd/ccd`'s `cmd_ws_hold`)
+ * is all that stops them, by its own stated design intent ("the reason string
+ * is the display everywhere — write it verbatim, parse it nowhere"). This is
+ * the same honesty `CLAUDE.md` already requires of the caps-and-pause
+ * chokepoint, "a contract the coordinator skill honors, not an OS wall", and
+ * it is what keeps the next reader from believing the registry field is
+ * structurally bounded when it is not.
+ */
+export const HOLD_ROUTE_REASON_MAX_BYTES = 512;
 
 /** One field rendered into a hold: a runtime JavaScript number, or the decimal
  *  TEXT of a width the budget reserves but no JavaScript number can hold. Both

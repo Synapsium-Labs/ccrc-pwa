@@ -223,11 +223,78 @@ export type AskTakeResult =
   | { ok: true; row: AskRow }
   | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' };
 
+/**
+ * D-2545 — THE FIVE READ ANSWERS, and the one rule that makes them worth
+ * having: **ABSENT IS NOT UNREADABLE.**
+ *
+ * `{ ok: true, run: null }` means NO SUCH ROW. `{ ok: false, … }` means the row
+ * EXISTS and one of its persisted integers is unrepresentable in JavaScript.
+ * Before this, `run(id): RunRow | null` and `askById(id): AskRow | null` had no
+ * slot for the second condition at all, and the naive fix — catch the
+ * `RangeError` and return `null` — is precisely the **overloaded null at a
+ * seam** this codebase bans
+ * (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md:99-100`),
+ * with `store.ts` named there as the L3 adapter bound by "an adapter may not
+ * narrow a distinction it received" (`:86-89`). The two conditions travel
+ * apart, all the way to every consumer.
+ *
+ * ALL-OR-FAILURE on the list reads: one unreadable row fails the WHOLE read.
+ * Never a partial list — a board that silently drops the run an operator is
+ * looking for is worse than a board that says it could not be read.
+ *
+ * Shaped on `HoldReasonVerdict` (`coord/rundefs.ts:97-100`) and on this file's
+ * own `SetEnvelopeResult`/`MarkAckedResult`/`AskTakeResult` above. SERVER-
+ * INTERNAL: none of these types reaches a wire — every consumer maps its own
+ * refusal onto its own vocabulary.
+ */
+export type RunReadResult =
+  | { ok: true; run: RunRow | null }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type RunsReadResult =
+  | { ok: true; runs: RunRow[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type OpenSiblingsResult =
+  | { ok: true; siblings: OpenSibling[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type AskReadResult =
+  | { ok: true; ask: AskRow | null }
+  | { ok: false; kind: 'ask-unreadable'; detail: string };
+
+export type AsksReadResult =
+  | { ok: true; asks: AskRow[] }
+  | { ok: false; kind: 'ask-unreadable'; detail: string };
+
+/** `AsksReadResult`'s KEYED sibling, for `currentAsksFor` alone — the one ask
+ *  reader whose answer is a map rather than a list, because `assembleFleet`
+ *  asks "the newest ask row PER CHILD" for the whole registry every tick. A
+ *  sixth type rather than returning the array and re-keying at the caller:
+ *  the keying is the store's own (a child with no row is ABSENT from the map,
+ *  which is what the caller's `.get(id) ?? null` fold reads), and moving it out
+ *  would put a store concern in `fleet.ts` to save a type alias. */
+export type AsksByChildResult =
+  | { ok: true; asks: Map<string, AskRow> }
+  | { ok: false; kind: 'ask-unreadable'; detail: string };
+
 /** The raw row shape common to `run(id)` and `runs()` — named columns only
  *  (no `SELECT *` anywhere in this file), joined once against `programs` for
- *  its title. */
+ *  its title.
+ *
+ *  THE THREE `*Text` FIELDS ARE THE WHOLE OF D-2545 (see `persistedInt` below).
+ *  `node:sqlite` throws a bare `RangeError` while CONVERTING a persisted
+ *  INTEGER wider than `Number.MAX_SAFE_INTEGER` into a JavaScript number, so a
+ *  row a newer build wrote and a rollback left behind used to crash the read
+ *  before any boundary could refuse in words — and there is no
+ *  `app.setErrorHandler` anywhere in `server/src`, so that became Fastify's
+ *  default bare 500. Reading them as TEXT and proving them afterwards is the
+ *  idiom `openRun`'s already-protected duplicate-row arm uses (`:647`), reached
+ *  here for the read surface. `CAST(NULL AS TEXT)` is `NULL`, so `waveOf`'s
+ *  nullability survives unchanged. */
 interface RunRowDb {
-  id: number; program: string; programTitle: string; wave: number; waveOf: number | null;
+  idText: string; program: string; programTitle: string;
+  waveText: string; waveOfText: string | null;
   homeProject: string | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
   state: string; claimedBy: string | null;
@@ -239,13 +306,80 @@ interface RunRowDb {
   clearError: string | null;
 }
 
+/** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
+ *  departure from the wave-1 ruling's parenthetical): `setReadBigInts` is
+ *  per-STATEMENT, not per-column, so turning it on here would convert EVERY
+ *  integer column of this SELECT to `bigint` — `openedAt`, `resumed`,
+ *  `clearedAt`, `dispatchedAt`, `closedAt`, `briefQueued` and more — forcing a
+ *  bigint->number conversion on a dozen columns outside this defect's domain.
+ *  `CAST(col AS TEXT)` is surgical, and it is the spelling the store's
+ *  already-protected sibling arm at `:647` already uses.
+ *
+ *  `ORDER BY r.id` and the `includeClosed` subquery below still order on the
+ *  real INTEGER column; only the projection changes. */
 const RUN_ROW_COLUMNS =
-  'r.id, r.program, p.title AS programTitle, p.homeProject AS homeProject, ' +
-  'r.wave, r.waveOf, r.project, r.sessionId, ' +
+  'CAST(r.id AS TEXT) AS idText, r.program, p.title AS programTitle, p.homeProject AS homeProject, ' +
+  'CAST(r.wave AS TEXT) AS waveText, CAST(r.waveOf AS TEXT) AS waveOfText, r.project, r.sessionId, ' +
   'r.workspace, r.branch, r.state, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
+
+/** ONE persisted integer, read as TEXT and proven representable.
+ *
+ *  A DISCRIMINATED RESULT, never a three-valued return: SQL `NULL` is decided
+ *  at the CALL SITE (the nullable `waveOf` column below), so this helper only
+ *  ever sees a string and never has to overload its own answer.
+ *
+ *  The predicate is `shared/api.ts`'s `isPositiveDecimalSafeInteger`, imported
+ *  rather than respelled — `single-definition.test.ts` text-scans four roots
+ *  and fails the build on a second copy of a single-source value.
+ *
+ *  `detail` NAMES THE COLUMN AND NOTHING ELSE. The offending value never
+ *  leaves this function — not as a bigint, not as a rounded number, not in a
+ *  log line and not in a reply — for `RUN_ID_MAX_DECIMAL`'s own stated reason:
+ *  a value this process cannot represent cannot be quoted without being
+ *  falsified in the quoting. The wording matches `openRun`'s existing details
+ *  verbatim in style (`'reused run id is not a positive safe integer'`). */
+type PersistedInt = { ok: true; value: number } | { ok: false; detail: string };
+
+const persistedInt = (text: string, column: string): PersistedInt => {
+  const value = Number(text);
+  return isPositiveDecimalSafeInteger(value)
+    ? { ok: true, value }
+    : { ok: false, detail: `${column} is not a positive safe integer` };
+};
+
+/** The three persisted integers every run-shaped read carries, proven. */
+interface RunNumbers { id: number; wave: number; waveOf: number | null }
+
+type RunNumbersResult = { ok: true; nums: RunNumbers } | { ok: false; detail: string };
+
+/** `RunRowDb`'s (and `openRunsForSession`'s narrower row's) three integers,
+ *  measured together so the two reads cannot come to disagree about which
+ *  columns are in the domain or how they are worded. */
+const measureRunNumbers = (
+  r: { idText: string; waveText: string; waveOfText: string | null },
+): RunNumbersResult => {
+  const id = persistedInt(r.idText, 'run id');
+  if (!id.ok) return id;
+  const wave = persistedInt(r.waveText, 'run wave');
+  if (!wave.ok) return wave;
+  // NULL IS DECIDED HERE, not inside `persistedInt` — `waveOf` is legitimately
+  // absent (the two documented display forms omit it), and a helper that had to
+  // answer "absent" as well as "present but unrepresentable" would be the
+  // overloaded value this whole change exists to remove.
+  if (r.waveOfText === null) return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: null } };
+  const waveOf = persistedInt(r.waveOfText, 'run waveOf');
+  if (!waveOf.ok) return waveOf;
+  return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: waveOf.value } };
+};
+
+/** A `RunRowDb` whose three integers are proven — what `healthFor` and
+ *  `hydrateRun` take now that the numeric ids do not exist until after
+ *  validation. The order is: read rows -> validate every row -> on any failure
+ *  return the refusal -> only then `healthFor` -> then hydrate. */
+interface MeasuredRunRow { row: RunRowDb; nums: RunNumbers }
 
 /**
  * Coordination's own terminal-state rule, spelled ONCE (bounded context 5:
@@ -1773,12 +1907,33 @@ export class CoordStore {
     this.db.prepare('UPDATE runs SET handoffCommit = ? WHERE id = ?').run(handoffCommit, runId);
   }
 
-  run(id: number): RunRow | null {
+  /** ONE run, or the two answers that are not one run (D-2545). `{ok:true,
+   *  run:null}` is "no such row"; `{ok:false}` is "the row is there and this
+   *  process cannot represent its integers". See `RunReadResult`. */
+  run(id: number): RunReadResult {
     const row = this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.id = ?`,
     ).get(id) as RunRowDb | undefined;
-    if (!row) return null;
-    return this.hydrateRun(row, this.healthFor([row]).get(row.id)!);
+    if (!row) return { ok: true, run: null };
+    const m = measureRunNumbers(row);
+    if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+    const measured: MeasuredRunRow = { row, nums: m.nums };
+    return { ok: true, run: this.hydrateRun(measured, this.healthFor([measured]).get(m.nums.id)!) };
+  }
+
+  /** Rows -> the whole answer, ALL-OR-FAILURE. The order is forced by the
+   *  CAST: `healthFor` reads `id` and `claimedBy`, and the numeric ids do not
+   *  exist until every row has been validated, so validation runs over the
+   *  whole batch BEFORE the four health statements are spent on it. */
+  private hydrateRuns(rows: readonly RunRowDb[]): RunsReadResult {
+    const measured: MeasuredRunRow[] = [];
+    for (const row of rows) {
+      const m = measureRunNumbers(row);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      measured.push({ row, nums: m.nums });
+    }
+    const health = this.healthFor(measured);
+    return { ok: true, runs: measured.map((m) => this.hydrateRun(m, health.get(m.nums.id)!)) };
   }
 
   /**
@@ -1803,24 +1958,20 @@ export class CoordStore {
    * silently truncated: this method's own `includeClosed:false` branch
    * (used by that frame) carries no LIMIT at all, clamped or otherwise.
    */
-  runs(opts: { includeClosed?: boolean; closedLimit?: number } = {}): RunRow[] {
+  runs(opts: { includeClosed?: boolean; closedLimit?: number } = {}): RunsReadResult {
     if (!opts.includeClosed) {
-      const rows = this.db.prepare(
+      return this.hydrateRuns(this.db.prepare(
         `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
         "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
-      ).all() as unknown as RunRowDb[];
-      const health = this.healthFor(rows);
-      return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
+      ).all() as unknown as RunRowDb[]);
     }
     const n = clampMailLimit(opts.closedLimit ?? 500);
-    const rows = this.db.prepare(
+    return this.hydrateRuns(this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
       "WHERE r.state NOT IN ('done','failed') OR r.id IN " +
       "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
       'ORDER BY r.id',
-    ).all(n) as unknown as RunRowDb[];
-    const health = this.healthFor(rows);
-    return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
+    ).all(n) as unknown as RunRowDb[]);
   }
 
   /**
@@ -1850,11 +2001,27 @@ export class CoordStore {
    * `excludeRunId` defaults to `-1`, an id AUTOINCREMENT never mints, so the
    * "no exclusion" call and the excluding call are ONE query, not two.
    */
-  openRunsForSession(sessionId: string, excludeRunId?: number): OpenSibling[] {
-    return this.db.prepare(
-      'SELECT id, program, wave, waveOf FROM runs ' +
+  openRunsForSession(sessionId: string, excludeRunId?: number): OpenSiblingsResult {
+    // Three of the four columns are CAST to TEXT and proven, for
+    // `RUN_ROW_COLUMNS`'s reason (D-2545) — this read's three consumers are all
+    // DESTRUCTIVE decision points, so an unrepresentable row here must refuse
+    // in words rather than throw out of a sweep or a fleet act.
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText FROM runs ' +
       "WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ? ORDER BY id",
-    ).all(sessionId, excludeRunId ?? -1) as unknown as OpenSibling[];
+    ).all(sessionId, excludeRunId ?? -1) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null }[];
+    const siblings: OpenSibling[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      // ALL-OR-FAILURE (`RunReadResult`'s own docstring): a partial sibling
+      // list is how "nothing else claims this workspace" gets asserted about a
+      // workspace something else claims.
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      siblings.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
+    }
+    return { ok: true, siblings };
   }
 
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
@@ -1984,18 +2151,26 @@ export class CoordStore {
       .run(home, slug);
   }
 
-  /** `RunRowDb` -> `RunRow`. The one place a raw `runs` row becomes the typed
-   *  shape everything else in this class and its callers use — every enum
+  /** `MeasuredRunRow` -> `RunRow`. The one place a raw `runs` row becomes the
+   *  typed shape everything else in this class and its callers use — every enum
    *  column goes through its guard here, never a cast, so this is also the
-   *  one place that rule could be forgotten for a future column. */
-  private hydrateRun(row: RunRowDb, health: RunHealth): RunRow {
+   *  one place that rule could be forgotten for a future column.
+   *
+   *  It takes a MEASURED row rather than a raw one (D-2545) so that the three
+   *  persisted integers cannot arrive here unproven: the proof is a
+   *  precondition of the type, not a step a future caller could skip. */
+  private hydrateRun(m: MeasuredRunRow, health: RunHealth): RunRow {
+    const row = m.row;
     return {
-      id: row.id, program: row.program, programTitle: row.programTitle,
+      // The three PROVEN integers (D-2545), never `Number(row.…)` here: this
+      // method is handed a row whose id, wave and waveOf have already been
+      // measured, precisely so it cannot be the place the proof is forgotten.
+      id: m.nums.id, program: row.program, programTitle: row.programTitle,
       // Straight off the `programs` join, on `programTitle`'s idiom: a free-form
       // project name, no vocabulary to read it through. NULL means the programme
       // row stores no home — never a value this build could not read.
       homeProject: row.homeProject,
-      wave: row.wave, waveOf: row.waveOf, project: row.project,
+      wave: m.nums.wave, waveOf: m.nums.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
       // `runs.claimedBy` — TEXT, nullable — read straight through on
@@ -2025,8 +2200,8 @@ export class CoordStore {
       dispatchStartedAt: row.dispatchStartedAt,
       openedAt: row.openedAt, dispatchedAt: row.dispatchedAt, closedAt: row.closedAt,
       handoffCommit: row.handoffCommit,
-      items: this.itemTally(row.id),
-      unreadMail: this.unreadMailCount(row.id, row.sessionId),
+      items: this.itemTally(m.nums.id),
+      unreadMail: this.unreadMailCount(m.nums.id, row.sessionId),
       // F7. Passed IN rather than measured here, and that is the whole design:
       // `hydrateRun` runs once per row, and four more per-row reads would cost
       // the board 2,000 more statements on a `?closed=1` load. `runHealth` answers
@@ -2046,12 +2221,16 @@ export class CoordStore {
     ).get(runId, sessionId) as { c: number }).c;
   }
 
-  /** `runHealth` for a batch of rows already read — the shape `runs()`/`run()`
-   *  hold. Keeps the id/coordinator extraction in one place so the two call
-   *  sites cannot disagree about which sessions count as coordinators. */
-  private healthFor(rows: readonly RunRowDb[]): Map<number, RunHealth> {
-    const coords = [...new Set(rows.map((r) => r.claimedBy).filter((c): c is string => c !== null))];
-    return this.runHealth(rows.map((r) => r.id), coords);
+  /** `runHealth` for a batch of rows already read AND MEASURED — the shape
+   *  `runs()`/`run()` hold. Keeps the id/coordinator extraction in one place so
+   *  the two call sites cannot disagree about which sessions count as
+   *  coordinators. `MeasuredRunRow`, not `RunRowDb`: it reads `id`, and with
+   *  the id read as TEXT (D-2545) the number does not exist until validation
+   *  has run — which is why validation now precedes this call rather than
+   *  following it. */
+  private healthFor(rows: readonly MeasuredRunRow[]): Map<number, RunHealth> {
+    const coords = [...new Set(rows.map((r) => r.row.claimedBy).filter((c): c is string => c !== null))];
+    return this.runHealth(rows.map((r) => r.nums.id), coords);
   }
 
   /**
@@ -3453,7 +3632,18 @@ export class CoordStore {
         );
         ids.push(Number(res.lastInsertRowid));
       }
-      return ids.map((id) => this.run(id)!);
+      // Rows this transaction just inserted, read back through the measured
+      // read (D-2545). A row the rebuild itself produced that cannot be read
+      // back must ROLL THE WHOLE RECONSTRUCTION BACK rather than be returned
+      // half-typed — the throw is inside `tx()`, which is what makes that true.
+      // Unreachable by construction (AUTOINCREMENT has just assigned these ids
+      // in this same transaction); it exists so a drift fails loudly.
+      return ids.map((id) => {
+        const read = this.run(id);
+        if (!read.ok) throw new Error(`reconstruct: ${read.detail}`);
+        if (read.run === null) throw new Error('reconstruct: a row this transaction inserted read back absent');
+        return read.run;
+      });
     });
   }
 
@@ -4204,46 +4394,95 @@ export class CoordStore {
     return row?.claimedBy ?? null;
   }
 
+  /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID
+   *  DOMAIN (`isPositiveDecimalSafeInteger`) — are CAST to TEXT and proven,
+   *  exactly as `RUN_ROW_COLUMNS` does for its three.
+   *
+   *  THE BOUNDARY, said out loud because the next reader will ask: the four
+   *  epoch-millisecond columns (`at`, `askAt`, `answeredAt`, `releasedAt`) are
+   *  NOT cast and NOT proven. They are not in this domain — `insertAsk`'s own
+   *  ruled guard names `runId` and nothing else — and giving them a
+   *  positive-safe-integer guard would invent a contract for them that nothing
+   *  in this tree has ruled on. The consequence is stated rather than hidden:
+   *  an out-of-safe-range TIMESTAMP still throws out of this method the way
+   *  every unguarded persisted read does. That wider surface is D-2560's. */
   private static readonly ASK_COLS =
-    'id, at, childId, parentId, runId, askKey, askAt, dialogId, question, options, ' +
+    'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
+    'askKey, askAt, dialogId, question, options, ' +
     'state, answeredBy, answer, answeredAt, releasedAt';
 
   private hydrateAsk(r: {
-    id: number; at: number; childId: string; parentId: string; runId: number | null;
+    idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
     answeredAt: number | null; releasedAt: number | null;
-  }): AskRow {
+  }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
+    const id = persistedInt(r.idText, 'ask id');
+    if (!id.ok) return id;
+    // `runId` is NULLABLE and null is LEGAL — an ask minted for a child with no
+    // open run carries none. Decided at this call site, never inside
+    // `persistedInt`, for `measureRunNumbers`'s stated reason.
+    let runId: number | null = null;
+    if (r.runIdText !== null) {
+      const measured = persistedInt(r.runIdText, 'ask runId');
+      if (!measured.ok) return measured;
+      runId = measured.value;
+    }
+    const { idText: _idText, runIdText: _runIdText, ...rest } = r;
     // Read back through `isAskState`, never a bare cast — an out-of-vocabulary
     // token a newer build wrote degrades honestly to `unknown` instead of
     // being smuggled into the narrow type.
     return {
-      ...r,
-      options: JSON.parse(r.options) as string[],
-      state: isAskState(r.state) ? r.state : 'unknown',
+      ok: true,
+      ask: {
+        ...rest,
+        id: id.value,
+        runId,
+        options: JSON.parse(r.options) as string[],
+        state: isAskState(r.state) ? r.state : 'unknown',
+      },
     };
   }
 
   /** `askById`'s private backer. Every caller across this plan names
    *  `askById`; this exists so `takeAskForAnswer` can read the row inside its
    *  own transaction without going through the public name. */
-  private readAsk(id: number): AskRow | null {
+  private readAsk(id: number): AskReadResult {
     const row = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE id = ?`,
     ).get(id) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
-    return row === undefined ? null : this.hydrateAsk(row);
+    if (row === undefined) return { ok: true, ask: null };
+    const h = this.hydrateAsk(row);
+    return h.ok ? { ok: true, ask: h.ask } : { ok: false, kind: 'ask-unreadable', detail: h.detail };
   }
 
-  askById(id: number): AskRow | null {
+  askById(id: number): AskReadResult {
     return this.readAsk(id);
   }
 
   /** Minted at hold time (Task 6), state `'held'` — the only state an ask is
-   *  ever inserted in; nothing else writes a fresh row. */
+   *  ever inserted in; nothing else writes a fresh row.
+   *
+   *  THE `runId` GUARD IS DEFENSIVE (D-2545) and unreachable by construction
+   *  today: its one production call site (`watch.ts`'s `hold`) takes `runId`
+   *  straight off `openRunsForSession`, which now proves it before returning
+   *  it. It exists for the same reason `hold`'s own `askKey === null` throw
+   *  does — so a future drift fails LOUDLY rather than writing a row nothing
+   *  can read back — and it THROWS rather than widening this method's return,
+   *  because the caller already try/catches into the immediate-operator-push
+   *  fallback that is the ruled behaviour for exactly this abort.
+   *
+   *  `null` IS LEGAL and stays legal: an ask minted for a child with no open
+   *  run carries none. Only a NON-NULL value outside the domain is refused —
+   *  refused, never coerced. */
   insertAsk(a: {
     childId: string; parentId: string; runId: number | null; askKey: string;
     askAt: number; dialogId: string; question: string; options: string[]; now: number;
   }): number {
+    if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
+      // The COLUMN and nothing else — the offending value never leaves here.
+      throw new Error('insertAsk: ask runId is not a positive safe integer');
+    }
     const res = this.db.prepare(
       'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, ' +
       "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
@@ -4254,7 +4493,7 @@ export class CoordStore {
 
   /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
    *  addressed to this parent, or only those in one `state` when given. */
-  asksForParent(parentId: string, state?: AskState): AskRow[] {
+  asksForParent(parentId: string, state?: AskState): AsksReadResult {
     const rows = (state === undefined
       ? this.db.prepare(
           `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? ORDER BY id`,
@@ -4262,19 +4501,28 @@ export class CoordStore {
       : this.db.prepare(
           `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? ORDER BY id`,
         ).all(parentId, state)) as Parameters<CoordStore['hydrateAsk']>[0][];
-    return rows.map((r) => this.hydrateAsk(r));
+    const asks: AskRow[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      // ALL-OR-FAILURE, like every other list read on this surface.
+      if (!h.ok) return { ok: false, kind: 'ask-unreadable', detail: h.detail };
+      asks.push(h.ask);
+    }
+    return { ok: true, asks };
   }
 
   /** Task 12's lookup when the operator answers: the row this child's live
    *  question is held under, if any. At most one `held` row per child is ever
    *  live at a time (a second mint only happens once the first has left
    *  `held`), so the newest is the right — and normally only — answer. */
-  heldAskFor(childId: string): AskRow | null {
+  heldAskFor(childId: string): AskReadResult {
     const row = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks ` +
       "WHERE childId = ? AND state = 'held' ORDER BY id DESC LIMIT 1",
     ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
-    return row === undefined ? null : this.hydrateAsk(row);
+    if (row === undefined) return { ok: true, ask: null };
+    const h = this.hydrateAsk(row);
+    return h.ok ? { ok: true, ask: h.ask } : { ok: false, kind: 'ask-unreadable', detail: h.detail };
   }
 
   /** Task 19's fleet-chip lookup: the newest ask row for this child, in ANY
@@ -4290,11 +4538,13 @@ export class CoordStore {
    *  happens once the previous row has left `held` (`insertAsk`'s own
    *  docstring) — there is never more than one row in flight to disambiguate
    *  by anything other than recency. */
-  currentAskFor(childId: string): AskRow | null {
+  currentAskFor(childId: string): AskReadResult {
     const row = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE childId = ? ORDER BY id DESC LIMIT 1`,
     ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
-    return row === undefined ? null : this.hydrateAsk(row);
+    if (row === undefined) return { ok: true, ask: null };
+    const h = this.hydrateAsk(row);
+    return h.ok ? { ok: true, ask: h.ask } : { ok: false, kind: 'ask-unreadable', detail: h.detail };
   }
 
   /** `currentAskFor`'s BATCHED form (fix round 1, item 3 — coordinator
@@ -4319,17 +4569,23 @@ export class CoordStore {
    *  `IN ()`. A child with no ask row at all is simply ABSENT from the
    *  returned map — the caller's `.get(id) ?? null` fold, not a `null`
    *  entry here. */
-  currentAsksFor(childIds: readonly string[]): Map<string, AskRow> {
+  currentAsksFor(childIds: readonly string[]): AsksByChildResult {
     const out = new Map<string, AskRow>();
-    if (childIds.length === 0) return out;
+    if (childIds.length === 0) return { ok: true, asks: out };
     const ph = placeholders(childIds.length);
     const rows = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE id IN (` +
         `SELECT MAX(id) FROM asks WHERE childId IN (${ph}) GROUP BY childId` +
       ')',
     ).all(...childIds) as Parameters<CoordStore['hydrateAsk']>[0][];
-    for (const r of rows) out.set(r.childId, this.hydrateAsk(r));
-    return out;
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      // ALL-OR-FAILURE. One unreadable row fails the WHOLE frame rather than
+      // silently removing one session's ask chip from the board.
+      if (!h.ok) return { ok: false, kind: 'ask-unreadable', detail: h.detail };
+      out.set(r.childId, h.ask);
+    }
+    return { ok: true, asks: out };
   }
 
   /** THE GUARD IS IN THE `WHERE` (the `endClaim` shape). Two predicates, and
@@ -4349,7 +4605,18 @@ export class CoordStore {
    *  `wave-lifecycle.md`, where a coordinator reads it. */
   takeAskForAnswer(id: number, askAt: number): AskTakeResult {
     return tx(this.db, () => {
-      const row = this.readAsk(id);
+      const read = this.readAsk(id);
+      // UNREADABLE IS NOT UNKNOWN, and `AskTakeResult` has no slot for it
+      // (D-2545). Answering `'unknown-ask'` here would be the overloaded value
+      // this whole change removes — a coordinator told "no such ask" for a row
+      // that is sitting there. It THROWS instead, and it is unreachable by
+      // construction from both call sites: `/answer` reads `askById` and
+      // `POST /api/sessions/:id/ask` reads `heldAskFor` immediately before,
+      // each refusing the unreadable row in its own words first. Widening
+      // `AskTakeResult` would put a never-wire word into the ask refusal
+      // vocabulary the two routes send verbatim.
+      if (!read.ok) throw new Error(`takeAskForAnswer: ${read.detail}`);
+      const row = read.ask;
       if (row === null) return { ok: false as const, why: 'unknown-ask' as const };
       if (row.askAt !== askAt) return { ok: false as const, why: 'ask-moved' as const };
       const res = this.db.prepare(

@@ -33,6 +33,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okAsk } from './coordReadHelpers.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -152,8 +153,8 @@ describe('what that costs the parent at the CAS', () => {
       const attempt = coord.takeAskForAnswer(id, fresh.updatedAt);
       expect(attempt.ok).toBe(false);
       expect(attempt.ok === false && attempt.why).toBe('ask-moved');
-      expect(coord.askById(id)?.askAt).toBe(before.updatedAt);
-      expect(coord.askById(id)?.state).toBe('held');
+      expect(okAsk(coord.askById(id))?.askAt).toBe(before.updatedAt);
+      expect(okAsk(coord.askById(id))?.state).toBe('held');
     }
   });
 });

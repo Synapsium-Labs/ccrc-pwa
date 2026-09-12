@@ -190,7 +190,7 @@ as its pin.
   (`ccrc-api ledger allocate` with the home project name) and defined in the home plan, because that
   is where the plan lives. The allocate route takes `project` from the caller
   (`routes.ts:2130-2131`) and cannot cross-check it; this is discipline, stated.
-- Programme mail: address the worker as `to: 'worker'` with the `runId`; address the coordinator as
+- Programme mail: address the worker as `toId: 'worker'` with the `runId`; address the coordinator as
   today. A `worker` mail without a `runId` refuses `unknown-recipient`; a `coordinator` mail without
   one keeps today's fallback to the single active programme (`store.ts:2105-2111`) and fails shut the
   moment two are active — so carry the `runId` always, and say so, so a worker never meets the
@@ -200,7 +200,7 @@ as its pin.
 
 - The plan the brief names may live in ANOTHER repository. Read it by the absolute path the brief
   gives; never write to it; commit only on this workspace's own branch in this repository.
-- Address the coordinator as `to: 'coordinator'` with this run's `runId` — unchanged — and note that a
+- Address the coordinator as `toId: 'coordinator'` with this run's `runId` — unchanged — and note that a
   reply from the coordinator may arrive addressed to the ROLE `worker`, which resolves to this session.
 
 **Ships via** the four-homes install lane (`ccd/install-coordinator-skill.sh`,
@@ -267,7 +267,7 @@ mail screen renders the feed and nothing filters either by programme.
   called from `dispatch.ts:429` and `routes.ts:964`) and `markDispatched` (`store.ts:1427`). Both
   funnel into one store method, `bindSession(runId, sessionId)`, which does what they do now and,
   when the run ALREADY names a different session, performs for the `worker` role the act D-1425
-  performs for the coordinator's heir: every OUTSTANDING delivery of a `to:'worker'` mail on this run
+  performs for the coordinator's heir: every OUTSTANDING delivery of a `toId:'worker'` mail on this run
   addressed to the predecessor is re-issued to the heir as a new delivery row, freshly rendered, its
   counters zero because they are true of it; the predecessor's row is parked under a third
   deliberate-cancel constant, `MAIL_REBIND_SUPERSEDED_ERROR` (`'recipient rebound'`), joining

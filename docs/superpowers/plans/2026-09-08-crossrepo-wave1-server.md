@@ -2417,7 +2417,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     if ('refused' in r) throw new Error('open refused');
     return r.id;
   };
-  /** One `to:'worker'` mail queued to the session that holds the run today —
+  /** One `toId:'worker'` mail queued to the session that holds the run today —
    *  the shape `POST /api/mail` mints once the role resolves. */
   const workerMail = (s: CoordStore, runId: number, toId: string, subject: string): number =>
     tx(s.db, () => {

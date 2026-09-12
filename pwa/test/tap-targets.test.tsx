@@ -20,7 +20,7 @@ import type { CoordCapsView } from '../../shared/api';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { CoordStatus, FleetSession, MailSummary, PrState, RunSummary, WsAudit } from '../../shared/api';
+import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -266,7 +266,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
       ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
-      ruleIn(fleetCss, '.caps-input'),
+      ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -296,6 +296,30 @@ describe('.mail-back — the feed’s back control', () => {
   it('is the class the rendered control actually carries', () => {
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
+  });
+});
+
+// — Cross-repo wave 2, Task 8: the feed's programme filter chips —
+
+describe('.mail-chip — the feed’s programme filter', () => {
+  it('is at least one tap square, off the shared token', () => {
+    expect(declValue(ruleIn(fleetCss, '.mail-chip'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('is the class the rendered chip actually carries — the All chip and a programme one alike', async () => {
+    // `groups.size > 1` is what makes the filter row render at all — two
+    // records naming two different runs, each resolved to its own programme.
+    const events: NotifyEvent[] = [
+      { seq: 1, at: Date.now() - 2000, kind: 'mail', sessionId: 'a', title: 'x', body: '', runId: 5 },
+      { seq: 2, at: Date.now() - 1000, kind: 'mail', sessionId: 'b', title: 'y', body: '', runId: 6 },
+    ];
+    const runs = [
+      { id: 5, program: 'build9b', programTitle: 'Build 9b' },
+      { id: 6, program: 'crossrepo', programTitle: 'Cross-repo' },
+    ] as unknown as RunSummary[];
+    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events })}
+                        loadRuns={async () => ({ runs })} />);
+    expect(await screen.findByRole('button', { name: 'Build 9b' })).toHaveClass('mail-chip');
+    expect(screen.getByRole('button', { name: 'All' })).toHaveClass('mail-chip');
   });
 });
 

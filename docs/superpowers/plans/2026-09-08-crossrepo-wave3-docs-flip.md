@@ -48,7 +48,7 @@ The other two plans, both under `docs/superpowers/plans/`:
 - Wave 1, `shared/api.ts`: `RunRefuseCode` gains `'project-mismatch'` and `'home-mismatch'` (and `RUN_REFUSE_CODES` derives from `RUN_REFUSE_CODE_MAP`); `RunSummary.homeProject: string | null`; `NotifyEvent.runId: number | null`; mail `toId` literals `'coordinator' | 'worker' | <session id>`.
 - Wave 1, `server/src/coord/store.ts`: `sessionProject`, `programHome`, `setProgramHome`, `bindSession` (the one writer of `runs.sessionId`), `requeueAbandonedMail`, `resolveWorker`, `mailForProgram`, `feedEventsForProgram`; `recordFeedEvent` stores `e.runId`.
 - Wave 1, `server/src/coord/schema.ts`: one new `MIGRATIONS` entry — `programs.homeProject`, `feed_events.runId`; `COORD_SCHEMA_VERSION = MIGRATIONS.length` rises by one.
-- Wave 1, `server/src/coord/routes.ts`: `POST /api/runs` takes `homeProject`; the two 409 refusals with `by`; the run events `legacy-home-project` and `home-project-backfilled`; the constant `HOME_PROJECT_LEGACY_ACCEPTED`; the response fields `ledgerRepo` and `ledgerAbsPath`; `POST /api/mail` admits `to: 'worker'`; `GET /api/mail?program=`; `GET /api/feed?program=`. `server/src/coord/dispatch.ts`: `DispatchOutcome`'s refused member gains `by?: string`, passed through by `sendDispatchOutcome`.
+- Wave 1, `server/src/coord/routes.ts`: `POST /api/runs` takes `homeProject`; the two 409 refusals with `by`; the run events `legacy-home-project` and `home-project-backfilled`; the constant `HOME_PROJECT_LEGACY_ACCEPTED`; the response fields `ledgerRepo` and `ledgerAbsPath`; `POST /api/mail` admits `toId: 'worker'`; `GET /api/mail?program=`; `GET /api/feed?program=`. `server/src/coord/dispatch.ts`: `DispatchOutcome`'s refused member gains `by?: string`, passed through by `sendDispatchOutcome`.
 - Wave 1, `ccd/ccrc-api`: `--program` on the `mail list` row and a new `feed list GET /api/feed [--program | --limit]` row.
 - Wave 2, PWA: `run-project` on every runs-screen row; the crossing marker; `ProjectCard`'s additive `abroad` prop and the rule-3 orphan marker text `"<program> wave n/N · home <project>"`; `FleetScreen`'s per-card abroad list; `MailScreen`'s programme grouping and filter chip.
 
@@ -254,13 +254,13 @@ describe('README: cross-repo programmes', () => {
     expect(ROUTES, "the send route no longer carries the 'worker' literal — this check is over nothing")
       .toContain("'worker'");
     const s = crossSection();
-    expect(s, "the section does not name the worker role").toContain("to: 'worker'");
-    expect(s, "the section does not name the coordinator role beside it").toContain("to: 'coordinator'");
+    expect(s, "the section does not name the worker role").toContain("toId: 'worker'");
+    expect(s, "the section does not name the coordinator role beside it").toContain("toId: 'coordinator'");
     // WITHIN ONE WINDOW, not merely both present somewhere: the rule is that a
     // `worker` mail carries a runId, and a section that names the role in one
     // paragraph and `runId` four paragraphs later has not stated the rule.
     expect(s, 'the section describes the worker role without the runId rule beside it')
-      .toMatch(/to: 'worker'[\s\S]{0,700}?runId/);
+      .toMatch(/toId: 'worker'[\s\S]{0,700}?runId/);
     expect(s, 'the section does not say what an unresolvable role answers')
       .toContain('unknown-recipient');
   });
@@ -384,7 +384,7 @@ at a named sha and *inlines* the contract excerpt the wave depends on, so the
 worker never reads the home plan to discover what it must build — only to read
 its context. Paths, not payloads; the 8 KiB body cap stands.
 
-**Mail finds a role, not a session.** `to: 'worker'` joins `to: 'coordinator'`
+**Mail finds a role, not a session.** `toId: 'worker'` joins `toId: 'coordinator'`
 as a recipient, resolved at send time — `worker` to that run's own session. A
 `worker` mail **must** carry its `runId`, because a worker is per run and there
 is nothing to fall back to; one that resolves to no session is refused
@@ -577,8 +577,8 @@ describe('README: the run lifecycle and programme mail', () => {
 
   it('the programme-mail paragraph names both roles, the refusal and both filters', () => {
     const p = programmeMailPassage();
-    expect(p, 'the paragraph does not name the worker role').toContain("to: 'worker'");
-    expect(p, 'the paragraph does not name the coordinator role').toContain("to: 'coordinator'");
+    expect(p, 'the paragraph does not name the worker role').toContain("toId: 'worker'");
+    expect(p, 'the paragraph does not name the coordinator role').toContain("toId: 'coordinator'");
     expect(p, 'the paragraph does not say what an unresolvable role answers')
       .toContain('unknown-recipient');
     expect(p, 'the paragraph does not name the mail filter').toContain('GET /api/mail?program=');
@@ -660,7 +660,7 @@ In `README.md`, replace step 2's first sentence block (`:1386-1390`) with:
 In `README.md`, insert between the mail-bus paragraph's last line (`:1483`, ending `because that exact placeholder is committed to this public repo.`) and `**Caps and pause.**` (`:1485`), separated by a blank line on each side:
 
 ```markdown
-**Programme mail at scale.** `to: 'coordinator'` has a sibling: `to: 'worker'`,
+**Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
 resolved at send time to that run's own session. `worker` requires a `runId` —
 a worker is per run, and there is nothing to fall back to — and one that
 resolves to no session is refused `unknown-recipient`, naming the run.
