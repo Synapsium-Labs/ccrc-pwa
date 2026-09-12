@@ -705,6 +705,46 @@ describe('the pool chip', () => {
   });
 });
 
+describe('route-owned pool handoff to session rows', () => {
+  const roster = TEST_ROSTER.map((account) => ({
+    ...account,
+    pool: account.id === 'claude2' ? 'pool-b' : null,
+  }));
+  const placement: ProjectPlacementRead = {
+    kind: 'measured',
+    pool: { state: 'tagged', name: 'pool-a' },
+    placement: { kind: 'unmeasurable' },
+  };
+  const conflictingFrame: ProjectPoolsWire = {
+    listed: true,
+    byProject: { demo: { state: 'tagged', name: 'pool-b' } },
+    enforcement: 'enforced',
+  };
+
+  it('passes the route pool to an active row when the pools frame disagrees', () => {
+    const active = sess({ wrapper: 'claude2', home: 'claude2' });
+    render(<ProjectCard group={grp({ sessions: [active] })} placement={placement}
+                        pools={conflictingFrame} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+
+    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+
+  it('passes the route pool to an expanded archived row when the pools frame disagrees', () => {
+    const archived = sess({
+      id: 'demo-quiet-basin', wrapper: 'claude2', home: 'claude2',
+      workspace: 'quiet-basin', archivedAt: 1_785_300_000,
+    });
+    render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
+                        pools={conflictingFrame} roster={roster} archivedOpen
+                        onOpen={() => {}} onActions={() => {}} />);
+
+    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+});
+
 describe('the stranded cell', () => {
   it('says how many members have nowhere in their pool to go, folded or not', () => {
     const { rerender } = render(
