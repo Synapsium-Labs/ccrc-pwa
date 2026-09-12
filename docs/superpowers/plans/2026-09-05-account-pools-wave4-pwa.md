@@ -495,7 +495,7 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/accounts-pool.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 22 tests; `tsc` exits 0.
+Expected: PASS, 24 tests; `tsc` exits 0. The 24 is a derived copy-completeness check, not a decreed cardinal: it equals the number of `it(` calls in the test block above (24 as written). After changing that block, re-derive it with `grep -cE '^\s*it\(' test/accounts-pool.test.ts`. If the block gains `it.each`, its rows make the `it(` call count and test count diverge, so measure the test count rather than carrying this derivation forward.
 
 - [ ] **Step 7: Prove the guard by mutation**
 
@@ -504,7 +504,7 @@ Run each mutation, confirm the named red, then revert it:
 1. In `splitByPool`, delete the `poolSide(null, projectPool) === 'unknown'` early return. Expected red: `offers EVERYTHING and flags unknown when the project pool is null` — `TypeError` or `expected false to be true` on `split.unknown`, and `does the same on an unreadable and on a malformed tag` fails with `expected [] to equal [ 'claude', 'claude2', 'claude-corp', 'claude-dev0' ]`.
 2. In `poolSide`, change the last line to `return 'crossing';` (folding `pool-undecidable` into a mismatch). Expected red: `is unknown on an unreadable or malformed tag, for a TAGGED account too` — `expected 'crossing' to be 'unknown'`.
 3. In `projectPoolOf`, change the `!pools.listed` arm to `return { state: 'untagged' };`. Expected red: `reads every project as UNREADABLE when the listing itself failed` — `expected { state: 'untagged' } to deeply equal { state: 'unreadable' }`.
-4. In `accountPool`, change `typeof p === 'string'` to `p ?? null`. Expected red: `tsc --noEmit` fails with `Type 'string | null | undefined' is not assignable to type 'string | null'` — the compiler is the mechanism for this one; keep the runtime test as the reader's explanation.
+4. In `accountPool`, change the return to `return p;`. Expected red in TWO independent mechanisms: `tsc --noEmit` fails with `Type 'string | null | undefined' is not assignable to type 'string | null'`, and the focused Vitest suite's `an older server is untagged, not unknown` case fails because `undefined` is not `null`.
 5. In `poolLabelList`, change `!== 'crossing'` to `=== 'eligible'`. Expected red: `is byte-identical to homeAbleLabelList when nothing is known` — `expected '' to be 'team·max, team·alt, team·b and team·d'`.
 
 - [ ] **Step 8: Commit**
@@ -3151,3 +3151,41 @@ plan-time refinements the PWA rides on are defined where they were decided — *
 `shared/poolrule.ts`, so `splitByPool` composes it and this wave tests the composition, not the table) in
 wave 1, and **D-1683** (the cold-start `pools` frame the store's `null` slot waits for) in wave 3. A
 deviation found while executing this plan is allocated in its own call at the moment it is found.
+
+- **D-2591 — The Task 1 `poolLabelList` test block contradicted itself.** Its
+  shared roster deliberately leaves the home-able `claude-dev0` untagged, and
+  its pool-b expectation correctly includes that account (`team·alt and
+  team·d`); its pool-c expectation incorrectly excluded the same account by
+  asserting an empty list. D-1664's shared `poolRule` admits an untagged
+  account to every tagged project, so the red-first implementation measured
+  `team·d`, not an empty string. The coordinator ruled that the first two
+  `poolLabelList` tests keep their shared roster, while only the empty-pool
+  test builds a roster that tags every home-able account before asserting that
+  pool-c is empty. Its test comment scopes the precondition to this label
+  projection: placement additionally requires `_account_ok` and `_avail`, so
+  the projection does not decide whether a session strands.
+
+- **D-2597 — Task 1 prescribed an inert mutation and understated the guard.**
+  Its fourth mutation changed `accountPool` from `typeof p === 'string' ? p :
+  null` to `p ?? null`, then expected TypeScript to retain `undefined` and
+  reject the return. Nullish coalescing instead converts `undefined` to `null`,
+  so the mutant is semantically equivalent and both the focused suite and
+  `tsc --noEmit` stayed green. The coordinator ruled that the intended mutation
+  is `return p;`. It independently reds in both mechanisms: TypeScript reports
+  `string | null | undefined` is not assignable to `string | null`, and the
+  older-wire runtime case observes `undefined` instead of `null`. The plan's
+  claim that only the compiler was the mechanism was therefore also false.
+  Literal leading `+` characters accidentally pasted with the initial D-TBD
+  entry were removed while replacing it with this issued definition.
+
+- **D-2598 — Task 1's focused-test cardinal did not survive counting.** Step 6
+  decreed 22 tests while the prescribed block contains 24 and the focused run
+  reports 24 passing tests. An independent census is four `accountPool` + six
+  `poolSide` + five `splitByPool` + four `projectPoolOf` + two `poolOptions` +
+  three `poolLabelList` cases = 24; `grep -cE '^\s*it\('` over the block also
+  returns 24. D-2475 is the precedent: a plan cardinal is derived from the list
+  it summarizes rather than decreed, because editing the list otherwise leaves
+  the cardinal stale. The ruling retains 24 as a copy-completeness check, states
+  that it equals the block's `it(` calls, tells editors to re-derive it after
+  changing that block, and warns that `it.each` rows make call count and test
+  count diverge.
