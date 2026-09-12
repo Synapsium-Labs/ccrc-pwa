@@ -3779,6 +3779,30 @@ deviation found while executing this plan is allocated in its own call at the mo
   mutant changes persistence/hydration only and reaches the structural
   snapshot assertion; restore all three temporary edits by exact inverse.
 
+- **D-2671 — Task 7 adds three transparent color-bearing rules that pass
+  contrast but remain outside the measured census.** The implemented
+  `.acct-pool`, `.acct-disclosure`, and `.pool-note` selectors each set text
+  color without an opaque ground inside `Sheet`. The focused audit was
+  baseline-green while all three appeared in `report.uncovered` and contributed
+  zero measured rows. The actual painting ancestor is `.sheet-panel`, whose
+  `primitives.css:141` rule sets `background: var(--bg-sheet)`; the three
+  selectors name no painted ancestor, so the auditor cannot recover that ground.
+  Measured there, tertiary ink passes at 5.51 dark / 5.70 light and secondary
+  ink at 8.27 / 7.41. Coordinator mail 914 approved registration in
+  `INHERITED_GROUNDS`, with direct assertions that each selector contributes two
+  measured rows at 4.5 or better and appears zero times in `report.uncovered`.
+  Deleting a registration must red the census assertion while the standalone
+  contrast gate remains green.
+
+- **D-2672 — New color-bearing rules need an uncovered-census high-water gate.**
+  D-2671 is the second wave in which a new rule passed the contrast command while
+  remaining outside its measured census, requiring a human to notice. Review is
+  not the mechanism. Coordinator mail 914 ruled a separate post-Task-7 commit
+  that pins `audit().uncovered.length` to the count after D-2671's three
+  registrations. The baseline may only shrink: a new unmeasured color rule must
+  fail on arrival rather than waiting for another manual census. This gate is
+  deliberately not part of Task 7's feature commit.
+
 - **D-2652 — The `unknown-pool` warning branch still announces request intent as
   measured state.** D-2646 moved ordinary success copy to
   `measuredToast(requestProject, response.pool)`, but the warning branch says

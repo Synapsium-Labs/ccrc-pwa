@@ -1354,6 +1354,24 @@ describe('the pool chip and stranded count are measured, not left in the blind s
   });
 });
 
+// ── account-pool picker cells ────────────────────────────────────────────────
+describe('the account-pool picker colours are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .acct-pool', 'var(--ink-tertiary)'],
+    ['fleet.css .acct-disclosure', 'var(--ink-secondary)'],
+    ['fleet.css .pool-note', 'var(--ink-tertiary)'],
+  ])('%s is grounded on the sheet it sits in', (key, ink) => {
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 // ── §1.6b's new coloured meta cell ──────────────────────────────────────────
 describe('the spawn chip is measured, not left in the blind spot', () => {
   it('measures the spawn chip rather than leaving it in the uncovered census', () => {

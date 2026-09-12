@@ -527,7 +527,19 @@ export const INHERITED_GROUNDS = {
   },
   'fleet.css .proj-card-stranded': {
     under: ['var(--bg-surface)'],
-    why: 'the stranded count sits in .proj-card-head on the project card and inherits that surface. Its selector names no painted ancestor, leaving this attention ink in the uncovered census without this entry',
+    why: 'the stranded count sits inside .proj-card-toggle, whose transparent background leaves the project card\'s --bg-surface behind it. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .acct-pool': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .acct-disclosure': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .pool-note': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],

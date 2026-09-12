@@ -1639,10 +1639,6 @@ button.proj-card-pool::before {
 .proj-card-pool[data-pool='unrecognised'] {
   color: var(--status-attention-text);
 }
-/* Nothing on the fleet is enforcing these tags yet. The chip is already inert,
-   cursor-neutral, and titled with the reason. Keep its small text at full
-   strength: a perceptible element fade cannot clear contrast in both themes. */
-
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {
   flex: none;
@@ -1673,6 +1669,35 @@ button.proj-card-pool::before {
   cursor: pointer;
 }
 .pool-row[data-none] { color: var(--ink-secondary); }
+
+/* A crossing names its destination pool on the revealed account row. */
+.acct-pool {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--ink-tertiary);
+}
+
+/* Revealing crossings is a separate, full-size choice from making a move. */
+.acct-disclosure {
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* An unknown pool changes disclosure, not eligibility. */
+.pool-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
 
 /* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
    r-md corner — the same treatment .sess-actions gives the ··· below, so

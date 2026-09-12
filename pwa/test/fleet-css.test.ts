@@ -922,4 +922,12 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
   it('keeps every pool option at the shared 44px touch-target floor', () => {
     expect(declValue(ruleFor('.pool-row'), 'min-height')).toBe('var(--tap-min)');
   });
+
+  it('makes the crossing disclosure a real target', () => {
+    expect(ruleFor('.acct-disclosure')).toContain('min-height: var(--tap-min)');
+  });
+
+  it('keeps the unknown-pool note quiet — it explains a longer list, it does not warn', () => {
+    expect(declValue(ruleFor('.pool-note'), 'color')).toBe('var(--ink-tertiary)');
+  });
 });
