@@ -250,6 +250,10 @@ _auth_url_of() {   # <clean line> -> the first https:// run on it; rc 1 when the
 # The helper reads the code and writes it down fd 9 itself, so the child's
 # stdin has exactly one writer.
 AUTH_RUN=''
+# The pid `_auth_spawn_pty_child` backgrounded, so its callers can `wait` on it.
+# A GLOBAL and not an echoed value: a command substitution would run the spawn
+# in a subshell, and the parent cannot `wait` on another shell's job.
+AUTH_CHILD=''
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
   mkdir -p "$AUTH_RUN" || return 1
@@ -346,35 +350,58 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
   # wrong program. `%q` is bash's own quoter and leaves ordinary tokens
   # untouched, so the common case reads exactly as it did.
   printf -v joined '%q ' "$@"; joined="${joined% }"
-  # THE BSD ARM'S ORDER IS RIGHT AND RUNNING IT IS NOT (D-2614, OPEN). The
-  # first macOS CI run this branch ever got — CI schedules nothing for a PR it
-  # cannot compute a merge commit for, and this one conflicted until 2026-09-12
-  # — passes all three argv-contract pins and fails every case that EXECUTES:
-  # 9 of them, 5 in setup-token and 4 in openai-login, which are the TWO
-  # methods that come through here. Hypothesis, unmeasurable from a Linux box:
-  # BSD `script` calls `tcgetattr` on its own stdin and exits 1 when that is
-  # not a terminal, and both callers hand the child a FIFO on stdin
-  # (`<"$AUTH_RUN/in.child"`), overriding the pane's tty. util-linux tolerates
-  # that; BSD does not. Every method through `script` fails, on both runs.
+  # THE BSD ARM'S ORDER IS RIGHT; RUNNING IT WAS NOT, AND THAT IS NOW FIXED
+  # NEXT DOOR (D-2614 diagnosed, D-2673 fixed). This function only ever chose
+  # the argv ORDER, and both spellings were correct all along — the three
+  # argv-contract pins passed on the first real Mac while every case that
+  # EXECUTED failed. What was wrong lived at the call site: a FIFO on
+  # `script`'s stdin. `_auth_spawn_pty_child` now pipes on darwin, and carries
+  # the measurement.
   #
-  # WHAT DOES NOT HOLD is the corollary this comment carried until D-2662: that
-  # `login` and `paste`, touching no `script(1)`, are therefore safe. The run on
-  # `ecd953b0` — the SAME executable bytes, comments aside — hung `login`'s
-  # expiry case to the 60s hard cap against a SIX-second deadline (D-2661). So
-  # the pty-less lane has an intermittent macOS failure of its own, with a
-  # different signature, and the default path is NOT measured clean on BSD.
-  # Two failures on one platform are not automatically one bug: fix the
-  # `script` arm on its own evidence, and D-2661 on its own.
-  #
-  # The obvious fix is not mechanical either: `_auth_pump` calls
-  # `_auth_forward_code`, which writes into that same FIFO, so removing the
-  # redirect unconditionally would take the code channel away from any pane
-  # method that can be asked for one.
+  # Kept here because this is where a reader arrives asking "is the BSD
+  # spelling right?": it is, it was, and the failure that looked like it was
+  # about argv was about an errno. See D-2662 for the corollary that reasoning
+  # produced and that had to be retracted.
   if [ "$CCD_OS" = darwin ]; then
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
   else
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -qfc "$joined" /dev/null
   fi
+}
+
+_auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set AUTH_CHILD
+  # THE DARWIN ARM PIPES, THE LINUX ARM REDIRECTS, AND BOTH HAND THE CHILD THE
+  # SAME FIFO (D-2673). The difference is only how `$AUTH_RUN/in.child` reaches
+  # `script`'s stdin, so the code channel does not move: the operator's code
+  # still arrives on fd 7, `_auth_forward_code` still writes it to fd 9, and on
+  # darwin `cat` copies it into the pipe `script` reads.
+  #
+  # WHY: BSD `script` calls `tcgetattr` on its own stdin and dies unless the
+  # errno is ENOTTY. MEASURED on macos-latest 2026-09-12
+  # (`server/test/script-shim-platform.test.ts`): a FIFO answers **ENOTSUP** —
+  # "Operation not supported on socket", because macOS implements FIFOs over the
+  # socket layer — so the `errno != ENOTTY` guard is TRUE, `err(1,
+  # "tcgetattr/ioctl")` runs, and the mint never starts. That is D-2614, and it
+  # is why every case that EXECUTED failed there while the argv-contract pins
+  # passed.
+  #
+  # The same run measured `/dev/null` ACCEPTED, which is the load-bearing half:
+  # this was never a tty requirement, only an errno the implementation
+  # tolerates. A pipe is accepted too, and a pipe is the only accepted shape
+  # that is still LIVE — `/dev/null` carries nothing and a regular file cannot
+  # deliver a code that arrives later.
+  #
+  # util-linux tolerates the FIFO directly and IS LEFT ALONE. This is a
+  # credential-minting path: the arm measured working does not change shape to
+  # match the arm that was not.
+  if [ "$CCD_OS" = darwin ]; then
+    cat <"$AUTH_RUN/in.child" | _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" >"$AUTH_RUN/out" 2>&1 &
+  else
+    _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  fi
+  # `$!` after a backgrounded PIPELINE is its LAST element — `_auth_timeout`,
+  # not `cat` — which is the one whose status the callers' `rc` branches read.
+  AUTH_CHILD=$!
 }
 
 _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never on stdout
@@ -558,9 +585,8 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   mapfile -t argv < <(_auth_script_argv \
     env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$scratch" \
       "$WRAPPER_DIR/$CCRC_UPSTREAM" setup-token)
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
-    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
-  local child=$!
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
   exec 8<"$AUTH_RUN/out"
   _auth_pump
   wait "$child"; rc=$?
@@ -590,9 +616,8 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
   mapfile -t argv < <(_auth_script_argv "$WRAPPER_DIR/$AUTH_ID" login)
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
-    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
-  local child=$!
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
   exec 8<"$AUTH_RUN/out"
   _auth_pump
   wait "$child"; rc=$?

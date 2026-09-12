@@ -224,18 +224,34 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: server/package-lock.json
-      # bash only: this file shells out to `script(1)` and `mkfifo` and needs
-      # nothing else. Deliberately NOT `coreutils` — `gtimeout`'s presence is
-      # one of the things whose absence D-2661 suspects, so this leg measures
-      # the userland as a fork's runner would first meet it.
+      # The same set as `test-macos`, and for the same reasons — this leg now
+      # runs the auth helper's own suite too, which drives `_plat_timeout`
+      # (whose Darwin fallback is `gtimeout`, from coreutils), plants tmux and
+      # flock stubs, and reads jq.
+      #
+      # An earlier revision of this job installed `bash` alone, reasoning that
+      # `gtimeout`'s absence is what D-2661 suspects and the leg should meet the
+      # userland bare. That conflated two things: the `script(1)` probe never
+      # calls `timeout`, so coreutils cannot colour its measurement, while the
+      # auth suite would have hung for D-2661's reason and reported nothing
+      # about the darwin arm. Measuring the deadline shim bare is a DIFFERENT
+      # probe and needs its own job, not this one's omission.
       - name: Install system dependencies
-        run: brew install bash
+        run: brew install bash tmux flock jq coreutils
       - name: Install
         working-directory: server
         run: npm ci
       - name: Probe
         working-directory: server
         run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts --reporter=verbose
+      # The helper's OWN suite, here as well as in `test-macos`, because it is
+      # the file D-2614 breaks and `test-macos` has twice been cut before
+      # reaching a verdict. ~40s, against a 55-minute leg that may never
+      # report — this is what makes a fix to the darwin arm verifiable in one
+      # cycle instead of none.
+      - name: The auth helper's own suite
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose
 
   build-pwa:
     runs-on: ubuntu-latest

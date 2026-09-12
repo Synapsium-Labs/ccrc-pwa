@@ -19470,7 +19470,7 @@ PRODUCT side carries that knowledge and the FIXTURE did not, so a test written t
 property failed for a reason with nothing to do with security. Recorder now tries GNU, falls back to
 BSD, and normalises the same way `_plat_mode` does.
 
-### D-2614 — the BSD `script(1)` arm shipped labelled UNVERIFIED, and the first real Mac refutes it — OPEN
+### D-2614 — the BSD `script(1)` arm shipped labelled UNVERIFIED, and the first real Mac refuted it — DIAGNOSED, fixed by D-2673
 
 `_auth_setup_token` mints under a pty because `claude setup-token` is an Ink full-screen TUI that
 produces ZERO BYTES without one. The two userlands spell that differently, so `_auth_script_argv`
@@ -19567,3 +19567,98 @@ Retracted in all three places it was written: `ccd/ccd-account-auth`'s `_auth_sc
 both paragraphs of D-2614 above. The grep that found all three is the point — the entry named one
 instance and the claim had propagated to three, in a source comment and two paragraphs of prose written
 at different times.
+
+### D-2673 — BSD `script` refuses a FIFO on stdin with ENOTSUP, and accepts a pipe: the D-2614 fix
+
+**Measured, on macos-latest, 2026-09-12** (`server/test/script-shim-platform.test.ts`, two rounds):
+
+| stdin | live? | BSD `script -q /dev/null <cmd>` |
+|---|---|---|
+| FIFO | yes | **rc 1**, `script: tcgetattr/ioctl: Operation not supported on socket` — refused before the child runs |
+| pipe | yes | **accepted** |
+| `/dev/null` | no | accepted |
+
+D-2614's hypothesis was right and **the objection this branch raised against it was wrong, for a reason
+worth keeping.** The objection read FreeBSD's `script.c` —
+
+```c
+if (tcgetattr(STDIN_FILENO, &tt) == -1 || ioctl(…, TIOCGWINSZ, …) == -1) {
+        if (errno != ENOTTY)        /* For debugger. */
+                err(1, "tcgetattr/ioctl");
+```
+
+— and concluded a FIFO is forgiven, because a FIFO "is" ENOTTY. It is not, on macOS: FIFOs there are
+implemented over the **socket layer**, so `tcgetattr` answers **ENOTSUP**, the `errno != ENOTTY` guard is
+TRUE, and `err(1, …)` runs. **The errno decides, not the fd type** — which reading the fd's name could
+never have revealed, and which is the whole argument for having probed rather than patched. A fix
+applied on the original reasoning would have been right by accident; one applied on the objection's
+reasoning would have been wrong.
+
+**The `/dev/null` control is the load-bearing half.** BSD does not require a TTY here — only a stdin
+whose `tcgetattr` fails in the way it tolerates. That is what collapses the "which method keeps the code
+channel" question the entry had been sitting on: nothing has to lose it. A pipe is accepted and a pipe
+is LIVE, so `_auth_spawn_pty_child` pipes on darwin and redirects on linux, both handing the child the
+same `$AUTH_RUN/in.child`. The operator's code still arrives on fd 7 and `_auth_forward_code` still
+writes it to fd 9; on darwin `cat` copies it into the pipe `script` reads.
+
+**util-linux is LEFT ALONE, deliberately.** It tolerates the FIFO directly and is measured doing so.
+This is a credential-minting path: the arm that works does not change shape to match the arm that did
+not, however tempting one code path is to read.
+
+`_auth_login` is untouched — it drives a plain pipe with no `script(1)` at all, so it never had this
+problem. (It has a different one: D-2661.)
+
+### D-2674 — the two userlands disagree about a failing mint, and only one of them tells the helper
+
+Measured in the same two rounds, and **this one is not fixed — it is now merely visible:**
+
+- **util-linux** `script -qfc … /dev/null` reports **rc 0** for a child that exits 7. It propagates the
+  child's status only with `-e`/`--return`, which `_auth_script_argv` does not pass.
+- **BSD** `script -q /dev/null …` reports an rc that **distinguishes** a child that exited 7 from one
+  that exited 0.
+
+`_auth_setup_token` and `_auth_openai_login` both branch on `rc` — `124` means expired, non-zero means
+`the mint exited $rc`, zero falls through to the credential assertion. So the same failing mint takes
+DIFFERENT paths on the two platforms: on macOS it dies at `the mint exited N`, and on Linux it reaches
+`(( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'` — which is why that
+guard exists and why it is the only thing standing between a silent mint and a `done` stamp on Linux.
+
+Round 1 could not see this: with a FIFO the child never ran, so rc 1 was `script`'s OWN error and said
+nothing about propagation. It is answerable only over a shape that runs, which is why it is asked over
+`/dev/null`.
+
+**Left open on purpose.** Making the two agree means passing `--return` on the util-linux arm, which
+changes what `rc` means on the platform the whole fleet runs, to fix an asymmetry nothing has yet been
+bitten by. That is a separate decision from D-2673, wants its own red-first test against the
+`exited 0 but printed no token` guard, and should not ride a fix for a different bug.
+
+### D-2675 — the pane-bound methods' stdin FIFO is unexercised: a GREEN mutation, against a RED control
+
+Measured while checking that D-2673's fix was pinned rather than decorative, on linux, 2026-09-12:
+
+| mutation | result |
+|---|---|
+| `_auth_spawn_pty_child`'s linux arm: `<"$AUTH_RUN/in.child"` → `</dev/null` | **48/48 GREEN** |
+| `_auth_login`'s own redirect: `<"$AUTH_RUN/in.child"` → `</dev/null` | **8 failed / 40 passed** |
+
+A green mutation alone proves nothing — it reads the same whether the guard is unpinned or whether
+nothing runs that code at all. The control is what makes it a finding: the harness demonstrably reds
+when a redirect that IS exercised is removed, so the first result means what it says. **No test in the
+suite sends a byte through the pane-bound methods' stdin.** Those methods do execute (all of
+`setup-token`'s and `openai-login`'s cases run and pass on linux) — they simply never have a code
+forwarded to them, so the FIFO's byte-carrying role is never exercised on that path.
+
+**What this changes about D-2673.** The fix preserves a channel nothing proves is used. That is the
+right conservative call for a credential path — it keeps the shipped shape and changes only what
+`script` is handed — but it means the "which pane method actually needs `_auth_forward_code`?" question
+D-2614 sat on is STILL UNANSWERED by the suite. It was made moot rather than resolved: a pipe is
+accepted, so nothing had to lose the channel, and no one had to find out who wanted it.
+
+**Not closed here.** Closing it means a red-first test that drives a code through `setup-token` and
+`openai-login` and asserts the child received it — which is a fixture that has to model a child reading
+its stdin under a pty, on both userlands, where the two disagree about exit status (D-2674). That is
+its own piece of work, and inventing it inside a bug fix would be the third unrelated change in one
+commit.
+
+Recorded rather than fixed, and recorded as a MEASUREMENT with its control, because the green half on
+its own is exactly the shape that gets mistaken for coverage.
