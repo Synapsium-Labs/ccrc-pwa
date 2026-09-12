@@ -444,7 +444,7 @@ describe('POST /api/sessions/:id/kickoff — the wave-N re-kickoff', () => {
   // D-1151 — THE LOWER BOUND THE BORROWED CHECK DROPPED, AND WHAT IT COSTS.
   // The pair reader took `coord/routes.ts`'s integer shape (`typeof === 'number'`
   // AND `Number.isInteger`) and left behind the term that ships in the same
-  // conjunction at `POST /api/runs` — `wave < 1` (`coord/routes.ts:894`). Without
+  // conjunction at `POST /api/runs` — `wave < 1` (`coord/routes.ts:1082`). Without
   // it `{runId:-5, wave:0}` IS a pair: it typechecks, composes
   // `programResumeKickoff(slug, title, -5, 0)`, and briefs a revived coordinator
   // to "find run -5 at wave 0" in `GET /api/runs` and pick that wave up. Neither

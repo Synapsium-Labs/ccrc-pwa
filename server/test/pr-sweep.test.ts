@@ -184,7 +184,7 @@ describe('the swept state reaches the wire, not just currentPrStates()', () => {
   // (server.ts's REST route or the /ws/fleet initial push) survived every
   // test above — both routes silently fell back to the registry's stale,
   // unenriched `persistedPr` and nothing failed. These two pin the actual
-  // wiring server.ts:84/156-170 depends on, the same way fleetws.test.ts
+  // wiring server.ts:90/156-170 depends on, the same way fleetws.test.ts
   // pins currentPending()'s wiring for dialogPending.
   it('GET /api/fleet carries the swept phase, not the stale registry phase', async () => {
     const home = seed(['demo-quiet-basin']);

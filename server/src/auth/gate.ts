@@ -254,7 +254,7 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "parent it names (`?fromUuid=` against `?parent=`, the same registry check `POST /api/claims` " +
     "and both ask-mutation routes already run) — a cookie caller (the operator) reads across " +
     'parents with no such check. THIS IS FRESHNESS, NOT FORGERY-PROOFNESS (the same honesty ' +
-    "`requireAttribution`'s own docstring states, coord/routes.ts:427-433): every session on the " +
+    "`requireAttribution`'s own docstring states, coord/routes.ts:573-579): every session on the " +
     "box can read every `.uuid` file, so it closes an ACCIDENTAL cross-parent read, not a " +
     'deliberate one — and on a DARK box (`CCRC_AUTH` off) this check does not run at all, exactly ' +
     'like its four siblings. The handler requires a live session OR a valid box token ' +
@@ -858,7 +858,7 @@ export function installGate(app: FastifyInstance, deps: InstallGateDeps): void {
     // is parsing an HTTP response it expected to be 101 — the status line is the
     // whole message, and a JSON body it will never read is noise on a socket that
     // is about to close. Never logs the cookie, the token, or any part of either
-    // — the rule `server.ts:443-446` states for the box token applies with more
+    // — the rule `server.ts:452-455` states for the box token applies with more
     // force to a bearer session.
     if (req.ws === true) return reply.code(401).send();
     return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: decision.verdict });

@@ -521,7 +521,7 @@ describe('dialog enrichment', () => {
   it('re-enriches a menu that flapped off-screen and came back', async () => {
     // A capture can miss a menu that is still there: tmux returns null, the grab
     // lands mid-redraw, or BUSY_RE matches one stray 'esc to interrupt' anywhere
-    // in the pane (pane/dialog.ts:24-28). The read-skip memo has to be forgotten
+    // in the pane (pane/dialog.ts:33-37). The read-skip memo has to be forgotten
     // with the menu, or the second appearance is judged against a probe taken for
     // the first — and since the agent is blocked awaiting the answer, the
     // transcript never changes to reopen the read. The menu would come back bare
@@ -551,7 +551,7 @@ describe('dialog enrichment', () => {
     // The other half of the same hazard: a grab mid-redraw can land with the
     // option rows erased and the 'Enter to select' footer still up, so the pane
     // is a menu but fewer than two numbered options survive and parseDialog
-    // returns `unparsed` (pane/dialog.ts:94). That is a dialog, not null, so a
+    // returns `unparsed` (pane/dialog.ts:103). That is a dialog, not null, so a
     // probe kept for `dialog !== null` outlives the menu it was scoped to — and
     // the parsed menu on the next poll is judged against it and declined,
     // forever, because the blocked agent never touches the transcript again.
@@ -587,10 +587,10 @@ describe('dialog enrichment', () => {
   // RC-off pane DOES render the busy marker, unlike a --remote-control one).
   // `checkDialog`'s own gate asks `hasMenu`, not `paneState() === 'menu'` —
   // the send.ts:320 idiom, independent of the busy check for exactly this
-  // reason (pane/dialog.ts:33-45). Fix round 1 closed the second half: the
+  // reason (pane/dialog.ts:42-54). Fix round 1 closed the second half: the
   // plan's own "dialog.ts UNTOUCHED" fence had sat directly on the hazard's
   // real seat (`parseDialog`'s internal `paneState(pane) !== 'menu'` gate,
-  // pane/dialog.ts:169) — the fence lifted for that one line, so `parseDialog`
+  // pane/dialog.ts:178) — the fence lifted for that one line, so `parseDialog`
   // now gates on `hasMenu` too and stops vetoing a real menu parse on a busy
   // pane. This is the real behavioral pin the D-102 gap test could not be
   // until both halves were fixed.

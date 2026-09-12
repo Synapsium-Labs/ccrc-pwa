@@ -113,7 +113,7 @@ describe('assembleFleet', () => {
 
 // Registry ladder (architecture doc, increment 1's second half): `liveStatus`
 // backs `POST /api/sessions/:id/interrupt`'s own busy check
-// (`server.ts:514`) — a degraded row reading 'dead' makes that route refuse
+// (`server.ts:523`) — a degraded row reading 'dead' makes that route refuse
 // an interrupt on a session that is plainly mid-turn, fails-open in exactly
 // the direction spec's own THE PRINCIPLE forbids ("fails toward refusing an
 // interrupt"). Written FIRST and confirmed red against the pre-ladder code,

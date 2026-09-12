@@ -223,7 +223,7 @@ describe('CoordStore: runs', () => {
 
   it('reads a state token this build does not know as `unknown`, never as a raw string', () => {
     // The designated we-do-not-know member (spec:77), the same shape PrPhase's
-    // 'unchecked' already has (registry.ts:133-140). Written by a NEWER build.
+    // 'unchecked' already has (registry.ts:135-142). Written by a NEWER build.
     const s = store();
     const r = openRun(s) as { id: number };
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r.id);
@@ -577,7 +577,7 @@ describe('CoordStore: programs', () => {
     // pinned nowhere — D-8's closing note (plan:88) and schema.ts's header
     // both say the gap is shut on the strength of the guard existing, but a
     // green suite that cannot tell the guard from `r.state as ProgramState`
-    // is not the mechanism that record claims (shared/api.ts:1331: "a
+    // is not the mechanism that record claims (shared/api.ts:1623: "a
     // comment is a request and a red suite is a mechanism").
     const s = store();
     openRun(s);
@@ -609,7 +609,7 @@ describe('CoordStore: programs', () => {
 
   it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
     // Every prior test of `resolveCoordinator` called it with `null` only
-    // (`coord-store.test.ts:195/199/203`, above) — the `runId !== null` arm
+    // (`coord-store.test.ts:354/199/203`, above) — the `runId !== null` arm
     // ("the run's own claim", `store.ts`'s own docstring) had no test
     // anywhere, and `routes.ts:185`'s `toId === 'coordinator' ?
     // coord.resolveCoordinator(runId) : toId` is the only caller outside this

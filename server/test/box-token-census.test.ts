@@ -81,7 +81,7 @@ const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
 
 /** Every `app.get`/`app.post` handler in one source file whose body consults the
  *  box token, keyed `VERB /path`. Bodies run from a route's own registration to
- *  the next one, the same slice `auth-gate.test.ts:405-413` takes. */
+ *  the next one, the same slice `auth-gate.test.ts:432-440` takes. */
 const lanesIn = (src: string): string[] => {
   const starts = [...src.matchAll(/app\.(get|post)\('([^']+)'/g)]
     .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! }));

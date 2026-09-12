@@ -320,7 +320,7 @@ export function PrSheet({
                       that is not an oversight: `cmd_ws_archive` in ccd/ccd has
                       no held rung of its own (only `cmd_ws_rm`/`cmd_ws_reap`
                       do), so a by-hand archive of a held workspace succeeds.
-                      CITED BY SYMBOL, not by line: this said `ccd:1415`, and
+                      CITED BY SYMBOL, not by line: this said `ccd:2161`, and
                       the hold wave's own insertions pushed `cmd_ws_archive`
                       down past it, so the citation came to point into
                       `cmd_caps` — a line number is a fact about a revision, a

@@ -44,7 +44,7 @@ const LIFECYCLE_RUNG: Record<SessionLifecycle, 'pass' | 'no' | 'unknown'> = {
 /**
  * The ladder, IN `sweepMail`'s ORDER — the first rung that cannot pass
  * answers, exactly as the sweep's own `continue`s fire (registry before
- * tmux before pid; watch.ts:1991, :2069, :2087). Three answer shapes,
+ * tmux before pid; watch.ts:2159, :2069, :2087). Three answer shapes,
  * never collapsed: 'yes', 'no:<reason>' (a measured refusal, reason
  * attached), 'unknown' (could not measure — NOT 'no', per D9).
  */

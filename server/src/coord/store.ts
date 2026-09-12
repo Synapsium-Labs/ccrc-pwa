@@ -104,7 +104,7 @@ export type AdvanceResult =
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
  *  vocabularies behind one discriminant. `unknown-run` is spelled the way its
- *  `MailRejectCode` twin is (shared/api.ts:3446); `no-claimant` is this wave's
+ *  `MailRejectCode` twin is (shared/api.ts:4260); `no-claimant` is this wave's
  *  own word, admitted to `mail-routes.test.ts`'s scanner through the exported
  *  `isReclaimRefuseCode` guard rather than an allowlist entry — the standing
  *  remedy that file states for every union after the first. */
@@ -437,7 +437,7 @@ const ABANDONED_PARK_SQL =
  *     id>` and `sessionws.ts`'s `checkMail` both read it, and `checkMail` is
  *     keyed on the SESSION's own id. A reclaimed workspace id is not gone for
  *     good: `ccd start` / `ws-restore` bring the same id back, and `_ws_slug_new`
- *     recycles a purged slug outright (`ccd/ccd:3516`) — so the returning
+ *     recycles a purged slug outright (`ccd/ccd:3653`) — so the returning
  *     session's mail strip would open on a kickoff briefing it to coordinate a
  *     program somebody else now holds. That is MINOR 9's own two-coordinator
  *     hazard, re-entered through the READ side after the write side closed it.
@@ -3364,7 +3364,7 @@ export class CoordStore {
    *    approximation of "whatever `foldPrLineage` would have stored at THAT
    *    close" when the close-time snapshots themselves were lost with the
    *    database. A wave that has not closed gets `[]`, and that is NOT a
-   *    stand-in: nothing has folded into it yet (`ccd/ccd:1957-1963`'s
+   *    stand-in: nothing has folded into it yet (`ccd/ccd:2080-2086`'s
    *    three-answer ladder).
    *
    * A THIRD rule (deviation D-11, found in Task 3 review — the plan's own

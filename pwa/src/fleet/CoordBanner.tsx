@@ -44,7 +44,7 @@ function inlinePauseError(err: unknown): string | null {
   if (err.status === 501) return COORD_UNSUPPORTED_TEXT;
   // Review, M1: this arm used to read `body.stderr` itself and fall back to
   // `apiErrorText(err)` — but `apiErrorText` is ALREADY stderr-first
-  // (`lib/api.ts:149-160`, its own docstring: "prefer that"), so the extract-
+  // (`lib/api.ts:153-164`, its own docstring: "prefer that"), so the extract-
   // and-fallback was byte-equivalent to this one line and only looked like a
   // second policy. What makes a 502 render INLINE is the status; what it
   // SAYS is `apiErrorText`'s one decision, not a second copy of it.

@@ -26,7 +26,7 @@ export interface HookState {
    *  `UserPromptSubmit` newer than a delivery's `deliveredAt` is the cheapest
    *  available proof that the injected turn actually STARTED, as opposed to
    *  the text merely leaving the input box — which is all `sendPrompt`'s
-   *  `ok:true` can ever mean (`inject/send.ts:98-112`, and note that a BUSY
+   *  `ok:true` can ever mean (`inject/send.ts:102-116`, and note that a BUSY
    *  session satisfies it by queueing the message where the server cannot see
    *  it).
    *
@@ -191,7 +191,7 @@ function reviveGraphCount(
  * a sessionId from a process this entry no longer is — eight conditions, one
  * arm, deliberately. Every one of them means the same actionable thing, and
  * an arm no consumer branches on is a wider type, not a finer measurement
- * (`limits.ts:126` and `commands.ts:73` are the tree's own precedent for
+ * (`limits.ts:310` and `commands.ts:73` are the tree's own precedent for
  * leaving an indifferent fold alone).
  *
  * `unmeasured` is the ninth condition and it is not a measurement at all:

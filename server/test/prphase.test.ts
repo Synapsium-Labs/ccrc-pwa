@@ -1,5 +1,5 @@
 // FINAL REVIEW, integration finding 3 — `PR_PHASES: readonly PrPhase[]` forced
-// a double cast, and `registry.ts:80` took it:
+// a double cast, and `registry.ts:82` took it:
 //
 //     PR_PHASES.includes(prPhaseRaw as PrPhase) ? (prPhaseRaw as PrPhase) : null
 //
@@ -104,7 +104,7 @@ describe('isPrPhase rejects everything else, without asserting its way past the 
 describe('the double-cast shape cannot come back — the constant is not reachable', () => {
   // VERIFY ROUND 2, P3. The previous version of this describe pinned that
   // `PR_PHASES` was cast-HOSTILE, which the reported defect satisfies BY
-  // CASTING — the verifier put `registry.ts:85` back to
+  // CASTING — the verifier put `registry.ts:87` back to
   //   PR_PHASES.includes(prPhaseRaw as PrPhase) ? (prPhaseRaw as PrPhase) : null
   // and measured tsc clean, the server suite 1005/1005 and typecheck-tests 7/7.
   //

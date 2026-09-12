@@ -9,7 +9,7 @@
  * `MailKind`/`ProgramState`/`MailDeliveryState`), so a token written by a
  * newer build lands somewhere honest instead of being switched on and
  * rendered as nothing — `PrPhase`'s `'unchecked'` is the precedent
- * (`server/src/registry.ts:133-140`). Deviation D-8 found that this plan's
+ * (`server/src/registry.ts:135-142`). Deviation D-8 found that this plan's
  * own draft left two of the five — `programs.state` and
  * `mail_deliveries.state` — uncovered on the wire (`programs()` returning a
  * raw `string`; `MailSummary.state` a closed union with no `unknown` arm).
@@ -245,7 +245,7 @@ export const MIGRATIONS: readonly string[] = [
   // ── 3: user_version 2 -> 3 ────────────────────────────────────────────────
   // The lifecycle journal mirror (build 9 §1 D1/D6/D8). `$REG/.lifecycle/
   // journal-<19-digit-epochNs>.ndjson` is APPEND-ONLY on the fleet host and is
-  // the one record `_reg_purge` (ccd:458-556) cannot reach; these three tables
+  // the one record `_reg_purge` (ccd:484-582) cannot reach; these three tables
   // are the server's copy of it.
   //
   // RE-MEASUREMENT, PROVABLY — the D8 ruling, written here rather than in a

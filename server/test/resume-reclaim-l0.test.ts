@@ -10,7 +10,7 @@
 //
 // WHAT THIS PINS AND WHY:
 //  - `RECLAIM_REFUSE_CODES` is DERIVED from `RECLAIM_REFUSE_CODE_MAP`
-//    (`RUN_REFUSE_CODE_MAP`'s idiom, `shared/api.ts:3498-3504`), so a member deleted
+//    (`RUN_REFUSE_CODE_MAP`'s idiom, `shared/api.ts:4312-4318`), so a member deleted
 //    from the map cannot leave a runtime list still promising it.
 //  - `isReclaimRefuseCode` narrows with `hasOwnProperty`, never `in`. That is the one
 //    place this guard's shape differs from its four siblings, which all spell
@@ -18,13 +18,13 @@
 //    `'toString' in RECLAIM_REFUSE_CODE_MAP` is TRUE, so an `in` mutant admits every
 //    key of `Object.prototype` to a refusal vocabulary.
 //  - The union is NOT a `RunRefuseCode`, as a MECHANISM rather than a docstring:
-//    `server/test/coordinator-skill.test.ts:318-321` asserts every member of THAT
+//    `server/test/coordinator-skill.test.ts:393-396` asserts every member of THAT
 //    union is named somewhere in the coordinator corpus, and this door's whole
 //    obligation (ruling R2) is to stay unnamed there.
 //  - `programResumeKickoff` is compared against `ccd/coordinator-skill/references/
 //    resume.md` §4's own code block — two speakers of one sentence, checked against
 //    EACH OTHER. The literal check beside it carries
-//    `pwa/test/start-program.test.tsx:114-128`'s argument over verbatim: a constant
+//    `pwa/test/start-program.test.tsx:121-135`'s argument over verbatim: a constant
 //    compared only against itself cannot notice the text drifting off the brief.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -41,7 +41,7 @@ const root = path.resolve(here, '..', '..');
 const apiPath = path.join(root, 'shared', 'api.ts');
 const resumeMd = path.join(root, 'ccd', 'coordinator-skill', 'references', 'resume.md');
 
-/** `coordinator-skill.test.ts:605`'s helper plus the comment-marker strip: a
+/** `coordinator-skill.test.ts:680`'s helper plus the comment-marker strip: a
  *  docstring's line wrapping is not part of the claim it makes. */
 const flat = (s: string): string => s.replace(/^\s*\*\s?/gm, '').replace(/\s+/g, ' ').trim();
 
@@ -93,7 +93,7 @@ describe('the sixth refusal union', () => {
   });
 
   it('is deliberately NOT a RunRefuseCode — the corpus census must never reach it', () => {
-    // `coordinator-skill.test.ts:318-321` loops `RUN_REFUSE_CODES` and requires each
+    // `coordinator-skill.test.ts:393-396` loops `RUN_REFUSE_CODES` and requires each
     // member to appear in `allSkillText`. Folding either of these two in there would
     // force the word into the coordinator corpus, and ruling R2 is that this door
     // stays unnamed in it. The docstring says so; this is the mechanism.
@@ -103,7 +103,7 @@ describe('the sixth refusal union', () => {
   });
 
   it('both members are kebab tokens the coord scanner will actually see', () => {
-    // Anti-vacuity for the arm added to `mail-routes.test.ts:469` in this same
+    // Anti-vacuity for the arm added to `mail-routes.test.ts:606` in this same
     // commit. That scanner matches `/'([a-z]+(?:-[a-z]+)+)'/` over every `.ts` under
     // `server/src/coord`; a single-word member would need no arm at all and the arm
     // would be decoration. Renaming a member to `'alive'` reds this and nothing else.
@@ -112,7 +112,7 @@ describe('the sixth refusal union', () => {
   });
 
   it('the coord kebab scanner admits them through the guard, never through NOT_CODES', () => {
-    // The difference is the point, and `mail-routes.test.ts:474-481` already states
+    // The difference is the point, and `mail-routes.test.ts:611-618` already states
     // it for `LifecycleGapReason`: an allowlist entry accepts exactly one spelling for
     // ever, a guard accepts a member added later and still rejects a typo'd one.
     const src = readFileSync(path.join(root, 'server/test/mail-routes.test.ts'), 'utf8');
@@ -168,7 +168,7 @@ describe('the wave-N re-kickoff', () => {
   });
 
   it('matches the brief\'s code block byte for byte', () => {
-    // `pwa/test/start-program.test.tsx:114-128`'s argument, carried: the assertion
+    // `pwa/test/start-program.test.tsx:121-135`'s argument, carried: the assertion
     // above compares two things that can be edited together in one commit, so it
     // cannot see the pair drifting off the brief as a pair. This is the one place
     // the brief's exact text is checked against what ships.
@@ -183,7 +183,7 @@ describe('the wave-N re-kickoff', () => {
 
   it('shares its first two lines with programKickoff — one greeting, one ledger path', () => {
     // The sibling relationship as a mechanism. A second inline ledger path was fix
-    // round 1's Minor 3 on `programKickoff` (`shared/api.ts:3106` builds it from
+    // round 1's Minor 3 on `programKickoff` (`shared/api.ts:3765` builds it from
     // `ledgerPath`); this is what stops it being reintroduced by the copy.
     const resume = programResumeKickoff(SLUG, TITLE, RUN_ID, WAVE).split('\n');
     const start = programKickoff(SLUG, TITLE).split('\n');

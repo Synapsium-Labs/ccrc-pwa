@@ -37,7 +37,7 @@ const ccdSrc = readFileSync(CCD, 'utf8');
  *  run below hands its child an EMPTY PATH — `_check_pools` forks nothing, and
  *  an empty PATH is the strongest statement of that — and libuv resolves the
  *  executable against the CHILD's environment, so a bare `bash` would be
- *  ENOENT. `ccrc-doctor.test.ts:66` resolves it the same way for the same
+ *  ENOENT. `ccrc-doctor.test.ts:70` resolves it the same way for the same
  *  reason. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 

@@ -25,7 +25,7 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 
 usage() { echo "usage: bash install.sh — build this checkout and run 'ccrc install' (single box, localhost)"; }
 
-# `cmd_install`'s own loop (ccd/ccrc:1619-1624), one layer up: an install that
+# `cmd_install`'s own loop (ccd/ccrc:1730-1735), one layer up: an install that
 # half-ran because argument 2 was a typo is worse than one that did not
 # start, and install.sh is now the OUTERMOST entry point a new operator
 # types — so it must refuse an argument it does not understand rather than

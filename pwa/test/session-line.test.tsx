@@ -235,8 +235,8 @@ describe('context pressure chip (D-2011) and the wedge signature (D-2016)', () =
   });
 
   // Finding 5 (fix round): `liveSessionStatus` collapses Claude Code's
-  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:316-317)
-  // while the SAME read sets `dialogPending` true (fleet.ts:419) — so a row
+  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:451-452)
+  // while the SAME read sets `dialogPending` true (fleet.ts:554) — so a row
   // blocked on a human permission prompt for hours, at high context, is
   // `status: 'busy'` with no other signal distinguishing it from a real
   // wedge unless this row itself checks `dialogPending`. D-2016's own text:

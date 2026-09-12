@@ -490,7 +490,7 @@ const sourcesUnder = (dir: string): string[] =>
 
 /** Slice one route handler's body out of `coord/routes.ts`: from its own
  *  registration to the next one, the same slice `box-token-census.test.ts` and
- *  `auth-gate.test.ts:405-413` take. Fails LOUDLY on a missing anchor, because
+ *  `auth-gate.test.ts:432-440` take. Fails LOUDLY on a missing anchor, because
  *  `''` satisfies every assertion made about it.
  *
  *  ADDRESSED IN THE RAW TEXT, READ FROM THE BLANKED COPY — the two are the same

@@ -3,7 +3,7 @@
 //
 // `server/tsconfig.json`'s `include` is `["src/**/*.ts","../shared/**/*.ts"]`.
 // Fifty test files and their helpers were never compiled by any gate, and a
-// live `TS2769` in `fleet.test.ts:178` (a `PrState` literal missing the
+// live `TS2769` in `fleet.test.ts:181` (a `PrState` literal missing the
 // REQUIRED `retryAt`) sat there undetected — reproduced independently on
 // `4e8b689` under a temporary tests-inclusive project, and now fixed. The
 // review's answer to "how many others hide there" is zero, which this file

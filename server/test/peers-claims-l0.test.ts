@@ -4,7 +4,7 @@
 //
 // WHAT THIS PINS AND WHY:
 //  - CLAIM_STATES is a TABLE the type derives from (MAIL_REJECT_CODES's
-//    as-const idiom, api.ts:3012) — order included, because wave 7's
+//    as-const idiom, api.ts:3671) — order included, because wave 7's
 //    migration generates the `claims` CHECK constraint from this array and a
 //    silent reorder is a silent schema rewrite.
 //  - isPeerDeliverable's empty-reason arm: 'no:' with no reason is an

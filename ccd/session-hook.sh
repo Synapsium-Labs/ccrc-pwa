@@ -413,7 +413,7 @@ _hook_graph_card() {
 # probe forks ZERO times (strace: 0 clone/clone3/vfork over one pass — still
 # true after fix round 1's read change, re-measured).
 #
-# The trim reproduces the server's own `field()` (`server/src/registry.ts:333`
+# The trim reproduces the server's own `field()` (`server/src/registry.ts:378`
 # does `content.trim()`), so the hook and the server group rows the same way.
 _ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
   CT_V=""
@@ -1212,7 +1212,7 @@ f="$REG/$id.hookstate.json"
 # one field that can carry unbounded text goes LAST: a shift can then only
 # corrupt `subs` itself, which the `\[*` guard below already catches. `state`
 # leads (bounded set, and the shifted-into value it would otherwise take has no
-# guard — an out-of-set `state` reaches `hookstate.ts:233` and degrades to
+# guard — an out-of-set `state` reaches `hookstate.ts:267` and degrades to
 # NO_STATE, but it should never be reachable from another field's overflow),
 # and the two counters sit in the middle, each behind its own `^[0-9]+$` guard.
 #

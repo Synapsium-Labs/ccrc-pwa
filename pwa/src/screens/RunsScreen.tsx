@@ -27,7 +27,7 @@
 // RunSummary's SHIPPED shape (`shared/api.ts`, PR I) diverges from the plan's
 // illustrative one on several points — no `waves` (it's `waveOf`), no
 // `holdReason` at all (never rides the wire — the reason string this file's
-// sibling docs keep citing, registry.ts:27, belongs to `FleetSession.held`,
+// sibling docs keep citing, registry.ts:28, belongs to `FleetSession.held`,
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.

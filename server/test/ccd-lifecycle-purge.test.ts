@@ -59,7 +59,7 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
   it('THE MUTANT: an emit moved after the loop reads a stripped registry', () => {
     // Mutant: move the `_lc_done purge …` line from above `local id="$1"` to
     // below the loop's closing `done` -> this fails with
-    // `expected undefined to be 'ws/still-river'`, because ccd:535 has already
+    // `expected undefined to be 'ws/still-river'`, because ccd:561 has already
     // unlinked every field but `archived`/`reaping`. That is the whole reason
     // the emit is where it is.
     const id = seed();

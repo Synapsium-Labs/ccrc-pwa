@@ -187,7 +187,7 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     // consumer branches between them: a `<pid>.json` caught mid-write is the
     // same "nothing published yet" a missing one is, one poll tick from
     // healing. Splitting them would be a wider type, not a finer measurement
-    // (`limits.ts:126`/`commands.ts:73` are the tree's own precedent for
+    // (`limits.ts:310`/`commands.ts:73` are the tree's own precedent for
     // leaving an indifferent fold alone).
     const truncated = path.join(mkTmp('ccrc-live-'), '.claude');
     mkdirSync(path.join(truncated, 'sessions'), { recursive: true });

@@ -2,11 +2,18 @@
 // `ACCOUNTS` literal in `shared/api.ts` (Stage 2a,
 // docs/superpowers/specs/2026-08-11-stage2a-roster-becomes-data-design.md).
 //
-// Pure and import-free, like every other file in `shared/`: this bundles
-// into the PWA, so it imports nothing — not even `node:*`. `parseRoster`
-// therefore takes already-parsed JSON (`unknown`), never a path. The server's
-// `loadConfig` reads and parses `~/.ccrc/accounts.json`, then hands the value
-// here; deploy-side bare-Node tooling uses the parity-pinned `.mjs` parser.
+// Pure, and L0 rather than import-free: this file bundles into the PWA
+// (`pwa/src/lib/offline.ts:10` is `import { HUES } from '../../../shared/roster';`
+// — a VALUE import), so it imports exactly two other `shared/*.ts` modules and
+// nothing else — no `node:*`, no `fs`, no path. The two are `./providers.js`
+// (the provider table, §4.1's `exec.provider` gate) and `./base-url.js` (the
+// endpoint gate), both themselves import-free, so the bundle gains no runtime
+// dependency. `server/test/providers.test.ts` asserts the WHOLE import list, so
+// a third import is a red suite and not a review comment. `parseRoster`
+// therefore still takes already-parsed JSON (`unknown`), never a path: the
+// server's `loadConfig` reads and parses `~/.ccrc/accounts.json` and hands the
+// value here, and deploy-side bare-Node tooling uses the parity-pinned `.mjs`
+// parser.
 //
 // Written in Task 2 of the stage-2a plan; live since Task 5, when `loadConfig`
 // began reading `~/.ccrc/accounts.json` into `CcrcConfig.roster`, and sole
@@ -15,6 +22,9 @@
 // `GET /api/accounts`) onto the parsed roster instead. `shared/api.ts`'s
 // `Wrapper` docstring is where the concept's history is recorded; this file is
 // where its data lives.
+
+import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';
+import { BASE_URL_OK } from './base-url.js';
 
 /**
  * The six colors an account can render in. Replaces today's hand-picked
@@ -48,6 +58,46 @@ function cycleAt<T>(arr: readonly T[], i: number): T {
   return arr[i % arr.length]!;
 }
 
+/** The four aliases ccd and Claude Code route on. NOT optional and not a
+ *  suggestion: `opus`/`sonnet`/`haiku` are what `/model` selects and `subagent`
+ *  is what a dispatched worker gets, so an api-key lane missing one has a
+ *  routing target with nothing behind it. */
+export interface ModelMap { opus: string; sonnet: string; haiku: string; subagent: string }
+
+/** One entry of the operator's allowlist. `label` is display text; absent means
+ *  the picker shows the id. */
+export interface ModelChoice { id: string; label?: string }
+
+/**
+ * An api-key lane's models. The four aliases are the ROUTING map; `selectable`
+ * is a different question — *which models may I choose from the picker* — and
+ * without it an OpenRouter or compatible lane inherits Claude's hardcoded list,
+ * which is wrong for every lane that is not Anthropic-served. Absent means "the
+ * four aliases and nothing else", which is what a roster written before this
+ * field already gets.
+ *
+ * Called `OpenRouterModels` until the base URL generalised (§15.22); the SHAPE
+ * did not change, only the name's claim about who may carry it.
+ */
+export interface ApiKeyModels extends ModelMap { selectable?: ModelChoice[] }
+
+/** The four alias keys, as a runtime list, so the validator walks them instead
+ *  of naming them four times. `satisfies` is what keeps it honest: dropping a
+ *  key from `ModelMap` without dropping it here is a compile error. */
+export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'] as const satisfies
+  readonly (keyof ModelMap)[];
+
+/** A model id, and a DISTINCT gate from `ID_RE` (`:289`) rather than a reuse of
+ *  it: an account id becomes a filename, a bash `case` pattern and a session-id
+ *  prefix, so it cannot hold `/`, `.` or `:` — and an OpenRouter id is
+ *  `anthropic/claude-opus-4.5:beta`, which holds all three. Capped at 128
+ *  characters. Task 4 adds a copy to `shared/roster-json.mjs` and a test
+ *  asserting the two equal source-for-source in `gen-accounts.test.ts`, because
+ *  the last time a regex was hand-copied into that file the escape text was
+ *  emitted as raw control bytes, twice in one task, with every suite green
+ *  (`server/test/source-bytes.test.ts:5-15`). */
+export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
+
 /**
  * How ccrc reaches an account's binary. The disk forced this shape (design
  * spec §1, from reading a live box): `claude` itself is 304,282,632 bytes of
@@ -57,16 +107,39 @@ function cycleAt<T>(arr: readonly T[], i: number): T {
  * and must never write.
  *
  *   - `upstream` — the Claude Code binary itself. Exactly one per roster.
- *   - `generated` — ccrc owns this file end to end. `secretsFile` is
- *     optional, resolved against `$HOME` by whoever writes the wrapper
- *     (never a path here — `shared/` cannot import `node:path`).
+ *   - `generated` — ccrc owns this file end to end.
  *   - `external` — a user-provided executable ccrc records but never
  *     touches.
+ *
+ * `secretsFile` is legal on ALL THREE and validated by one gate. On
+ * `generated` it is the file ccrc writes and the wrapper sources. On the other
+ * two it is DECLARATIVE — it names the file somebody else's launcher sources,
+ * so doctor and the UI can point at it and say whether it exists. That is the
+ * only way `§1.7`'s hole closes: the upstream account has a credential and
+ * nothing in the tree could see it, and ccrc is never going to write the
+ * upstream launcher. Never a path here — `shared/` cannot import `node:path`;
+ * it is resolved against `$HOME` by whoever reads it.
+ *
+ * `provider` is REQUIRED on `generated` (absent parses as `anthropic`, with one
+ * warning per parse) and OPTIONAL on `external`, where absent means UNDECLARED
+ * — a real third answer, not a default: the card shows the lane and offers no
+ * provider operation. On `upstream` it is not spelled at all; the Claude Code
+ * binary is `anthropic` by construction and a roster claiming otherwise would
+ * be asserting something false about a file ccrc does not own.
+ *
+ * `baseUrl` and `models` are the api-key lane's two settings, and they live
+ * here rather than in the wrapper because §4.3 measured that Claude Code's own
+ * `settings.json` routes the lane on its own — so the wrapper shape does not
+ * change and `_wrap_parse_shape`, the equivalence triple and `cmd_wrappers`
+ * are all untouched.
  */
 export type ExecSpec =
-  | { kind: 'upstream' }
-  | { kind: 'generated'; secretsFile?: string }
-  | { kind: 'external' };
+  | { kind: 'upstream'; secretsFile?: string }
+  | {
+    kind: 'generated'; secretsFile?: string; provider: ProviderId;
+    baseUrl?: string; models?: ApiKeyModels;
+  }
+  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string };
 
 /** One account, as validated by `parseRoster`. */
 export interface AccountDef {
@@ -232,9 +305,9 @@ export class RosterError extends Error {
  *  - a bash `case` pattern
  *  - a session-id prefix
  *
- * Critically, ccd's `_default_pool` (ccd:9019) joins ids into a
+ * Critically, ccd's `_default_pool` (ccd:10715) joins ids into a
  * space-separated string via `"${CCRC_HOME_ABLE[*]}"`, and `_swap_target`
- * (ccd:9201) reads that back through an UNQUOTED
+ * (ccd:10897) reads that back through an UNQUOTED
  * `for cand in $(_pool_for "$id")`. Whitespace in an id would word-split
  * there silently and corrupt account routing — which is why `[a-z0-9-]`
  * has no room for anything else, including whitespace. Capped at 32
@@ -306,14 +379,31 @@ const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
 );
-// `upstream` and `external` carry no fields beyond the discriminator;
-// `generated` is the only kind with a second, optional one. Split so a typo
-// like `secretFile` (missing the `s`) — which silently drops an account's
-// secrets-file reference, and the account then launches with no OAuth token
-// and no diagnostic anywhere — gets caught by `warnUnknownKeys` instead of
-// vanishing the way an unrecognised key on a plain object always would.
-const EXEC_KEYS_BASE: ReadonlySet<string> = new Set(['kind']);
-const EXEC_KEYS_GENERATED: ReadonlySet<string> = new Set(['kind', 'secretsFile']);
+// THREE sets, not two, and written as a containment chain so the shared members
+// are never retyped. `upstream` and `external` used to share `EXEC_KEYS_BASE`
+// because neither carried a field beyond the discriminator; §4.1 gives each arm
+// a different set, and the two-way ternary `parseExec` used could not express
+// three of them.
+//
+// The reason the sets exist at all is unchanged: a typo like `secretFile`
+// (missing the `s`) silently drops an account's secrets-file reference, the
+// account then launches with no OAuth token, and nothing anywhere says so.
+// `warnUnknownKeys` catches it. Note what it does NOT do — it never removes the
+// key and never fails; adding a name here stops a warning, it does not enable a
+// field.
+const EXEC_KEYS_UPSTREAM: ReadonlySet<string> = new Set(['kind', 'secretsFile']);
+const EXEC_KEYS_EXTERNAL: ReadonlySet<string> =
+  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'baseUrl']);
+const EXEC_KEYS_GENERATED: ReadonlySet<string> =
+  new Set([...EXEC_KEYS_EXTERNAL, 'models']);
+/** Keyed so the call site is a lookup rather than a chain of ternaries, and so
+ *  a fourth `ExecSpec` kind would be a compile error here before it was a
+ *  silent fall-through to the wrong set. */
+const EXEC_KEYS: Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>> = {
+  upstream: EXEC_KEYS_UPSTREAM,
+  external: EXEC_KEYS_EXTERNAL,
+  generated: EXEC_KEYS_GENERATED,
+};
 
 /** Named in every remedy below, since `parseRoster` itself never sees a
  *  path (it takes parsed JSON, not a file) — this is where the schema's
@@ -343,7 +433,94 @@ function warnUnknownKeys(obj: Record<string, unknown>, known: ReadonlySet<string
  *  still pending. */
 type Draft = Omit<AccountDef, 'hue'> & { hue: Hue | undefined };
 
-function parseExec(raw: unknown, id: string): ExecSpec {
+/** Validates `exec.models`. Returns the value, so the caller cannot forget to
+ *  keep it; throws with the offending key NAMED, because "invalid models" over
+ *  a five-key object is a message that costs a second read of the file. */
+function parseModels(raw: unknown, id: string, provider: ProviderId): ApiKeyModels {
+  if (!PROVIDERS[provider].apiKeyModels) {
+    throw new RosterError(
+      `account "${id}" declares exec.models on provider "${provider}", which carries no model map.`,
+      `Remove "models" from account "${id}"'s exec in ${ROSTER_PATH}, or set exec.provider to a `
+        + `provider that takes one (${PROVIDER_IDS.filter((p) => PROVIDERS[p].apiKeyModels).join(', ')}).`,
+    );
+  }
+  if (!isPlainObject(raw)) {
+    throw new RosterError(
+      `account "${id}" has a non-object exec.models.`,
+      `Set exec.models for account "${id}" in ${ROSTER_PATH} to an object with `
+        + `${MODEL_ALIASES.join(', ')}, or remove it.`,
+    );
+  }
+  const map: Record<string, string> = {};
+  for (const alias of MODEL_ALIASES) {
+    const v = raw[alias];
+    if (typeof v !== 'string' || !MODEL_ID_RE.test(v)) {
+      throw new RosterError(
+        `account "${id}" has a missing or invalid exec.models.${alias} ${JSON.stringify(v)}.`,
+        `Set exec.models.${alias} for account "${id}" in ${ROSTER_PATH} to a model id: a letter or `
+          + 'digit followed by up to 127 of letters, digits, ".", "_", ":", "/" and "-".',
+      );
+    }
+    map[alias] = v;
+  }
+  const selectableRaw = raw['selectable'];
+  if (selectableRaw === undefined) {
+    return { opus: map['opus']!, sonnet: map['sonnet']!, haiku: map['haiku']!, subagent: map['subagent']! };
+  }
+  if (!Array.isArray(selectableRaw) || selectableRaw.length === 0) {
+    throw new RosterError(
+      `account "${id}" has an empty or non-array exec.models.selectable.`,
+      `Set exec.models.selectable for account "${id}" in ${ROSTER_PATH} to a non-empty array of `
+        + '{ "id": … } objects, or remove it — absent means the four aliases and nothing else.',
+    );
+  }
+  const selectable: ModelChoice[] = selectableRaw.map((entry, i) => {
+    if (!isPlainObject(entry) || typeof entry['id'] !== 'string' || !MODEL_ID_RE.test(entry['id'])) {
+      throw new RosterError(
+        `account "${id}" has an invalid exec.models.selectable[${i}].`,
+        `Each entry of exec.models.selectable for account "${id}" in ${ROSTER_PATH} must be an `
+          + 'object with a model-id "id" and an optional string "label".',
+      );
+    }
+    const label = entry['label'];
+    if (label !== undefined && (typeof label !== 'string' || label.length === 0)) {
+      throw new RosterError(
+        `account "${id}" has a non-string exec.models.selectable[${i}].label.`,
+        `Set that entry's "label" to display text, or remove it — absent shows the id.`,
+      );
+    }
+    return label !== undefined ? { id: entry['id'], label } : { id: entry['id'] };
+  });
+  // Every alias must be selectable. A routing target the operator cannot pick
+  // is a lane that answers `/model opus` with a model the picker never showed
+  // (§4.1) — and the operator would have no way to find out which.
+  const offered = new Set(selectable.map((c) => c.id));
+  for (const alias of MODEL_ALIASES) {
+    if (!offered.has(map[alias]!)) {
+      throw new RosterError(
+        `account "${id}" routes ${alias} to ${JSON.stringify(map[alias])}, which its `
+          + 'exec.models.selectable does not offer.',
+        `Add ${JSON.stringify(map[alias])} to exec.models.selectable for account "${id}" in `
+          + `${ROSTER_PATH}, or point exec.models.${alias} at a model the list already offers.`,
+      );
+    }
+  }
+  return {
+    opus: map['opus']!, sonnet: map['sonnet']!, haiku: map['haiku']!, subagent: map['subagent']!,
+    selectable,
+  };
+}
+
+/**
+ * @param assumedProvider collects the ids of `generated` accounts that named no
+ *   provider, so `parseRoster` can warn ONCE for the whole file instead of once
+ *   per account. `ccd/ccrc-adopt` writes `{"kind":"generated"}` with no provider
+ *   (`:496-503`; the bare `'{"kind":"generated"}'` literal is `:500` and the
+ *   jq-composed `secretsFile` form is `:498`), so an adopted roster has one
+ *   such account per generated
+ *   wrapper and a per-account warning would print a paragraph on every boot.
+ */
+function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpec {
   if (!isPlainObject(raw)) {
     throw new RosterError(
       `account "${id}" has a missing or invalid "exec".`,
@@ -359,38 +536,119 @@ function parseExec(raw: unknown, id: string): ExecSpec {
       `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated" or "external".`,
     );
   }
-  warnUnknownKeys(raw, kind === 'generated' ? EXEC_KEYS_GENERATED : EXEC_KEYS_BASE, `on account "${id}"'s exec`);
-  if (kind === 'generated') {
-    const secretsFile = raw['secretsFile'];
-    if (secretsFile !== undefined && typeof secretsFile !== 'string') {
-      throw new RosterError(
-        `account "${id}" has a non-string exec.secretsFile.`,
-        `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a string path relative to ` +
-          '$HOME, or remove it.',
-      );
-    }
-    // A path, not merely a string. `""` and a trailing "/" both resolve to a
-    // directory rather than a file; ".." escapes $HOME; a leading "/" ignores
-    // it. Each is rejected by name so the remedy can say which one happened.
-    if (
-      secretsFile !== undefined
-      && (secretsFile === '' || secretsFile.startsWith('/') || secretsFile.endsWith('/')
-        || secretsFile.includes('..') || !SECRETS_SAFE_RE.test(secretsFile))
-    ) {
-      throw new RosterError(
-        `account "${id}" has an invalid exec.secretsFile ${JSON.stringify(secretsFile)}.`,
-        `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME ` +
-          '(e.g. ".cc-secrets/' + id + '-oauth.env") using only letters, digits, ".", "-", "_" and ' +
-          '"/" — never absolute, never containing "..", never ending in "/".',
-      );
-    }
-    return secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' };
+  warnUnknownKeys(raw, EXEC_KEYS[kind as ExecSpec['kind']], `on account "${id}"'s exec`);
+
+  // HOISTED out of the `generated` arm (D-1857). This is the one change in this
+  // wave that is not absence-permitting: `{kind:'upstream', secretsFile:'../x'}`
+  // parsed with a warning before and throws now. The field is legal on all
+  // three kinds because the upstream launcher has a credential nothing could
+  // see (§1.7) and a declaration is the only way that closes; the gate applies
+  // on all three because the value reaches a double-quoted bash string in
+  // `shared/wrapper.mjs` on the generated path and a doctor `ls` on the other
+  // two, and a path that escapes $HOME is wrong in both.
+  const secretsFile = raw['secretsFile'];
+  if (secretsFile !== undefined && typeof secretsFile !== 'string') {
+    throw new RosterError(
+      `account "${id}" has a non-string exec.secretsFile.`,
+      `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a string path relative to ` +
+        '$HOME, or remove it.',
+    );
   }
-  if (kind === 'upstream') return { kind: 'upstream' };
-  return { kind: 'external' };
+  // A path, not merely a string. `""` and a trailing "/" both resolve to a
+  // directory rather than a file; ".." escapes $HOME; a leading "/" ignores
+  // it. Each is rejected by name so the remedy can say which one happened.
+  if (
+    secretsFile !== undefined
+    && (secretsFile === '' || secretsFile.startsWith('/') || secretsFile.endsWith('/')
+      || secretsFile.includes('..') || !SECRETS_SAFE_RE.test(secretsFile))
+  ) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.secretsFile ${JSON.stringify(secretsFile)}.`,
+      `Set exec.secretsFile for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME ` +
+        '(e.g. ".cc-secrets/' + id + '-oauth.env") using only letters, digits, ".", "-", "_" and ' +
+        '"/" — never absolute, never containing "..", never ending in "/".',
+    );
+  }
+  const withSecrets = secretsFile !== undefined ? { secretsFile } : {};
+
+  if (kind === 'upstream') return { kind: 'upstream', ...withSecrets };
+
+  // `provider`. Refused if present and unknown, on both remaining kinds; the
+  // DEFAULT applies to `generated` only, because absent on `external` is the
+  // third answer (`undeclared`) rather than a missing one.
+  const providerRaw = raw['provider'];
+  // Written as a nested `if` rather than as one compound condition, and not for
+  // taste: `isProviderId` is a type guard over `unknown`, and only this shape
+  // narrows `providerRaw` to `ProviderId` on the path after the throw without a
+  // cast. A cast here would be the assertion this repo's guards exist to avoid.
+  let provider: ProviderId | undefined;
+  if (providerRaw !== undefined) {
+    if (!isProviderId(providerRaw)) {
+      throw new RosterError(
+        `account "${id}" has an unknown exec.provider ${JSON.stringify(providerRaw)}.`,
+        `Set exec.provider for account "${id}" in ${ROSTER_PATH} to one of ` +
+          `${PROVIDER_IDS.join(', ')}, or remove it.`,
+      );
+    }
+    provider = providerRaw;
+  }
+  if (kind === 'generated' && provider === undefined) assumedProvider.push(id);
+  const effective: ProviderId | undefined = kind === 'generated' ? provider ?? 'anthropic' : provider;
+
+  // `baseUrl`. One gate (`BASE_URL_OK`), five named refusals, and the value
+  // stored is the NORMALISED one — see that file's header for why. Required
+  // when the provider says so and the roster names no default to fall back on.
+  const baseUrlRaw = raw['baseUrl'];
+  let baseUrl: string | undefined;
+  if (baseUrlRaw !== undefined) {
+    const verdict = BASE_URL_OK(baseUrlRaw);
+    if (!verdict.ok) {
+      throw new RosterError(
+        `account "${id}" has an invalid exec.baseUrl ${JSON.stringify(baseUrlRaw)}: ${verdict.reason}.`,
+        `Set exec.baseUrl for account "${id}" in ${ROSTER_PATH} to an https:// endpoint, or an ` +
+          'http:// one on 127.0.0.1, [::1] or localhost — with no user:password, no query string ' +
+          'and no fragment.',
+      );
+    }
+    baseUrl = verdict.url;
+  } else if (effective !== undefined && PROVIDERS[effective].baseUrlRequired) {
+    throw new RosterError(
+      `account "${id}" has provider "${effective}" and no exec.baseUrl: base-url-required.`,
+      `Set exec.baseUrl for account "${id}" in ${ROSTER_PATH} — provider "${effective}" ships no ` +
+        'default endpoint, so only you can say where the lane talks to.',
+    );
+  }
+  const withBaseUrl = baseUrl !== undefined ? { baseUrl } : {};
+
+  if (kind === 'external') {
+    return {
+      kind: 'external', ...withSecrets, ...withBaseUrl,
+      ...(provider !== undefined ? { provider } : {}),
+    };
+  }
+
+  // `models` — generated only. It is not in `EXEC_KEYS_EXTERNAL`, so an
+  // `external` entry carrying one warns and drops it, which is right: ccrc does
+  // not write that lane's `settings.json` and a model map it cannot apply would
+  // be a roster asserting a configuration that is not on the box.
+  // `effective` is provably a `ProviderId` here — `kind` is `'generated'`, so
+  // the `??` above supplied one — and the assertion says that once rather than
+  // twice. `ExecSpec`'s `generated` arm declares `provider` NON-optional, so a
+  // future path that forgot to compute it would not compile; that is the
+  // property the old literal-per-arm return bought, kept.
+  const generatedProvider = effective!;
+  const modelsRaw = raw['models'];
+  const models = modelsRaw !== undefined
+    ? parseModels(modelsRaw, id, generatedProvider)
+    : undefined;
+
+  return {
+    kind: 'generated', provider: generatedProvider, ...withSecrets, ...withBaseUrl,
+    ...(models !== undefined ? { models } : {}),
+  };
 }
 
-function parseAccount(raw: unknown, index: number): Draft {
+function parseAccount(raw: unknown, index: number, assumedProvider: string[]): Draft {
   const where = `account at accounts[${index}]`;
   if (!isPlainObject(raw)) {
     throw new RosterError(
@@ -500,7 +758,7 @@ function parseAccount(raw: unknown, index: number): Draft {
     );
   }
 
-  const exec = parseExec(raw['exec'], id);
+  const exec = parseExec(raw['exec'], id, assumedProvider);
 
   const homeAble = raw['homeAble'];
   if (typeof homeAble !== 'boolean') {
@@ -665,7 +923,12 @@ export function parseRoster(json: unknown): Roster {
     );
   }
 
-  const drafts: Draft[] = rawAccounts.map((raw, i) => parseAccount(raw, i));
+  // Collected across the whole file so the migration warning is said ONCE,
+  // naming every account it applied to, rather than once per account. Declared
+  // here and read after every check that can throw, so a roster that fails to
+  // parse never warns about a field on an account nobody is going to keep.
+  const assumedProvider: string[] = [];
+  const drafts: Draft[] = rawAccounts.map((raw, i) => parseAccount(raw, i, assumedProvider));
 
   const seenIds = new Set<string>();
   for (const a of drafts) {
@@ -724,6 +987,13 @@ export function parseRoster(json: unknown): Roster {
   }
   // Exactly one element, just proven by the two checks above.
   const upstreamId = upstreams[0]!.id;
+
+  if (assumedProvider.length > 0) {
+    console.warn(
+      `ccrc: ${ROSTER_PATH} names no exec.provider on ${assumedProvider.join(', ')}; assuming ` +
+      '"anthropic". Set exec.provider on each to silence this.',
+    );
+  }
 
   assignHues(drafts);
   // `assignHues` has just given every draft a concrete hue; this cast

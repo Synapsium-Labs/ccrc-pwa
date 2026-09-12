@@ -266,7 +266,7 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:160-176`), the park is gated on `d.deliveredAt === null`
+    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
     // (`:2042`), and a delivered row that is merely never acked parks on
     // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
     //

@@ -155,7 +155,7 @@ export function deviceActor(device: string | null): string {
  * own write (the naming sweep's `sweep:names`, a run close's `run:<id> close`)
  * and an operator's tap distinguishable — and why a fifth surface word is
  * not the fix: spec §2 says `StopSurface` is unchanged, and widening a closed
- * set that `ccd:1523` also spells would be one enumeration in two languages
+ * set that `ccd:2407` also spells would be one enumeration in two languages
  * drifting apart.
  *
  * `reason: null`: a sweep's reason is its name, and repeating it in a second

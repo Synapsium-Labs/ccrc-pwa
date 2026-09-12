@@ -14,7 +14,7 @@
 // that ends at ccrc.env resolves nothing on the very box that fires this hook,
 // and "silence is the contract" would have quietly meant "silence, always".
 // `CCRC_SERVER_URL` is already in agent.env, written by `ccrc install --role
-// fleet` (ccd/ccrc:3051) and read by both coordination skills since #89, so
+// fleet` (ccd/ccrc:3168) and read by both coordination skills since #89, so
 // the box needs no provisioning at all.
 //
 // PRECEDENCE, stated because nothing else records it: agent.env is read BEFORE

@@ -57,7 +57,7 @@ describe('peerDeliverable: the ladder, rung by rung', () => {
 
   it('the ladder answers IN ORDER — an earlier rung pre-empts a later one, matching sweepMail', () => {
     // registry beats tmux: sweepMail's identity===null branch continues
-    // before sessionVerdict ever runs (watch.ts:1991-2054 vs :2069).
+    // before sessionVerdict ever runs (watch.ts:2159-2222 vs :2069).
     expect(peerDeliverable(probe({ registry: 'absent', tmux: 'gone' }))).toBe('no:not-in-registry');
     // tmux beats pid and lifecycle.
     expect(peerDeliverable(probe({ tmux: 'gone', panePid: null, lifecycle: 'stopped' })))

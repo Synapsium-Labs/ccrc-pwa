@@ -327,7 +327,7 @@ export async function dispatchRun(
   if (run.sessionId === null) {
     // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
     // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
-    // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
+    // <path> (branch …)`, `ccd/ccd:1234`) — a prose line nobody wrote a
     // contract for, and this repo has already paid for one of those. Read
     // the registry before and after; exactly one new `workspace !== null`
     // row for this project is the run's session.

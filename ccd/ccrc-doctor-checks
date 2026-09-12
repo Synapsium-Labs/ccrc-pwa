@@ -188,6 +188,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  accounts
   credentials
   pools
   graphify
@@ -484,13 +485,13 @@ _check_python3() {
     "install it: sudo apt install python3"
 }
 _check_flock() {
-  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:2501-2502)" \
+  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:3282-3283)" \
     "install it: sudo apt install util-linux"
 }
 
 # ── gh's authentication ───────────────────────────────────────────────────
 # DELIBERATE DIVERGENCE FROM ccd, do not "harmonise" the two: `ccd` never
-# probes `gh auth status` — it classifies gh's own stderr instead (ccd:707-715,
+# probes `gh auth status` — it classifies gh's own stderr instead (ccd:733-741,
 # "`gh auth status` is NOT probed first: it is another network call on the
 # unhappy path"), because ccd runs that path in a poll loop over every open PR.
 # Doctor is the COLD path: it runs when a human asks "is this box fit to
@@ -730,7 +731,7 @@ _check_path() {
 # this asks about the units whose FILE is present and skips a box that has none
 # rather than demanding units a dev checkout was never meant to have. A server
 # box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
-# cap-scopes timer, and `deploy.sh` (:416, :463) is what puts each there.
+# cap-scopes timer, and `deploy.sh` (:417, :464) is what puts each there.
 #
 # ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
 # A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
@@ -1641,7 +1642,7 @@ _check_exposure() {
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
 # Its own `systemctl`, in SYSTEM scope — NOT `_check_services`, which reads
-# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:443 as root and is
+# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:444 as root and is
 # nobody's user unit. The FAIL is the D2 pending state made visible: exposure
 # configured, ceremony not yet run — so the remedy IS the ceremony, all three
 # steps, not a pointer back to a transcript that has scrolled away.
@@ -1737,7 +1738,7 @@ _check_caddyfile() {
 # the answer exists before DNS propagates and never depends on the WAN path.
 # The handshake is the WHOLE conversation — no HTTP request is sent (the
 # D-150 note above). Bounded by CCRC_DOCTOR_GH_TIMEOUT for the reason that
-# knob exists: a wedged listener holding :443 without answering is precisely a
+# knob exists: a wedged listener holding :444 without answering is precisely a
 # box this check will be run on.
 _check_cert() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDY_ROOT_CA:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
@@ -1768,7 +1769,7 @@ _check_cert() {
   # Candidates: loopback first (the common all-interfaces bind), then this
   # box's own addresses (`hostname -I` — the name check's source). Caddy CAN
   # bind a single interface: live 2026-08-21, tailscaled held the tailnet
-  # IP's :443, caddy took the public IP, and loopback REFUSED — a probe that
+  # IP's :444, caddy took the public IP, and loopback REFUSED — a probe that
   # stopped there FAILed a box serving a perfectly good certificate. The
   # first listener that completes a handshake is the one measured.
   local -a cert_cands=(127.0.0.1)
@@ -2092,7 +2093,7 @@ _dr_wr_has() {
 
 # IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
 # every roster account of every kind must answer yes to, because that path is
-# literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
+# literally what ccd runs (ccd:9057). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
 # happened, and a present non-executable file is a `chmod`.
@@ -2367,7 +2368,7 @@ _check_wrappers() {
       continue
     fi
     # An id is not decoration: it is the FILENAME ccd executes
-    # ($HOME/.local/bin/<id>, ccd:7361), so the roster's ids are held to the
+    # ($HOME/.local/bin/<id>, ccd:9057), so the roster's ids are held to the
     # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
     # states. Nothing else in this check can be trusted about an entry whose id
     # is not an id, so it is reported and skipped rather than looked up on disk
@@ -2654,6 +2655,93 @@ _check_wrappers() {
     return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+}
+
+# ── the accounts surface, by existence ────────────────────────────────────
+# TWO FACTS NOTHING ELSE ON THIS BOX MEASURES. `_check_wrappers` compares the
+# roster against ~/.local/bin; neither of these files is there.
+#   credential-declared-absent — the roster DECLARES a secretsFile and the file
+#     is not on disk, so the lane looks configured and authenticates as nobody.
+#     `secretsFile` is legal on `upstream` as a DECLARATION for exactly this
+#     reason: it is the only way "the upstream account has a credential nobody
+#     can see" becomes checkable at all.
+#   settings-env-drift — a lane's settings.json `env` block disagrees with the
+#     roster's provider config. The base URL and the model map live in that
+#     block rather than in the wrapper, so it is the one place a lane can talk
+#     somewhere the roster does not name while every other check passes.
+#
+# EXISTENCE ONLY, NEVER CONTENTS, for the credential half. Those files are 0600
+# under a 0700 ~/.cc-secrets and CLAUDE.md's rule is absolute; the reader calls
+# `existsSync` and reports a PATH. settings.json is a different class — a 0644
+# config file whose key field this design deliberately leaves EMPTY — so it is
+# read, and reported by key name and endpoint.
+#
+# `launcher-absent` IS NOT REPORTED HERE, and its absence is deliberate. It is
+# the third member of the shared vocabulary because the PWA renders it on a
+# card; doctor's renderer of it is `_check_wrappers`, whose `external)` arm has
+# run `_dr_wr_present … wr_hard` since stage 2b. A second verdict line would
+# count one finding twice — `_check_tmux_skew`'s own first arm is this file's
+# ruling on that. The PASS detail below names which axes were measured, so a
+# reader can see the third was asked elsewhere rather than not at all.
+#
+# NEVER A SKIP. A box with no roster is exactly the box whose operator most
+# needs a line, and the roster's own health is `_check_wrappers`' FAIL one entry
+# up — so this WARNs, says where that FAIL lives, and returns 2. THE ARM ORDER
+# IS PART OF THAT: the roster test runs FIRST, because a box with no roster
+# usually has no node stub either and the sentence its operator needs is about
+# the roster.
+_check_accounts() {
+  local roster="$HOME/.ccrc/accounts.json" gen="$CCRC_HERE/../deploy/account-op.mjs"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_warn accounts "no readable account roster at \$HOME/.ccrc/accounts.json, so no account's credential or provider config was measured" \
+      "the roster's own health is the wrappers check above — fix what it reports first, then re-run doctor"
+    return 2
+  fi
+  if [ ! -f "$gen" ]; then
+    _dr_warn accounts "the account helper did not ship ($gen), so no account's credential or provider config was measured" \
+      "the helper lives one directory up from ccrc (at ~/ccrc/deploy on a deployed box): re-run the install, or redeploy, so ccrc and deploy/ come from one tree"
+    return 2
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_warn accounts "node is not on PATH, so \$HOME/.ccrc/accounts.json could not be read" \
+      "install Node first — see the 'node' check above"
+    return 2
+  fi
+
+  local out rc=0
+  out="$(node "$gen" doctor --file "$roster" --home "$HOME" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_warn accounts "\$HOME/.ccrc/accounts.json could not be read as a roster, so no account's credential or provider config was measured" \
+      "the roster's own health is the wrappers check above — fix what it reports first, then re-run doctor"
+    return 2
+  fi
+
+  # ONE LINE PER FINDING, plus one COUNTS line, TAB-separated and read into FOUR
+  # variables. Every field the helper writes is non-empty by construction (a
+  # code, an id, a sentence, or a number), so CLAUDE.md's measured TSV hazard —
+  # TAB is an IFS whitespace character, so a run of them collapses and shifts
+  # every field after an empty one — cannot bite here; a finding's absent fourth
+  # field is TRAILING, which `read` leaves empty without shifting anything.
+  # `_dr_line` squashes embedded newlines out of both halves, so the findings
+  # join onto ONE verdict line and the remedy stays the line after it.
+  local -a findings=()
+  local n_acct=0 n_cred=0 n_env=0
+  local code a b c
+  while IFS=$'\t' read -r code a b c; do
+    [ -n "$code" ] || continue
+    if [ "$code" = COUNTS ]; then n_acct="$a"; n_cred="$b"; n_env="$c"; continue; fi
+    findings+=("$code: $a — $b")
+  done <<<"$out"
+
+  # THE COUNTS ARE THE MEASUREMENT (this file's "never the bare word ok" rule),
+  # and they come from the SAME run that produced the findings.
+  if [ "${#findings[@]}" -eq 0 ]; then
+    _dr_pass accounts "$n_acct account(s): $n_cred declared credential file(s), all present; $n_env provider env block(s), all agreeing with the roster (an account's launcher is the wrappers check's subject, not this one)"
+    return 0
+  fi
+  _dr_warn accounts "$(_dr_join "${findings[@]}")" \
+    "a declared credential file that is not on disk is re-written by: ccrc account credential --id <id> --credential - ; a drifted env block by re-running the lane's provisioning, whose settings.json merge is idempotent"
+  return 2
 }
 
 # ── credentials: does every account this box will PROBE have a token file? ──
@@ -3182,7 +3270,7 @@ _check_graphify() {
   # measured and WARN would report a problem there is none. Existence and
   # readability are checked BEFORE `_box_env_value` runs (its `< "$file"`
   # redirection is fatal to a missing file) — the same guard
-  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:4205-4208).
+  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:9243-9246).
   local role=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
     role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
@@ -3959,7 +4047,7 @@ _check_fleet() {
   # different bodies (no `connected` at all; `"yes"`; `null`; the STRING
   # `"false"`) each produced `PASS fleet: … in remote mode, connected` — a
   # verdict asserting the opposite of what the last one says. The justification
-  # written here was wrong as well as the code: `shared/api.ts:1484` declares
+  # written here was wrong as well as the code: `shared/api.ts:1926` declares
   # `connected` REQUIRED, so absence is a malformed answer, and the
   # absence-permits rule belongs to the optional pair `roster?`/`build?` and
   # licenses nothing here. `mode` and `build`/`roster` already WARN on a value
@@ -4033,7 +4121,7 @@ _check_fleet() {
 # ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
 # (this suite's own test harness does exactly that to read
 # `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
-# ccrc-install.test.ts:2547-2556) is this repo's standing ruling that
+# ccrc-install.test.ts:2416-2425) is this repo's standing ruling that
 # ccrc-doctor-checks must hold its own second spelling of anything it needs,
 # rather than lean on a scope accident. Don't "fix" this duplication by
 # reaching across a boundary that does not reliably exist.

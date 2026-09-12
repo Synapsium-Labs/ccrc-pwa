@@ -30,7 +30,7 @@ const PROJECT = 'demo';
 const DEAD = 'demo-coordinator-old';
 const HEIR = 'demo-coordinator-new';
 
-/** `coord-abandon.test.ts:30-38`'s registry row, field for field, so a fixture
+/** `coord-abandon.test.ts:31-39`'s registry row, field for field, so a fixture
  *  session reads exactly like a ccd one. */
 const seed = (home: string, id: string): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -47,7 +47,7 @@ const seed = (home: string, id: string): void => {
  *  recognises exactly `can't find session` as proof of death and calls every other
  *  failure `unknown`, so a fixture that improvised a stderr would be scripting
  *  `unmeasurable` by accident and passing for the wrong reason. `cmd` is recorded
- *  as well as the argv (`kickoff-route.test.ts:133`'s reason) — "nothing was
+ *  as well as the argv (`kickoff-route.test.ts:175`'s reason) — "nothing was
  *  measured" is a statement about `cmd`, which `calls.push(args)` cannot make. */
 const makeRunner = (live: ReadonlySet<string> = new Set()): { run: Runner; execs: string[][] } => {
   const execs: string[][] = [];
@@ -74,7 +74,7 @@ const openApp = async (home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'
 
 /** One run of `PROGRAM`, claimed by `DEAD`. `openRun` answers a UNION — it can
  *  refuse a second coordinator — so the id is narrowed rather than destructured
- *  off the refusal shape (`coord-abandon.test.ts:70-73`). */
+ *  off the refusal shape (`coord-abandon.test.ts:71-74`). */
 const openWave = (coord: CoordStore, wave: number, claimedBy = DEAD): number => {
   const opened = coord.openRun({
     program: PROGRAM, title: 'Program leverage', project: PROJECT, wave, waveOf: 8, claimedBy,
@@ -142,7 +142,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
   it('409 no-claimant for a reconstructed run whose claimedBy is NULL', async () => {
     // `reconstruct` inserts every rebuilt run with `claimedBy` bound to NULL
     // (`store.ts:361-368`) and no in-tree method writes that shape, so the row
-    // is made the way `run-routes.test.ts:1329` already makes it.
+    // is made the way `run-routes.test.ts:2145` already makes it.
     const home = mkTmp('ccrc-reclaim-');
     seed(home, HEIR);
     const { run } = makeRunner();
