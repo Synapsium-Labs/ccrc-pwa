@@ -930,3 +930,89 @@ describe('ccd-account-auth — openai-login runs somebody else\'s program', () =
     expect(status('gpt')).toMatchObject({ state: 'failed' });
   });
 });
+
+describe('ccd-account-auth — advertised, shipped, taken back off, and agent-first', () => {
+  // Files read by path rather than through a helper: `ccd/ccrc`, `deploy.sh`
+  // and `gen-wrappers.mjs` have no single-sourced constant in this package the
+  // way `CCD` does, and minting one here would be a second spelling
+  // `single-definition.test.ts` exists to refuse.
+  const REPO = path.resolve(__dirname, '../..');
+  const read = (...p: string[]): string => fs.readFileSync(path.join(REPO, ...p), 'utf8');
+
+  it('ccd advertises account-v1 as a CAPABILITY, not as a verb', () => {
+    // The token every wave-2 route gates on. `capSupported(state,'account-v1')`
+    // answers FALSE on no evidence, so a box that has not taken this deploy
+    // gets `501 unsupported` rather than a route that half works.
+    expect(h.sh('cmd_caps').split('\n')).toContain('account-v1');
+    // …and it is NOT dispatchable: `ccd account-v1` is not a command. Through
+    // the shared `CCD` constant, not a second spelling of that path —
+    // `single-definition.test.ts` holds it to one file and is right to.
+    expect(fs.readFileSync(CCD, 'utf8')).not.toMatch(/^ {2}account-v1\)/m);
+  });
+
+  it('the capability is named in the list that partitions caps output', () => {
+    // `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS is HAND-MAINTAINED and is
+    // what tells a capability token apart from a verb. Said here too, because
+    // the file that adds the token and the file that classifies it are two
+    // packages apart in a reader's head even though they are not on disk.
+    expect(read('server', 'test', 'ccd-archive.test.ts'))
+      .toContain("const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'stop-surface'];");
+  });
+
+  it('_inst_bins places the helper on BOTH platform arms', () => {
+    // Unlike ccd-cap-scopes (cgroups) and ccd-graph-sweep (a systemd timer),
+    // this one is not Darwin-excluded: decision 9 makes macOS a supported box,
+    // and only the two PANE methods are gated — inside the helper, at runtime.
+    const ccrc = read('ccd', 'ccrc');
+    const m = /_inst_bins\(\) \{([\s\S]*?)\n\}/.exec(ccrc);
+    expect(m, 'ccd/ccrc has no _inst_bins').toBeTruthy();
+    const body = m![1]!;
+    const line = '_inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755';
+    expect(body).toContain(line);
+    // Outside the `if [ "$CCD_OS" != darwin ]` block — measured by POSITION,
+    // not by reading the comment beside it.
+    const darwinGuard = body.indexOf('if [ "$CCD_OS" != darwin ]; then');
+    expect(darwinGuard, 'the darwin carve-out must still be findable').toBeGreaterThan(-1);
+    const closeAt = body.indexOf('\n  fi\n', darwinGuard);
+    expect(closeAt).toBeGreaterThan(darwinGuard);
+    const at = body.indexOf(line);
+    expect(at < darwinGuard || at > closeAt,
+      'the helper must not be inside the darwin carve-out').toBe(true);
+  });
+
+  it('the uninstall takes it back off PATH, and does not mistake it for a wrapper', () => {
+    // TWO TEXT PINS, and they are text on purpose: the behaviour of both lines
+    // is measured in `ccrc-uninstall.test.ts` against a real fixture box, and
+    // this is the copy a reader of THIS feature finds. The orphan rule is
+    // `_uninst_tree_bins`' own comment: an uninstall that leaves the binary
+    // strands it on PATH for ever — and this helper has no units, so nothing
+    // else removes anything on its behalf.
+    //
+    // The `case` is the weaker claim and is stated as such. Today an unmarked
+    // `ccd-account-auth` is kept silently by the wrapper arm whether or not
+    // the case names it. The entry is what keeps that true once anything
+    // stamps the file; `ccrc-uninstall.test.ts`'s stamped fixture is where it
+    // goes red.
+    const ccrc = read('ccd', 'ccrc');
+    expect(ccrc).toContain('case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-auth) continue ;; esac');
+    expect(ccrc).toContain('"$HOME/.local/bin/ccd-account-auth"');
+  });
+
+  it('the agent deploy ships it, BEFORE the agent restart', () => {
+    // AGENT-FIRST end to end. The agent caches `ccd caps` at boot — the
+    // 113-second lesson deploy.sh records — so an agent restarted against
+    // yesterday's ccd pins yesterday's capability set until someone restarts
+    // it again.
+    const deploySh = read('deploy', 'deploy.sh');
+    expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
+    const agentStart = deploySh.indexOf('if [ "$TARGET" = "agent" ]');
+    expect(agentStart, 'deploy.sh has no agent branch').toBeGreaterThan(-1);
+    const agentBranch = deploySh.slice(agentStart, deploySh.indexOf('\nelse', agentStart));
+    const shipAt = agentBranch.indexOf('install_atomic ccd/ccd-account-auth');
+    const restartAt = agentBranch.indexOf('"${SSH[@]}" "$BOX" "$AGENT_CMD"');
+    expect(shipAt, 'the helper is not shipped on the agent lane').toBeGreaterThan(-1);
+    expect(restartAt, 'the agent restart is not in the agent branch').toBeGreaterThan(-1);
+    expect(shipAt, 'the helper must land before the agent restart that caches ccd caps')
+      .toBeLessThan(restartAt);
+  });
+});

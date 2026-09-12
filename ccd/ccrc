@@ -8047,6 +8047,16 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   local bin="$HOME/.local/bin" tree="$BOX_TREE_DIR" gen
   mkdir -p "$bin" || _ccrc_die "cannot create $bin"
   _inst_atomic "$tree/ccd/ccd" "$bin/ccd" 755
+  # `ccd-account-auth` is the account-connection helper `ccd account-pane`
+  # execs, and it goes on BOTH arms — unlike the two below, which are gated on
+  # cgroups and on a systemd timer respectively. macOS is a supported box for
+  # this feature (decision 9): `login` and `paste` drive a plain pipe and touch
+  # no `script(1)`, so they run identically on both userlands, and only the two
+  # PANE methods are platform-dependent — gated inside the helper at runtime,
+  # with `pane-unsupported-here`, rather than by omitting the file. A binary
+  # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
+  # own comment warns about.
+  _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -8072,9 +8082,9 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep — its timer is systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep — its timer is systemd-only)"
   else
-    echo "install: bins: ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
@@ -9923,7 +9933,7 @@ _uninst_wrappers() {
     # (graphify Task 10/fix-round F2 adds `ccd-graph-sweep` to this case,
     # or the wrapper arm would misclassify it instead of the bin arm below
     # ever getting a say).
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-auth) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -10027,10 +10037,10 @@ _uninst_tree_bins() {
   # reasoning exactly — its own units were already removed by `_uninst_units`
   # above, and leaving the binary behind orphans it the same way).
   rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
-    "$HOME/.local/bin/ccd-graph-sweep" \
+    "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-auth" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher removed from \$HOME/.local/bin"
-  # ── the FIFTH entry, and the only one that is not ccrc's own binary ──────
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher removed from \$HOME/.local/bin"
+  # ── the SIXTH entry, and the only one that is not ccrc's own binary ──────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
   # uninstall that removed the engine's home (`--purge` takes `~/.ccrc` whole,

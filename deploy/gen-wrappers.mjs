@@ -157,7 +157,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  (its unit and enable are role-gated; the binary is not). It carries no
  *  provenance marker today either, same as `ccd-cap-scopes` — this set is the
  *  defence regardless, exactly as its own header already promised. */
-const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']);
+const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-auth']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

@@ -591,6 +591,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });

@@ -638,6 +638,11 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host, so there is no server-role branch to gate it against the way
   # `ccd/ccrc`'s own `_inst_bins` has to.
   install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
+  # The account-connection helper `ccd account-pane` execs. Unconditional here
+  # exactly as its two siblings above — the agent lane only ever ships to a
+  # fleet host — and BEFORE the agent restart below, because the agent caches
+  # `ccd caps` at boot and this deploy is what makes `account-v1` true.
+  install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a
   # fleet host is DEPLOYED day to day and installed rarely; without it the box

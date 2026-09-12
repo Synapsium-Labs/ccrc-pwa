@@ -159,6 +159,8 @@ const TREE_FILES = [
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
   // UNIT and its ENABLE are role-gated, per `_inst_units`/`_inst_enable`).
   'ccd/ccd-graph-sweep',
+  // The account-connection helper, on BOTH arms — see `_inst_bins`.
+  'ccd/ccd-account-auth',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -1779,6 +1781,18 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  it('ccd-account-auth lands beside them on EVERY platform — macOS is supported', () => {
+    // A plain `it`, where the two around it are `itLinux`. That is not an
+    // oversight: `login` and `paste` drive a plain pipe and touch no
+    // `script(1)`, so a Mac gets the DEFAULT path from this binary rather than
+    // a no-op, and only the two pane methods degrade — inside the helper, at
+    // runtime, with `pane-unsupported-here`.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-account-auth');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-account-auth')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   itLinux('ccd-graph-sweep lands beside it too (graphify Task 10, O3/O6b) — every role, but not Darwin', () => {
     // Mirrors the `ccd-cap-scopes` case above, byte for byte: `_inst_bins`
     // ships this one on every role the same way, and rides the same darwin
@@ -1889,6 +1903,8 @@ describe('ccrc install: the executables and files it installs', () => {
       ...(process.platform === 'darwin'
         ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
                 join(home, '.local', 'bin', 'ccd-graph-sweep')]),
+      // NOT in the spread above: this one is on both arms.
+      join(home, '.local', 'bin', 'ccd-account-auth'),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
@@ -2840,8 +2856,10 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
-        ? ['ccd', 'ccrc', 'graphify']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
-        : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
+        // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
+        // and graph-sweep (systemd-timer-bound), macOS is a supported box for it.
+        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
+        : ['ccd', 'ccd-account-auth', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3268,6 +3286,8 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       ...(process.platform === 'darwin'
         ? [] : [join(home, '.local', 'bin', 'ccd-cap-scopes'),
                 join(home, '.local', 'bin', 'ccd-graph-sweep')]),
+      // NOT in the spread above: this one is on both arms.
+      join(home, '.local', 'bin', 'ccd-account-auth'),
       join(home, '.local', 'bin', 'ccrc'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),

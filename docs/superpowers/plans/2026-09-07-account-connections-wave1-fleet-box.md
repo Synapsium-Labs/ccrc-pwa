@@ -19059,3 +19059,45 @@ disk one name away.
 Pinned by `the mint, the tag and the template all spell the same oauth lane`, three source assertions in
 one case, each naming what must move with it. Measured: renaming the destination in the helper alone
 reds four cases, one of them this one.
+
+### D-2573 — the plan's own Step-1 test block reds a suite its Step 4 tells you to run
+
+Task 56's test block opens with a local helper, `const read = (...p) => readFileSync(path.join(REPO, ...p))`,
+and uses it for the negative caps assertion:
+
+```ts
+expect(read('ccd', 'ccd')).not.toMatch(/^ {2}account-v1\)/m);
+```
+
+`server/test/single-definition.test.ts` holds the path to the ccd script to ONE file, and its rule is
+`` NAMES_CCD = /['"]\.\.\/\.\.\/ccd\/ccd['"]|['"]ccd['"]\s*,\s*['"]ccd['"]/ `` — the second alternative
+matching exactly `'ccd', 'ccd'`. So the plan's own code adds a second spelling of that path, and
+`is spelled in exactly one file, and that file is ccdWsHelpers.ts` goes red with
+
+```
+- Expected                                    + Received
+  [                                           [
+                                              +  "server/test/ccd-account-auth.test.ts",
+     "server/test/ccdWsHelpers.ts",               "server/test/ccdWsHelpers.ts",
+  ]                                           ]
+```
+
+`single-definition.test.ts` is in Step 4's own run list, so the task as written cannot reach its own
+green. The rule is right and the plan is wrong: the assertion wants the ccd source, and `CCD` — already
+imported in this file — is that constant. Shipped as `fs.readFileSync(CCD, 'utf8')`.
+
+Worth recording rather than fixing silently because of what it is an instance of: a plan can spell a
+path that is correct, readable and forbidden, and the forbidding is invisible unless you run the suite
+that owns the rule. The other three `read(...)` call sites in the same block name `ccd/ccrc`,
+`deploy/deploy.sh` and `server/test/ccd-archive.test.ts`, none of which any rule holds to one spelling.
+
+Task 56's mutation table, seven mutations, all red and all restored: the token advertised but not
+classified (2 red), classified but not advertised (2 red), `_inst_bins`' install line deleted (5 red —
+two of them `ccrc-install` cases that fail because `_inst_atomic` dies on a file the fixture never
+copied), the uninstall's `rm -f --` entry deleted (3 red), `_uninst_wrappers`' case entry deleted
+(2 red), and the agent lane's `install_atomic` deleted (1 red).
+
+And the PAIRED measurement the plan asks for, which says which half of the uninstall pair does which
+work: reverting `plantInstalledBox`'s plant AND the `rm -f --` entry together leaves the preserve-set
+loop GREEN — it would be asserting about a file the fixture never created — while the stamped-fixture
+`it` and the text pin both still fire, because that `it` writes its own copy. Measured exactly that way.

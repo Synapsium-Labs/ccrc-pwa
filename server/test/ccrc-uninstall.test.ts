@@ -120,7 +120,11 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
   // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
-  // ── the FIFTH name in ~/.local/bin, and the only one that is not a ccrc
+  // The account wave's fifth `_inst_bins` executable, and UNMARKED exactly as
+  // the four above are: `_inst_atomic` copies and chmods, it never stamps, so
+  // a real box's copy carries no marker either.
+  writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
+  // ── the SIXTH name in ~/.local/bin, and the only one that is not a ccrc
   // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
   // pinned venv's own engine. The venv is planted too, because the proof this
   // link is ccrc's is its TARGET — the uninstall reads it with a one-hop
@@ -474,7 +478,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'graphify']) {
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-auth', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -484,6 +488,29 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
     expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd'))).toBe(true);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
+  });
+
+  it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {
+    // `_inst_atomic` does not stamp, so a real box's copy is unmarked and the
+    // wrapper arm keeps it silently whether or not `_uninst_wrappers`' case
+    // names it. The case line's whole value is that it does not DEPEND on
+    // that: stamp the file and, without the entry, `_uninst_wrappers` reads
+    // `ccrc-unmodified`, removes it FIRST, and reports a toolchain executable
+    // in the wrapper census as though ccrc had found an account launcher on
+    // this box. That is the failure this fixture can see and a text pin
+    // cannot.
+    const home = mkTmp('ccrc-uninst-auth-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-account-auth'),
+      markGenerated('#!/bin/sh\n# account auth\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-account-auth')),
+      'the helper survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-account-auth/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-account-auth.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the

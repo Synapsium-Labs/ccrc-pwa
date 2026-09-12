@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0f4932f49ff692c9665119e2829809c0c2871afde6a7a63994453a07e5bbb01a
+# ccrc:generated 1 sha256=5e0bfdfa0d19e6d0c4c19f5236be4af97f792ed6c8d84705c86ec47889f05ccb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5009,10 +5009,12 @@ EOF
   # that answers the question. Names the FLAG `cmd_stop`
   # has carried since D3 (spec §4.1): `ccd stop [--surface <word>] <id>`.
   # `server/test/ccd-archive.test.ts`'s caps<->dispatcher parity check knows
-  # these tokens by name (`KNOWN_CAPABILITY_TOKENS`, that file's line 153) and
+  # these tokens by name (`KNOWN_CAPABILITY_TOKENS`, that file's line 154) and
   # holds the advertised set EXACTLY equal to it — a token added here without
-  # updating that list fails loudly there, in BOTH directions: :175 sees it as
-  # a phantom verb, :180 sees the list short one.
+  # updating that list fails loudly there, in BOTH directions: :184 sees it as
+  # a phantom verb, :189 sees the list short one. (Re-measured 2026-09-12; the
+  # three numbers this comment carried before — 153, 175, 180 — had all
+  # rotted, and nothing reds when they do.)
   echo stop-surface
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
@@ -5029,6 +5031,14 @@ EOF
   # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
   # argument, same polarity, as `stop-surface` above.
   echo actor-flags-v1
+  # `account-v1` says THIS copy of ccd carries the account surface: the
+  # `account-pane` verb above and the `ccd-account-auth` helper it execs. It
+  # gates a SERVER DECISION — whether to offer any account mutation at all —
+  # so every wave-2 route answers `501 unsupported` against a box that has not
+  # taken this deploy, rather than emitting a verb that box does not have.
+  # Same channel, same argument, as the three tokens above; and the same
+  # obligation, which is the list named in the comment beside `stop-surface`.
+  echo account-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
