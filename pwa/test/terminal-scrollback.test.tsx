@@ -149,25 +149,47 @@ const fakeTermFactory = () => {
   };
 };
 
-const fakeHistoryFactory = () => {
+/** `defer: true` holds each write's parse callback instead of running it, so a
+ *  test can measure what the drawer does BEFORE the history has landed — which
+ *  is the real xterm's behaviour (`write` parses asynchronously) and the shape
+ *  the opening scroll got wrong. */
+const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   const scrolled: number[] = [];
   const madeWith: number[] = [];
+  /** Every call this terminal received, in order — the latch has to be armed
+   *  before the scroll that takes the reader away from the bottom. */
+  const order: string[] = [];
+  const parses: Array<(() => void) | undefined> = [];
   let bottom: (() => void) | null = null;
   return {
     write,
     dispose,
     scrolled,
     madeWith,
+    order,
+    /** Run the parse callbacks a deferred stub is holding. */
+    flushParse: () => {
+      for (const done of parses.splice(0)) done?.();
+    },
     toBottom: () => bottom?.(),
     makeHistoryTerm: (_host: HTMLElement, lines: number) => {
       madeWith.push(lines);
       return {
-        write: (d: string) => write(d),
+        write: (d: string, done?: () => void) => {
+          write(d);
+          order.push('write');
+          if (defer) parses.push(done);
+          else done?.();
+        },
         fit: () => ({ cols: 48, rows: 20 }),
-        scrollLines: (n: number) => scrolled.push(n),
+        scrollLines: (n: number) => {
+          order.push('scroll');
+          scrolled.push(n);
+        },
         onBottom: (cb: () => void) => {
+          order.push('onBottom');
           bottom = cb;
         },
         dispose,
@@ -175,6 +197,11 @@ const fakeHistoryFactory = () => {
     },
   };
 };
+
+/** The history layer as a READER sees it: one door, and it says it is pressed.
+ *  The old probe was the status badge — which a history that is up no longer
+ *  shows, because a line count was never what the reader asked for. */
+const historyDoor = () => screen.queryByRole('button', { name: 'Back to live' });
 
 const HISTORY = 'older output\nolder still\n';
 
@@ -239,12 +266,12 @@ describe('the wheel scrolls the console history', () => {
       t.wheel(-120);
     });
     await waitFor(() => expect(h.write).toHaveBeenCalled());
-    expect(screen.getByRole('status', { name: /history/i })).toBeTruthy();
+    expect(historyDoor(), 'the history went up without arming its door').toBeTruthy();
 
     act(() => {
       h.toBottom();
     });
-    await waitFor(() => expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    await waitFor(() => expect(historyDoor()).toBeNull());
     expect(h.dispose).toHaveBeenCalled();
   });
 
@@ -314,9 +341,9 @@ const ARROWS: [string, string][] = [
 /** An opened drawer on scripted doubles, with the socket's frames already
  *  cleared: every assertion below is about what the GESTURE put there, never
  *  about the attach that preceded it. */
-const mountDrawer = () => {
+const mountDrawer = (histOpts?: { defer?: boolean }) => {
   const t = fakeTermFactory();
-  const h = fakeHistoryFactory();
+  const h = fakeHistoryFactory(histOpts);
   const view = render(
     <TerminalDrawer
       id={ID}
@@ -445,10 +472,9 @@ describe('the ways back to live', () => {
     });
     await waitFor(() => expect(h.write).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: 'live' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to live' }));
 
-    await waitFor(() =>
-      expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    await waitFor(() => expect(historyDoor()).toBeNull());
     expect(h.dispose).toHaveBeenCalled();
     // Leaving the history is not a re-attach: the live socket is untouched and
     // still the one that was open.
@@ -470,8 +496,7 @@ describe('the ways back to live', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Arrow up' }));
 
-    await waitFor(() =>
-      expect(screen.queryByRole('status', { name: /history/i })).toBeNull());
+    await waitFor(() => expect(historyDoor()).toBeNull());
     expect(h.dispose).toHaveBeenCalled();
     expect(lastFrame(ws), 'the return to live ate the keystroke').toEqual({
       type: 'input',
@@ -495,7 +520,7 @@ describe('the ways back to live', () => {
       window.dispatchEvent(new Event('resize'));
     });
 
-    expect(screen.getByRole('status', { name: /history/i })).toBeTruthy();
+    expect(historyDoor(), 'a rotation closed the history the reader was in').toBeTruthy();
     expect(h.dispose, 'a rotation disposed the history the reader was in').not.toHaveBeenCalled();
     // …and the resize itself still reached the pane, which is what a refit is for.
     expect(lastFrame(ws)).toEqual({ type: 'resize', cols: 60, rows: 18 });
@@ -515,7 +540,7 @@ describe('the ways back to live', () => {
 
     // A capture taken before the drop is a snapshot of a session that has
     // moved on since, so the re-attach must not leave it on screen.
-    expect(screen.queryByRole('status', { name: /history/i })).toBeNull();
+    expect(historyDoor()).toBeNull();
     expect(h.dispose).toHaveBeenCalled();
 
     // The guard is installed per attach. If it ever moves outside the attach
@@ -584,9 +609,9 @@ describe('a read that fails says WHICH failure', () => {
 
   it('a failed read leaves the wheel able to try again', async () => {
     // `empty` is not `live`, so the idempotence guard would refuse a retry if
-    // the only way out were the wheel. The way back is the same live button the
-    // history view uses — measured here so the reader is never stranded on a
-    // failure they cannot clear.
+    // the only way out were the wheel. The way back is the key bar's own
+    // toggle, which reads `live` in every state that is not live — measured
+    // here so the reader is never stranded on a failure they cannot clear.
     vi.stubGlobal('fetch', jsonFetch(404, { ok: false, error: 'gone' }));
     const { t } = mountDrawer();
     act(() => {
@@ -594,7 +619,7 @@ describe('a read that fails says WHICH failure', () => {
     });
     await screen.findByText(/no history/i);
 
-    fireEvent.click(screen.getByRole('button', { name: 'live' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to live' }));
     await waitFor(() => expect(screen.queryByText(/no history/i)).toBeNull());
   });
 });
@@ -635,5 +660,114 @@ describe('the console history has a door a thumb can reach', () => {
     const door = screen.getByRole('button', { name: 'Scroll back' });
     expect(door.textContent).toBe('hist');
     expect(door.className).toContain('keycap--act');
+  });
+});
+
+// — one door, both ways —
+//
+// The operator's own words, testing the first cut: "вмикати історію однією
+// кнопкою, а вимикати іншою, не зручно". The badge over the history carried a
+// line count nobody asked for and a second exit beside it; the key bar's door
+// opened but never closed. One toggle now does both, and says which way it is
+// facing — a button that changes what it does without changing how it looks is
+// the failure this block exists to refuse.
+describe('the history door is a toggle', () => {
+  it('names the way out, says it is pressed, and takes it', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h, ws } = mountDrawer();
+
+    const door = screen.getByRole('button', { name: 'Scroll back' });
+    expect(door.textContent, 'the door did not offer the history').toBe('hist');
+    expect(door.getAttribute('aria-pressed')).toBe('false');
+
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    // The SAME element — a second button would be the inconvenience this
+    // replaces, so identity is part of the claim.
+    const back = screen.getByRole('button', { name: 'Back to live' });
+    expect(back, 'the door was replaced rather than toggled').toBe(door);
+    expect(back.textContent, 'the legend still promised the way in').toBe('live');
+    expect(back.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(back);
+
+    await waitFor(() => expect(historyDoor()).toBeNull());
+    expect(h.dispose).toHaveBeenCalled();
+    expect(door.textContent).toBe('hist');
+    expect(door.getAttribute('aria-pressed')).toBe('false');
+    // Still not a key: the way out sends nothing to the pane either.
+    expect(ws.sent, 'the toggle put a control sequence on the socket').toEqual([]);
+  });
+
+  it('the badge over a history that is up is gone, and the two states that need words keep them', async () => {
+    // A line count is not news to someone looking at the lines. A read still in
+    // flight, and a pane with no history to give, are.
+    let settle: ((r: Response) => void) | null = null;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => { settle = r; })));
+    const { t, h } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+
+    expect(await screen.findByText(/reading history/i), 'a read in flight said nothing').toBeTruthy();
+
+    act(() => {
+      settle?.(new Response(JSON.stringify(OK_HISTORY), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }));
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    expect(screen.queryByText(/lines/i), 'the line count came back').toBeNull();
+    expect(screen.queryByText(/reading history/i)).toBeNull();
+    expect(historyDoor(), 'the history is up, so its door must say so').toBeTruthy();
+  });
+});
+
+// — one notch up, one notch back —
+//
+// Also measured by the operator: "один скрол вверх і вниз вже не повертає, два
+// рази вверх і два рази вниз - повертає". Two mechanisms had to be wrong at
+// once for that, and both are ordering.
+describe('the opening scroll', () => {
+  it('arms the bottom latch BEFORE the departure it latches', async () => {
+    // `onBottom` only fires for a reader who has been away from the newest
+    // line, and the opening scroll is that departure. Registered after it, the
+    // latch never saw it — so the first scroll DOWN read as an arrival nobody
+    // had left, and the way back cost two notches instead of one.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.scrolled.length).toBe(1));
+
+    expect(h.order, 'the latch was armed after the scroll it exists to catch')
+      .toEqual(['onBottom', 'write', 'scroll']);
+    expect(h.scrolled, 'the history opened by more than the notch that asked for it')
+      .toEqual([-3]);
+  });
+
+  it('waits for the PARSE, not the call — a scroll against an empty buffer moves nothing', async () => {
+    // xterm writes asynchronously. Issued beside the write, the opening scroll
+    // ran against the buffer as it stood BEFORE the history landed: it moved
+    // nothing, so the reader was left at the bottom with the latch unarmed —
+    // the same two-notch symptom by a second road.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t, h } = mountDrawer({ defer: true });
+    act(() => {
+      t.wheel(-120);
+    });
+    await waitFor(() => expect(h.write).toHaveBeenCalled());
+
+    expect(h.scrolled, 'the history scrolled before it had been parsed').toEqual([]);
+
+    act(() => {
+      h.flushParse();
+    });
+    expect(h.scrolled).toEqual([-3]);
   });
 });

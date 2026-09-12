@@ -43,7 +43,11 @@ export type MakeTerm = (host: HTMLElement) => DrawerTerm;
  *  it is the one of the two that HAS scrollback (the live one is on tmux's
  *  alternate screen, where xterm keeps none). */
 export interface HistoryTerm {
-  write(data: string): void;
+  /** `done` fires when the data is PARSED, not merely queued — xterm's own
+   *  `write(data, cb)` contract. The opening scroll has to wait for it: a
+   *  `scrollLines` against a buffer that has not grown yet moves nothing, and
+   *  the reader is then sitting at the bottom with the bottom latch unarmed. */
+  write(data: string, done?: () => void): void;
   fit(): { cols: number; rows: number };
   /** Scroll the view; negative is up, in lines. */
   scrollLines(amount: number): void;
@@ -144,7 +148,7 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
   term.loadAddon(fit);
   term.open(host);
   return {
-    write: (d) => term.write(d),
+    write: (d, done) => term.write(d, done),
     fit: fitter(term, fit),
     scrollLines: (n) => term.scrollLines(n),
     onBottom: (cb) => {
@@ -226,6 +230,9 @@ export function TerminalDrawer({
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
   const kbInset = useKeyboardInset({ active: open });
+  /** Live, or one of the three history states — the only distinction the key
+   *  bar's door and its legend turn on. */
+  const atLive = hist.at === 'live';
 
   const goHist = (next: Hist): void => {
     histRef.current = next;
@@ -412,15 +419,25 @@ export function TerminalDrawer({
     if (hist.at !== 'history' || histHost === null) return undefined;
     const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines);
     term.fit();
+    // ARMED BEFORE THE DEPARTURE IT LATCHES. `onBottom` fires only for a
+    // reader who has been AWAY from the newest line, and the opening scroll
+    // below is that departure. Registered after it, the latch never saw it, so
+    // the first scroll DOWN read as an arrival nobody had left — and returning
+    // to live cost two notches up and two back instead of one each way, which
+    // is exactly what the operator measured.
+    term.onBottom(() => goHist({ at: 'live' }));
     // A capture is LF-separated; a terminal needs the carriage return too, or
     // every line starts where the last one ended. Done HERE rather than with
     // xterm's `convertEol` so the bytes a `HistoryTerm` receives are the same
     // whoever implements it.
-    term.write(hist.text.replace(/\r?\n/g, '\r\n'));
-    // One notch up, so the gesture that opened this visibly did something —
-    // and so the bottom latch is armed by a reader who is genuinely above it.
-    term.scrollLines(-WHEEL_LINES);
-    term.onBottom(() => goHist({ at: 'live' }));
+    term.write(hist.text.replace(/\r?\n/g, '\r\n'), () => {
+      // One notch up, so the gesture that opened this visibly did something —
+      // and so the bottom latch is armed by a reader who is genuinely above
+      // it. INSIDE the parse callback: xterm writes asynchronously, and a
+      // scroll issued beside the write runs against the buffer as it stood
+      // BEFORE the history landed, which moves nothing and arms nothing.
+      term.scrollLines(-WHEEL_LINES);
+    });
     return () => term.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
   }, [hist, histHost, makeHistoryTerm]);
@@ -445,20 +462,16 @@ export function TerminalDrawer({
               <div ref={setHistHost} className="term-host" />
             </div>
           )}
-          {hist.at !== 'live' && (
+          {/* NO BADGE OVER A HISTORY THAT IS UP: the reader can see the
+              history, the line count told them nothing they had asked for, and
+              the `live` button beside it was a second door for the job the key
+              bar's toggle now does both ways. Only the two states a reader
+              cannot read off the glass still speak. */}
+          {(hist.at === 'reading' || hist.at === 'empty') && (
             <div className="term-histbar" role="status" aria-label="History">
               <span className="term-histbar-word">
-                {hist.at === 'reading' && 'reading history…'}
-                {hist.at === 'history' && `history · ${hist.lines} lines`}
-                {hist.at === 'empty' && `no history · ${hist.why}`}
+                {hist.at === 'reading' ? 'reading history…' : `no history · ${hist.why}`}
               </span>
-              <button
-                type="button"
-                className="btn-ghost term-histbar-live"
-                onClick={() => goHist({ at: 'live' })}
-              >
-                live
-              </button>
             </div>
           )}
           {conn !== 'open' && (
@@ -520,11 +533,19 @@ export function TerminalDrawer({
           <button
             type="button"
             className="keycap keycap--act"
-            aria-label="Scroll back"
+            aria-label={atLive ? 'Scroll back' : 'Back to live'}
+            /* A real toggle, not two buttons: one key in, the same key out.
+               `aria-pressed` is what carries the engaged state to AT and,
+               through the attribute selector, to the inverted fill in CSS —
+               one fact, one source, with no `data-` twin to drift from it. */
+            aria-pressed={!atLive}
             onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
-            onClick={openHistory}
+            onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
           >
-            <span aria-hidden="true">hist</span>
+            {/* The legend names the destination, the way every other cap here
+                names what it sends: from live it offers `hist`, and from the
+                history it offers the way back. */}
+            <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
           </button>
         </div>
       </div>

@@ -71,6 +71,17 @@ describe('pty drawer bridge', () => {
     await vi.waitFor(() => expect(stub.written).toContain('ls\r'), wait);
     ws.send(JSON.stringify({ type: 'resize', cols: 90, rows: 28 }));
     await vi.waitFor(() => expect(stub.resized).toContainEqual({ cols: 90, rows: 28 }), wait);
+    // THE WINDOW FOLLOWS THE CLIENT, at attach and at every refit. The close
+    // handler's own `resize-window` sets `window-size manual` — measured on
+    // the live fleet, every window reads `manual` — so tmux stops sizing the
+    // window to whoever attaches, and a drawer on any other grid than the
+    // spawn's sees a clipped viewport: the right of each line cut and the
+    // status row hidden. Delete either call and the drawer goes back to
+    // showing a window it does not fit.
+    await vi.waitFor(() => expect(calls).toContainEqual(
+      ['tmux', 'resize-window', '-t', 'cc-claude2-MekWarLive', '-x', '120', '-y', '40']), wait);
+    await vi.waitFor(() => expect(calls).toContainEqual(
+      ['tmux', 'resize-window', '-t', 'cc-claude2-MekWarLive', '-x', '90', '-y', '28']), wait);
 
     // close: kill the pty AND restore the canonical tmux window size via the Runner
     ws.close();
