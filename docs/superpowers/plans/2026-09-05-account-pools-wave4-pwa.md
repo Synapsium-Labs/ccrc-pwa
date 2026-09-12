@@ -680,6 +680,17 @@ describe('account pools', () => {
     expect(apiErrorText(asError(409, {
       ok: false, error: 'pool-mismatch', accountPool: 'pool-b',
     }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch',
+      accountPool: { name: 'pool-b' }, projectPool: 'pool-a',
+    }))).toBe(generic);
+  });
+
+  it('does not interpolate pool fields for a different unmapped code', () => {
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'some-other-code',
+      accountPool: 'pool-b', projectPool: 'pool-a',
+    }))).toBe('some-other-code');
   });
 
   it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
@@ -816,10 +827,10 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/api.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 65 tests; `tsc` exits 0. The 65 is a derived
-copy-completeness check, not a decreed cardinal: the focused file contains 65
+Expected: PASS, 66 tests; `tsc` exits 0. The 66 is a derived
+copy-completeness check, not a decreed cardinal: the focused file contains 66
 direct `it(` calls and zero `it.each` calls after D-2619 split the distinct
-refusal facts and D-2621 added the absent-name fallback proof. Re-derive both
+refusal facts and D-2621 added fallback/type/code-gate proofs. Re-derive both
 counts if the focused file changes; parameterized rows would make direct calls
 diverge from reported tests.
 
@@ -827,12 +838,14 @@ diverge from reported tests.
 
 1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: both complete ordinary-request tests receive a body containing `crossPool:false` instead of `JSON.stringify({ wrapper: 'claude2' })`.
 2. In `createSession`, change the body to plain `rest` regardless. Expected red: `createSession omits crossPool entirely unless it is true` — the third assertion fails, `expected {…} to deeply equal { …, crossPool: true }`.
-3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `turns pool-mismatch into a truthful sentence without promising absent controls` receives the bare `pool-mismatch` slug.
+3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `uses the unchanged generic mismatch sentence when either pool name is absent` receives the raw `pool-mismatch` slug instead of D-2620's generic fallback.
 4. **D-2618 URL pin:** change only `swap`'s suffix from `/swap` to `/swop`. Expected red: both complete ordinary-request tests receive `/api/sessions/s1/swop` instead of `/api/sessions/s1/swap`. Restore by exact inverse.
 5. **D-2618 complete-init pin:** change the JSON-body `post` helper's method from `POST` to `PUT`. Expected red includes both complete ordinary-request tests receiving `method:'PUT'`; existing independent callers red too. Restore by exact inverse.
 6. **D-2619 state-preservation pin:** make the `state === 'malformed'` branch return `API_ERROR_TEXT['pool-unreadable']!`. Expected red only in the distinct-state test: unreadable copy does not match `/invalid pool name/i`. Restore by exact inverse.
 7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red in the absent-name fallback test because the static generic sentence changed. Restore by exact inverse.
-8. **D-2621 name-aware pin:** delete only the pre-map `code === 'pool-mismatch'` branch. Expected red only in `names both pools in a measured mismatch without promising a control`: the generic fallback does not match `/pool-b/`; the absent-name fallback test remains green. Restore the branch by exact inverse.
+8. **D-2621 name-aware pin:** delete only the pre-map `code === 'pool-mismatch'` branch. Expected red only in `names both pools in a measured mismatch without promising a control`: the generic fallback does not match `/pool-b/`; all generic fallback assertions remain green. Restore the branch by exact inverse.
+9. **D-2621 string-type pin:** replace both `typeof ... === 'string'` checks with truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-b' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
+10. **D-2621 code-gate pin:** widen `if (code === 'pool-mismatch')` to `if (code)`. Expected red only in `does not interpolate pool fields for a different unmapped code`: `some-other-code` is replaced by the pool-name sentence. Restore by exact inverse.
 
 - [ ] **Step 7: Commit**
 
@@ -3414,9 +3427,11 @@ deviation found while executing this plan is allocated in its own call at the mo
   strings, return a sentence naming both and promising no control. If either
   field is absent or non-string, fall through unchanged to D-2620's static
   sentence so older servers permit rather than print `undefined` or crash.
-  Tests pin both paths. Deleting only the name-aware branch must red the
-  with-names assertion while the static fallback remains green, then restore by
-  exact inverse.
+  Tests pin both paths, reject truthy non-string names, and prove other error
+  codes cannot enter this branch. Deleting only the name-aware branch must red
+  the with-names assertion while the static fallback remains green; widening
+  string checks to truthiness and widening the code gate must each red their own
+  new assertion. Restore every mutant by exact inverse.
 
 - **D-2615 — Task 3's combined persistence mutant must be null-safe at store
   bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown

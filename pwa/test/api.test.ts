@@ -916,6 +916,21 @@ describe('account pools', () => {
       error: 'pool-mismatch',
       accountPool: 'pool-b',
     }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: { name: 'pool-b' },
+      projectPool: 'pool-a',
+    }))).toBe(generic);
+  });
+
+  it('does not interpolate pool fields for a different unmapped code', () => {
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'some-other-code',
+      accountPool: 'pool-b',
+      projectPool: 'pool-a',
+    }))).toBe('some-other-code');
   });
 
   it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
