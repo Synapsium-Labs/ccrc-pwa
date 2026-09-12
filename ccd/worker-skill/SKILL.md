@@ -98,12 +98,16 @@ You commit only on this workspace's own branch in THIS repository (clause 2), an
 the home repo's plan and ledger are read-only from where you are sitting.
 
 The contract excerpt your wave depends on is INLINED in the brief, verbatim from
-the merged file, and that inline copy is the authority for the interface. The home
-plan is context you may read, never somewhere to go hunting for a contract the
-brief did not hand you; if the two disagree, the plan's text governs (clause 6) and
-you say so in your `wave-done` mail so the ledger gets it. A deviation you find is
-still never a number you invent (clause 11): report it, and the coordinator mints
-it against the programme's home project.
+the merged file, and that inline copy is the authority for the INTERFACE — the
+shape of the thing you build against, frozen at the moment the brief was cut,
+even though the home plan may have moved since. The home plan is context you may
+read, never somewhere to go hunting for a contract the brief did not hand you,
+and it is the authority for the WAVE'S REQUIREMENTS — what to build and why
+(clause 6). Those are different questions, so a disagreement is not a tie to
+break: the excerpt still wins on shape, the plan still wins on scope, and you
+say so either way in your `wave-done` mail so the ledger gets it. A deviation
+you find is still never a number you invent (clause 11): report it, and the
+coordinator mints it against the programme's home project.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,

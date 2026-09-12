@@ -1591,7 +1591,8 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     expect(skill).toContain('## When a wave crosses into another project');
   });
 
-  // `flat` is this file's own helper (`:654`, the `readme-holds.test.ts` idiom):
+  // `flat` is this file's own helper (`const flat = (s: string) => s.replace(/\s+/g, ' ')`,
+  // the `readme-holds.test.ts` idiom):
   // both corpora wrap mid-clause at 80 columns, so a raw `toContain` would pin
   // the WRAP POINT rather than the sentence and would red on a re-flow that
   // changed nothing. A paraphrase still fails exactly as a deletion does.

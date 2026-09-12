@@ -3544,9 +3544,18 @@ export interface NotifyEvent {
    * WHICH RUN this notification is about, or `null` when it is about none.
    *
    * ADDITIVE (design 2026-09-08 §4); `FLEET_PROTO` is deliberately not bumped.
-   * The ONE tolerant reader is `reviveNotifyEvent` below — an older server's
-   * frame carries no `runId` at all, and that absence becomes `null` there and
-   * nowhere else.
+   * TWO tolerant readers at two different boundaries, deliberately, not one
+   * reader total and not a duplicate: `reviveNotifyEvent` below is what a
+   * `NotifyEvent` crosses coming IN — an older server's frame carries no
+   * `runId` at all, and that absence becomes `null` there, at the wire. The
+   * render boundary has its own reader, `pwa/src/lib/feed.ts`'s `eventRunId`,
+   * for a store row that reached a renderer WITHOUT having crossed that wire
+   * check just now — an older build's cached record, or a merge that put an
+   * unrevived object back in the store — and it turns that same absence into
+   * the same `null` there. Neither reaches past its own boundary: every
+   * `pwa/src` render site reads `eventRunId(ev)`, never `ev.runId` directly,
+   * so the wire's normalisation is never re-derived, only covered where it
+   * could still be missed.
    *
    * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
    * `coord` are about a SESSION or about the config; they belong to no

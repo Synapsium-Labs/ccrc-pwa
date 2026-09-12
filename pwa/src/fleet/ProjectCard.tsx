@@ -242,8 +242,17 @@ export function ProjectCard({
   // any reachable row. Kept for what it documents, not for what it guards.
   //
   // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
-  // and not every worker's: a child whose parent IS on this card is bracketed,
-  // and the bracket already says what this sentence would say. It looks only
+  // and not every worker's: a child whose parent IS on this card is USUALLY
+  // bracketed, and the bracket already says what this sentence would say — but
+  // not always. `nestFleet`'s rule 4 lifts a session that is BOTH a child and
+  // a parent back to depth 0 with no bracket at all (`nestFleet.test.ts:145-157`
+  // pins it), and that row still reaches this guard, still finds its parent on
+  // `group.sessions`, and still returns null here — so this card says nothing
+  // about it either. That silence is acceptable for the same reason rule 4
+  // itself gives: the row IS a parent, rendering its own children beneath it,
+  // and a THIRD sentence ("your parent is also on this card") next to a row
+  // that is already a visible coordinator was judged not worth a marker; it is
+  // not evidence the guard's premise holds for every depth-0 row. It looks only
   // at `group.sessions`, never `group.archived` — an archived coordinator IS
   // still a row on this card (`group.archived.map(...)` renders it under the
   // `Archived (N)` fold), just not among this card's LIVE rows, so a worker

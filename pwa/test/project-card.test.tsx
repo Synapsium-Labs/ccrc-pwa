@@ -635,9 +635,14 @@ describe('the orphan worker says which programme it belongs to', () => {
 
   it('marks NO row when the coordinator is on this very card — the bracket already says it', () => {
     // `pair` is the coordinator + worker fixture; `childRun` is bracketed. A
-    // marker here would be a second sentence saying what the `└─` says. This
-    // one passes on the DEPTH check alone, which is why the rule-4 case below
-    // exists: depth 0 is not proof that a coordinator is elsewhere.
+    // marker here would be a second sentence saying what the `└─` says. It
+    // does NOT pass on the depth check alone: the worker's row is depth 1, so
+    // the marker slot is never rendered for it regardless of what `orphanNote`
+    // returns, and `orphanNote` itself would independently silence it via the
+    // `group.sessions.some(...)` guard (its coordinator is on this card). That
+    // is why the rule-4 case below exists — it puts a coordinator's own
+    // worker at depth 0, where the depth check cannot help and only that
+    // guard can silence it: depth 0 is not proof a coordinator is elsewhere.
     const { container } = render(
       <ProjectCard group={pair} runs={[childRun]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
@@ -650,8 +655,9 @@ describe('the orphan worker says which programme it belongs to', () => {
     // parent of another renders at TOP level with its own children beneath it.
     // So a depth-0 row is NOT evidence that its coordinator is off this card —
     // and without the `group.sessions.some(...)` guard this row would carry
-    // "this worker's coordinator is not on this card" while that coordinator is
-    // rendered two lines above it. This case is the guard's only witness.
+    // "this worker's coordinator is not among this card's live sessions" while
+    // that coordinator is rendered two lines above it. This case is the
+    // guard's only witness.
     const coord = sess();                                             // demo-quiet-mesa
     const middle = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
     const leaf = sess({ id: 'demo-far-bank', workspace: 'far-bank' });

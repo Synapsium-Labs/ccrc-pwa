@@ -229,7 +229,7 @@ citation meaning one thing later; and the excerpt is inlined because a worker
 that has to go and FIND its contract has been handed a brief that did not carry
 one. It reads the home plan for context, never writes to it, and commits only on
 its own workspace's branch in the repo it is running in — the branch-discipline
-sentence above, which is already in every brief, is the whole of what changes for
+sentence below, which is already in every brief, is the whole of what changes for
 it.
 
 **The execution skill is the one list item that is not merely useful.** The
@@ -380,9 +380,12 @@ send, whichever role you address: with it, `coordinator` resolves off that run's
 own claim regardless of programme state and `worker` resolves off its `sessionId`;
 without it, `coordinator` falls back to the single active programme and a `worker`
 mail with no `runId` is refused `unknown-recipient`. One habit, no asymmetry to
-remember. Reading a programme's whole lane is `GET /api/mail?program=<slug>` and
-its records are `GET /api/feed?program=<slug>` — the filters that make a
-cross-repo programme legible from one call instead of two per repo.
+remember. Reading a programme's whole lane is `GET /api/mail?program=<slug>&all=1`
+— without `&all=1` it answers only what is still outstanding, exactly as `?to=`
+does above — and its records are `GET /api/feed?program=<slug>`, which is always
+the full archive with no outstanding/all split of its own; together they are the
+filters that make a cross-repo programme legible from one call instead of two per
+repo.
 
 ## 4 — Advance the run as the wave progresses
 

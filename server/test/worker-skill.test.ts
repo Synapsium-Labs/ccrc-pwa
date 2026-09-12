@@ -412,11 +412,12 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
 // change that adds no clause.
 describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
   // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
-  // already names (`coordinator-skill.test.ts:654`): this prose wraps at 80
-  // columns, so a raw `toContain` would pin the wrap point rather than the
-  // sentence. Kept per-file on purpose — the sibling's own comment gives the
-  // reason: it touches nothing shared, so a copy costs one helper and an import
-  // would cost a seam.
+  // already names on its own `flat` helper (`coordinator-skill.test.ts`'s
+  // `const flat = (s: string) => s.replace(/\s+/g, ' ')`): this prose wraps at
+  // 80 columns, so a raw `toContain` would pin the wrap point rather than the
+  // sentence. Kept per-file on purpose, defined again just below — it touches
+  // nothing shared, so a copy costs one helper and an import would cost a
+  // seam.
   const flat = (s: string): string => s.replace(/\s+/g, ' ');
 
   const FOREIGN: readonly (readonly [string, string])[] = [
