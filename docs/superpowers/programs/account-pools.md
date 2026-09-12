@@ -3608,8 +3608,11 @@ was watched rather than waved through. All five legs green.
 ### The defect
 
 PR #88's review round turned two `guards the guard` cases from hard failures into skips, because a box
-whose only UTF-8 locale is `C.utf8` cannot exhibit D-2522 and must not go red for a tree with nothing
-wrong with it. **The replacement guard asserted a different property from the one its own comment
+that lacks the property a block needs must not go red for a tree with nothing wrong with it. **The two
+host shapes are different, and only one is `C.utf8`** — measured: `C.utf8` collates by codepoint so it
+cannot exhibit D-2522, but it DOES classify U+3000 as `[[:space:]]`, so it exhibits D-2520 fine. The
+D-2520 guard's host shape is a box with NO UTF-8 locale at all — which is why that guard was the one
+that broke, and why one cause for both cases was the wrong account. **The replacement guard asserted a different property from the one its own comment
 claims.** The comment says a null from `localeWhere` "must mean 'this box has no such locale' and never
 'the probe is broken'"; the assertion was `expect(localeWhere('echo yes')).not.toBeNull()`, which cannot
 tell those apart. On a box whose `locale -a` lists no UTF-8 locale at all — the exact host the skip
@@ -3666,3 +3669,38 @@ on a box that cannot host the condition.
 DEFINED in a plan, so the floor seed would have jumped to 2638 and burned the band 2547–2587 forever.
 CLAUDE.md's rule is allocate and define **in the same act**, and the number written without being
 defined seals its own band. Defined in the wave's plan; green.
+
+### The review round found the same class AGAIN, inside this fix — PR #91
+
+Four adversarial lenses, 19 findings, 3 surviving refutation. All prose, and the first is the reason the
+round was run at all.
+
+**The fix's own comments named a subsystem its assertion cannot observe.** Three sites said
+`probe-broken` means "`LC_ALL` is not reaching the probe". The probe is `echo yes`, whose output is
+locale-INVARIANT, so a dropped `LC_ALL` reads as `found` and can never reach that arm. The refuter set
+out to kill the finding and measured five ways of breaking delivery — drop the `env` spread, never set
+the key, misspell it, set it empty, baseline — and **all five returned `found`**. So the message sent a
+maintainer to the one subsystem it provably cannot reach, and on a polluted-stdout failure it is flatly
+false: `LC_ALL` IS delivered there while the message says it is not.
+
+That is D-2588's own class committed inside D-2588's fix. Two rounds running, on the same file, the
+defect has been *a claim outliving the assertion under it* — first `not.toBeNull()` under a comment
+about host-vs-probe, then a failure message about `LC_ALL` under an assertion that cannot see `LC_ALL`.
+**The pattern worth carrying: when a guard's message names a cause, ask what input would produce that
+cause and check the guard actually fires on it.** Neither round's author did; both times a refuter
+measuring the cause found the answer in minutes.
+
+**The gap was closed, not just described.** `runUnder` is now the one place a probe is spawned under a
+locale, and a new case asserts `LC_ALL` actually arrives over that same channel — sharing one spawn site
+deliberately, because a second copy of the `env` spread would let the delivery check pass while
+`localeWhere` dropped `LC_ALL` entirely. Mutating the spread two ways reds it; an identity stub of the
+carrier stays GREEN and is reported as such, with those two reds as the control that makes the green
+mean "undetectable by construction" rather than "nothing drives this".
+
+The other two survivors: a stale row count in a comment, and one host shape given for two converted
+cases — `C.utf8` cannot exhibit D-2522 but DOES classify U+3000 as `[[:space:]]`, so it exhibits D-2520
+fine; the D-2520 guard's shape is a box with no UTF-8 locale at all. That sentence was in this ledger
+verbatim too, and both copies are corrected.
+
+**PR #91** — https://github.com/Synapsium-Labs/ccrc-pwa/pull/91. Test-only; nothing here ships to a box.
+472 tests green across 9 files.
