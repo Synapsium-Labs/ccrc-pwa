@@ -196,6 +196,47 @@ jobs:
         working-directory: server
         run: ./node_modules/.bin/vitest run
 
+  # THE PROBE LEG — a platform CONTRACT check that is not hostage to the suite.
+  #
+  # `test-macos` above is a 303-file run, and it has stopped being able to
+  # report: of its three runs on 2026-09-12 one completed at 39 min and TWO
+  # were cut at the 55-minute deadline mid-`Test`, answering nothing. A leg
+  # that cannot finish cannot be iterated against, and D-2614 — a credential
+  # path that fails on macOS and only macOS — can only be settled by asking a
+  # real Mac a question and reading the answer.
+  #
+  # So this job asks exactly one file's worth of questions about what
+  # `script(1)` does on this userland, in about two minutes. It is deliberately
+  # NOT folded into `test-macos`: the whole point is that its answer survives
+  # whatever the big suite does, including being cut. Same reason it is not
+  # required — it reports, it does not gate.
+  #
+  # `--reporter=verbose` because the answer travels in the assertion MESSAGE
+  # (each case carries `script`'s rc and stderr), and the default reporter
+  # elides those for passing cases.
+  probe-macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      # bash only: this file shells out to `script(1)` and `mkfifo` and needs
+      # nothing else. Deliberately NOT `coreutils` — `gtimeout`'s presence is
+      # one of the things whose absence D-2661 suspects, so this leg measures
+      # the userland as a fork's runner would first meet it.
+      - name: Install system dependencies
+        run: brew install bash
+      - name: Install
+        working-directory: server
+        run: npm ci
+      - name: Probe
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts --reporter=verbose
+
   build-pwa:
     runs-on: ubuntu-latest
     # Under a minute in practice; 15 is headroom for a cold npm cache.
