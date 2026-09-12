@@ -926,6 +926,10 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(citedCount('see nota/b/c.ts', ['x/a/b/c.ts', 'y/b/c.ts'])).toBe(0);
   });
 
+  it('does not reinterpret a two-segment full path through suffix-only slash-left semantics (Minor 3, fix round 4)', () => {
+    expect(citedCount('see x/a/b.ts', ['a/b.ts'])).toBe(0);
+  });
+
   it('measureCommand: the fields, and null — never 0 or main — without a set or without files', () => {
     const F = '\x60\x60\x60';                                       // a fence, never literal in a test file
     const text = `3. Files and Code Sections:\n- server/src/watch.ts\n${F}ts\nx\n${F}\n4. Next:\n${F}\ny\n${F}\n${F}`;
