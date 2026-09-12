@@ -184,13 +184,22 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   if (t === 'coord' && typeof (m as { coord?: unknown }).coord === 'object' && (m as { coord?: unknown }).coord !== null) {
     return m as FleetMsg;
   }
-  // Frame-level only, same depth as `coord` above — per-PROJECT tolerance (a
-  // `state` word this build has never heard of) is the renderer's job, via
-  // `projectPoolOf`/`ProjectCard`. A payload that is not an object at all is
-  // dropped rather than coerced: an unreadable policy frame must leave the
-  // last known one standing, never replace it with a shape nothing can read.
-  if (t === 'pools' && typeof (m as { pools?: unknown }).pools === 'object' && (m as { pools?: unknown }).pools !== null) {
-    return m as FleetMsg;
+  // Validate the envelope that makes `ProjectPoolsWire` safe to read, but not
+  // its project members: a later member state belongs to that reader's additive
+  // tolerance. A malformed envelope must leave the last live policy standing.
+  if (t === 'pools') {
+    const pools = (m as { pools?: unknown }).pools;
+    if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
+    const outer = pools as { listed?: unknown; enforcement?: unknown; byProject?: unknown };
+    const validEnforcement = outer.enforcement === 'enforced'
+      || outer.enforcement === 'unavailable'
+      || outer.enforcement === 'unknown';
+    const validByProject = typeof outer.byProject === 'object'
+      && outer.byProject !== null
+      && !Array.isArray(outer.byProject);
+    if (validEnforcement && (outer.listed === false || (outer.listed === true && validByProject))) {
+      return m as FleetMsg;
+    }
   }
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
   // this parser cannot trust is exactly the kind of frame absence-permits
