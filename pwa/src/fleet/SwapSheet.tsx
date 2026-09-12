@@ -604,7 +604,7 @@ export function SwapSheet({
         </div>
         {split.unknown ? (
           <p className="pool-note">
-            This project's pool is not known from here, so every account is offered.
+            This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
           </p>
         ) : split.crossing.length > 0 ? (
           <>

@@ -753,16 +753,47 @@ describe('SwapSheet and the pool line', () => {
     expect(swap.mock.calls[0]).toHaveLength(2);
   });
 
-  it('offers EVERY account with no disclosure and one honest note when the pool is not known from here', () => {
+  it('offers EVERY available account with no disclosure and one honest note when the pool is not known', () => {
     // Hiding on unknown would be inventing a rule. The note is the whole
-    // difference between "these are the accounts" and "these are the accounts
-    // this box could vouch for".
+    // difference between "these are the available accounts" and "these are the
+    // accounts this box could vouch for".
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, null)} />);
 
     expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/pool is not known from here/i)).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('keeps the unknown-pool note truthful when the roster has no other account', () => {
+    const roster = TEST_ROSTER.filter((a) => a.id === 'claude');
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s], roster)} />);
+
+    expect(screen.getByText('No other account to move this session to yet.')).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('keeps the unknown-pool note truthful when every alternative is switched off', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'gpt', disabled: true }),
+      acct({ wrapper: 'claude-dev0', disabled: true }),
+    ]);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, null)} />);
+
+    expect(await screen.findByText(
+      'Every other account is switched off on the fleet host — turn one back on from Accounts.',
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
   });
 
   it('says the same on an unreadable tag — nobody decides, so nothing is hidden', () => {
@@ -774,7 +805,9 @@ describe('SwapSheet and the pool line', () => {
 
     expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/pool is not known from here/i)).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
   });
 
   it('shows no disclosure when every account is in the pool — a control for an empty set is noise', () => {
