@@ -4875,3 +4875,34 @@ to `info`. A taste call they made reasonably is not a defect, and I have reverse
 being clever.
 
 **D-2652 issued** (floor 2653), mail 875, status 873 acked.
+
+## 2026-09-12 16:56Z — b62a4a95 verified independently; the citation in the moved file was right
+
+Worker mail 881: Task 3 review fix at `b62a4a95`, reported 74/74 with three mutants each at exactly
+1 failure and restored to matching SHA-256 sentinels. **Ran the gate myself rather than taking the
+report — 74/74.** All four land as ruled:
+
+- **D-2647** — `not.toContain('pool')` → `not.toContain('enforcement')`: the depth-independent property
+  survives and can no longer trip on a required `RosterWire.pool`.
+- **D-2648** / **D-2649** — the `listed:true` + `unavailable` combination and the disconnect/fresh-socket
+  reconnect stickiness each have a named test.
+- **D-2651** — exactly one comment, three lines; `fleet.ts` is `+3` and nothing else. No fixture, no
+  source-shape test. **The ruling followed to the letter including the part that said not to write
+  something** — which is the harder half to obey.
+
+**Checked the item most likely to be wrong: the comment's line citation.** It cites
+`stores.test.ts:1087` for the load-bearing `byProject` guard, in a commit that added 49 lines to that
+same file. Measured: `:1087` at `b62a4a95` IS the `byProject` shape table carrying `byProject: []`.
+They computed it AFTER the edit. With ~1300 line citations in this repo that is the class that rots
+silently, and the same-commit case is the one that usually gets it wrong.
+
+**Sent the open work in order**: D-2652 first (smallest, and a live falsehood); then D-2640's `GROUNDS`
+entries with the before/after census (baseline 258/350 at `5def521c`); then **D-2643 and D-2636
+TOGETHER, D-2643 written RED first** — the crossed fixture that fails today becomes the thing the
+`placement` fix turns green, so the suite that could not catch the defect gets its eye before the
+defect is repaired; then the recorded-not-fixed items D-2644/D-2645/D-2639.
+
+Also told them to pass D-2652 to the fresh review already running against `5def521c`, so it does not
+re-report a known defect as new.
+
+Mail 882, status 881 acked.
