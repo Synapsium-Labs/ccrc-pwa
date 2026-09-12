@@ -553,6 +553,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
   },
+  'fleet.css .sess-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
+  },
   'fleet.css .sheet-panel .proj-ready': {
     under: ['var(--bg-sheet)'],
     why: "the program-ready badge (F3) on a project row inside the start-a-program sheet. Its selector DOES name an ancestor — .sheet-panel — and naming a painter is still not enough: the descendant route grounds a rule only against a SELF-GROUNDED host, one setting a colour AND a ground, and .sheet-panel sets a background with no colour of its own. Same stylesheet or not is irrelevant (chat.css .chat has uncovered descendants in its own file). So all three rules were measured at nothing. Confirmed by running audit() before this entry existed, which is the only reason it is here rather than in the uncovered census looking scoped-and-safe",

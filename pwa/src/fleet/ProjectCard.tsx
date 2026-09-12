@@ -294,6 +294,7 @@ export function ProjectCard({
         selected={row.session.id === selectedId}
         onActions={onActions}
         roster={roster}
+        projectPool={pool}
         onOpenRun={openRunFor(row.session)}
       />
     ) : (
@@ -425,7 +426,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} onOpenRun={openRunFor(s)} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={pool} onOpenRun={openRunFor(s)} />
               ))}
             </div>
           )}

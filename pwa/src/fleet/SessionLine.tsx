@@ -23,9 +23,9 @@ import {
   ASK_OPERATOR_PRINCIPAL,
   ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
   unmeasuredFields,
-  type FleetSession, type RosterWire, type SessionBucket,
+  type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
-import { accountColorVar, accountLabel } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { elapsedWords } from '../lib/elapsed';
 import { useNow } from '../lib/useNow';
@@ -143,6 +143,7 @@ export function SessionLine({
   selected = false,
   onActions,
   roster = [],
+  projectPool = null,
   onOpenRun = null,
 }: {
   session: FleetSession;
@@ -155,6 +156,11 @@ export function SessionLine({
    *  degrades to `accountLabel`/`accountColorVar`'s own raw-name/neutral-ink
    *  fallback rather than needing a roster it was never given. */
   roster?: readonly RosterWire[];
+  /** This session's PROJECT's pool, derived by `ProjectCard` from its
+   *  authoritative project measurement. `null` — the DEFAULT — is "nobody
+   *  said", and the row then makes no pool claim at all: a line rendered
+   *  standalone, or under an older server, stays byte-identical. */
+  projectPool?: ProjectPoolWire | null;
   /** Task 5: what a tap on the hold reason should do, or `null` for "there is
    *  nowhere to go" — which is the DEFAULT, so every caller that has not been
    *  taught this renders the inert cell that shipped.
@@ -269,6 +275,17 @@ export function SessionLine({
     : swapReason === null ? 'swap blocked'
     : `swap blocked — ${swapReason}`;
 
+  // The strand (ruling 6). The marker's PRESENCE is the durable fact and must
+  // outlive a reason this build could not read. `at` is deliberately ignored:
+  // the registry's fail-shut arm uses `at: 0` for a real but unreadable marker.
+  const stranded = session.stranded ?? null;
+  const strandReason =
+    typeof stranded?.reason === 'string' && stranded.reason !== '' ? stranded.reason : null;
+  const strandNote =
+    stranded === null ? null
+    : strandReason === null ? 'stranded'
+    : `stranded — ${strandReason}`;
+
   // The supervisor's standing substrate fault (spec §4) — the console cannot
   // currently SEE this session, so every field above may be frozen at its
   // last good measurement. Read through `substrateFault`, never
@@ -355,6 +372,15 @@ export function SessionLine({
   // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
   // nothing is running, so "away" would describe a journey that ended.
   const away = !dead && session.wrapper !== session.home;
+
+  // Both pool names must be measured before the row can claim a mismatch.
+  // Untagged accounts or projects are compatible by policy, not off-pool.
+  const acctPool = accountPool(roster, session.wrapper);
+  const projPoolName = projectPool !== null && projectPool.state === 'tagged' ? projectPool.name : null;
+  const offPoolLabel =
+    !dead && acctPool !== null && projPoolName !== null && acctPool !== projPoolName
+      ? `running on ${accountLabel(roster, session.wrapper)} (pool ${acctPool}), project is pool ${projPoolName}`
+      : null;
 
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
@@ -573,6 +599,15 @@ export function SessionLine({
             </span>
           )}
 
+          {/* A strand is a durable marker that no eligible account can take
+              this live session. It stays distinct from swap refusal because
+              their remedies differ, and the reason remains verbatim. */}
+          {!dead && strandNote !== null && (
+            <span className="sess-stranded" data-stranded="true" title={strandReason ?? strandNote}>
+              {strandNote}
+            </span>
+          )}
+
           {/* The cleanup bucket's merge facts — see `cleanupFacts` above.
               Two cells, not one: the shared `.sess-meta > *:not(:first-child)
               ::before` rule already punctuates siblings with `·`, so a merged
@@ -682,10 +717,11 @@ export function SessionLine({
             className="sess-acct"
             style={acctStyle}
             data-away={away || undefined}
+            data-offpool={offPoolLabel !== null || undefined}
             aria-label={
-              away
+              offPoolLabel ?? (away
                 ? `running on ${accountLabel(roster, session.wrapper)}, pinned to ${accountLabel(roster, session.home)}`
-                : undefined
+                : undefined)
             }
           >
             {accountLabel(roster, session.wrapper)}

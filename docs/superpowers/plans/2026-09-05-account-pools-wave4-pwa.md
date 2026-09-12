@@ -3245,6 +3245,8 @@ If nothing needed fixing, this step produces no commit and the wave is done.
 
 ## Deviations found
 
+- **D-2678 — Task 9's prescribed stranded style was unaudited, and registering only its ordinary ground would conceal a selected-row failure.** Step 5 adds `.sess-stranded { color: var(--status-attention-text); }`, making it a new color-bearing selector, but omitted `pwa/design/audit.mjs` despite D-2671/D-2672 requiring each such selector to contribute measured rows and remain absent from `report.uncovered`. After the exact planned production/test edits, the focused Task 9 gate registered and ran 496 assertions but failed the uncovered census: expected at most 255, received 256. The ratchet therefore caught the next instance of this defect class without a manual census. The coordinator measured the ordinary project-card pair at 10.09:1 dark / 5.92:1 light, but also measured the selector's own attention ink on a selected row's `--ink-primary` slab at only 1.55:1 dark / 2.80:1 light. Ruling: register `.sess-stranded` with its inherited `--bg-surface` ground, make the registration's rationale explicitly distinguish the selected-row path, keep `.sess-stranded` in the active row's achromatic group where `--edge-strong` measures 9.27:1 dark / 9.91:1 light, and pin both the two measured audit rows with zero uncovered entry and the selected-group membership in the same Task 9 commit.
+
 **Allocated and defined in one act, from the live allocator, on 2026-09-05.**
 `~/.local/bin/ccrc-api ledger allocate --json -` with `project: ccrc-pwa`, `count: 26` and `byId`
 filled from this pane (`ccrc-pwa-amber-summit`) answered **D-1663**–**D-1688** and moved the floor to

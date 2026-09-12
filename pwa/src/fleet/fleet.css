@@ -858,6 +858,7 @@
 .sess-line--active .sess-held,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
+.sess-line--active .sess-stranded,
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
@@ -1323,6 +1324,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink-tertiary);
+}
+
+/* A strand is deliberately louder than the neighbouring durable markers.
+   Like them, it truncates while its title preserves the complete reason. */
+.sess-stranded {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--status-attention-text);
 }
 
 /* Task 5: the hold reason, when a run backs it, is a DOOR onto /runs. The
