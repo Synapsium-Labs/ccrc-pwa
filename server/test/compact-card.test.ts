@@ -839,26 +839,35 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(filesSectionChars('no headings here\n\x60\x60\x60ts\ncode\n\x60\x60\x60')).toBeNull();
   });
 
-  it('the heading scan skips FENCED regions: a numbered-looking line inside a fence is not the next heading (Minor 2, fix round 1, D-2553)', () => {
-    const F = '\x60\x60\x60';
-    // A fenced block sitting inside the Files section contains a line that
-    // LOOKS like a numbered heading ("1. not a real heading") but is code
-    // content, not prose structure — it must not end the section early.
-    const c = `3. Files and Code Sections:\n- a.ts\n${F}ts\n1. not a real heading\n${F}\n- b.ts\n4. Errors and fixes:\nnone`;
-    expect(filesSectionChars(c)).toBe(`3. Files and Code Sections:\n- a.ts\n${F}ts\n1. not a real heading\n${F}\n- b.ts\n`.length);
-    // The Files section quoting its OWN numbered list inside a fence (the
-    // corpus's own shape — a rendered file listing) must not truncate the
-    // section at the list's first line either.
-    const d = `3. Files and Code Sections:\nHere are the files:\n${F}\n1. a.ts\n2. b.ts\n${F}\n4. Next:\nnone`;
-    expect(filesSectionChars(d)).toBe(`3. Files and Code Sections:\nHere are the files:\n${F}\n1. a.ts\n2. b.ts\n${F}\n`.length);
+  it('the heading scan recognizes Markdown backtick fences, not arbitrary triple-backtick substrings (Minor 2, fix round 1, D-2553)', () => {
+    const F3 = '\x60'.repeat(3), F4 = '\x60'.repeat(4);
+    // An inline triple-backtick string is prose, rather than a fence that
+    // makes the real heading below look like code.
+    const inline = `3. Files and Code Sections:\n- a.ts ${F3} literal\n4. Next:\nnone`;
+    expect(filesSectionChars(inline)).toBe(`3. Files and Code Sections:\n- a.ts ${F3} literal\n`.length);
+    expect(measureCommand(inline, null, 'auto').fences).toBe(0);
+
+    // A three-backtick opener accepts a wider Markdown closing fence. The
+    // literal triple-backtick string in its code must not form another fence.
+    const triple = `3. Files and Code Sections:\n${F3}ts\n1. not a real heading\nliteral ${F3} stays code\n${F4}\n- b.ts\n4. Next:\nnone`;
+    expect(filesSectionChars(triple)).toBe(`3. Files and Code Sections:\n${F3}ts\n1. not a real heading\nliteral ${F3} stays code\n${F4}\n- b.ts\n`.length);
+    expect(measureCommand(triple, null, 'auto').fences).toBe(1);
+
+    // A four-backtick opener stays open across a shorter triple-backtick line;
+    // only an equally wide close ends the fenced region.
+    const four = `3. Files and Code Sections:\n   ${F4}ts\n${F3}\n1. still code\nliteral ${F3} stays code\n   ${F4}\n- b.ts\n4. Next:\nnone`;
+    expect(filesSectionChars(four)).toBe(`3. Files and Code Sections:\n   ${F4}ts\n${F3}\n1. still code\nliteral ${F3} stays code\n   ${F4}\n- b.ts\n`.length);
+    expect(measureCommand(four, null, 'auto').fences).toBe(1);
+
     // A fake Files heading inside a fence is not a candidate start; only the
     // following prose heading starts the measured section.
-    const e = `${F}\n3. Files and Code Sections:\n- fake.ts\n${F}\n3. Files and Code Sections:\n- real.ts\n4. Next:\nnone`;
-    expect(filesSectionChars(e)).toBe('3. Files and Code Sections:\n- real.ts\n'.length);
+    const nestedStart = `${F3}\n3. Files and Code Sections:\n- fake.ts\n${F3}\n3. Files and Code Sections:\n- real.ts\n4. Next:\nnone`;
+    expect(filesSectionChars(nestedStart)).toBe('3. Files and Code Sections:\n- real.ts\n'.length);
     // An unmatched opening fence covers the remaining text, including what
     // otherwise looks like a terminating numbered heading.
-    const unpaired = `3. Files and Code Sections:\n- a.ts\n${F}\n4. not a real heading`;
+    const unpaired = `3. Files and Code Sections:\n- a.ts\n${F3}\n4. not a real heading`;
     expect(filesSectionChars(unpaired)).toBe(unpaired.length);
+    expect(measureCommand(unpaired, null, 'auto').fences).toBe(0);
   });
 
   it('cited counts a set file when its path appears, or a UNIQUE suffix of at least two segments does — never a bare basename', () => {
@@ -870,19 +879,18 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(citedCount('see server/src/watch.ts and pwa/src/watch.ts', paths)).toBe(2);
   });
 
-  it('the FULL-PATH branch requires a left boundary: a shorter set member is not credited merely because it is a raw substring of a longer member\'s cited full path (Minor 3, fix round 1)', () => {
+  it('full paths and unique suffixes require both path-character boundaries (Minor 3, fix round 1)', () => {
     const paths = ['a/b/c.ts', 'x/a/b/c.ts'];
     // Only the longer path is actually named; the shorter one is not a
-    // standalone citation just because its characters occur inside the
-    // longer path's own text (path-segment-aligned per spec §3.4).
+    // standalone citation just because its characters occur in the longer
+    // path's own text (path-segment-aligned per spec §3.4).
     expect(citedCount('see x/a/b/c.ts here', paths)).toBe(1);
-    // Naming BOTH, each at its own left boundary, credits both.
+    // Naming BOTH, each at its own path-character boundaries, credits both.
     expect(citedCount('see a/b/c.ts and x/a/b/c.ts', paths)).toBe(2);
-    // The suffix half is untouched by this fix: a segment-aligned, in-set
-    // unique suffix still counts even when the shorter path is a "prefix" of
-    // the match rather than sharing the same reference — matches the
-    // existing 'unique 2-segment suffix' and 'ambiguous within the set'
-    // cases above, unchanged.
+    // A full path must not be credited as the prefix of another token.
+    expect(citedCount('see a/b/c.tsx', ['a/b/c.ts', 'a/b/c.tsx'])).toBe(1);
+    // Nor can a unique multi-segment suffix begin inside a larger path token.
+    expect(citedCount('see nota/b/c.ts', ['x/a/b/c.ts'])).toBe(0);
   });
 
   it('measureCommand: the fields, and null — never 0 or main — without a set or without files', () => {
@@ -906,31 +914,22 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(measureCommand(text, { ...set, scope: 'parent' } as any, 'auto').scope).toBeNull();
   });
 
-  it('a malformed files[] entry cannot crash the measurement or phantom-cite: null, no-path, empty and non-string paths are filtered rather than trusted (Minor 1, fix round 1)', () => {
+  it('a malformed files[] entry makes set-derived fields unknown, while a valid empty set remains measured empty (Minor 1, fix round 1)', () => {
     const base = { v: 1, at: 1, nonce: 'nonce-1', scope: 'main', agent: null, transcript: '/t', cwd: '/w', built: 'b', fresh: 'fresh', steered: false, served: false, stats: null };
-    // A raw entry with no `path` at all crashed `.map()` before the set's
-    // `files` even reached `citedCount`.
+    // Any malformed entry invalidates the working-set denominator. It must
+    // never crash, phantom-cite, or turn the result into a smaller valid set.
     expect(() => measureCommand('nothing relevant here', { ...base, files: [null] } as any, 'auto')).not.toThrow();
-    expect(measureCommand('nothing relevant here', { ...base, files: [null] } as any, 'auto')).toMatchObject({ setSize: 0, cited: 0 });
-    // A non-string `path` (here a number) reached `.split('/')` and threw
-    // whenever the text did not coincidentally contain its ToString'd form.
-    expect(() => measureCommand('no numbers here at all', { ...base, files: [{ path: 5 }] } as any, 'auto')).not.toThrow();
-    expect(measureCommand('no numbers here at all', { ...base, files: [{ path: 5 }] } as any, 'auto')).toMatchObject({ setSize: 0, cited: 0 });
-    // An entry with `path: undefined` did not throw when the summary
-    // happened to contain the literal word "undefined" — `.includes(undefined)`
-    // coerces to the string "undefined" and silently scored a PHANTOM
-    // citation for a file that was never actually named.
+    expect(measureCommand('nothing relevant here', { ...base, files: [null] } as any, 'auto')).toMatchObject({ setSize: null, cited: null });
+    expect(measureCommand('no numbers here at all', { ...base, files: [{ path: 5 }] } as any, 'auto')).toMatchObject({ setSize: null, cited: null });
     const phantom = measureCommand('mentions undefined right here', { ...base, files: [{}] } as any, 'auto');
-    expect(phantom).toMatchObject({ setSize: 0, cited: 0 });
-    // The empty string is a particularly dangerous malformed path: every
-    // string includes it, so accepting it would phantom-cite even an empty
-    // summary.
-    expect(measureCommand('', { ...base, files: [{ path: '' }] } as any, 'auto')).toMatchObject({ setSize: 0, cited: 0 });
-    // A mix of malformed and one genuinely valid entry: only the valid one
-    // is measured; the malformed ones cost nothing beyond themselves.
+    expect(phantom).toMatchObject({ setSize: null, cited: null });
+    expect(measureCommand('', { ...base, files: [{ path: '' }] } as any, 'auto')).toMatchObject({ setSize: null, cited: null });
+    // Mixed malformed and valid entries are still unknown, not a filtered
+    // denominator that makes the valid path look complete.
     const mixed = measureCommand('touched server/src/watch.ts', { ...base,
       files: [null, {}, { path: '' }, { path: 5 }, { path: 'server/src/watch.ts', tag: 'edited', count: 1 }] } as any, 'auto');
-    expect(mixed).toMatchObject({ setSize: 1, cited: 1 });
+    expect(mixed).toMatchObject({ setSize: null, cited: null });
+    expect(measureCommand('', { ...base, files: [] } as any, 'auto')).toMatchObject({ setSize: 0, cited: 0 });
   });
 
   it('as the hook runs it: stdin in, one JSON line out, the trailing newline jq -r adds is not counted; exit 2 on a bad trigger; a bad set is NO set', () => {
@@ -946,12 +945,12 @@ describe('measure — the summary the session will see (spec §3.4)', () => {
     expect(helper(['measure', '--set', path.join(dir, 'absent'), '--trigger', 'auto'], 'x').status).toBe(EXIT.OK);
   });
 
-  it('a set whose files[] carries a malformed entry never crashes the real CLI either (Minor 1, fix round 1)', () => {
+  it('a set whose files[] carries a malformed entry leaves the real CLI set-derived fields unknown (Minor 1, fix round 1)', () => {
     const set = write('malformed-files.compactset', JSON.stringify({ v: 1, at: 1, nonce: 'n', scope: 'main',
       agent: null, transcript: '/t', cwd: null, built: null, fresh: null, steered: false, served: false,
       files: [null, { path: '' }, { path: 5 }], stats: null }) + '\n');
     const r = helper(['measure', '--set', set, '--trigger', 'auto'], 'mentions undefined nowhere useful');
     expect(r.status).toBe(EXIT.OK);
-    expect(JSON.parse(r.stdout)).toMatchObject({ setSize: 0, cited: 0 });
+    expect(JSON.parse(r.stdout)).toMatchObject({ setSize: null, cited: null });
   });
 });

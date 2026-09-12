@@ -616,39 +616,57 @@ export function normalizeSummary(raw) {
  *  `**`, `<n>.`, a title, an optional colon, optional closing `**`. */
 const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
 
-/** Character-offset ranges covered by fenced code blocks (paired triple-backtick
- *  markers, hex-escaped so this source never carries a literal fence); an
- *  unpaired final marker covers to EOF. A numbered-looking line INSIDE one
- *  of these ranges is code content, not document structure, and must not be
- *  mistaken for the next section heading (fix round 1, Minor 2, D-2553). */
+/** Markdown backtick fences begin at a line start with at most three spaces.
+ *  A close must be at least as wide as its opener and otherwise whitespace,
+ *  so inline backticks and shorter runs inside a wider fence stay code. */
+const FENCE_OPEN_RE = /^(?: {0,3})(\x60{3,})/;
+const FENCE_CLOSE_RE = /^(?: {0,3})(\x60{3,})[ \t\r]*$/;
+
+/** JS string-offset ranges covered by Markdown fenced code blocks. The line
+ *  scanner visits each line once; an unmatched opener covers EOF. A numbered-
+ *  looking line inside one range is code content, not document structure. */
 function fencedRanges(text) {
-  const re = /\x60\x60\x60/g;
   const ranges = [];
-  let m, start = null;
-  while ((m = re.exec(text))) {
-    if (start === null) start = m.index;
-    else { ranges.push([start, m.index + 3]); start = null; }
+  let start = -1, width = 0, closed = 0, lineStart = 0;
+  while (lineStart <= text.length) {
+    const nl = text.indexOf('\n', lineStart);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const line = text.slice(lineStart, lineEnd);
+    if (start < 0) {
+      const open = FENCE_OPEN_RE.exec(line);
+      if (open) { start = lineStart; width = open[1].length; }
+    } else {
+      const close = FENCE_CLOSE_RE.exec(line);
+      if (close && close[1].length >= width) {
+        ranges.push([start, nl < 0 ? lineEnd : nl + 1]);
+        start = -1;
+        width = 0;
+        closed++;
+      }
+    }
+    if (nl < 0) break;
+    lineStart = nl + 1;
   }
-  if (start !== null) ranges.push([start, text.length]);
-  return ranges;
+  if (start >= 0) ranges.push([start, text.length]);
+  return { ranges, closed };
 }
 
 /** Chars from the "Files and Code Sections" heading to the next numbered
  *  heading (or EOF); null when the summary has no such heading — 19% of the
  *  corpus is not in the nine-section format, and null is what keeps this
- *  field honest. A numbered-looking line inside a FENCED region is skipped
- *  entirely — never a section start, never the terminating heading — since
- *  the corpus routinely quotes fenced numbered lists inside this very
- *  section (D-2553). */
+ *  field honest. A numbered-looking line inside a Markdown fenced region is
+ *  skipped entirely — never a section start, never the terminating heading
+ *  — since the corpus routinely quotes fenced numbered lists inside this
+ *  very section (D-2553). */
 export function filesSectionChars(text) {
-  const fences = fencedRanges(text);
+  const { ranges } = fencedRanges(text);
   let fence = 0;
   let start = -1;
   for (const m of text.matchAll(HEADING_RE)) {
     // Heading matches arrive in source order, so advance rather than re-scan
     // every fenced range for each heading.
-    while (fence < fences.length && m.index >= fences[fence][1]) fence++;
-    if (fence < fences.length && m.index >= fences[fence][0]) continue;
+    while (fence < ranges.length && m.index >= ranges[fence][1]) fence++;
+    if (fence < ranges.length && m.index >= ranges[fence][0]) continue;
     if (start < 0) { if (/^files and code sections$/i.test(m[1])) start = m.index; }
     else return m.index - start;
   }
@@ -659,15 +677,15 @@ export function filesSectionChars(text) {
  *  Used only to LEFT-bound a full-path citation, never to re-derive matches. */
 const PATH_CHAR = /[A-Za-z0-9_./-]/;
 
-/** Whether `p` occurs in `text` at a LEFT-aligned position: start of string,
- *  or preceded by a non-path character. Without this, a full set path that
- *  happens to be the tail of a LONGER set member's own cited path (e.g.
- *  `a/b/c.ts` inside a cited `x/a/b/c.ts`) is a substring hit but not a
- *  citation of `a/b/c.ts` itself — fix round 1, Minor 3. */
+/** Whether `p` occurs in `text` at a path-character-aligned position:
+ *  start/end of string or non-path characters on BOTH sides. Without this,
+ *  a full set path can be a substring of a longer cited path or token rather
+ *  than a citation of that set member itself. */
 function hasAlignedOccurrence(text, p) {
   let i = text.indexOf(p);
   while (i >= 0) {
-    if (i === 0 || !PATH_CHAR.test(text[i - 1])) return true;
+    const end = i + p.length;
+    if ((i === 0 || !PATH_CHAR.test(text[i - 1])) && (end === text.length || !PATH_CHAR.test(text[end]))) return true;
     i = text.indexOf(p, i + 1);
   }
   return false;
@@ -685,7 +703,7 @@ export function citedCount(text, paths) {
     for (let k = 2; k < segs.length && !hit; k++) {
       const suffix = segs.slice(-k).join('/');
       const unique = paths.filter((q) => q === suffix || q.endsWith('/' + suffix)).length === 1;
-      if (unique && text.includes(suffix)) hit = true;
+      if (unique && hasAlignedOccurrence(text, suffix)) hit = true;
     }
     if (hit) n++;
   }
@@ -699,23 +717,22 @@ const SCOPES = new Set(['main', 'subagent', 'ambiguous']);
  *  set could not say: no set, or a set with `files: null`. */
 export function measureCommand(raw, set, trigger) {
   const text = normalizeSummary(raw);
-  // A malformed individual `files[]` entry (null, no `path`, an empty or
-  // non-string `path`) must not reach `citedCount`'s `includes`/`split` — it
-  // threw on `.split` for a non-string path (or on `.path` for a null entry),
-  // while `undefined` and `''` silently ToString'd into phantom citations.
-  // Filtered out here, not trusted (fix round 1, Minor 1): the rest of the
-  // set is still measured.
-  const paths = set && Array.isArray(set.files)
-    ? set.files.filter((f) => f && typeof f.path === 'string' && f.path.length > 0).map((f) => f.path)
+  // A malformed individual `files[]` entry means the working-set denominator
+  // is unknown. Do not filter it into a smaller valid set: that would publish
+  // a misleading citation rate. A valid `files: []` remains a known zero.
+  const entries = set && Array.isArray(set.files) ? Array.from(set.files) : null;
+  const paths = entries && entries.every((f) =>
+    f && typeof f.path === 'string' && f.path.length > 0)
+    ? entries.map((f) => f.path)
     : null;
+  const { closed: fences } = fencedRanges(text);
   return {
     at: Date.now(),
     trigger,
     scope: set && SCOPES.has(set.scope) ? set.scope : null,
     chars: text.length,
     filesChars: filesSectionChars(text),
-    // three backticks, hex-escaped so this source never carries a fence
-    fences: Math.floor((text.match(/\x60\x60\x60/g) ?? []).length / 2),
+    fences,
     cited: paths ? citedCount(text, paths) : null,
     setSize: paths ? paths.length : null,
     steered: set ? set.steered === true : false,
