@@ -48,7 +48,7 @@ import type { ProjectPoolWire } from './api.js';
 export type PoolVerdict =
   | { ok: true; why: 'untagged-project' | 'untagged-account' | 'same-pool' }
   | { ok: false; reason: 'pool-mismatch'; accountPool: string; projectPool: string }
-  | { ok: false; reason: 'pool-undecidable'; state: 'unreadable' | 'malformed' };
+  | { ok: false; reason: 'pool-undecidable'; state: 'unreadable' | 'malformed' | 'unrecognised' };
 
 /**
  * The rule, once.
@@ -68,8 +68,13 @@ export function poolRule(accountPool: string | null, projectPool: ProjectPoolWir
     return { ok: false, reason: 'pool-undecidable', state: projectPool.state };
   }
   if (projectPool.state === 'untagged') return { ok: true, why: 'untagged-project' };
-  if (accountPool === null) return { ok: true, why: 'untagged-account' };
-  return accountPool === projectPool.name
-    ? { ok: true, why: 'same-pool' }
-    : { ok: false, reason: 'pool-mismatch', accountPool, projectPool: projectPool.name };
+  if (projectPool.state === 'tagged') {
+    if (accountPool === null) return { ok: true, why: 'untagged-account' };
+    return accountPool === projectPool.name
+      ? { ok: true, why: 'same-pool' }
+      : { ok: false, reason: 'pool-mismatch', accountPool, projectPool: projectPool.name };
+  }
+  const unhandled: never = projectPool;
+  void unhandled;
+  return { ok: false, reason: 'pool-undecidable', state: 'unrecognised' };
 }

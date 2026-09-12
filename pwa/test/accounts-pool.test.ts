@@ -8,7 +8,7 @@
 // this package cannot import `server/test/fixtures`, so it pins the six shapes
 // that reach a phone.
 import { describe, it, expect } from 'vitest';
-import type { ProjectPoolWire, RosterWire } from '../../shared/api';
+import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../shared/api';
 import { accountPool, homeAbleLabelList } from '../src/lib/accounts';
 import { poolLabelList, poolOptions, poolSide, projectPoolOf, splitByPool } from '../src/lib/pools';
 import { TEST_ROSTER } from './rosterFixture';
@@ -25,6 +25,7 @@ const olderWire: RosterWire[] =
   TEST_ROSTER.map(({ id, label, hue, homeAble, hidden }) => ({ id, label, hue, homeAble, hidden })) as RosterWire[];
 
 const tagged = (name: string): ProjectPoolWire => ({ state: 'tagged', name });
+const archived = { state: 'archived', name: 'pool-z' } as unknown as ProjectPoolWire;
 
 describe('accountPool — the ONE reader of RosterWire.pool', () => {
   it('answers the string a tagged account carries', () => {
@@ -88,6 +89,10 @@ describe('poolSide — the rule, composed and never restated', () => {
   it('is unknown when there is no project pool at all', () => {
     expect(poolSide('pool-b', null)).toBe('unknown');
   });
+
+  it('is unknown for a future project-pool state', () => {
+    expect(poolSide('pool-b', archived)).toBe('unknown');
+  });
 });
 
 describe('splitByPool', () => {
@@ -126,6 +131,13 @@ describe('splitByPool', () => {
     }
   });
 
+  it('offers every candidate with no crossing for a future project-pool state', () => {
+    const split = splitByPool(roster, all, archived);
+    expect(split.eligible).toEqual(all);
+    expect(split.crossing).toEqual([]);
+    expect(split.unknown).toBe(true);
+  });
+
   it('preserves the caller order it was handed and returns fresh arrays', () => {
     const wrappers = ['claude2', 'claude'];
     const split = splitByPool(roster, wrappers, tagged('pool-a'));
@@ -144,6 +156,15 @@ describe('projectPoolOf — the frame, read by project name', () => {
     expect(projectPoolOf(
       { listed: true, byProject: { demo: tagged('pool-a') }, enforcement: 'enforced' }, 'demo',
     )).toEqual(tagged('pool-a'));
+  });
+
+  it('preserves a raw future project-pool state from the map', () => {
+    const pools = {
+      listed: true,
+      byProject: { demo: archived },
+      enforcement: 'enforced',
+    } as unknown as ProjectPoolsWire;
+    expect(projectPoolOf(pools, 'demo')).toBe(archived);
   });
 
   it('reads a project the listing does not name as UNTAGGED — the directory was measured', () => {
@@ -200,6 +221,10 @@ describe('poolLabelList', () => {
     expect(poolLabelList(roster, null)).toBe(homeAbleLabelList(roster));
     expect(poolLabelList(roster, { state: 'untagged' })).toBe(homeAbleLabelList(roster));
     expect(poolLabelList(roster, { state: 'unreadable' })).toBe(homeAbleLabelList(roster));
+  });
+
+  it('retains the normal home-able labels for a future project-pool state', () => {
+    expect(poolLabelList(roster, archived)).toBe(homeAbleLabelList(roster));
   });
 
   it('is empty when no home-able account is in the pool — the empty-pool strand, before it bites', () => {
