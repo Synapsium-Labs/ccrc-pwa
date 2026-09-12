@@ -1368,4 +1368,56 @@ describe('the programme tree on the fleet screen', () => {
     });
     expect(document.querySelector('.proj-pending')).toBeNull();
   });
+
+  it('gives each card the runs whose HOME is that project and whose work is elsewhere', () => {
+    // The wire, and only measurable here: the card cannot compute this list (it
+    // is a fact about runs on OTHER projects, which its own `runs` filter has
+    // already excluded by construction) and `nestFleet` must never see it.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({
+        id: 40, program: 'build9b', wave: 2, waveOf: 3,
+        project: 'beta', homeProject: 'alpha',
+        sessionId: 'claude:worker', claimedBy: 'claude:coord',
+      })],
+      runsFrameSeen: true,
+    });
+    // The HOME card (alpha) says where the wave went…
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const alpha = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'alpha');
+    expect(alpha, 'no card for alpha').toBeTruthy();
+    expect(alpha!.querySelector('.proj-abroad-line')?.textContent).toContain('build9b');
+    expect(alpha!.querySelector('.proj-abroad-line')?.textContent).toContain('beta');
+    // …and the WORKING card (beta) does not: its own row is where that wave is.
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta');
+    expect(beta!.querySelector('.proj-abroad')).toBeNull();
+    // And beta's own row carries the orphan marker (Task 6), because the
+    // coordinator is on alpha's card.
+    expect(beta!.querySelector('.proj-crossing')?.textContent).toContain('home alpha');
+  });
+
+  it('gives a single-project programme no abroad line at all', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'alpha', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({
+        id: 41, project: 'alpha', homeProject: 'alpha',
+        sessionId: 'claude:worker', claimedBy: 'claude:coord',
+      })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-abroad')).toBeNull();
+    expect(document.querySelector('.proj-crossing')).toBeNull();
+  });
 });

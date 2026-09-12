@@ -19,7 +19,7 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed, runHomeProject } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
@@ -489,6 +489,16 @@ export function FleetScreen({
                    the worker's card, where `nestFleet`'s rule 3 leaves it
                    unbracketed: a `└─` never crosses two cards. */
                 runs={activeRuns.filter((r) => r.project === g.project)}
+                /* The SECOND list (spec §3 F4): the runs this project is the
+                   HOME of, working somewhere else. It is the exact complement
+                   of the filter above — that one asks where the work is, this
+                   one asks whose programme it is — and the two never merge,
+                   because only the first may reach `nestFleet`. `runHomeProject`
+                   rather than `r.homeProject`, for the reason its own docstring
+                   gives: an older server omits the key and `undefined !== g.project`
+                   would put every run on every card. */
+                abroad={activeRuns.filter(
+                  (r) => runHomeProject(r) === g.project && r.project !== g.project)}
                 nowMs={nowMs}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for

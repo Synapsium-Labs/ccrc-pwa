@@ -565,6 +565,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the same marker\'s glyph. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the glyph half of the marker unmeasured while the report looked complete',
   },
+  'fleet.css .proj-abroad-line': {
+    under: ['var(--bg-surface)'],
+    why: "the home card's own sentence about a wave running in another repo (F4, cross-repo wave 2), same ground and register as .proj-crossing above. Its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-abroad-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the abroad line's glyph, same ground and same reason as .proj-crossing-glyph above",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

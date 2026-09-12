@@ -80,6 +80,7 @@ export function ProjectCard({
   archivedOpen = false,
   roster = [],
   runs = [],
+  abroad = [],
   nowMs = Date.now(),
 }: {
   group: FleetGroup;
@@ -121,6 +122,17 @@ export function ProjectCard({
    *  has landed — or by a test that is not about the tree — renders the flat
    *  list it always did. */
   runs?: readonly RunSummary[];
+  /** The runs whose programme is HOMED in this project and whose work is
+   *  happening somewhere else (spec §3 F4). A SECOND, additive list, and never
+   *  merged into `runs`: `runs` is what the tree is drawn from and every one of
+   *  its members belongs to this card's project by construction, while every
+   *  member of this list belongs to another card by the same construction.
+   *  Merging them would put a phantom child under a coordinator for a workspace
+   *  that is not in this repo. Computed by `FleetScreen`, which owns the store
+   *  read, for the same reason `runs` is: a card handed one session list cannot
+   *  answer a question about other projects' runs. Defaults to `[]`, so every
+   *  caller and every test that predates this renders exactly as it did. */
+  abroad?: readonly RunSummary[];
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -374,6 +386,16 @@ export function ProjectCard({
               </div>
             );
           })}
+          {abroad.length > 0 && (
+            <div className="proj-abroad">
+              {abroad.map((r) => (
+                <span key={r.id} className="proj-abroad-line">
+                  <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+                  {`${r.program} ${waveLabel(r)} in ${r.project}`}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -774,3 +774,64 @@ describe('the orphan worker says which programme it belongs to', () => {
     expect(marker!.textContent).toContain('home other');
   });
 });
+
+// ── cross-repo wave 2: the home card knows where its waves went ──────────────
+//
+// A crossing programme's home card would otherwise show nothing at all for the
+// wave that is running: the worker's session lives in the other repo, so it is
+// on the other card, and this card's own `runs` filter (by `run.project`) cannot
+// see it BY CONSTRUCTION. The second list is additive and the tree never sees
+// it — `nestFleet` is called with `runs`, exactly as before.
+describe('the home card lists the waves running abroad', () => {
+  const away = runFor({
+    id: 30, program: 'build9b', wave: 2, waveOf: 3,
+    project: 'other-repo', sessionId: 'other-repo-far-bank',
+    claimedBy: 'demo-quiet-mesa', homeProject: 'demo',
+  });
+
+  it('renders one line per wave abroad, naming the programme, the wave and the repo', () => {
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[]} abroad={[away]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const lines = container.querySelectorAll('.proj-abroad-line');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.textContent).toContain('build9b');
+    expect(lines[0]?.textContent).toContain(waveLabel({ wave: 2, waveOf: 3 }));
+    expect(lines[0]?.textContent).toContain('other-repo');
+  });
+
+  it('renders one line per wave, not one per programme', () => {
+    const second = { ...away, id: 31, wave: 3, project: 'third-repo' };
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[]} abroad={[away, second]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-abroad-line')).toHaveLength(2);
+  });
+
+  it('renders nothing at all when nothing is abroad — the prop is additive', () => {
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-abroad')).toBeNull();
+  });
+
+  it('hides the list with the rest of the card when collapsed', () => {
+    // A fold hides the body; the abroad lines are body, not header. The one
+    // thing a fold may never hide is attention, and this is not that.
+    const { container } = render(
+      <ProjectCard collapsed group={grp()} runs={[]} abroad={[away]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-abroad')).toBeNull();
+  });
+
+  it('does not draw the abroad run into the tree — nestFleet is called with `runs` alone', () => {
+    // The run names `demo-quiet-mesa` as its coordinator, which IS on this card.
+    // If the abroad list ever reached `nestFleet`, a pending/settled child would
+    // appear under that session for a workspace that is not in this repo.
+    const { container } = render(
+      <ProjectCard group={grp()} runs={[]} abroad={[away]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-nest')).toBeNull();
+    expect(container.querySelector('.proj-pending')).toBeNull();
+  });
+});

@@ -1727,6 +1727,28 @@ button.sess-held {
 }
 .proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
 
+/* F4 (cross-repo): the home card's own sentence about a wave that is running in
+   another repo. Same register and same ground as `.proj-crossing` above — this
+   card's body — and a top border, because it is about a row that is NOT on this
+   card and must not read as one more session. */
+.proj-abroad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-abroad-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);
