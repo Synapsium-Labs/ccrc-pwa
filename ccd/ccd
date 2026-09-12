@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=56f3c3bc3eb4a6690dfa95a1088f5e8c6072bd873e46cd877c79199034247841
+# ccrc:generated 1 sha256=0f4932f49ff692c9665119e2829809c0c2871afde6a7a63994453a07e5bbb01a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1732,12 +1732,17 @@ sys.stdout.write(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))
 # record but a dotted directory is untouchable. Precedent already load-bearing:
 # `$REG/.reaped/` has had zero deleters in this file since Aug 6.
 #
-# THE INVENTORY AT ccd:1536 IS AMENDED IN THIS SAME COMMIT — it counted seven
-# dot-prefixed artifacts and this block adds an eighth. That comment counts
-# DIRECTORIES, not their contents (`.reaped/` is one entry, its tombstones are
-# not counted), so `.lifecycle/`'s generations, `errors` and `.rotate.lock` are
-# counted WITH it. An inventory a future writer copies is exactly the defect
-# `_reg_purge`'s own header records having shipped once.
+# THE INVENTORY IS `_reg_purge`'S R-3 BOUNDARY PARAGRAPH, and it was amended
+# in the same commit as this block — it counted seven dot-prefixed artifacts
+# and this block added an eighth. THE LIVE COUNT IS NOT REPEATED HERE, and
+# that is the correction: a second copy of a cardinal is how the first one
+# goes stale unnoticed, which is exactly the defect `_reg_purge`'s own header
+# records having shipped once. That paragraph counts DIRECTORIES, not their
+# contents (`.reaped/` is one entry, its tombstones are not counted), so
+# `.lifecycle/`'s generations, `errors` and `.rotate.lock` are counted WITH
+# it — and `ccd-account-auth.test.ts` now derives its cardinal from the
+# shipped bash, so the number lives in one place and a measurement keeps it
+# honest.
 #
 # EVERY FUNCTION HERE RETURNS 0 ON EVERY PATH except `_lc_refuse`, which emits
 # and then `die`s so refusal and death cannot drift. The journal is best-effort
@@ -3533,24 +3538,38 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `quiet-basin` aliases that same session's REAP LOCK,
 # `$REG/.reap-demo-quiet-basin.lock` (pre-dates this wave); project
 # `.ws-add` + slug `demo` -> id `.ws-add-demo`, aliasing the WS-ADD LOCK for
-# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave); and
+# project `demo`, `$REG/.ws-add-demo.lock` (pre-dates this wave);
 # project `.tmux` + slug `server` -> id `.tmux-server`, aliasing the
 # TMUX-SERVER LOCK `$REG/.tmux-server.lock` that `_tmux_new_session` takes
-# (pre-dates this wave) — `server` passes `_ws_slug_valid` exactly as the
-# other three slugs do, no more contrived. Unlinking a lock file while
+# (pre-dates this wave); and project `.account` + slug `placement` -> id
+# `.account-placement`, aliasing the ACCOUNT-PLACEMENT LOCK
+# `$REG/.account-placement.lock` that all five `ccrc account` writing verbs
+# serialise on (new with that verb, and NOT amended here when it landed — see
+# the census note below) — `server` and `placement` pass `_ws_slug_valid`
+# exactly as the other three slugs do, no more contrived. Unlinking a lock file while
 # another process holds it is exactly how two processes come to hold "the
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — EIGHT dot-prefixed
-# artifacts live under `$REG`; the four above are reachable, these four are
-# not: `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
+# NOT reachable this way, and this set IS the boundary — TEN dot-prefixed
+# artifacts live under `$REG`; the five above are reachable, these five are
+# not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
+# EIGHT about a tree that already held nine, because `.account-placement.lock`
+# landed with `ccrc account` and nothing here reds when prose drifts.
+# `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
+# census, not a memory" derives the number from the shipped bash and refuses
+# a paragraph that disagrees with it. The five:
+# `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
 # are counted with `.reaped/`); `$REG/.reaped/` (a directory, not a
 # `.reaped.<suffix>` file — no id's
 # purge glob matches a bare directory, and `rm -f` cannot take one
-# regardless); `_reg_set`'s own tmps; and session-hook.sh's
+# regardless); `$REG/.auth/` (the account-connection status files — a dotted
+# DIRECTORY for the same reason `.lifecycle/` is one, and unreachable for
+# `.reaped/`'s reason rather than the second-dot one below; its per-id
+# `<id>.json`, its `.<id>.<pid>.tmp` staging files and its `<id>.run/` FIFOs
+# are counted WITH it); `_reg_set`'s own tmps; and session-hook.sh's
 # `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.

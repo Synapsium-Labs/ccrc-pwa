@@ -18738,3 +18738,101 @@ Eight mutations were measured on this task in total, each red and each restored:
 the literal-target `send-keys`, the `--id` flag anchor (6 red — it also unbinds `$id`), the ID_RE
 guard, `_is_valid_wrapper`, the method `case`, the `has-session` in-progress guard, and `--cancel`'s
 `null` arm.
+
+### D-2556 — the plan quotes a `_plat_timeout` that no longer exists, and copying it would have shipped D-2272 into a new file
+
+Task 51's Step 3 spells `_auth_timeout` out in full, "a copy of `_plat_timeout`", and pins it with
+`expect(body(helper,'_auth_timeout')).toBe(body(ccd,'_plat_timeout'))`. The plan then describes the
+body it is copying: "`ccd/ccd:363-371` is NINE lines explaining `|| exit 0`".
+
+Measured on this branch: `_plat_timeout` is `ccd/ccd:353-405`, and its body is **51 lines**, not the
+~25 the plan quotes. Two things landed in it after the plan was written — **D-2272**, which put
+`>/dev/null 2>&1` on the watcher subshell (without it, a call inside a command substitution cannot see
+EOF until the full deadline elapses, turning a deadline into a floor: measured 10 006 ms versus 9 ms),
+and **D-2332**, which corrected D-2272's own claim about which call site was first. The plan's quoted
+line is the pre-D-2272 spelling:
+
+```
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) &
+```
+
+So transcribing Step 3 verbatim would have done two bad things at once: reddened the byte-copy pin it
+ships in the same commit, and — had the pin been relaxed instead of the copy fixed — put a known,
+already-diagnosed defect into a brand-new file on the day it was created.
+
+**The copy was therefore taken MECHANICALLY, not retyped**: the body is extracted from `ccd/ccd` with
+the same regex the pin uses and spliced in. A copy a human types is a copy that can differ; a copy a
+script takes from the source of truth is the thing the pin claims it is. Pinned by mutation — deleting
+the D-2272 comment block from the helper's copy reds the byte-equality case alone, which is what makes
+"byte for byte" a mechanism rather than a word.
+
+### D-2557 — the dot-artifact inventory was already wrong before this task touched it, and nothing could tell
+
+Task 51 says to amend two comments in `ccd/ccd`: the LC block's "it counted seven dot-prefixed
+artifacts and this block adds an eighth", and `_reg_purge`'s R-3 boundary paragraph, "EIGHT
+dot-prefixed artifacts live under `$REG`; the four above are reachable, these four are not". The plan's
+instruction is to make those NINE and five.
+
+**Both would still have been wrong.** `$REG/.account-placement.lock` landed on this same branch with
+`ccrc account`'s placement lock (Task 31/32) and amended neither inventory, so the paragraph asserted
+EIGHT about a tree that already held nine. And it belongs on the REACHABLE side, not the unreachable
+one: project `.account` + slug `placement` mints the id `.account-placement`, whose purge glob matches
+`$REG/.account-placement.lock` — the same construction the paragraph already illustrates four times,
+and `placement` passes `_ws_slug_valid` exactly as `server` does. So the true amendment is **TEN, five
+reachable and five not**, with `.account-placement.lock` added as the fifth illustrated instance and
+`.auth/` as the fifth unreachable one.
+
+The paragraph's own header records that a copied inventory is the defect it has already shipped once,
+and this is that defect shipping a second time. So the fix is not a better comment: `ccd-account-auth.test.ts`
+now carries **"the dot-prefixed registry inventory is a census, not a memory"**, which scans every
+shebang'd file under `ccd/` for `$REG/.<name>` and `$_SVC_REG/.<name>` literals, requires the paragraph
+to name each one, and DERIVES the cardinal instead of reading it. Two mutations measured: changing TEN
+to NINE reds it, and renaming `.auth/` to `.elsewhere/` in the paragraph reds it.
+
+Three artifacts are invisible to a literal scan and are declared, each self-checked in both directions
+so the declaration cannot go stale either: `.prstate-<id>.lock` is built inside `_pr_py`'s embedded
+PYTHON (`os.path.join(reg, '.prstate-' + id_ + '.lock')`), and `_reg_set`'s tmps and session-hook.sh's
+`.$id.$$.hookstate.tmp` are named by an interpolated id rather than a literal. Seven scanned + one
+unscannable + two variable-named = ten.
+
+The LC block's copy of the cardinal is **deleted rather than corrected**. Two numbers about one fact is
+how the first one goes stale unnoticed; it now records its own history ("this block added an eighth")
+and points at the one census.
+
+### D-2558 — the plan's roster loop is the spelling that breaks on the platform this file is scanned for
+
+Task 51's `_auth_rostered` is quoted as `for v in "${CCRC_ACCOUNTS[@]}"; do`, copied from ccd's
+`_is_valid_wrapper`. On bash before 4.4 — which is what macOS ships as `/bin/bash` — expanding an
+EMPTY array that way under `set -u` is an unbound-variable error, not an empty list.
+
+That is harmless in `ccd`, which dies at source time on a roster it cannot read and is scanned by
+`macos-platform.test.ts` only for GNU-only COMMANDS. It is not harmless here: `ccd-account-auth` joins
+that file's derived corpus the day it lands, so this file is one the tree now asserts runs on macOS,
+and an account roster that parses to zero accounts is a state `parseRoster` permits.
+
+Shipped as `for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do`, the form that is correct on both.
+The same spelling is already in `ccd`'s `_wrapper_rostered_now` (D-2530) for the same reason.
+
+### D-2559 — the red for Task 51 was measured after the fact, not before it
+
+Step 2 predicts a COLLECTION failure — `describe('ccd-account-auth — the platform shim it had to carry')`
+reads `HELPER` in its body, so vitest fails the file before running any of its cases. The helper was
+written before that step was run, so the honest red-first was skipped.
+
+It was then measured rather than asserted: the helper was moved aside and the suite re-run, giving
+exactly the predicted shape —
+
+```
+Error: ENOENT: no such file or directory, open '…/ccd/ccd-account-auth'
+ Test Files  1 failed (1)
+      Tests  no tests
+```
+
+— and the file moved back. Recorded because a retroactive red is weaker evidence than a red-first one:
+it proves the test cannot pass without the file, not that each assertion was written against a failure
+it had seen. What carries the weight for this task is the mutation table instead — ten mutations, each
+red on the case it targets and each restored: the shim replaced by a bare `timeout` (3 red, including
+`macos-platform`'s own derived case), the D-2272 comment block dropped from the copy, `.auth` losing its
+dot (5 red), `umask 077` dropped, `chmod 700` dropped, the absent-field arithmetic replaced by
+always-present empty strings, `_auth_die` not recording its reason, the id-shape guard, the roster gate,
+and the two census mutations from D-2557.

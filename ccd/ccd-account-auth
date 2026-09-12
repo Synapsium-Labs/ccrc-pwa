@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# ccd-account-auth — <id> <login|setup-token|openai-login>: drive ONE account
+# connection to a credential, and publish what it is doing to
+# $REG/.auth/<id>.json so a phone can watch without a terminal.
+#
+# THE CREDENTIAL NEVER CROSSES THIS SCRIPT'S STDOUT. Two of the three methods
+# hand the credential to somebody else's file (Claude Code writes
+# `~/<suffix>/.credentials.json`; an external launcher writes its own), and the
+# third captures a token line and SUBSTITUTES it on screen. The status file
+# carries a sign-in URL and, for the external launcher, a device code — the
+# spec says out loud that the device code is not a secret (§11).
+#
+# A SEPARATE EXECUTABLE, not a ccd verb, because it must OUTLIVE the process
+# that started it and own a tty it did not inherit: `ccd account-pane` returns
+# as soon as the pane exists.
+#
+# `set -uo pipefail`, NO `-e`, exactly as ccd and ccrc: every failure below is
+# an explicit `_auth_die`, so nothing aborts silently mid-state and leaves a
+# status file asserting `starting` about a process that is gone.
+set -uo pipefail
+
+SELF=ccd-account-auth
+REG="$HOME/.cc-sessions"
+AUTH_DIR="$REG/.auth"
+SECRETS_DIR="$HOME/.cc-secrets"
+SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
+WRAPPER_DIR="$HOME/.local/bin"
+CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# Every knob env-overridable for the harness, `ccd-graph-sweep`'s idiom
+# (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots take NO override —
+# HOME is the harness's isolation boundary, exactly as in ccd.
+#
+# CCRC_AUTH_SCRIPT names the pty vehicle rather than hard-coding `script`, and
+# that is a TESTABILITY requirement, not a preference: the two pane methods
+# must be able to answer `pane-unsupported-here` under test, and the only
+# other way to make `script(1)` absent is to empty PATH — which also removes
+# `mkdir`, `date`, `jq`, `mv` and `chmod`, so `_auth_publish` fails, no status
+# file is written, and the test asserting on that file gets ENOENT instead of
+# the refusal it came to measure.
+: "${CCRC_AUTH_TIMEOUT:=600}"
+: "${CCRC_AUTH_TICK:=1}"
+: "${CCRC_AUTH_SCRIPT:=script}"
+
+# ── platform ──────────────────────────────────────────────────────────────
+# A LOCAL COPY, deliberately, and it is `session-hook.sh`'s situation exactly:
+# this file is exec'd by tmux with no ccd to source (sourcing ccd RUNS ccd's
+# roster preamble and would die or double-source), so the two helpers it needs
+# are copied here under local names and PINNED byte-for-byte to the originals
+# by `server/test/ccd-account-auth.test.ts`. A copy that drifts is the failure
+# mode this shape invites; the pin is what makes "deliberate copy" a different
+# thing from "a copy nobody is watching".
+#
+# `_auth_timeout` IS `_plat_timeout`, and the copy was taken mechanically
+# rather than retyped — the plan's own quoted version of it predates D-2272
+# and D-2332 and is missing both the `>/dev/null 2>&1` on the watcher and the
+# comment blocks that argue for it.
+CCD_OS=linux
+case "${OSTYPE:-}" in
+  darwin*) CCD_OS=darwin ;;
+  linux*)  CCD_OS=linux ;;
+  *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
+esac
+
+_auth_timeout() {   # <seconds> <cmd> [args...]
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+  done
+  local secs="$1"; shift
+  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  rm -f -- "$stamp" 2>/dev/null
+  "$@" &
+  local pid=$! rc=0 watcher
+  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
+  # with no coreutils — it returns INSTANTLY, and without this guard the
+  # watcher would stamp and signal in the same breath: every call would report
+  # 124 having given the command no time at all. A sleep that cannot run means
+  # THIS CALL GETS NO DEADLINE, which is the same honest degradation the
+  # callers had before a shim existed ("a box without coreutils' `timeout`
+  # still gets an answer, just without a deadline"). Caught by
+  # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
+  # BOTH OF THE WATCHER'S OWN STREAMS GO NOWHERE, AND IT IS THE DIFFERENCE
+  # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
+  # substitution the caller reads, this subshell inherits that pipe on fd 1 -
+  # and on fd 2 as well wherever the call site joins the two, which
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
+  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
+  # write end open and the substitution cannot see EOF until the full duration
+  # has run out, long after the command answered. MEASURED on a box with no
+  # coreutils, a 10-second deadline and a command that answers instantly: 10 006
+  # ms before this redirection, 9 ms after. Neither stream carries anything a
+  # caller wants - the watcher exists for its stamp file and its signal - so
+  # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  #
+  # THE ACCOUNT PROBE IS WHERE THIS WAS NOTICED, NOT WHERE IT BECAME REACHABLE
+  # (D-2332, correcting D-2272). The finding was filed saying that probe is the
+  # tree's FIRST caller inside a command substitution. It is the eleventh of
+  # eleven, measured 2026-09-09: five in ccd, three in ccrc-doctor-checks and
+  # three in ccrc - and eight of the other ten predate the account-connections
+  # branch entirely, so on a box with no coreutils this floor has been under ccd's
+  # tmux liveness probe, its two gh pr queries and the doctor's gh auth status
+  # check for as long as the shim has existed: each of them paid its whole
+  # deadline on every run instead of answering when its command did. The fix
+  # below is unchanged and was always right; what was understated is that it is
+  # a fix for the WHOLE call-site population, not for one new call site. The
+  # population is measured in ccrc-account.test.ts rather than counted here, so
+  # the claim cannot rot back into a claim about one caller.
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  if [ -s "$stamp" ]; then rc=124; fi
+  rm -f -- "$stamp" 2>/dev/null
+  return "$rc"
+}
+
+# ── the status file: ONE writer, five fields, tmp + rename ────────────────
+# ONE WRITER IS THE WHOLE DESIGN. `ccd account-pane --cancel` kills the pane
+# and does NOT stamp `cancelled` itself — the trap below does, from inside the
+# process that knows. Two writers on one file is a torn state waiting for a
+# race, and the caller cannot tell a torn state from a stale one.
+AUTH_ID=''
+AUTH_STATE=starting
+AUTH_URL=''
+AUTH_CODE=''
+AUTH_ERROR=''
+# Task 54's `_auth_capture_token` is this variable's ONLY writer, and
+# `_auth_setup_token` its only reader. It is declared HERE, with the other
+# AUTH_* globals, for the reason `SPAWN_FROMSWAP` is declared beside `_spawn`:
+# `set -u` kills the shell outright at the first read by a path whose writer
+# never ran, and 0 is the safe value — "no token was seen" is what a mint that
+# printed nothing means.
+AUTH_SECRET_WRITTEN=0
+
+_auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
+  local tmp
+  mkdir -p "$AUTH_DIR" 2>/dev/null || return 1
+  chmod 700 "$AUTH_DIR" 2>/dev/null
+  # `.<id>.<pid>.tmp` — a SECOND dot in the suffix, which is exactly what
+  # `_reg_purge`'s `*.*` skip excludes, and under a dotted directory besides.
+  tmp="$AUTH_DIR/.$AUTH_ID.$$.tmp"
+  # `date -u +%FT%TZ`, never `date +%s%3N`: the second spelling is GNU-only and
+  # answers `<epoch>3N` on BSD — a string jq would take and every reader would
+  # misread. An ISO-8601 UTC STRING is the contract wave 2 parses.
+  ( umask 077
+    jq -cn --arg state "$AUTH_STATE" --arg url "$AUTH_URL" \
+           --arg userCode "$AUTH_CODE" --arg error "$AUTH_ERROR" \
+           --arg updatedAt "$(date -u +%FT%TZ)" \
+      '{state:$state, updatedAt:$updatedAt}
+       + (if $url == "" then {} else {url:$url} end)
+       + (if $userCode == "" then {} else {userCode:$userCode} end)
+       + (if $error == "" then {} else {error:$error} end)' > "$tmp"
+  ) || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$AUTH_DIR/$AUTH_ID.json" || { rm -f -- "$tmp"; return 1; }
+}
+
+_auth_state() {   # <state> — move the machine and publish, in one act
+  AUTH_STATE="$1"
+  _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
+}
+
+_auth_die() {   # <reason> — the file says failed, stderr says why, exit 1
+  AUTH_STATE=failed; AUTH_ERROR="$1"
+  _auth_publish || true
+  echo "$SELF: $1" >&2
+  exit 1
+}
+
+_auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
+  AUTH_STATE=cancelled; AUTH_ERROR=''
+  _auth_publish || true
+  exit 0
+}
+
+# BEFORE AUTH_ID IS KNOWN THERE IS NO FILE TO WRITE, which is the whole reason
+# this is a second refusal rather than a call to `_auth_die`. It stays the
+# refusal for `bad method` too, one step past the point where AUTH_ID IS bound:
+# a mistyped method means nothing was attempted, `ccd account-pane` already
+# refuses the same word upstream, and a `failed` status file for a run that
+# never started is a fact about the caller's typing, not about the account.
+die() { echo "$SELF: $*" >&2; exit 1; }
+
+_auth_load_roster() {
+  # MISSING and UNREADABLE stay distinct, ccd's own discipline: the remedy for
+  # one is `ccrc install` and the remedy for the other is chmod, and telling an
+  # operator the wrong one sends them to a generator that will rewrite a file
+  # whose bytes were never the problem.
+  [[ -e "$CCRC_ACCOUNTS_SH" ]] || die "no account roster at $CCRC_ACCOUNTS_SH — generate it with \`ccrc install\`"
+  [[ -r "$CCRC_ACCOUNTS_SH" ]] || die "account roster $CCRC_ACCOUNTS_SH exists but is not readable by $(id -un) — fix its permissions"
+  # shellcheck source=/dev/null
+  source "$CCRC_ACCOUNTS_SH" || die "account roster unreadable: $CCRC_ACCOUNTS_SH"
+}
+
+_auth_rostered() {   # <id> -> 0 when the roster claims it
+  local w v
+  w="$1"
+  for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do [[ "$w" == "$v" ]] && return 0; done
+  return 1
+}
+
+# ── the three methods, and the two line-filters they share ────────────────
+# STUBS, each replaced in its own later task, and each here for a stated
+# reason rather than as scaffolding. Under `set -uo pipefail` with no `-e` an
+# undefined function is not fatal — it is `bash: <name>: command not found` on
+# STDERR, once per line the pump reads, in a method whose own test asserts
+# stderr is empty. A stub is the difference between a staged file and a file
+# that lies about its output.
+_auth_login()        { _auth_die 'not-implemented: login'; }
+_auth_setup_token()  { _auth_die 'not-implemented: setup-token'; }
+_auth_openai_login() { _auth_die 'not-implemented: openai-login'; }
+# `_auth_capture_token` returning 1 means "this line carried no token", which
+# is the correct answer before it is taught to look.
+_auth_capture_token() { return 1; }
+_auth_user_code()     { :; }
+
+_auth_main() {
+  [[ $# -eq 2 ]] || die "usage: $SELF <id> <login|setup-token|openai-login>"
+  AUTH_ID="$1"
+  # BEFORE any path is built from it — the rule ccd states in its R-3 block
+  # ("a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>`
+  # file ccd owns") and applies at every id-minting site. The class is
+  # `shared/roster.ts`'s ID_RE, which is where every rostered id comes from.
+  [[ "$AUTH_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $AUTH_ID"
+  local method="$2"
+  _auth_load_roster
+  _auth_rostered "$AUTH_ID" || die "unknown-account: $AUTH_ID"
+  trap '_auth_cancelled' HUP INT TERM
+  case "$method" in
+    login)        _auth_login ;;
+    setup-token)  _auth_setup_token ;;
+    openai-login) _auth_openai_login ;;
+    *) die "bad method: $method (want login|setup-token|openai-login)" ;;
+  esac
+}
+
+# THE TEST SEAM, one line and no `BASH_SOURCE` guard. In production this file
+# is only ever exec'd, so a source-guard would be machinery nothing exercises;
+# the variable is what `ccd-account-auth.test.ts` sets to assert one function
+# at a time.
+[[ -n "${CCRC_AUTH_NO_MAIN:-}" ]] || _auth_main "$@"
