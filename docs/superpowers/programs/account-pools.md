@@ -4516,3 +4516,39 @@ it**, and the branch squashes at merge with a hand-written body, so nothing reac
 forward-looking only: heredoc or `git commit -F`, never a shell string with escapes.
 
 Mail 835 sent, 832 acked. Task 6 resumes.
+
+## 2026-09-12 15:29Z — D-2634/D-2635: one green mutant is a missing mechanism, the other is disjoint branches
+
+Worker mail 833: a replacement isolated Opus review of Task 2 at `3265a386` found no production defect
+and all eleven prescribed mutations red, but independently measured **two green mutants**. Its eleven
+reds are the control that makes the greens evidence (the thing `a-green-mutation-needs-a-control`
+exists to demand), so both are real. **They are not the same kind of finding, and the second's
+diagnosis is wrong.**
+
+**D-2634 — UPHELD and UPGRADED.** The worker framed it as "synthesizing `response.pool` from intent
+remains 66/66 green". It is more than that: `setProjectPool`'s own docstring (`pwa/src/lib/api.ts:485`)
+states the contract verbatim — *"the fleet box after the write, not the value that was requested, and
+that measured state is the only thing `PoolSheet` may render before the next `pools` frame settles
+it"*. **A documented invariant with no mechanism.** Ruled: pick the divergence from what the re-measure
+can actually produce — a successful write whose re-read comes back `unreadable` or `malformed` — not an
+arbitrary different name. Those are the cases where rendering the INTENT has the sheet announce
+`tagged pool-a` while the box measured that nobody can decide.
+
+**D-2635 — the mutant is real, the diagnosis is not; the prescribed fixture is REFUSED.** The worker
+proposed "a competing pool-mismatch code+names alongside stderr". **Measured whether the server can
+emit that body: it cannot, at any send site.** Every stderr-bearing reply is `{ok:false, stderr}` with
+no `error` key (`server/src/server.ts:1885, 2054, 2291, 2350, 2437, 2514`); every coded reply carries
+no stderr (`refusePool` at `:1877-1880`, and the 501 `{error:'unsupported'}`). **Disjoint by
+construction.** So the mutation is green because the branches never compete, not because the ordering
+is unpinned. Building the fixture would fabricate a body the product cannot produce and freeze an
+arbitrary answer — and if such a route ever appeared, code-first is arguably better (a `pool-mismatch`
+naming both pools beats ccd's raw text), so the test would decide it the wrong way while LOOKING like
+measured behaviour. **This wave's recurring shape: a prescribed test for an input the mechanism cannot
+exhibit.**
+
+Instead: convert `apiErrorText`'s docstring from assumption ("A coded failure with **no stderr** is
+next") to measurement naming those send sites; and record — NOT build, it is server-side in a PWA wave
+— the guard actually worth having, an assertion that no reply body carries both `stderr` and `error`.
+
+**D-2634/D-2635 issued** (floor 2636), mail 839, question 833 acked. Task 5's pair (mail 834) is with
+an adversarial panel; told the worker not to wait on it to land D-2634.
