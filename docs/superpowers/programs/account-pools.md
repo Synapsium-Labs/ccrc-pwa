@@ -4428,3 +4428,53 @@ fade was reinforcement, never the only signal. Told the worker that if route (a)
 **D-2631 issued** (floor 2632), mail 825, question 824 acked. D-2623 core committed at `6cd67dc9`.
 
 **Fifteen deviations in one day, every one the plan.**
+
+## 2026-09-12 15:12Z — D-2632/D-2633: the worker confessed the wrong defect, and I am red for its mirror
+
+Worker mail 829 (`question`): commits `f7da6c4a`, `6cd67dc9`, `7ee79790` staged only code and tests
+while the issued deviation definitions stayed uncommitted in the plan. It asked me to rule a
+forward-only repair and declined to amend. **Approved — but two corrections change what gets committed.**
+
+**Amending would falsify a true record, which is the better reason than "don't rewrite history".**
+`f7da6c4a` DID contain only the code for D-2622. Amending it to carry the definition too would make it
+assert a simultaneity that did not occur. Same trade as registering a `noText` lie to green the contrast
+gate, refused in D-2631: buying a compliance CLAIM by editing the artifact the claim is about.
+
+**The confession names a defect that did not happen.** Measured — `git grep -oE 'D-26[0-9]{2}'
+ws/clear-meadow -- ':!docs/'` returns NOTHING. Not one code commit carries a D-ref outside `docs/`, so
+none could have dangled a number and none could have red `deviation-refs.test.ts`. Same-commit
+compliance in the sense the gate enforces was never at risk.
+
+**The defect it actually has is worse and has no test — D-2632.** Seven issued numbers (2622, 2623,
+2624, 2628, 2629, 2630, 2631) existed only in the uncommitted working tree of an UNPUSHED branch
+(`git ls-remote origin refs/heads/ws/clear-meadow` — empty). The floor had already risen to 2632. One
+`git checkout --` and all seven are orphaned permanently: never entering the ledger, raising the floor
+anyway. That is `sweepLedgerReconcile`'s orphan shape, the one CLAUDE.md says **nothing refuses**. The
+gate catches a committed ref with no definition; **it cannot see a definition that exists only in a
+working tree.** Mitigation is ordering, not tooling — so: commit FIRST, verify Task 6 SECOND.
+
+**I am red for the mirror of it — D-2633.** `deviation-refs.test.ts` on `ws/amber-summit`:
+
+> a tracked file names a global D-ref above the ledger high-water D-2546
+> (`docs/superpowers/programs/account-pools.md` names D-2631) — expected 2681 to be 2596
+
+I checked whether the GATE was at fault — whether `definedMax()` should also scan
+`docs/superpowers/programs/`. **It should not.** On `origin/main`, definedMax and max-tracked-ref are
+both **2614, exactly equal**; the suite's own comment states the invariant — *"a source ref to an
+allocated-but-unentered number reds here until its entry lands"*. The gate is working. **I broke the
+rule I issued D-2588 for, one wave later, from the other side of it.** Structural, and worth naming:
+citations live on the coordinator's branch and definitions on the worker's, so the coordinator is blind
+to the one gate that would catch coordinator ledger mistakes — and must check the UNION, never its own
+branch.
+
+**The acceptance criterion is arithmetic, so it is not eyeballed.** The floor assertion compares MAXIMA,
+so the plan must define up to the highest number cited anywhere: 2622, 2623, 2624, 2628, 2629, 2630,
+2631 — seven, none optional, six leaves it red — plus D-2632/D-2633 themselves, in the SAME commit,
+which makes the repair compliant with the rule it records and moves the required plan max to 2633.
+
+**And told it to claim exactly what is true**: not "same-commit compliance was missed" (too strong —
+nothing was ever undefined-and-committed), nor a compliance claim. True: definitions authored at ruling
+time, committed late; no commit ever carried an undefined reference; the exposure was orphanhood, not
+collision.
+
+**D-2632/D-2633 issued** (floor 2634), mail 830, question 829 acked.
