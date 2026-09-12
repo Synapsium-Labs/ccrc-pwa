@@ -5006,3 +5006,41 @@ that gap itself before my mail 907 arrived**, the second self-correction ahead o
 itself audit coverage: per D-2640, each new color-bearing selector must enter `report.measured`."*
 
 **D-2671/D-2672 issued** (floor 2673), mail 914; 906/909/911 acked.
+
+## 2026-09-12 20:38Z — ask 6 / D-2676/D-2677: the options offered all missed the thing that mattered
+
+Operator ask 6, routed to me as parent of `ccrc-pwa-clear-meadow`: an untracked `/.playwright-mcp/`
+appeared in a tree that had been clean. Options were ignore (recommended) / inspect / pause.
+**Ruled: IGNORE — resume immediately.** Measured rather than assumed:
+
+- **Not mine.** mtime **20:16**; my two panels ran 15:20–15:50 and 18:25–18:51, both in disposable
+  detached worktrees under my own scratchpad, never in the worker's tree.
+- **Not unique to this session.** The same directory exists in **four other worktrees across three
+  other projects** — `MekWarLive/swift-harbor`, `custom-tools/calm-river`,
+  `expoAI-assistant/keen-delta`, `expoAI-assistant/still-summit`. The Playwright MCP server writes its
+  artifacts into whatever cwd invoked it. Fleet-wide behaviour, not an event.
+- Contents are a `console-<ts>.log` and a `page-<ts>.yml`. Nothing to inspect.
+
+**D-2676 — but all three offered options missed the material fact: `.playwright-mcp` is NOT
+gitignored.** `git check-ignore` returns nothing and `.gitignore` carries no playwright entry, so
+`git add -A` would commit a console log and a page snapshot into a repo **bound for public release**.
+"Ignore it" was the right answer to the question asked and would have left that exposure standing. The
+operative constraint is **never `git add -A` in that tree — stage explicit paths**. Verified it has
+never been committed on any ref (`git log --all --diff-filter=A -- .playwright-mcp` empty), so nothing
+needs undoing. The durable fix is one `.gitignore` line and the repo already has the convention
+(`.claude/`, `.extraction/`, `.worktrees/`) — but it spans five worktrees across four projects, so it is
+the operator's call, not a worker commit folded into Task 7.
+
+**D-2677 — the ask channel routes a parent to a door it cannot open.** The ask instructed
+`POST /api/asks/6/answer` (or `/release`). **`ccrc-api` has no `asks` group**: its help states "Closed
+table — no URL, host or path is an argument", and the table is `claims`, `feed`, `ledger`, `lifecycle`,
+`mail`, `peers`, `runs`, `whoami` — no asks, no passthrough. This repo's settings deny `curl`. **So a
+parent session instructed to rule on its child's ask cannot answer or release it through any sanctioned
+path.** The answer/release routes are ungated operator doors by design, and the client that exists so a
+curl-denied repo can still work a programme does not carry them — a dead end built for exactly the
+session type meant to use it.
+
+Worked around it by mailing the ruling to the worker directly (927), which unblocks it immediately; ask
+6 will time out into the operator's own notification. Recorded and reported upward.
+
+**D-2676/D-2677 issued** (floor 2678), mail 927, ask-mail 926 acked.
