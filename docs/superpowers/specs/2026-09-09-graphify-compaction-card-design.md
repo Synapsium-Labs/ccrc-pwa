@@ -574,7 +574,7 @@ On the normalised text:
 | field | meaning | type |
 | --- | --- | --- |
 | `chars` | length | integer |
-| `filesChars` | chars from the "Files and Code Sections" heading to the next numbered heading; the heading regex tolerates `#`, `**`, a trailing colon and case (the corpus carries both `Errors and fixes` and `Errors and Fixes`); **null** when no such heading exists (19% of summaries are not in the nine-section format) | integer or null |
+| `filesChars` | chars from the "Files and Code Sections" heading to the next numbered heading; the heading regex tolerates `#`, `**`, a trailing colon and case (the corpus carries both `Errors and fixes` and `Errors and Fixes`); **a numbered-looking line inside a FENCED code block is skipped — never a section start, never the terminating heading — since the corpus routinely quotes fenced numbered lists (including its own file listings) inside this very section, and counting one as the next heading truncates the span early (D-2553)**; **null** when no such heading exists (19% of summaries are not in the nine-section format) | integer or null |
 | `fences` | count of fenced code blocks (pairs of triple backticks; an odd count floors) | integer |
 | `cited` | working-set files named in the summary: the file's repo-relative path appears, or a path-segment-aligned suffix of it of at least two segments that is unique *within the set* appears — computed from the set file alone, no graph needed | integer or null |
 | `setSize` | `files.length` of the set | integer or null |

@@ -616,17 +616,61 @@ export function normalizeSummary(raw) {
  *  `**`, `<n>.`, a title, an optional colon, optional closing `**`. */
 const HEADING_RE = /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*\d+\.[ \t]+([^\n]*?)[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/gm;
 
+/** Character-offset ranges covered by fenced code blocks (paired triple-backtick
+ *  markers, hex-escaped so this source never carries a literal fence); an
+ *  unpaired final marker covers to EOF. A numbered-looking line INSIDE one
+ *  of these ranges is code content, not document structure, and must not be
+ *  mistaken for the next section heading (fix round 1, Minor 2, D-2553). */
+function fencedRanges(text) {
+  const re = /\x60\x60\x60/g;
+  const ranges = [];
+  let m, start = null;
+  while ((m = re.exec(text))) {
+    if (start === null) start = m.index;
+    else { ranges.push([start, m.index + 3]); start = null; }
+  }
+  if (start !== null) ranges.push([start, text.length]);
+  return ranges;
+}
+
 /** Chars from the "Files and Code Sections" heading to the next numbered
  *  heading (or EOF); null when the summary has no such heading — 19% of the
  *  corpus is not in the nine-section format, and null is what keeps this
- *  field honest. */
+ *  field honest. A numbered-looking line inside a FENCED region is skipped
+ *  entirely — never a section start, never the terminating heading — since
+ *  the corpus routinely quotes fenced numbered lists inside this very
+ *  section (D-2553). */
 export function filesSectionChars(text) {
+  const fences = fencedRanges(text);
+  let fence = 0;
   let start = -1;
   for (const m of text.matchAll(HEADING_RE)) {
+    // Heading matches arrive in source order, so advance rather than re-scan
+    // every fenced range for each heading.
+    while (fence < fences.length && m.index >= fences[fence][1]) fence++;
+    if (fence < fences.length && m.index >= fences[fence][0]) continue;
     if (start < 0) { if (/^files and code sections$/i.test(m[1])) start = m.index; }
     else return m.index - start;
   }
   return start < 0 ? null : text.length - start;
+}
+
+/** A path-continuation character: the same alphabet `tokenRegex` mines with.
+ *  Used only to LEFT-bound a full-path citation, never to re-derive matches. */
+const PATH_CHAR = /[A-Za-z0-9_./-]/;
+
+/** Whether `p` occurs in `text` at a LEFT-aligned position: start of string,
+ *  or preceded by a non-path character. Without this, a full set path that
+ *  happens to be the tail of a LONGER set member's own cited path (e.g.
+ *  `a/b/c.ts` inside a cited `x/a/b/c.ts`) is a substring hit but not a
+ *  citation of `a/b/c.ts` itself — fix round 1, Minor 3. */
+function hasAlignedOccurrence(text, p) {
+  let i = text.indexOf(p);
+  while (i >= 0) {
+    if (i === 0 || !PATH_CHAR.test(text[i - 1])) return true;
+    i = text.indexOf(p, i + 1);
+  }
+  return false;
 }
 
 /** Working-set files the summary names: the repo-relative path, or a
@@ -635,7 +679,7 @@ export function filesSectionChars(text) {
 export function citedCount(text, paths) {
   let n = 0;
   for (const p of paths) {
-    if (text.includes(p)) { n++; continue; }
+    if (hasAlignedOccurrence(text, p)) { n++; continue; }
     const segs = p.split('/');
     let hit = false;
     for (let k = 2; k < segs.length && !hit; k++) {
@@ -655,7 +699,15 @@ const SCOPES = new Set(['main', 'subagent', 'ambiguous']);
  *  set could not say: no set, or a set with `files: null`. */
 export function measureCommand(raw, set, trigger) {
   const text = normalizeSummary(raw);
-  const paths = set && Array.isArray(set.files) ? set.files.map((f) => f.path) : null;
+  // A malformed individual `files[]` entry (null, no `path`, an empty or
+  // non-string `path`) must not reach `citedCount`'s `includes`/`split` — it
+  // threw on `.split` for a non-string path (or on `.path` for a null entry),
+  // while `undefined` and `''` silently ToString'd into phantom citations.
+  // Filtered out here, not trusted (fix round 1, Minor 1): the rest of the
+  // set is still measured.
+  const paths = set && Array.isArray(set.files)
+    ? set.files.filter((f) => f && typeof f.path === 'string' && f.path.length > 0).map((f) => f.path)
+    : null;
   return {
     at: Date.now(),
     trigger,
@@ -671,9 +723,14 @@ export function measureCommand(raw, set, trigger) {
   };
 }
 
-/** The set for `measure`: absent, unreadable or malformed all read as NO SET
- *  (spec §3.4 — a bad set must never cost the whole measurement, and the
- *  hook consumes it either way). */
+/** The set for `measure`: absent, unreadable, or JSON that does not parse to
+ *  a plain object all read here as NO SET (spec §3.4). A malformed
+ *  INDIVIDUAL `files[]` entry is not this function's concern — the set
+ *  itself is well-formed JSON — and is not this document's claim: it is
+ *  `measureCommand`'s path extraction that filters such an entry out, so
+ *  one corrupt file entry costs that entry's own citation, never the whole
+ *  measurement (fix round 1, Minor 1 — the earlier docstring here claimed
+ *  that broader guarantee without the code to back it). */
 export function readSetForMeasure(setPath) {
   if (!setPath) return null;
   try {
