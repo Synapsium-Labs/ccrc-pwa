@@ -771,7 +771,11 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/api.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS; `tsc` exits 0.
+Expected: PASS, 63 tests; `tsc` exits 0. The 63 is a derived
+copy-completeness check, not a decreed cardinal: the focused file contains 63
+direct `it(` calls and zero `it.each` calls as measured after adding this
+block. Re-derive both counts if the focused file changes; parameterized rows
+would make direct calls diverge from reported tests.
 
 - [ ] **Step 6: Prove the guard by mutation**
 
@@ -3223,6 +3227,30 @@ deviation found while executing this plan is allocated in its own call at the mo
   that it equals the block's `it(` calls, tells editors to re-derive it after
   changing that block, and warns that `it.each` rows make call count and test
   count diverge.
+
+- **D-2606 — Task 2's fallback reasoned about file order, but the defect is
+  lexical scope.** Step 1 told an editor to append the new sibling
+  `describe('account pools', ...)` at EOF, with a fallback of putting it
+  immediately after the block that defines `asError`. At Task 1 HEAD
+  `a2c54690`, `pwa/test/api.test.ts:709-712` instead defines `const asError`
+  inside the existing sibling `describe('apiErrorText and the code translators
+  that compose with it', ...)`, which closes at `:774`. No placement of a
+  sibling describe can see that nested const: moving it after the enclosing
+  block changes file order but cannot cross lexical scope. The planned refusal
+  assertions would therefore fail from unavailable `asError` before their
+  `/different pool/i` prediction is observable. Ruling: hoist the helper to
+  module scope as a pure move, with its body byte-identical and all existing
+  uses untouched, then append the new sibling describe.
+
+- **D-2607 — Task 2's stated alphabetical location contradicted the import
+  order it asked the editor to read.** Step 3 said to place `ProjectPoolWire`
+  between `PrView` and `ReapResult`, while `pwa/src/lib/api.ts:5` orders the
+  relevant existing symbols `PasskeyRegisterStart, ProjectRow, PrView,
+  ReapResult`. The existing `ProjectRow`-before-`PrView` ordering proves the
+  list is case-insensitively alphabetical; on that order `ProjectPoolWire`
+  belongs after `PasskeyRegisterStart` and before `ProjectRow`. Ruling: use
+  that corrected position. The stale `API_ERROR_TEXT` and method line locators
+  are locator drift requiring a re-read, not a separate deviation.
 
 - **D-2608 — Task 1 mutation 1 overstated what deleting the unknown early
   return changes.** The loop after `splitByPool`'s early return routes each

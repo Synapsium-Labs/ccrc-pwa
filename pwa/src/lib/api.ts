@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -193,6 +193,19 @@ const API_ERROR_TEXT: Record<string, string> = {
   // sentence, where the session id is in scope anyway.
   'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
   'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
+  // Account pools (spec §5.6). Three codes, three different things the box
+  // established — and NOT one sentence between them, because the remedies are
+  // not the same: cross on purpose, fix a file on the fleet box, or type a
+  // legal name. `unsupported` above already covers the 501 both pool routes
+  // can answer with, so no fourth entry is added for it.
+  //
+  // None of these is a code `uploadErrorText`, `kickoffErrorText` or
+  // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
+  // sentence here for a code one of them owns would lose its wording. The
+  // suite asserts that in both directions.
+  'pool-mismatch': 'That account is in a different pool from this project. Open "show other pools" and confirm the crossing, or pick an account the project\'s pool admits.',
+  'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
+  'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 };
 
 /** Human-readable failure text for a caught error.
@@ -440,13 +453,40 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // spelled inline here, this generic would have gone on declaring a shape
     // the server had already stopped sending (D-1028).
     projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
-    createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
-      post('/api/sessions', b),
+    /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
+     *  start sends the byte-identical body it sent before pools existed —
+     *  `archive`'s `{force:true}` rule, for `archive`'s reason: a key an older
+     *  server does not know is the silent-success class, and a flag that only
+     *  ever means "yes" never needs to travel saying "no". */
+    createSession: ({ crossPool, ...rest }: {
+      wrapper: string; project: string; workdir?: string; crossPool?: boolean;
+    }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
     workspaceAdd: (project: string): Promise<void> =>
       post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `POST /api/projects/:project/pool` — tag the project into an account
+     *  pool, or clear it with an explicit `null`.
+     *
+     *  `postJson`, not `post`: the route answers the pool it RE-READ off the
+     *  fleet box after the write, not the value that was requested, and that
+     *  measured state is the only thing `PoolSheet` may render before the next
+     *  `pools` frame settles it. The shape is spelled inline over the shared
+     *  `ProjectPoolWire`, the same way `projects` above composes `ProjectRow`.
+     *
+     *  `warning: 'unknown-pool'` is a WARNING and not a refusal (ruling O4):
+     *  this server's roster copy can lag the fleet's, so a pool no account
+     *  here carries may still be about to gain one. */
+    setProjectPool: (project: string, pool: string | null) =>
+      postJson<{ ok: true; pool: ProjectPoolWire; warning?: 'unknown-pool' }>(
+        `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
     stop: (id: string) => post(`${sid(id)}/stop`),
-    swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
+    /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
+     *  and an absent `opts` both send the byte-identical `{wrapper}` body the
+     *  route has always taken. Not a checkbox anywhere in the UI: it is what a
+     *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
+     *  a confirm sentence that names the crossing. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
+      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an

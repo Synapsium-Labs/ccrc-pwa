@@ -9,6 +9,10 @@ const jsonResponse = (status: number, body: unknown): Response =>
     headers: { 'content-type': 'application/json' },
   });
 
+const asError = (status: number, body: unknown): unknown => {
+  try { throw new ApiError(status, body); } catch (e) { return e; }
+};
+
 describe('api client', () => {
   // Task 8: DELETE /api/sessions/:id/workspace is gone, and so is this method.
   // A mutation sweep found that restoring workspaceRemove (and the `del`
@@ -707,10 +711,6 @@ describe('createSession (Task 13)', () => {
 // disjoint today (`unsupported` vs `unsupported-type`) and this is what keeps
 // it true.
 describe('apiErrorText and the code translators that compose with it', () => {
-  const asError = (status: number, body: unknown): unknown => {
-    try { throw new ApiError(status, body); } catch (e) { return e; }
-  };
-
   it('routes a 501 unsupported to the sentence, not the slug', () => {
     expect(apiErrorText(asError(501, { ok: false, error: 'unsupported' })))
       .toBe(UNSUPPORTED_VERB_TEXT);
@@ -794,5 +794,118 @@ describe('send-failure copy', () => {
     // echoed back, versus echoed and then not taken), and collapsing them
     // would tell the operator the wrong story about which one happened.
     expect(sendErrorText('verify-failed')).not.toBe(sendErrorText('enter-ignored'));
+  });
+});
+
+// Account pools, wave 4. The three writes and the three refusals.
+//
+// The BYTE-IDENTITY assertions are the point of the first two: an ordinary
+// swap and an ordinary start must send exactly the request they sent before
+// pools existed, because an older server reading an unexpected key is the
+// silent-success class this wire discipline exists to prevent. `archive(id,
+// {force:false})` above is the same shape for the same reason.
+describe('account pools', () => {
+  const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
+    jsonResponse(200, { ok: true, pool, ...extra });
+
+  it('setProjectPool posts the name and reads the MEASURED state back', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'tagged', name: 'pool-a' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const r = await api.setProjectPool('demo', 'pool-a');
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/demo/pool');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ pool: 'pool-a' });
+    expect(r.pool).toEqual({ state: 'tagged', name: 'pool-a' });
+    expect(r.warning).toBeUndefined();
+  });
+
+  it('setProjectPool sends an explicit null to CLEAR, and carries the unknown-pool warning', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'untagged' }, { warning: 'unknown-pool' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const r = await api.setProjectPool('demo', null);
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ pool: null });
+    expect(r.warning).toBe('unknown-pool');
+  });
+
+  it('setProjectPool percent-encodes the project segment', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'untagged' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.setProjectPool('a b', null);
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects/a%20b/pool');
+  });
+
+  it('swap(id, w) posts the byte-identical {wrapper} body it always did', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2');
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+  });
+
+  it('swap(id, w, {crossPool:false}) is still the UNCROSSED call — never a body that says no', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { crossPool: false });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+  });
+
+  it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { crossPool: true });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
+  });
+
+  it('createSession omits crossPool entirely unless it is true', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: false });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
+    expect(JSON.parse((fetchImpl.mock.calls[2] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
+  });
+
+  it('turns the three pool refusals into sentences, not slugs', () => {
+    // Each names what the box established and what would change it. A bare
+    // `pool-mismatch` under a failed toast says nothing about the disclosure
+    // that exists precisely to let the operator do it on purpose.
+    expect(apiErrorText(asError(409, { ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' })))
+      .toMatch(/different pool/i);
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'unreadable' })))
+      .toMatch(/could not be read/i);
+    expect(apiErrorText(asError(400, { error: 'bad-pool-name' })))
+      .toMatch(/lowercase/i);
+  });
+
+  it('still prefers ccd\'s own stderr over a pool sentence — a 502 says more than a code could', () => {
+    expect(apiErrorText(asError(502, { ok: false, stderr: 'pool-mismatch: nothing was touched' })))
+      .toBe('pool-mismatch: nothing was touched');
+  });
+
+  it('does not shadow any code the UPLOAD, KICKOFF or SEND translators own', () => {
+    // The three new keys join a map two other translators consume the OUTPUT
+    // of as a KEY. None of them owns these codes today; this asserts it in the
+    // direction that breaks if one ever does.
+    for (const code of ['pool-mismatch', 'pool-unreadable', 'bad-pool-name']) {
+      expect(uploadErrorText(code), code).toBe(code);
+      expect(kickoffErrorText(code), code).toBe(code);
+      expect(sendErrorText(code), code).toBe(code);
+    }
   });
 });
