@@ -4323,3 +4323,62 @@ a control — undoing exactly what the span exists to do. The fix idiom is on th
 
 **D-2622..D-2624 issued** (floor 2625), mail 813, status 810 acked. Worker refuted two of their own
 review's findings and declined to record them — the posture applied to themselves, unprompted.
+
+---
+
+## 2026-09-12 14:39Z — Task 6: D-2628/D-2629/D-2630. Two of them are one mechanism.
+
+Mail 821, all three re-measured at `origin/main`, all three upheld.
+
+### D-2628 — the toast tests are RED AT BASELINE
+
+`toast()` pushes to a module-level `listeners` Set (`Toast.tsx:29,42`); `ToastHost` is the ONLY
+subscriber (`:59`). The Task 6 block renders `<PoolSheet …/>` alone at all ten render sites — **zero
+`ToastHost` occurrences**. The message reaches no listener and `findByText` times out.
+
+**The headline is the worker's own clause, promoted:** *"mutations cannot prove branches."* **A mutation
+RED is only evidence if the BASELINE is green.** A test red before anyone mutates anything cannot host a
+mutation row at all — mutate it and it is still red, so the table reads RED/RED and carries zero bits.
+That is the third direction on the same rule: a false green proves nothing
+([[a-green-mutation-needs-a-control]]), a false red proves nothing
+([[an-import-time-crash-is-a-false-red]]), and a **baseline** red makes every row beneath it
+unfalsifiable.
+
+Remedy is the in-tree idiom, not an invention: `render(<><ToastHost /><PoolSheet … /></>)` —
+`pwa/test/abandon-sheet.test.tsx:205`, import at `:21`. Five PWA suites already do it; Task 6 forgot.
+
+### D-2629 — the SPEC settles it in its own words
+
+The worker asked for a ruling; the spec had already made it.
+`specs/2026-09-04-account-pools-design.md:407`, verbatim: *"renders the measured `pool` from the 200 and
+**settles on the next `pools` frame**."* The plan's `measured ?? projectPoolOf(pools, …)` holds until
+CLOSE and says so in its own comment — a different behaviour from the sentence the plan's own **Spec**
+line quotes two hundred lines above it. **Not a judgement call: a plan that diverged from the document
+it cites.**
+
+Recorded why the plan's instinct still loses rather than dismissing it: holding until close avoids a
+snap-back when a frame PREDATING the write arrives just after the 200. That flicker is real, which is
+exactly why "the next frame" must mean *the next frame after the response*.
+
+### D-2630 — the unguarded write
+
+`void api.setProjectPool(project, pool).then(onOk, onErr).finally(() => setSaving(false))` — `project`
+and `pool` are closure-captured and every arm runs unconditionally. With A in flight and the sheet
+reopened on B: A's toast names A over B's sheet, A's response sets the measured state B is rendering,
+and A's `.finally` clears the saving flag guarding B's own write. **Three wrong outcomes from one
+unguarded continuation.**
+
+### The ruling that matters: D-2629 and D-2630 are ONE mechanism
+
+Both need the same fact — **which request, and which frames, are still relevant.** One monotonic
+generation, bumped on every write and on every project change / reopen / close: each `then`/`catch`/
+`finally` arm returns unless its captured generation is current (D-2630), and `measured` is stored with
+the generation it was measured against and dropped when a NEWER frame arrives (D-2629's "next frame",
+made precise). Two ad-hoc guards would be two things to keep in step, and they would drift — the failure
+this program spent D-2519..D-2522 and D-2623 on.
+
+Mutation instruction: drop the generation check **one arm at a time**, never all three
+([[mutate-the-call-site-not-just-the-helper]]).
+
+**D-2628..D-2630 issued** (floor 2631), mail 823, question 821 acked. **Fourteen deviations in one day,
+every one the plan.**
