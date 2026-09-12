@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runWarnings, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -165,6 +165,12 @@ function RunRow({
   // picks no words.
   const verdict = session === null ? null : spawnVerdictChip(session);
   const resume = resumeNote(run, nowSec);
+  // F4. TWO facts, and only one of them is conditional: the run's own project is
+  // rendered on every row (a badge that appears only sometimes teaches nothing),
+  // while the crossing marker is `crossingNote`'s single answer — silent when the
+  // home is unknown, silent when the home IS this project, two cues when it is
+  // neither. This component compares nothing.
+  const crossing = crossingNote(run);
   // F7. The DECISION is `runWarnings`' — five conditions, one place, tolerant of
   // a server that has never heard of `health`. This component picks no words and
   // compares no thresholds; it lays out what it was handed.
@@ -174,6 +180,13 @@ function RunRow({
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
       <span className="run-state">{RUN_WORD[state]}</span>
       <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
+      <span className="run-project">{run.project}</span>
+      {crossing !== null && (
+        <span className="run-crossing" data-home={crossing.home} title={crossing.title}>
+          <span className="run-crossing-glyph" aria-hidden="true">{crossing.glyph}</span>
+          {crossing.word}
+        </span>
+      )}
       <span className="run-tally">{itemTallyLabel(items)}</span>
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
@@ -698,7 +711,7 @@ export function RunsScreen({
               <div key={program} className="runs-group" role="group" aria-label={`program ${program}`}>
                 <p className="runs-group-head">
                   <span className="runs-program">{program}</span>
-                  <span className="runs-wave">wave {wave}{waveOf === null ? '' : `/${waveOf}`}</span>
+                  <span className="runs-wave">{waveLabel({ wave, waveOf })}</span>
                 </p>
                 <ul className="runs-list">
                   {list.map(rowFor)}

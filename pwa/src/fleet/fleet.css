@@ -2041,6 +2041,22 @@ button.sess-held {
 .run-row .run-glyph { color: var(--ink-tertiary); }
 .run-row .run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
 .run-ws { font-size: var(--text-sm); }
+/* F4 (cross-repo): which repo this run is in, and whether that is its
+   programme's home. Scoped under `.run-row` — self-grounded above, background
+   and colour both set — so these inherit the same recovered ground
+   `.run-row .run-state`/`.run-row .run-dispatch` do: no new token pair for
+   `design/contrast-check.mjs` to price. The badge takes `--ink-tertiary` (it is
+   context, present on every row, and must not compete with the workspace name);
+   the marker takes `--ink-secondary`, one step up, because it is the rarer fact
+   — and it is told apart by its GLYPH and its WORD, never by a hue. */
+.run-row .run-project { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+.run-row .run-crossing {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-crossing-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

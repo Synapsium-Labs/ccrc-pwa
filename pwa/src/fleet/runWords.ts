@@ -357,6 +357,74 @@ export function programWave(list: readonly RunSummary[]): { wave: number; waveOf
   return { wave: best.wave, waveOf: best.waveOf };
 }
 
+/* ── cross-repo: which repo, and whose programme (spec §3 F4) ─────────────── */
+
+/**
+ * The programme's HOME project, tolerantly — the ONE reader of
+ * `RunSummary.homeProject` in `pwa/src`.
+ *
+ * The field is declared REQUIRED on the wire type and is still optional at
+ * RUNTIME, the same measured skew `runItems`/`runClosedAt`/`graphReadCount`
+ * already carry: `api.runs()` is a bare cast and the `{type:'runs'}` frame is
+ * shape-checked at the array level only, so a row from a server that predates
+ * this field arrives with the key missing. `undefined !== null` is true, so a
+ * raw comparison at a call site paints a crossing marker naming `undefined` —
+ * which is why every reader goes through here.
+ *
+ * THREE conditions collapse to `null` and that is deliberate, not an overloaded
+ * null: absent, non-string and empty all mean "this board cannot name a home",
+ * and the caller's answer to each is the same silence. What must NOT collapse
+ * into it is a home that is genuinely the run's own project — that is a
+ * measured sameness, and `crossingNote` decides it separately, below.
+ */
+export const runHomeProject = (run: { homeProject?: string | null }): string | null =>
+  typeof run.homeProject === 'string' && run.homeProject !== '' ? run.homeProject : null;
+
+/** `wave 2/5`, or `wave 2` when the programme declared no total. One spelling,
+ *  three callers (the group header, the card's orphan marker, the card's abroad
+ *  line) — a fragment this small is exactly the kind that drifts into four
+ *  slightly different ones. */
+export const waveLabel = (run: { wave: number; waveOf: number | null }): string =>
+  run.waveOf === null ? `wave ${run.wave}` : `wave ${run.wave}/${run.waveOf}`;
+
+/** The one glyph both crossing surfaces draw. A GLYPH, beside a WORD, never
+ *  instead of one: the board's standing rule is that nothing is read out of
+ *  colour or shape alone. */
+export const CROSSING_GLYPH = '⇄';
+
+export interface CrossingNote {
+  readonly glyph: string;
+  readonly word: string;
+  /** The programme's home project — measured, never inferred. */
+  readonly home: string;
+  readonly title: string;
+}
+
+/**
+ * What the board says about a wave running outside its programme's home repo,
+ * or `null` when there is nothing to say. TWO ways to get `null` and they are
+ * different facts kept apart on purpose:
+ *   • the home is UNKNOWN (legacy generation, or an older server) — absence
+ *     permits, and a marker here would be this build asserting a crossing it
+ *     never measured;
+ *   • the home IS this run's project — measured, and a marker would be a lie.
+ * Neither renders, which is why they may share a return value: the CALLER does
+ * the same thing with both, and the distinction that matters (is there a home
+ * at all) is `runHomeProject`'s, one line up.
+ */
+export function crossingNote(
+  run: { project: string; homeProject?: string | null },
+): CrossingNote | null {
+  const home = runHomeProject(run);
+  if (home === null || home === run.project) return null;
+  return {
+    glyph: CROSSING_GLYPH,
+    word: 'crossing',
+    home,
+    title: `this wave runs in ${run.project}; its programme is homed in ${home}`,
+  };
+}
+
 /* ── F7: the compact warn row ──────────────────────────────────────────────── */
 
 /** One thing worth saying about a run, as the board says everything: a WORD and
