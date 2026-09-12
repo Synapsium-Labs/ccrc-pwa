@@ -4478,3 +4478,41 @@ time, committed late; no commit ever carried an undefined reference; the exposur
 collision.
 
 **D-2632/D-2633 issued** (floor 2634), mail 830, question 829 acked.
+
+## 2026-09-12 15:21Z — the union gate RUN, not asserted: 31/31 green at 2633 == 2633
+
+Worker mail 832: `43561414` records D-2622..D-2633 forward-only. **Verified rather than accepted.**
+All nine definition lines present; the plan's definition high-water is now exactly **2633**.
+
+**D-2633's procedure executed for the first time.** I said a coordinator must check the UNION because
+its own branch cannot pass this gate during a wave — so I built one: a DETACHED worktree at `43561414`
+(never checking out the worker's branch), the worker's plan as committed, my program ledger as pushed,
+then `./node_modules/.bin/vitest run test/deviation-refs.test.ts`. **31/31 PASS**, max tracked ref 2633
+== definition high-water 2633 — the same exact balance `origin/main` holds at 2614. The arithmetic in
+mail 830 is now a measurement. My branch's red is confirmed as the citations-lead-definitions artefact
+and not something either of us carries into the PR. Worktree removed afterwards, filtered on my own
+scratchpad path.
+
+**Checked the 38 DELETED lines, not just the 184 added.** A definitions-only commit that deletes is
+worth opening. They are the plan's own prescriptions being replaced by the ruled ones — `opacity: 0.55`,
+the `dim || onTap === undefined` span arm, the `[data-pool='unreadable']` rule, two mutation rows. The
+entries preserve what was prescribed BEFORE deleting it: D-2631 quotes `.proj-card-pool[data-dim] {
+opacity:0.55 }` verbatim and names the gate it was prescribed against. Correcting the body while the
+entry keeps the original is right — a plan nobody can execute is worse than one with a history section.
+
+**The worker's commit message claims exactly the right amount** — "authored when ruled but remained
+exposed only in the working tree", "no code commit carried an undefined deviation reference". Neither
+the compliance claim nor the overstated confession. Nothing to change.
+
+**D-2631's entry added a mechanism I did not require, and I endorsed it:** the stylesheet test must
+assert NO opacity on `[data-dim]`, and mutating back to `opacity:0.55` must red both that assertion and
+the real contrast gate. I ruled the instruction out; the worker turned the ruling into a ratchet. That
+is the difference between this not shipping today and this coming back in three waves.
+
+**One defect noted and deliberately NOT repaired:** `43561414`'s message carries a literal `\n\n` before
+`Co-Authored-By:`, so the trailer sits inside the body and `git interpret-trailers` cannot see it.
+**Ordering an amend for a cosmetic metadata defect would contradict mail 830 ten minutes after issuing
+it**, and the branch squashes at merge with a hand-written body, so nothing reaches main from it. Told
+forward-looking only: heredoc or `git commit -F`, never a shell string with escapes.
+
+Mail 835 sent, 832 acked. Task 6 resumes.
