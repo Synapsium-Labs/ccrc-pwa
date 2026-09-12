@@ -1180,13 +1180,18 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     for (const f of files) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
       src.forEach((ln, i) => {
-        // All four spawn idioms this suite uses, not just the one this scan was
+        // All spawn idioms this suite uses, not just the one this scan was
         // born matching. `spawnSync` is how a file that EXPECTS a nonzero exit
         // spawns (`ccd-start-id`, `ccd-roster-preamble`), and a pre-resolved
         // `BASH` is how a file whose child PATH holds no system directory has to
         // spawn at all — both were invisible here, so two real ccd runners sat
         // outside a guard whose whole claim is "every bash call site".
-        if (!/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln)) return;
+        // ASYNC `spawn` joined them when `ccd-account-auth.test.ts` needed to
+        // watch a status file WHILE the helper was still running: a run that
+        // must be observed mid-flight cannot be a synchronous call, and the
+        // scan's claim is about every bash call site, not every convenient
+        // one. Matched by the same alternation so a reader sees one rule.
+        if (!/(?:execFileSync|spawnSync|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');

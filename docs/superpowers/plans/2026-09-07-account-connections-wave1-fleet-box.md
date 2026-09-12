@@ -18836,3 +18836,114 @@ red on the case it targets and each restored: the shim replaced by a bare `timeo
 dot (5 red), `umask 077` dropped, `chmod 700` dropped, the absent-field arithmetic replaced by
 always-present empty strings, `_auth_die` not recording its reason, the id-shape guard, the roster gate,
 and the two census mutations from D-2557.
+
+### D-2562 — `_auth_close_pipes` sent this process's stderr to /dev/null, permanently, and every later refusal with it
+
+Task 52's `_auth_close_pipes` is quoted as:
+
+```bash
+_auth_close_pipes() {
+  exec 7<&- 2>/dev/null
+  exec 8<&- 2>/dev/null
+  exec 9<&- 2>/dev/null
+```
+
+**`exec` with no command makes ALL of its redirections permanent.** So the first of those three lines
+does not merely silence a "bad file descriptor" complaint — it repoints THIS SHELL's fd 2 at
+`/dev/null` for the rest of the run. Measured:
+
+```
+$ bash -c 'exec 3<>/dev/null; exec 3<&- 2>/dev/null; echo x >&2'
+(nothing)
+$ bash -c '{ exec 3<&-; exec 4<&-; } 2>/dev/null; echo x >&2'
+x
+```
+
+`_auth_close_pipes` is called from `_auth_login` **before** every refusal the success path can produce:
+the non-zero-exit `_auth_die`, and the missing-`.credentials.json` `_auth_die`. Both wrote their
+sentence nowhere. The status file was still correct — `{"state":"failed","error":"the sign-in reported
+success but wrote no …/.credentials.json"}` — so a PWA reading the file would have been fine and an
+operator watching the pane would have seen an empty failure.
+
+Shipped as `{ exec 7<&-; exec 8<&-; exec 9<&-; } 2>/dev/null`: the group's redirection is temporary, so
+it still swallows the bad-fd complaint it was always for, and the `exec`s carry none of their own.
+
+**Found by a test the plan does not contain** — see D-2565. Pinned: reverting to the plan's three lines
+reds `refuses a launcher that exits 0 having written no credential` on `expected '' to contain 'wrote no'`.
+
+### D-2563 — the token assertion could not fail, because nothing ever set the token
+
+Task 52's launcher fixture records `${CLAUDE_CODE_OAUTH_TOKEN-<unset>}` and the test asserts it reads
+`<unset>`, as proof that `env -u CLAUDE_CODE_OAUTH_TOKEN` did its job. The env the test builds is
+`{ ...process.env, HOME, CCRC_AUTH_TICK, CCRC_AUTH_TIMEOUT }`, and vitest's `process.env` carries no
+`CLAUDE_CODE_OAUTH_TOKEN` — so the variable was never set, and `<unset>` is what the fixture reports
+whether or not the helper removes anything.
+
+`runLogin` now sets one (`PARENT_TOKEN`, a recognisable fixture string), so the removal is measured.
+The same case also asserts the token reaches neither the transcript nor the status file. Pinned:
+dropping `-u CLAUDE_CODE_OAUTH_TOKEN` reds it; before this change that mutation was green.
+
+This is the `tests-pin-shape-not-effect` class — the assertion was true, well-argued, and about
+nothing.
+
+### D-2564 — dropping `read -t` does not red the assertion the plan says it does
+
+Task 52's second mutation replaces `read -r -t "$CCRC_AUTH_TICK" -u 8 line` with a blocking
+`read -r -u 8 line`, and predicts RED on `reaches waiting-code on a prompt that carries no newline,
+then expires`, at `expected '' to contain 'Paste code here if prompted'`.
+
+Measured: that case stays **GREEN**. `_auth_pump`'s EOF branch forwards `$pending$line` when the child
+closes its stream, and bash's blocking `read` also saves partial input on EOF — so when the deadline
+kills the child at six seconds, the prompt IS printed, just six seconds late and only as the process
+dies. The transcript ends up containing the string either way.
+
+What the mutation costs is the thing no synchronous test can see: the prompt arrives at the END instead
+of WHILE the operator is waiting, so `waiting-code` is never published while it is true. The case that
+reds is the live one added under D-2565 (`expected 'starting' to be 'waiting-code'`). Recorded because
+an executor who ran the plan's mutation, saw green, and concluded the deadline was decorative would have
+deleted the one line that makes this method usable from a phone.
+
+### D-2565 — three guards this task ships had no test at all, and one of them was hiding D-2562
+
+`waiting-code` and `cancelled` are both TRANSIENT — the first is overwritten by whatever ends the run,
+the second is written by a signal handler — so neither is observable from a run you wait for, and Task
+52's four cases all wait. The `.credentials.json` check is unreachable for the opposite reason: every
+run in the task expires, so `rc == 124` short-circuits before the success path is entered. Three shipped
+guards, zero measurements.
+
+Added:
+
+- **`publishes waiting-code while it waits, and cancelled when the pane is killed`** — an async `spawn`
+  polling the status file mid-flight, then `SIGTERM` (the same trap arm `tmux kill-session`'s SIGHUP
+  reaches) and a second poll for `cancelled`. Reds on: the `read -t` removal (D-2564), the
+  `Paste code here` branch, the trap, and the lane-launcher mutation.
+- **`refuses a launcher that exits 0 having written no credential`** — a launcher that says it worked
+  and writes nothing. This is the case that found D-2562.
+
+An async `spawn` is a bash call site `ccd-workspaces.test.ts`'s containment census could not see: its
+alternation was `(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]`. **Widened to include `spawn`** in the
+same commit — a run that must be observed mid-flight cannot be synchronous, and the census's claim is
+about every bash call site, not every convenient one.
+
+### D-2566 — `AUTH_URL` first-wins is an equivalent mutant on the fixture the plan ships
+
+`_auth_line` takes the URL only when `AUTH_URL` is still empty. Removing that guard — making it
+last-wins — measured **GREEN** against Task 52's four cases, because the replay stream carries exactly
+one URL-bearing line and the two policies are indistinguishable on it.
+
+The property is real: a launcher has every reason to print a second link (a docs page, a status page, a
+support link), and last-wins would then hand the operator whichever came last to open. Pinned by a fifth
+case whose fixture emits `https://docs.example.invalid/sign-in` after the authorize URL and asserts the
+status file still names the authorize URL. The mutation is now red.
+
+Recorded separately from the guard because this is the general shape: **a fixture copied from one
+measured stream can only distinguish policies that stream distinguishes.** The measurement (one
+URL-bearing line, 2026-09-07) is right; using it unchanged as the only fixture is what made the guard
+untestable.
+
+Task 52's full table, 15 mutations: the strip not called, `read -t` dropped (D-2564), the CR strip
+dropped (GREEN here by design — Task 54 is where a pty makes it measurable), `env -u` dropped (D-2563),
+the lane launcher instead of the upstream one (4 red), the expiry collapsed into a failure, the
+`waiting-code` branch, the signal trap, the credential check, `_auth_close_pipes` reverted to the plan's
+form (D-2562), fd 9 opened read-only instead of read-write (6 red), and first-wins made last-wins
+(D-2566).

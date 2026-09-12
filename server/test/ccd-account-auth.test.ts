@@ -8,8 +8,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { execFileSync, spawn } from 'node:child_process';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 const CCD_ROOT = path.resolve(__dirname, '../../ccd');
 const HELPER = path.join(CCD_ROOT, 'ccd-account-auth');
@@ -233,4 +233,249 @@ describe('the dot-prefixed registry inventory is a census, not a memory', () => 
     expect(region, `the boundary paragraph's cardinal disagrees with the ${total} artifacts measured (${found.length} scanned + ${Object.keys(UNSCANNABLE).length} unscannable + ${VARIABLE_NAMED} variable-named)`)
       .toContain(`${CARDINAL[total]} dot-prefixed`);
   });
+});
+
+/** The two control bytes the OSC-8 hyperlink form is built from, spelled here
+ *  rather than embedded as literals: an invisible ESC in a source file is a
+ *  byte a reviewer cannot see and a copy-paste can silently drop. */
+const ESC = '\x1b';
+const BEL = '\x07';
+const OAUTH_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture&state=fixture-state';
+
+/** A token in the PARENT's environment, so `env -u CLAUDE_CODE_OAUTH_TOKEN`
+ *  is load-bearing rather than decorative. Without this the `<unset>`
+ *  assertion below passes on a helper that never removes anything — the
+ *  variable was never set in the first place — which is a test pinning a
+ *  shape instead of an effect. Not a secret: a fixture string chosen to be
+ *  recognisable if it ever leaks into a transcript. */
+const PARENT_TOKEN = 'sk-ant-oat01-fixture-must-not-reach-the-child';
+
+/** A fake launcher standing in for the UPSTREAM launcher. It replays the
+ *  measured bytes and then blocks on stdin exactly as the real one does.
+ *  `harnessBin` is `<home>/.local/bin`, i.e. `WRAPPER_DIR` — the same
+ *  directory `makeCcdHarness` plants its stub wrappers in, so this REPLACES
+ *  the stub for the id it names. */
+function plantLauncher(id: string, body: string): void {
+  fs.writeFileSync(path.join(harnessBin(h.home), id), body, { mode: 0o755 });
+}
+
+/** The measured stream, built by the fixture's own `printf` rather than
+ *  interpolated from JS: `printf` understands the octal escapes, and a
+ *  JSON-stringified ESC would land in the script as six literal characters.
+ *  `%s` twice on one line is the doubling — once as the escape's target, once
+ *  as the visible text. The last line carries NO trailing newline, which is
+ *  the whole reason `read -t` exists below. */
+const REPLAY_STREAM =
+  `URL=${JSON.stringify(OAUTH_URL)}\n`
+  + "printf 'Opening browser to sign in.\\n'\n"
+  + "printf 'If the browser did not open, visit: \\033]8;;%s\\007%s\\033]8;;\\007\\n' \"$URL\" \"$URL\"\n"
+  + "printf 'Paste code here if prompted > '\n";
+
+/** Records what the launcher was given, replays the stream, then blocks on
+ *  stdin the way the real `auth login` does. Nothing feeds it here — Task 53
+ *  is where a code arrives — so every run below ends at the deadline. */
+const LOGIN_REPLAY =
+  '#!/usr/bin/env bash\n'
+  + 'printf %s "$CLAUDE_CONFIG_DIR" > "$HOME/seen-config-dir"\n'
+  + 'printf %s "${CLAUDE_CODE_OAUTH_TOKEN-<unset>}" > "$HOME/seen-token-env"\n'
+  + 'printf \'%s\\n\' "$*" > "$HOME/seen-argv"\n'
+  + REPLAY_STREAM
+  + 'IFS= read -r got\n'
+  + 'printf %s "$got" > "$HOME/seen-code"\n'
+  + 'mkdir -p "$CLAUDE_CONFIG_DIR" && printf \'{"fixture":true}\' > "$CLAUDE_CONFIG_DIR/.credentials.json"\n'
+  + 'chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"\n'
+  + 'echo done\nexit 0\n';
+
+describe('ccd-account-auth — the OSC-8 strip', () => {
+  const strip = (line: string): string => fn('_auth_strip_osc8 "$LINE"', { LINE: line });
+  const urlOf = (line: string): string => fn('_auth_url_of "$LINE"', { LINE: line });
+
+  it('removes the hyperlink escape and leaves the visible text once', () => {
+    const line = `If the browser did not open, visit: ${ESC}]8;;${OAUTH_URL}${BEL}${OAUTH_URL}${ESC}]8;;${BEL}`;
+    expect(strip(line)).toBe(`If the browser did not open, visit: ${OAUTH_URL}`);
+  });
+
+  it('handles the ST terminator form too — ESC-backslash, not BEL', () => {
+    const line = `visit: ${ESC}]8;;${OAUTH_URL}${ESC}\\${OAUTH_URL}${ESC}]8;;${ESC}\\`;
+    expect(strip(line)).toBe(`visit: ${OAUTH_URL}`);
+  });
+
+  it('leaves an ordinary line alone', () => {
+    expect(strip('Opening browser to sign in')).toBe('Opening browser to sign in');
+  });
+
+  it('takes the URL ONCE — and the raw line is exactly the trap', () => {
+    expect(urlOf(`If the browser did not open, visit: ${OAUTH_URL}`)).toBe(OAUTH_URL);
+    // The unstripped line, measured: the first `https://` run swallows the BEL
+    // (which is `\a`, NOT a member of `[[:space:]]`) and the second copy with
+    // it. This is the value a reader that regexed the RAW bytes would have
+    // handed the operator to open.
+    const raw = `visit: ${ESC}]8;;${OAUTH_URL}${BEL}${OAUTH_URL}${ESC}]8;;${BEL}`;
+    const trapped = urlOf(raw);
+    expect(trapped).not.toBe(OAUTH_URL);
+    expect(trapped.length).toBeGreaterThan(OAUTH_URL.length);
+  });
+});
+
+describe('ccd-account-auth — login over a plain pipe', () => {
+  /** Runs the helper to its DEADLINE. Nothing writes the code FIFO in this
+   *  task, so `login` always ends `expired` here; Task 53 adds the feeder and
+   *  with it the `done` half. `CCRC_AUTH_TIMEOUT` is small on purpose — the
+   *  expiry is the terminator, not a hang the vitest timeout has to catch. */
+  const runLogin = (id: string): { code: number; stdout: string; stderr: string } => {
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home, timeout: 60_000,
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '6',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+        { systemd: true, tmux: true }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [HELPER, id, 'login'], opts), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('publishes the single clean URL, and the transcript carries no escape', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = runLogin('claude-a');
+    // The URL the operator is asked to open, exactly once and with no escape.
+    expect(status('claude-a')['url']).toBe(OAUTH_URL);
+    // The transcript the pane/drawer sees carries the stripped line.
+    expect(r.stdout).toContain(`If the browser did not open, visit: ${OAUTH_URL}`);
+    expect(r.stdout).not.toContain(']8;;');
+  });
+
+  it('reaches waiting-code on a prompt that carries no newline, then expires', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = runLogin('claude-a');
+    // `Paste code here if prompted > ` is the LAST thing the child writes and
+    // it carries no newline. A plain `read` loop could never have seen it.
+    expect(r.stdout).toContain('Paste code here if prompted');
+    // Nobody typed a code, so the deadline is what ends this — and `expired`
+    // is a different terminal state from `failed`, because retyping a code
+    // into a process that is gone is the thing that distinction prevents.
+    expect(r.code).toBe(1);
+    expect(status('claude-a')['state']).toBe('expired');
+    expect(r.stderr).toBe('');
+  });
+
+  it('runs the UPSTREAM launcher, in the lane\'s own config dir, with no inherited token', () => {
+    // `CCRC_UPSTREAM` is `claude` in the fixture roster — the one
+    // `exec.kind: 'upstream'` entry. The lane's OWN launcher is not used here
+    // and cannot be: `claude-a` is a generated lane with a `secretsFile`, and
+    // a generated wrapper re-sources that file INSIDE the child
+    // (`shared/wrapper.mjs`), putting back the very token `env -u` removed.
+    // Running the upstream launcher with the config dir set explicitly is the
+    // same shape `setup-token` takes, and it is what makes the `<unset>`
+    // below a fact about the shipped path — the parent really does carry a
+    // token, so the removal is measured rather than assumed.
+    plantLauncher('claude', LOGIN_REPLAY);
+    const r = runLogin('claude-a');
+    expect(fs.readFileSync(path.join(h.home, 'seen-config-dir'), 'utf8'))
+      .toBe(path.join(h.home, '.claude-a'));
+    expect(fs.readFileSync(path.join(h.home, 'seen-token-env'), 'utf8')).toBe('<unset>');
+    expect(fs.readFileSync(path.join(h.home, 'seen-argv'), 'utf8').trim())
+      .toBe('auth login --claudeai');
+    // …and it reached no stream either.
+    expect(r.stdout).not.toContain(PARENT_TOKEN);
+    expect(JSON.stringify(status('claude-a'))).not.toContain(PARENT_TOKEN);
+  });
+
+  it('refuses a launcher that exits 0 having written no credential', () => {
+    // THE SUCCESS PATH'S ONE GUARD, and the only case in this task that can
+    // reach it: every other run here ends at the deadline, so `rc == 124`
+    // short-circuits before the credential is ever looked for. A launcher that
+    // says it worked and wrote nothing is the shape that would otherwise flip
+    // the lane to `done` on a lane that cannot start — and the operator would
+    // find out at the next `ccd start`, not here.
+    plantLauncher('claude', '#!/usr/bin/env bash\necho done\nexit 0\n');
+    const r = runLogin('claude-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('wrote no');
+    expect(status('claude-a')).toMatchObject({ state: 'failed' });
+    expect(String(status('claude-a')['error'])).toContain('.credentials.json');
+  });
+
+  it('keeps the FIRST url — a later link on the stream does not replace the sign-in', () => {
+    // FIRST-WINS, not last-wins, and nothing in the measured stream tells the
+    // two apart: it carries exactly one URL-bearing line, so a helper that
+    // overwrote `AUTH_URL` on every match would look identical. A real
+    // launcher has every reason to print a second link — a docs page, a
+    // status page, a support link — and the operator would then be asked to
+    // open whichever one happened to come last.
+    plantLauncher('claude', LOGIN_REPLAY.replace(
+      "printf 'Paste code here if prompted > '\n",
+      "printf 'Trouble? See https://docs.example.invalid/sign-in\\n'\n"
+      + "printf 'Paste code here if prompted > '\n"));
+    const r = runLogin('claude-a');
+    expect(r.stdout).toContain('https://docs.example.invalid/sign-in');
+    expect(status('claude-a')['url']).toBe(OAUTH_URL);
+  });
+
+  it('never opens a tmux session — this method needs no pane at all', () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    runLogin('claude-a');
+    expect(h.tmuxCalls()).toEqual([]);
+    expect(h.calls()).toEqual([]);
+  });
+});
+
+describe('ccd-account-auth — the two states only a live run can show', () => {
+  // `waiting-code` and `cancelled` are both TRANSIENT: the first is overwritten
+  // by whatever ends the run, and the second is written by a signal handler.
+  // Neither is observable from a run you wait for, so neither was measured by
+  // anything above — a state machine with two unpinned states is two states
+  // that can quietly stop working. This is the case that watches the file
+  // WHILE the helper is still in it.
+  const settle = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+
+  const stateNow = (id: string): string | null => {
+    try { return String(status(id)['state']); } catch { return null; }
+  };
+
+  /** Poll the status file until it reads `want`, or give up. Returns the last
+   *  state seen, so a failure says what it WAS rather than only that it was
+   *  not what we wanted. */
+  const waitForState = async (id: string, want: string, ms: number): Promise<string | null> => {
+    const deadline = Date.now() + ms;
+    let last: string | null = null;
+    while (Date.now() < deadline) {
+      last = stateNow(id);
+      if (last === want) return last;
+      await settle(100);
+    }
+    return last;
+  };
+
+  it('publishes waiting-code while it waits, and cancelled when the pane is killed', async () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    // ASYNC spawn, not execFileSync: a run you wait for is a run whose
+    // intermediate states you cannot see. Contained exactly like every
+    // synchronous spawn in this file — `ccd-workspaces.test.ts`'s census reads
+    // this call site too, its alternation having been widened to match `spawn`
+    // in the same commit.
+    const child = spawn('bash', [HELPER, 'claude-a', 'login'], {
+      cwd: h.home,
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '30',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+        { systemd: true, tmux: true }),
+      stdio: 'ignore',
+    });
+    try {
+      expect(await waitForState('claude-a', 'waiting-code', 20_000),
+        'the newline-less prompt never moved the machine to waiting-code').toBe('waiting-code');
+      // `ccd account-pane --cancel` kills the pane, which SIGHUPs what is in
+      // it; the helper's own trap is what writes the terminal state, because
+      // only this process knows. TERM is the same trap arm and is what a test
+      // can send without a pane.
+      child.kill('SIGTERM');
+      expect(await waitForState('claude-a', 'cancelled', 20_000),
+        'the signal trap did not publish cancelled').toBe('cancelled');
+    } finally {
+      child.kill('SIGKILL');
+    }
+  }, 60_000);
 });

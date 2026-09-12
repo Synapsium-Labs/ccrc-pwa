@@ -199,6 +199,159 @@ _auth_rostered() {   # <id> -> 0 when the roster claims it
   return 1
 }
 
+# ── the OSC-8 strip ───────────────────────────────────────────────────────
+# MEASURED 2026-09-07 (CC 2.1.263): the sign-in line is
+#   If the browser didn't open, visit: ESC]8;;<URL>BEL<URL>ESC]8;;BEL
+# so the raw URL appears TWICE — once as the escape's target, once as the
+# visible text. A reader that regexed the RAW bytes would capture
+# `<URL>BEL<URL>ESC]8;;BEL` and hand the operator that to open — and the
+# obvious `${u%%[[:space:]]*}` trim does not save it, because BEL is `\a` and
+# `\a` is not a member of `[[:space:]]`. Pure bash: no `sed -e 's/\x1b…'`,
+# because BSD sed does not understand `\x` and this file is in
+# `macos-platform.test.ts`'s derived corpus from the day it lands.
+_auth_strip_osc8() {   # <line> -> the line with every OSC-8 hyperlink escape removed
+  local s="$1" out='' esc=$'\033' bel=$'\a' head tail
+  while [[ "$s" == *"$esc]8;;"* ]]; do
+    head="${s%%"$esc]8;;"*}"
+    tail="${s#*"$esc]8;;"}"
+    out="$out$head"
+    # BEL first, ST (ESC \) second, and a line carrying both takes BEL: that is
+    # what the measured bytes use, and preferring the OTHER one on such a line
+    # would swallow the visible text between them.
+    if [[ "$tail" == *"$bel"* ]]; then
+      s="${tail#*"$bel"}"
+    elif [[ "$tail" == *"$esc\\"* ]]; then
+      s="${tail#*"$esc\\"}"
+    else
+      # An UNTERMINATED introducer. Dropping the remainder is the safe
+      # direction: what follows is an escape target, not text anybody typed.
+      s=''
+    fi
+  done
+  printf '%s' "$out$s"
+}
+
+_auth_url_of() {   # <clean line> -> the first https:// run on it; rc 1 when there is none
+  local s="$1" u
+  [[ "$s" == *"https://"* ]] || return 1
+  u="https://${s#*https://}"
+  u="${u%%[[:space:]]*}"
+  [[ -n "$u" && "$u" != "https://" ]] || return 1
+  printf '%s' "$u"
+}
+
+# ── the pipes ─────────────────────────────────────────────────────────────
+# THREE descriptors, and each has one job:
+#   fd 8  the child's stdout+stderr, read line by line by `_auth_pump`
+#   fd 9  the child's STDIN, held open by THIS process so the child never sees
+#         EOF while it waits for a code nobody has typed yet
+#   fd 7  the operator's code, arriving from outside on a FIFO this process
+#         owns — opened read-WRITE so it, too, never EOFs
+# The helper reads the code and writes it down fd 9 itself, so the child's
+# stdin has exactly one writer.
+AUTH_RUN=''
+_auth_open_pipes() {
+  AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
+  mkdir -p "$AUTH_RUN" || return 1
+  chmod 700 "$AUTH_RUN" || return 1
+  # Targeted removal, never `rm -rf` on a path under $REG: this process owns
+  # exactly these three names and nothing else in that directory is its
+  # business. A previous run killed mid-flight leaves its FIFOs behind, and
+  # `mkfifo` on an existing path fails — so the removal is not tidiness, it is
+  # what makes a retry possible at all.
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  mkfifo -m 600 "$AUTH_RUN/in"       || return 1
+  mkfifo -m 600 "$AUTH_RUN/out"      || return 1
+  mkfifo -m 600 "$AUTH_RUN/in.child" || return 1
+  # BOTH opened read-WRITE (`<>`), and that is the whole trick: a FIFO opened
+  # read-only blocks until a writer arrives and reports EOF the moment the last
+  # one leaves. Holding a write end on each means the child never sees EOF
+  # while it waits for a code nobody has typed yet, and a code writer that
+  # opens, writes and closes does not end the channel. A FIFO delivers each
+  # byte to exactly ONE reader, and this process never reads fd 9 — so what it
+  # writes there is the child's.
+  exec 9<>"$AUTH_RUN/in.child" || return 1
+  exec 7<>"$AUTH_RUN/in"       || return 1
+}
+
+_auth_close_pipes() {
+  # THE REDIRECTION IS ON THE GROUP, NOT ON THE `exec`s, and that is a
+  # correctness fix rather than a style choice. `exec 7<&- 2>/dev/null` is an
+  # `exec` with no command, so ALL of its redirections are made PERMANENT —
+  # this shell's stderr would point at /dev/null for the rest of the run, and
+  # every refusal after this function (the expiry branch's neighbours, the
+  # non-zero exit, the missing-credential check) would write its sentence
+  # nowhere. Measured: `bash -c 'exec 3<>/dev/null; exec 3<&- 2>/dev/null;
+  # echo x >&2'` prints nothing. The group's own redirection is temporary, so
+  # it still swallows a "bad file descriptor" from closing an fd a failed
+  # `_auth_open_pipes` never opened, which is all it was ever for.
+  { exec 7<&-; exec 8<&-; exec 9<&-; } 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+}
+
+# ── the pump ──────────────────────────────────────────────────────────────
+_auth_line() {   # <raw line from the child> — classify, substitute, forward
+  local raw="$1" clean url
+  # CARRIAGE RETURN FIRST, and it is not cosmetic. Two of the three methods
+  # run their child under `script(1)`, which gives it a pty — and a tty's line
+  # discipline translates NL to CR-NL on output. `read -r` splits on NL only,
+  # so every line from a pane method arrives with a trailing CR that would
+  # otherwise reach the status file inside the URL, the transcript and the
+  # substitution line. `login` has no pty and no CR; stripping one that is not
+  # there costs nothing, and this line is therefore NOT measurable from this
+  # method — Task 54's token capture is where deleting it goes red.
+  clean="${raw%$'\r'}"
+  clean="$(_auth_strip_osc8 "$clean")"
+  # THE TOKEN BRANCH IS FIRST, unconditionally, so no later branch can print a
+  # line that carries one. It ships as `return 1` and a later task gives it
+  # eyes; here it never fires, and a `command not found` in its place would put
+  # a line on stderr for every line the pump reads.
+  _auth_capture_token "$clean" && return 0
+  # `url=$(...)` in a PLAIN assignment takes the substitution's exit status,
+  # where `local url=$(...)` would take `local`'s — `url` is declared on the
+  # line above for exactly that reason. ccd states the same rule beside
+  # `_json_str`.
+  if [[ -z "$AUTH_URL" ]] && url="$(_auth_url_of "$clean")"; then
+    AUTH_URL="$url"; _auth_state url
+  fi
+  case "$clean" in
+    *'Paste code here'*|*'Enter the code'*) _auth_state waiting-code ;;
+  esac
+  _auth_user_code "$clean"
+  printf '%s\n' "$clean"
+}
+
+_auth_pump() {   # the one loop: the child's stream out, the operator's code in
+  local line rc pending='' shown=''
+  while :; do
+    line=''
+    IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    if (( rc == 0 )); then
+      _auth_line "$pending$line"; pending=''; shown=''
+    elif (( rc > 128 )); then
+      # A TIMEOUT, and this branch is the whole reason `read -t` is here: bash
+      # saves whatever arrived WITHOUT a newline into the variable, so
+      # `Paste code here if prompted > ` — measured to carry none — is visible
+      # here and nowhere else. `shown` keeps one prompt from re-firing every
+      # tick; a partial that later completes IS forwarded again with its full
+      # text, deliberately, because the alternative is holding back output the
+      # operator is waiting to see.
+      pending="$pending$line"
+      if [[ -n "$pending" && "$pending" != "$shown" ]]; then
+        _auth_line "$pending"; shown="$pending"
+      fi
+      # THE CODE FORWARD GOES HERE, one task later. Nothing reads fd 7 yet, and
+      # that is deliberate rather than an omission: the channel and its reader
+      # are two separable facts, and a reader shipped one task early would make
+      # that task's first test green before its mechanism existed.
+    else
+      # rc 1 = EOF: the child closed its stream.
+      [[ -n "$pending$line" && "$pending$line" != "$shown" ]] && _auth_line "$pending$line"
+      return 0
+    fi
+  done
+}
+
 # ── the three methods, and the two line-filters they share ────────────────
 # STUBS, each replaced in its own later task, and each here for a stated
 # reason rather than as scaffolding. Under `set -uo pipefail` with no `-e` an
@@ -206,7 +359,44 @@ _auth_rostered() {   # <id> -> 0 when the roster claims it
 # STDERR, once per line the pump reads, in a method whose own test asserts
 # stderr is empty. A stub is the difference between a staged file and a file
 # that lies about its output.
-_auth_login()        { _auth_die 'not-implemented: login'; }
+_auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
+  # THE UPSTREAM LAUNCHER WITH THE CONFIG DIR SET EXPLICITLY, which is what the
+  # spec asks for: "with CLAUDE_CONFIG_DIR=~/<suffix> … and
+  # CLAUDE_CODE_OAUTH_TOKEN unset". NOT the lane's own launcher: a generated
+  # wrapper re-sources its `secretsFile` inside the child (shared/wrapper.mjs),
+  # which puts back the token `env -u` just removed — so on a token-bearing
+  # lane the custody claim would hold only against a launcher nobody ships.
+  # `setup-token` takes the same shape for the mirror reason (a wrapper's
+  # export would overwrite ITS scratch dir); the rule both obey is one rule:
+  # run the upstream launcher, and set the dir this method wants.
+  local cfg rc
+  cfg="$(_ccrc_cfg_dir "$AUTH_ID")"
+  # `_ccrc_cfg_dir` has NO default arm (shared/generate.mjs), so an id it does
+  # not know echoes nothing rather than guessing a home.
+  [[ -n "$cfg" ]] || _auth_die "no config dir for $AUTH_ID in the roster"
+  [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
+  [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  mkdir -p "$cfg" || _auth_die "cannot create $cfg"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" \
+    env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$cfg" \
+      "$WRAPPER_DIR/$CCRC_UPSTREAM" auth login --claudeai \
+      <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  # 124 IS `_plat_timeout`'s own expiry code, and the ONE thing the callers
+  # branch on — a bounded call that expired is a different fact from one that
+  # failed, and collapsing them would tell an operator to retype a code into a
+  # process that is gone.
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the sign-in exited $rc"
+  [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
+  _auth_state done
+}
 _auth_setup_token()  { _auth_die 'not-implemented: setup-token'; }
 _auth_openai_login() { _auth_die 'not-implemented: openai-login'; }
 # `_auth_capture_token` returning 1 means "this line carried no token", which
