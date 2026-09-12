@@ -4109,3 +4109,88 @@ D-2608 and D-2615 between them. Saved as [[an-import-time-crash-is-a-false-red]]
 
 **Seven findings, seven times the plan was the defective party** — and three of the seven are the plan
 predicting its own mutation reds wrongly (inert / backwards / crashes first).
+
+---
+
+## 2026-09-12 13:01Z — Task 2 review: 2 of 3 upheld, 1 REFUTED, and two NEW findings underneath
+
+Mail 796. Three independent verifiers (opus) run over the worker's three findings, cruxes re-measured by
+me. **This is the first round where the worker's own review was wrong** — and refuting it found a bigger
+gap. D-2617..D-2620 issued (floor 2621); they do NOT map one-to-one onto the three entries.
+
+### Finding 1 — REFUTED as a finding. The remedy would have made it worse.
+
+The mechanical half is right: four absent/false call sites, all `JSON.parse` + `toEqual`, blind to
+whitespace and key order. The consequential half is not.
+
+**Byte identity is not the property that matters**, measured: `post` is a bare `JSON.stringify` with no
+replacer or space argument; the server consumes only the PARSED object; there is no `rawBody`, no
+`addContentTypeParser`, no Fastify schema, no body-keyed dedupe, no idempotency key, no request-body
+signature. Every consumer is a JSON parser — an older server cannot observe whitespace or key order.
+And the defect the prose names ("an older server reading an unexpected KEY") is exactly what `toEqual`
+fails on, already mutation-proven at plan :744.
+
+**`.toBe` would be actively wrong for `createSession`.** It becomes `({crossPool, ...rest}) => post(…, rest)`
+— `rest` is a REST-SPREAD, so key order is the CALLER's insertion order, which the api client does not
+own (`NewSessionSheet.tsx:154`, `StartProgramSheet.tsx:654`). A `.toBe` pins the TEST's literal order, so
+reordering either call site — a harmless refactor — changes production bytes with the test still GREEN.
+**False confidence is worse than an honest structural pin.**
+
+- **D-2617** — what IS wrong is the PROSE: "byte-identical" at :536, :545-549, :586, :697-698, :723-725
+  means "the same keys and values". This wave's own recurring class, a claim the assertion does not
+  support. Reword the prose; **do not weaken the assertions.**
+- **D-2618 (NEW, found while refuting)** — **`swap` has NO wire pin anywhere in the PWA suite.**
+  `pwa/test/api.test.ts` on main contains zero occurrences of "swap"; Task 2's tests are its first, and
+  they discard the URL and never assert `method` or `content-type`. A typo in `${sid(id)}/swap` or a
+  `post`→`postJson` slip is caught by **nothing in this repo**. Fixed by finishing the precedent the plan
+  itself cites at :548-549 and does not follow (`archive`'s shape) — and legitimate there, because
+  `swap`'s object literal lives in `api.ts` where the client owns it.
+
+### Finding 2 — UPHELD (D-2619), with the decisive argument the worker did not have
+
+`refusePool`'s 503 arm sends `{error:'pool-unreadable', state: v.state}` — one code, two states, `state`
+on the wire, ignored by `apiErrorText`. Two corrections, both strengthening:
+
+- **NOT a server defect.** Collapsing the DECISION is *mandated* — `ccd/ccd:1456-1458` voids its own
+  safety park if any decider splits the two states. The server deliberately preserved `state` so the
+  MESSAGE can differ. The defect is entirely PWA-side.
+- **This same plan already forbids this fold elsewhere.** §11 row 24 (:1089) pins DISTINCT aria-labels
+  for malformed vs unreadable on `PoolChip`; :1285-1287 argues why; :1547 makes merging them a required
+  RED; `PoolSheet` writes two sentences. **As prescribed, the chip reads "pool malformed" while a toast
+  from tapping that same project says "could not be read" — two ccrc surfaces contradicting each other
+  on one measured fact, on the same screen.** Internal inconsistency, not a judgement call.
+
+Fix follows the idiom `apiErrorText` already establishes: `stderr` is read from the body and
+short-circuits the static map, so a `state`-aware branch is not a new pattern.
+
+### Finding 3 — UPHELD (D-2620), and worse than reported
+
+Reachability confirmed end to end: `StartProgramSheet` → `api.createSession` → `POST /api/sessions` →
+`refusePool` (`server.ts:1990`) → 409. Its `createSession` prop is `{wrapper; project; workdir?}` — no
+pool parameter — and it renders `apiErrorText(err)` directly.
+
+**The worker's mechanism wording would have refuted itself.** "via global UNTAGGED projection" reads as
+though the ACCOUNT were untagged — and an untagged account is the one case that can NEVER mismatch
+(`poolrule.ts:44`, verbatim). The real mechanism: `/api/accounts`'s `projected` is computed with the POOL
+ARGUMENT `{state:'untagged'}` (`server.ts:1226`, its comment says "THE UNTAGGED FORECAST"), so the
+account it names may itself be pool-TAGGED and collide. Same conclusion, different reason.
+
+**It promises TWO absent controls, not one** — "pick an account the project's pool admits" is also false:
+the sheet has no account picker at all.
+
+**Scope ruled, three measured reasons:** the SPEC's own surfaces table omits StartProgramSheet (the gap
+is upstream, and the plan is faithful); adding the control means inventing an account chooser — a product
+decision, not one to take mid-wave; and `StartProgramSheet.tsx:258` pins the sheet at exactly two network
+calls. Make the sentence truthful; **do not touch the sheet.**
+
+### Reported, not taken
+
+`shared/poolrule.ts:29-31` says the verdict "CARRIES BOTH NAMES so a 409 body … can say which two pools
+disagreed", and the route ships them — but `API_ERROR_TEXT` is a static Record and `apiErrorText`
+discards the body, so **no flow ever tells the operator which two pools collided, on a wire built to tell
+them.** Same root cause as D-2619. Deliberately NOT folded in and NOT an expansion of the worker's scope:
+recorded as a `D-TBD` token pending a decision on where it lands.
+
+**Eight findings now. Seven upheld, one refuted — and refuting it produced D-2618, the largest coverage
+hole found this wave.** Worth recording: the review apparatus is good enough that its misses are
+productive, but "the worker's review said so" is not itself evidence.
