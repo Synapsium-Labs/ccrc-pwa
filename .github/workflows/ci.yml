@@ -256,14 +256,27 @@ jobs:
       - name: Probe
         working-directory: server
         run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts --reporter=verbose
-      # The helper's OWN suite, here as well as in `test-macos`, because it is
-      # the file D-2614 breaks and `test-macos` has twice been cut before
-      # reaching a verdict. ~40s, against a 55-minute leg that may never
-      # report — this is what makes a fix to the darwin arm verifiable in one
-      # cycle instead of none.
-      - name: The auth helper's own suite
+      # THE TWO PANE-BOUND DESCRIBES ONLY, and the narrowing is the point.
+      #
+      # This step began as the whole `ccd-account-auth.test.ts` file and was cut
+      # at 10 minutes, then again at 25 — not because the file is big (~40s on
+      # linux) but because D-2661 makes individual cases run to the fixture's
+      # 60_000 ms cap instead of their 6-to-25-second deadlines. Most of that
+      # cost is in describes that have nothing to do with D-2614.
+      #
+      # `setup-token` and `openai-login` are the two methods that go through
+      # `script(1)`, so they are the two D-2673 changes the shape of, and they
+      # are the whole question this leg exists to answer. Everything else about
+      # the helper is already answered on linux and by `test-macos` when it
+      # manages to finish.
+      #
+      # Measured on 52934a2e, the run this replaces: `the mint exited 1`
+      # appeared ZERO times, against NINE before the fix, with the setup-token
+      # describe demonstrably reached. That is what says D-2673 works; this
+      # narrowing is what lets a run say it without being cut first.
+      - name: The two pane-bound methods (what D-2673 changes)
         working-directory: server
-        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose
+        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'setup-token|openai-login'
 
   build-pwa:
     runs-on: ubuntu-latest
