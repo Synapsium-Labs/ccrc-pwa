@@ -4001,3 +4001,68 @@ is expected wear. D-2606 is a deviation *precisely because it is not that*.
 
 **Five findings, five times the plan was the defective party.** The posture set at D-2598 is holding and
 is now clearly the right one for this wave.
+
+---
+
+## 2026-09-12 11:15Z — Task 1 review round: D-2608, D-2609, D-2610. One is High and real.
+
+Mail 767. The worker's isolated Opus review found three, each Sonnet-verified; all three reproduced here
+at `origin/main` before ruling.
+
+### D-2610 (HIGH) — `projectPoolOf` reads `Object.prototype` for legal project names
+
+`pools.byProject[project] ?? { state: 'untagged' }` over a `JSON.parse`d wire. **Reproduced end to end.**
+Every name below is LEGAL under ccd's `_ws_project_valid` `^[A-Za-z0-9._-]+$`, and each yields a falsely
+refusing verdict naming a pool that does not exist:
+
+| project | verdict |
+|---|---|
+| `constructor` | `pool-mismatch`, projectPool **`'Object'`** |
+| `toString` / `valueOf` / `hasOwnProperty` / `isPrototypeOf` | `pool-mismatch`, projectPool = the method name |
+| `__proto__` | `pool-mismatch` with the `projectPool` key **absent** — a renderer prints `undefined` |
+
+**Ruled:** `Object.hasOwn(...)`. ES2023 is the PWA's target and `Object.hasOwn` is already used in
+`PasskeyNotice.tsx` and `spawnWords.ts` — idiomatic, not a new dependency. Both tests: an ABSENT
+collision name reads `untagged`, and an OWN tagged collision key still reads tagged (the second is what
+stops the fix becoming "collision names are always untagged").
+
+**Why it is a plan defect and not paranoia — the framing given to the worker.** The server's own reader
+is `read.tags.get(project)`, a **Map**, which has no prototype chain and is immune. The wire cannot carry
+a Map, so `poolsWire` flattens it with `Object.fromEntries` into a `Record` — and the flattening silently
+loses the own-vs-inherited distinction the Map gave for free. The PWA reader has to restore it. That is
+*an adapter may not narrow a distinction it received*, read in the other direction: the Record is a
+WIDER surface than the Map.
+
+**Blast radius measured, not assumed:** line 449 is the ONLY index of `byProject` in the whole plan;
+every other occurrence constructs a fixture. **Not shipped** — the server lane never had it.
+
+### D-2608 — the predicted red is BACKWARDS, not merely imprecise
+
+Ran the mutant: with the early return deleted, `poolSide` returns `'unknown'` for every account, the
+loop tests `=== 'crossing'`, so every wrapper falls into the `else` and `eligible` comes out as the FULL
+list — exactly what the test expects. Measured for all three inputs (null, unreadable, malformed):
+eligible = all four, crossing = `[]`, unknown = false. The plan's `expected [] to equal [ 'claude', … ]`
+is the opposite of what happens, and there is no `TypeError` either.
+
+**The part the worker did not have:** the early return's ONLY observable contribution is the `unknown`
+flag — the arrays are identical with and without it. The plan's prose reads as though the guard controls
+the arrays; it does not. Told them to record that, or the next reader will think the corrected red is
+weaker than the old one. It is not; it is the whole of the guard's effect.
+
+### D-2609 — `accountPool` accepts off-grammar pool strings
+
+`parseRoster` THROWS on any pool failing `POOL_NAME_RE` (`shared/roster.ts:535`), so the canonical wire
+cannot carry `''`; the exposure is a malformed payload or a stale same-origin cache. **In scope,
+narrowly**, and the composable option composes: `POOL_NAME_RE` is exported at `shared/roster.ts:285`,
+`shared/` is L0 and the PWA already bundles it (`pwa/src/lib/offline.ts` imports `HUES` from there). So
+`typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null` — the SAME constant, so `pool-name-parity`
+keeps covering it and `single-definition` finds nothing new.
+
+**Out of scope, confirmed so it is settled:** do not broaden server-side or offline-cache validation.
+**And the permissive direction is already argued** — folding off-grammar to `null` means untagged, which
+`shared/poolrule.ts`'s own docstring justifies for the account-this-side-cannot-see case. Told the worker
+to cite it rather than invent a fresh justification.
+
+**D-2608/2609/2610 issued** (floor 2611), mail 768, question 767 acked.
+
+**Six findings, six times the plan was the defective party.** Posture unchanged.
