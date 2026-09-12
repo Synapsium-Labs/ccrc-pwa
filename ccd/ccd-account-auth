@@ -550,8 +550,51 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   (( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'
   _auth_state done
 }
-_auth_openai_login() { _auth_die 'not-implemented: openai-login'; }
-_auth_user_code()     { :; }
+_auth_openai_login() {   # `<launcher> login` — somebody else's program, under a pty
+  # AN EXTERNAL LANE'S LAUNCHER IS NOT CCRC'S. `shared/wrapper.mjs` refuses to
+  # generate a wrapper for `external` outright, so `$WRAPPER_DIR/$id` here is a
+  # file a human wrote and this method only runs it. Its id and its launcher
+  # are the same name by construction. No config dir is minted, no secrets file
+  # is written, and the credential lands wherever that launcher puts it — which
+  # is why the card says "external launcher — ccrc does not manage its
+  # credential" rather than showing a custody line.
+  local rc argv=()
+  [[ -x "$WRAPPER_DIR/$AUTH_ID" ]] \
+    || _auth_die "launcher-absent: $WRAPPER_DIR/$AUTH_ID (declare the lane before logging in)"
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound login cannot run"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv "$WRAPPER_DIR/$AUTH_ID" login)
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
+    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the launcher's login exited $rc"
+  # NO CREDENTIAL ASSERTION HERE, unlike login and setup-token, and the absence
+  # is the point: ccrc does not know where this launcher keeps its credential
+  # and must not pretend to. The health probe is what measures whether the lane
+  # actually works.
+  _auth_state done
+}
+_auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
+  # The spec says out loud that this value is not a secret and is shown —
+  # which is what makes it the one thing besides the URL that may reach the
+  # status file.
+  #
+  # FIRST match only, and the guard is `-z` on the value rather than a
+  # once-flag: a device-code flow reprints its code on every "still waiting"
+  # line, and a launcher that truncates or re-renders it would otherwise
+  # overwrite the code the operator is in the middle of typing.
+  [[ -z "$AUTH_CODE" ]] || return 0
+  [[ "$1" =~ ([A-Z0-9]{4}-[A-Z0-9]{4}) ]] || return 0
+  AUTH_CODE="${BASH_REMATCH[1]}"
+  _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
+}
 
 _auth_main() {
   [[ $# -eq 2 ]] || die "usage: $SELF <id> <login|setup-token|openai-login>"

@@ -848,3 +848,85 @@ describe('the secrets-file name is agreed across three writers, or it is agreed 
       .toContain('`.cc-secrets/${id}-${secretTag}.env`');
   });
 });
+
+describe('ccd-account-auth — openai-login runs somebody else\'s program', () => {
+  const runOai = (id: string): { code: number; stdout: string; stderr: string } => {
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home, timeout: 60_000,
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '15',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+        { systemd: true, tmux: true }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [HELPER, id, 'openai-login'], opts), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  /** TWO code lines, from the first version of this fixture rather than added
+   *  later by a mutation step. A device-code flow reprints its code on every
+   *  "still waiting…" line, so a reader that took the LAST match would show
+   *  the operator whatever the launcher happened to say most recently — and a
+   *  one-code fixture cannot tell the two readers apart. `orchard-api` is the
+   *  blessed fixture hostname; a real device-authorization host in tracked
+   *  text is what `topology-clean.test.ts` exists to refuse. */
+  const OAI_REPLAY =
+    '#!/usr/bin/env bash\n'
+    + 'printf \'%s\\n\' "$*" > "$HOME/seen-argv"\n'
+    + 'echo "To sign in, open https://orchard-api/device and enter the code."\n'
+    + 'echo "Your code: WXYZ-4321"\n'
+    + 'echo "Waiting for approval. Your code: MNOP-0000"\n'
+    + 'mkdir -p "$HOME/.launcher" && printf secret > "$HOME/.launcher/creds"\n'
+    + 'echo "Signed in."\nexit 0\n';
+
+  it('runs `<launcher> login` — the launcher\'s own program, not Claude Code', () => {
+    // `gpt` is the roster's one external account and it has NO stub wrapper
+    // out of the harness — `makeCcdHarness` plants stubs only for the
+    // home-able ids, and `gpt` is not one — so this test plants the launcher
+    // it is about to run.
+    plantLauncher('gpt', OAI_REPLAY);
+    const r = runOai('gpt');
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-argv'), 'utf8').trim()).toBe('login');
+    expect(status('gpt')).toMatchObject({ state: 'done' });
+  });
+
+  it('publishes the FIRST device code, which the spec says is not a secret and is shown', () => {
+    plantLauncher('gpt', OAI_REPLAY);
+    const r = runOai('gpt');
+    // The first, not the last: the fixture reprints a DIFFERENT code on its
+    // "waiting" line, which is what a launcher that truncates or re-renders
+    // does, and the operator must not be shown a code that supersedes the one
+    // they are already typing.
+    expect(status('gpt')['userCode']).toBe('WXYZ-4321');
+    expect(status('gpt')['url']).toBe('https://orchard-api/device');
+    expect(r.stdout).toContain('Your code: WXYZ-4321');
+  });
+
+  it('holds nothing: the credential is the launcher\'s file and ccrc writes no secrets', () => {
+    plantLauncher('gpt', OAI_REPLAY);
+    runOai('gpt');
+    expect(fs.existsSync(path.join(h.home, '.launcher', 'creds'))).toBe(true);
+    expect(fs.existsSync(path.join(h.home, '.cc-secrets'))).toBe(false);
+    // …and no config dir was minted for it either. An external lane's config
+    // dir is not ccrc's to create.
+    expect(fs.existsSync(path.join(h.home, '.ccrc', 'auth-scratch', 'gpt'))).toBe(false);
+  });
+
+  it('still filters a token line, even from a launcher nobody here wrote', () => {
+    plantLauncher('gpt',
+      `#!/usr/bin/env bash\necho "export CLAUDE_CODE_OAUTH_TOKEN=${CANARY_TOKEN}"\nexit 0\n`);
+    const r = runOai('gpt');
+    expect(r.stdout).not.toContain(CANARY_TOKEN);
+    expect(r.stdout).toContain('[token captured to ~/.cc-secrets/gpt-oauth.env]');
+  });
+
+  it('refuses when the launcher is not there — the declare step has not run', () => {
+    const r = runOai('gpt');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('launcher-absent');
+    expect(status('gpt')).toMatchObject({ state: 'failed' });
+  });
+});
