@@ -165,7 +165,16 @@ export function MailScreen({
     if (g) g.rows.push(ev);
     else groups.set(key, { head, rows: [ev] });
   }
-  const shown = [...groups].filter(([key]) => filter === null || key === filter);
+  // A filter pinned to a group KEY that later vanishes — the runs read
+  // landing mid-view turns `run:5` into `program:build9b` for the very same
+  // record — must not blank the screen (D-2584): `shown` would filter to
+  // nothing, and the empty-state branch below reads `rows.length`, never
+  // `shown.length`, so nothing would even say why. Falling back to All here,
+  // rather than giving "no match" its own line, is the answer that needs no
+  // reader action: the KEY changed under a filter that already correctly
+  // named this record — the record never left the group it was in.
+  const activeFilter = filter !== null && groups.has(filter) ? filter : null;
+  const shown = [...groups].filter(([key]) => activeFilter === null || key === activeFilter);
 
   return (
     <div className="mail-screen">
@@ -195,8 +204,8 @@ export function MailScreen({
           <button
             type="button"
             className="mail-chip"
-            data-on={filter === null || undefined}
-            aria-pressed={filter === null}
+            data-on={activeFilter === null || undefined}
+            aria-pressed={activeFilter === null}
             onClick={() => setFilter(null)}
           >
             All
@@ -206,8 +215,8 @@ export function MailScreen({
               key={key}
               type="button"
               className="mail-chip"
-              data-on={filter === key || undefined}
-              aria-pressed={filter === key}
+              data-on={activeFilter === key || undefined}
+              aria-pressed={activeFilter === key}
               onClick={() => setFilter(key)}
             >
               {g.head}

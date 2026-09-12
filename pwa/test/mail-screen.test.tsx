@@ -324,11 +324,13 @@ describe('the feed, grouped by programme', () => {
     // group ORDER hostage to `Date.now()` monotonicity and `mergeBySeq`'s
     // seq tiebreak rather than to anything this case states. Stated here
     // instead: wave 2 is the MORE RECENT record, so under this screen's own
-    // "newest first on screen; oldest-first in the store" convention
-    // (`MailScreen.tsx:108`, `rows = [...feed].reverse()`, backed by
-    // `mergeBySeq`'s ascending sort in `lib/feed.ts`) its programme heads the
-    // list — group order follows first-appearance in that same newest-first
-    // order, never the order the events were constructed in.
+    // "newest first on screen; oldest-first in the store" convention — the
+    // comment on `MailScreen.tsx`'s `rows = [...feed].reverse()` line, cited
+    // by that text rather than a line number so a later move cannot
+    // falsify this the way D-2586 found (backed by `mergeBySeq`'s ascending
+    // sort in `lib/feed.ts`) — its programme heads the list — group order
+    // follows first-appearance in that same newest-first order, never the
+    // order the events were constructed in.
     const now = Date.now();
     mount([e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
            e({ seq: 2, runId: 6, at: now - 60_000, title: 'wave 2 dispatched' })]);
@@ -347,9 +349,9 @@ describe('the feed, grouped by programme', () => {
     // string.
     //
     // Explicit `at`, same reason as above (D-2583): the ask is the MORE
-    // RECENT record, so under "newest first on screen" (`MailScreen.tsx:108`)
-    // its header comes first — the order below states that rather than
-    // leaning on construction order or the clock.
+    // RECENT record, so under `MailScreen.tsx`'s own "newest first on
+    // screen" comment its header comes first — the order below states that
+    // rather than leaning on construction order or the clock.
     const now = Date.now();
     mount([e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
            e({ seq: 2, runId: null, at: now - 60_000, title: 'an ask' })]);
@@ -369,10 +371,33 @@ describe('the feed, grouped by programme', () => {
   });
 
   it('keeps rendering every record when the runs read fails — grouping is a nicety, the feed is not', async () => {
-    mount([e({ seq: 1, runId: 5, title: 'wave 1 dispatched' })],
-      () => Promise.reject(new Error('offline')));
+    // D-2587: the previous fixture mounted exactly ONE record, so "every
+    // record" was asserted over a population of one — a mutation that
+    // dropped every record but the first on a failed read would have stayed
+    // green. Widened to three, with explicit `at` values 60 seconds apart
+    // (D-2583's own lesson: state the order, never lean on the clock): an
+    // ask (no runId, the NEWEST), a run this read might otherwise have
+    // resolved (runId 6), and an older one (runId 5) — measured newest-first
+    // heads below.
+    const now = Date.now();
+    mount(
+      [
+        e({ seq: 1, runId: 5, at: now - 180_000, title: 'wave 1 dispatched' }),
+        e({ seq: 2, runId: 6, at: now - 120_000, title: 'wave 2 dispatched' }),
+        e({ seq: 3, runId: null, at: now - 60_000, title: 'an ask' }),
+      ],
+      () => Promise.reject(new Error('offline')),
+    );
     expect(await screen.findByText('wave 1 dispatched')).toBeInTheDocument();
-    expect(screen.getByText('run 5 — programme not measured')).toBeInTheDocument();
+    expect(screen.getByText('wave 2 dispatched')).toBeInTheDocument();
+    expect(screen.getByText('an ask')).toBeInTheDocument();
+    await waitFor(() => {
+      expect([...document.querySelectorAll('.mail-group-head')].map((h) => h.textContent)).toEqual([
+        'Not part of a programme',
+        'run 6 — programme not measured',
+        'run 5 — programme not measured',
+      ]);
+    });
   });
 
   it('filters to one programme on its chip, and restores on All', async () => {
@@ -385,11 +410,83 @@ describe('the feed, grouped by programme', () => {
     expect(screen.getByText('wave 2 dispatched')).toBeInTheDocument();
   });
 
+  it('a filter pinned to a group key that later vanishes never blanks the screen (D-2584)', async () => {
+    // The runs read can land AFTER a chip is tapped: the SAME record's group
+    // key moves from `run:5` (unresolved) to `program:build9b` (resolved)
+    // out from under an already-set filter. `shown` would filter to nothing,
+    // and the empty-state branch above reads `rows.length`, never
+    // `shown.length`, so without `activeFilter`'s fallback the screen would
+    // go blank with no message at all — "there is no mail" and "nothing
+    // matches this filter" collapsing to one silent render.
+    let resolveRuns!: (v: { runs: RunSummary[] }) => void;
+    const deferred = new Promise<{ runs: RunSummary[] }>((resolve) => { resolveRuns = resolve; });
+    const now = Date.now();
+    const store = makeStore();
+    render(
+      <MailScreen
+        store={store}
+        loadFeed={async () => ({
+          events: [
+            e({ seq: 1, runId: 5, at: now - 120_000, title: 'wave 1 dispatched' }),
+            e({ seq: 2, runId: null, at: now - 60_000, title: 'an ask' }),
+          ],
+        })}
+        loadRuns={() => deferred}
+      />,
+    );
+    // Before the runs read resolves, runId 5's key is `run:5` — filter on it.
+    fireEvent.click(await screen.findByRole('button', { name: 'run 5 — programme not measured' }));
+    expect(screen.getByText('wave 1 dispatched')).toBeInTheDocument();
+    expect(screen.queryByText('an ask')).toBeNull();
+    // The runs read lands: runId 5's key changes from `run:5` to
+    // `program:build9b`. The filter, still pinned to the now-vanished
+    // `run:5` key, must fall back to All rather than leaving the screen
+    // blank.
+    await act(async () => { resolveRuns({ runs: RUNS }); });
+    await waitFor(() => {
+      expect(screen.getByText('wave 1 dispatched')).toBeInTheDocument();
+    });
+    expect(screen.getByText('an ask')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('reads the runs loader exactly once per mount', async () => {
     const spy = vi.fn(loadRuns);
     const store = makeStore();
     render(<MailScreen store={store} loadFeed={async () => ({ events: [e()] })} loadRuns={spy} />);
     await screen.findByText('Not part of a programme');
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('protects a record that reached the renderer without going through revival (D-2585)', async () => {
+    // `eventRunId`'s own docstring (`lib/feed.ts`) states its purpose as
+    // "belt to that braces for a row that reached the renderer without
+    // proving it went through revival" — every OTHER case in this describe
+    // block mounts via `loadFeed`, which always revives
+    // (`reviveNotifyEvents` -> `reviveNotifyEvent`), so none of them can
+    // tell `eventRunId(ev)` apart from a bare `ev.runId` read (see the
+    // Step-5 mutation-3 finding in the task report). This case puts a row
+    // into the store DIRECTLY — the idiom the older
+    // `describe('the mail feed', ...)` block above already uses
+    // (`act(() => { store.setState({ feed: [...] }); })`) — bypassing
+    // revival on purpose.
+    const store = makeStore();
+    render(<MailScreen store={store} loadFeed={async () => ({ events: [] })} loadRuns={loadRuns} />);
+    // Wait for the empty state FIRST: the durable read's own (empty) resolve
+    // must land before this case writes `feed` itself, so nothing else can
+    // clobber it afterward.
+    await screen.findByText('Nothing yet.');
+    act(() => {
+      // Omit the key entirely, not merely set it to `null` — a real
+      // `NotifyEvent` object literal cannot omit `runId` (`number | null`,
+      // not optional) without failing `tsc`, so the `as unknown as
+      // NotifyEvent` cast is LOAD-BEARING: it is what lets this case build
+      // exactly the shape revival forbids and `eventRunId`'s fallback
+      // exists for, measuring the RUNTIME guard rather than the type
+      // checker.
+      const { runId: _bypassed, ...withoutRunId } = e();
+      store.setState({ feed: [withoutRunId as unknown as NotifyEvent] });
+    });
+    expect(await screen.findByText('Not part of a programme')).toBeInTheDocument();
   });
 });

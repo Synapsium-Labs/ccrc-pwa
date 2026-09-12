@@ -2020,8 +2020,10 @@ button.sess-held {
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
    `--ink-primary` for the one that is on — so nothing here is read out of
-   colour: the pressed chip carries `aria-pressed` and `data-on`, and the header
-   above each list says in words what the chip selected. */
+   colour: the pressed chip carries `aria-pressed` and `data-on`, and — for
+   every chip but All, which shows every header at once — the one visible
+   group's own header repeats its label in words (D-2586: the claim used to
+   say this held for every chip, which is false of All). */
 .mail-filter {
   display: flex;
   flex-wrap: wrap;
