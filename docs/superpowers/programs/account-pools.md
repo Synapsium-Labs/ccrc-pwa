@@ -4552,3 +4552,75 @@ next") to measurement naming those send sites; and record — NOT build, it is s
 
 **D-2634/D-2635 issued** (floor 2636), mail 839, question 833 acked. Task 5's pair (mail 834) is with
 an adversarial panel; told the worker not to wait on it to land D-2634.
+
+## 2026-09-12 15:50Z — D-2636..D-2645: an adversarial panel refuted BOTH of my draft rulings
+
+Worker mails 833/834 carried four findings. I drafted rulings on the Task 5 pair and — because one
+REVERSED the reviewer's remedy and the other EXTENDED it with a finding of my own — put both to an
+adversarial panel before sending: three opus skeptics each told to refute one claim, plus a
+completeness pass, on a DETACHED disposable worktree in my own scratchpad (never a session's
+checkout). **Both of my claims were refuted, with measurements. Ten numbers issued, D-2636..D-2645.**
+
+**D-2636 — the pool-blind projection. Defect UPHELD; my three grounds were each FALSE.**
+- `poolLabelList` does not apply the pool rule alone — `pools.ts:125` conjoins `a.homeAble` with it.
+  **Second time I have mis-stated this one function**; the first is already in memory.
+- "Not at ceiling" is deliberately not part of placeability (`limits.ts:197-199`). I invented a bar
+  the incumbent `projected` does not clear either — a double standard against the replacement.
+- The `${placeableNames} all disabled` copy I cited as proof lives only in the `projected === null`
+  arm, which the server reaches exactly when every home-able lane is disabled. It was evidence
+  AGAINST my premise.
+
+**And the remedy was already shipped, which neither the reviewer nor I looked for.** `ProjectPlacement`
+(`shared/api.ts:3146-3149`) is `projected{wrapper,score} | none{pool} | unmeasurable` — the three-state
+discipline sharpened; `projectPlacement` (`limits.ts:273-280`) composes the projection WITH the
+project's pool; `server.ts:1921-1923` ships it on every `ProjectRow`; the client types it already; and
+`server/test/projects-route-placement.test.ts` pins the reviewer's exact case 8/8 green. It carries the
+named account's OWN score, so my "transplanted headroom" objection was the argument FOR a named-account
+fix. **Ruled: render from `placement`, never recompute on the client** (`RosterWire` withholds
+`telemetry` by design and `useProjectedHome` forbids a third implementation). The one real cost is a
+per-project data path into `FleetScreen`; told the worker to MEASURE the three options rather than let
+me guess — a scope ruling is a claim about cost.
+
+**D-2637/D-2638 — the tap target. Defect UPHELD; both the reviewer and I stated it wrongly.** It is
+**22.25px, not 24**: `--leading-tight` is in the formula but a button's computed `line-height` is
+`normal`, so the box is 12px — under SC 2.5.8's floor that `fleet.css:1347` itself invokes. My
+horizontal claim was wrong: the `::before` is a generated child with no `pointer-events`, so the hit
+region is the UNION and measures `max(visibleW, 44)` everywhere. The clamp is still worth making, but
+for the end-column vertical gap (12.75px vs 23.25px), not a narrowed width — **a finding that names the
+wrong axis gets closed as not-reproducible.** And wide chips are the DEFAULT: "no pool" 46.22,
+"pool malformed" 92.42, "pool unreadable" 99.03 — no long pool name needed. The guard is weaker than
+either of us said: `toContain('var(--tap-min)')` stays green with the token on ZERO axes (60/60).
+
+**D-2641 — the sequencing finding that reorders the work.** `button.proj-card-pool` does not render in
+the shipped app at all: `PoolChip` takes the span branch when `onTap === undefined`, and **nobody
+passes `onPool`** — `FleetScreen.tsx:472` passes 14 props without it, and the plan wires it in **Task
+6**. The overlay we argued about is dead CSS that goes live the moment Task 6 lands. **Fix it in that
+commit or the defect ships live in the commit that makes the button reachable.**
+
+**D-2640 — the contrast gate never measured this wave's colours, while three artefacts say it did.**
+Ran `audit()` myself: **258 uncovered, 346 measured, all three new colour rules in `uncovered`, zero in
+`measured`** — bare class selectors, so no ground is recovered (`hosts.size === 0 → skipped`, the
+failure `fleet-css.test.ts:855` already warns about). `plan:1652` asserts the opposite. **The colours
+are FINE** — measured what the gate would have said: `--ink-tertiary` on `--bg-surface` 5.77/5.70,
+`--status-attention-text` 10.09/5.92, all clearing 4.5. **So the defect is three artefacts claiming a
+measurement that never happened, not a contrast failure.** D-2631's family, one level deeper: there I
+refused a false registration to green the gate; here the gate skips in silence while the plan says it
+fired.
+
+**D-2642 — D-2620 was decided on a false premise, and it was mine.** I ruled "do not touch the sheet"
+because "the only fix is an account chooser". `StartProgramSheet` already loads `api.projects`, whose
+rows already carry `placement`. No chooser, no change to its two-call flow. Recorded as SUPERSEDED
+rather than edited — the reasoning is the record.
+
+**D-2639/D-2643/D-2644/D-2645** — the same substring anti-pattern leaves three other overlays
+unguarded (mutating two to `inset:0` → 60/60 green; pre-existing, recorded not fixed);
+`project-card.test.tsx` never crosses a truthy `projected` with a `pools` prop, so the suite **could
+not** have caught D-2636; `.proj-card-pool[data-dim] { cursor: default }` is inert (120/120 green when
+flipped to `pointer`) though D-2624's actual fix is untouched; and the static `pool-mismatch` sentence
+still promises a crossing flow with **zero production callers** — the exact false-promise class D-2620
+rewrote the other sentence to remove.
+
+**D-2636..D-2645 issued** (floor 2646), mails 846 and 847, questions 833/834 acked. Review worktree
+removed.
+
+**Two of my own rulings refuted in one day, both by measurement, both on facts I could have checked.**
