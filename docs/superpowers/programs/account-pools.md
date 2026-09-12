@@ -3906,3 +3906,47 @@ body as diff residue — flagged by them rather than quietly fixed, which is the
 self-contradictory (D-2591), once prescribing an inert mutation with a correct prediction attached
 (D-2597). Worth noting for the wave: this plan's Task 1 has been wrong twice in its own verification
 apparatus, so the remaining mutation rows deserve the same skepticism rather than the benefit of the doubt.
+
+---
+
+## 2026-09-12 10:26Z — D-2598: a cardinal that does not survive counting (third time on Task 1)
+
+Mail 743, worker's third finding. Plan line 498 says *"Expected: PASS, 22 tests"*; the block it points
+at holds **24**.
+
+**Counted independently before reading the worker's arithmetic**, and cross-checked two further ways —
+a hand count of a hand count is not a measurement:
+
+| check | result |
+|---|---|
+| per-describe: 4 + 6 + 5 + 4 + 2 + 3 | **24** |
+| `grep -cE '^\s*it\('` over the exact fence (124–299) | **24** |
+| `grep -cE '^describe\('` | 6 |
+| `grep -c 'it.each'` | **0** — so `it(` calls equal TESTS; no row-multiplying table |
+
+**Ruled: write 24, but DERIVE it** — this program has already ruled on this exact shape and the ruling
+binds us. **D-2475** (ccd-queue plan) is the same defect: a headline asserting "twelve guard sites" over
+a list enumerating ten mandatory plus conditional groups. *A cardinal in a plan is a claim about a list,
+and it goes stale the moment the list is edited.* I resolved a merge conflict in favour of that very
+correction this morning — main's copy still asserted twelve — so leaving a bare `24` here would
+re-commit the defect we just spent a number correcting.
+
+The number is **kept**, not deleted, because a bare "expected PASS" would not catch the failure mode the
+step exists for — a block copied INCOMPLETELY. It is the *provenance* that was missing: the step must
+say the count is derived from the block above, tell the next editor to re-derive it, and warn that
+`it.each` rows multiply, which is the one way the derivation itself breaks.
+
+Noted to the worker that the D-2591 fix does **not** move the count: giving the empty-pool assertion its
+own fully tagged roster changes a FIXTURE, not the number of `it(` calls.
+
+**D-2598 issued** (floor 2599), mail 745, finding 743 acked. To be defined naming D-2475 as precedent,
+not as a new rule.
+
+### Standing posture for this wave, as of now
+
+**Three findings, three times the plan was the defective party** — self-contradictory (D-2591), an inert
+mutation carrying a correct prediction (D-2597), a cardinal that does not survive counting (D-2598).
+Task 1's verification apparatus has now been wrong three times in three inspections. The worker is
+instructed to treat the remaining steps' numbers and expected-red strings as **claims to measure, not
+instructions to follow**. That is the standing posture for the rest of wave 4, not a one-off — and it is
+the opposite of the usual default, so it is written here rather than left as a mood.
