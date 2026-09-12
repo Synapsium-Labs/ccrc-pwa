@@ -102,6 +102,60 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
   });
 
+  it('clears a plain selection that becomes crossing after the roster changes', async () => {
+    const projects = [
+      proj('demo', { state: 'tagged', name: 'pool-a' }),
+      proj('quiet-basin', { state: 'tagged', name: 'pool-b' }),
+    ];
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByRole('button', { name: /^Start demo/ })).toBeEnabled();
+
+    act(() => { store.setState({ roster: pooled({ claude: 'pool-b', claude2: 'pool-b' }) }); });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled());
+    expect(screen.queryByText('demo')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
+    expect(screen.getByText('demo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+
+  it('preserves a plain selection when an unrelated roster render leaves it eligible', async () => {
+    const projects = [proj('demo', { state: 'tagged', name: 'pool-a' })];
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByText('demo'));
+
+    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-corp': 'pool-b' }) }); });
+
+    expect(await screen.findByRole('button', { name: /^Start demo/ })).toBeEnabled();
+  });
+
+  it('preserves a deliberately disclosed crossing selection while it remains crossing', async () => {
+    const projects = [proj('quiet-basin', { state: 'tagged', name: 'pool-b' })];
+    const roster = pooled(POOLS);
+    const store = storeWith(roster);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={store} />);
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'show other pools (1)' }));
+    fireEvent.click(screen.getByText('quiet-basin'));
+
+    act(() => { store.setState({ roster: pooled({ ...POOLS, 'claude-corp': 'pool-a' }) }); });
+
+    expect(await screen.findByRole('button', { name: /^Start quiet-basin/ })).toBeEnabled();
+  });
+
   it('still says nothing matched when search empties both lists', async () => {
     await openAtStepTwo([
       proj('demo', { state: 'tagged', name: 'pool-a' }),

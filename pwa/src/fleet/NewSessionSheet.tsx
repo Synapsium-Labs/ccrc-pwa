@@ -6,7 +6,7 @@
 // team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
@@ -69,6 +69,10 @@ export function NewSessionSheet({
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
   const [project, setProject] = useState<ProjectRow | null>(null);
+  // Classification at the deliberate pick, not at the current render. A later
+  // eligible -> crossing transition must withdraw the selection; a project
+  // picked from the disclosed crossing side remains a deliberate crossing.
+  const selectedCrossingRef = useRef<boolean | null>(null);
   const [query, setQuery] = useState('');
   const [showOther, setShowOther] = useState(false);
   const [list, setList] = useState<ProjectRow[] | null>(null); // null = loading
@@ -116,6 +120,7 @@ export function NewSessionSheet({
     if (open) return;
     setWrapper(null);
     setProject(null);
+    selectedCrossingRef.current = null;
     setQuery('');
     setShowOther(false);
     setStarting(false);
@@ -150,6 +155,18 @@ export function NewSessionSheet({
     poolSide(wrapperPool, candidate.pool ?? null) === 'crossing';
   const inPool = matching.filter((candidate) => !isCrossing(candidate));
   const otherPool = matching.filter(isCrossing);
+
+  useEffect(() => {
+    if (project !== null && selectedCrossingRef.current === false && isCrossing(project)) {
+      setProject(null);
+      selectedCrossingRef.current = null;
+    }
+  }, [project, wrapperPool]);
+
+  const pickProject = (candidate: ProjectRow): void => {
+    selectedCrossingRef.current = isCrossing(candidate);
+    setProject(candidate);
+  };
 
   // THE SAME RULE THE SWAP PICKER ASKS, AND THAT IS A DECISION, NOT A SHARED
   // HELPER'S SIDE EFFECT (D-1978). The two surfaces were re-examined separately, because
@@ -228,6 +245,7 @@ export function NewSessionSheet({
             onClick={() => {
               setWrapper(null);
               setProject(null);
+              selectedCrossingRef.current = null;
               setShowOther(false);
             }}
           >
@@ -255,7 +273,7 @@ export function NewSessionSheet({
                   row={candidate}
                   selected={candidate.workdir === project?.workdir}
                   pool={null}
-                  onPick={setProject}
+                  onPick={pickProject}
                 />
               ))}
               {otherPool.length > 0 && (
@@ -274,7 +292,7 @@ export function NewSessionSheet({
                       row={candidate}
                       selected={candidate.workdir === project?.workdir}
                       pool={candidate.pool?.state === 'tagged' ? candidate.pool.name : null}
-                      onPick={setProject}
+                      onPick={pickProject}
                     />
                   ))}
                 </>
