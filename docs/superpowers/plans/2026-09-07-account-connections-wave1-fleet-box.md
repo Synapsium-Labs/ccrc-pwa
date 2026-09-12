@@ -19014,3 +19014,48 @@ with `waiting-code was never published` about a helper that had published it.
 **The fix went in the code, not the test.** `_auth_forward_code` now runs at the top of the timeout
 branch, so a whole tick separates the ask from the answer. Recorded as argued-green rather than pinned:
 the mutant's signal is probabilistic, and a test that reds it only sometimes is not a mechanism.
+
+### D-2571 — the CR strip is not measured where the plan says it is, and the plan says to stop if it is not
+
+Task 54's fourth mutation replaces `clean="${raw%$'\r'}"` with `clean="$raw"` and predicts RED on
+`captures the token to a 0600 file`, with the written secret carrying a trailing CR. The step then adds,
+correctly, that **if the red does not appear the guard has no mechanism and that is a finding**.
+
+Measured: the mutation is **GREEN** on the secret file. The cause is one line further down its own
+function — `_auth_capture_token` does `tok="${tok%%[[:space:]]*}"`, and **CR is a member of
+`[[:space:]]`**. The token is trimmed at the carriage return whether or not the line was stripped, so
+the secret is byte-identical either way. The same is true of the URL: `_auth_url_of` trims on
+`[[:space:]]` too. Both places the plan expects the CR to bite already defend themselves.
+
+Where the strip actually earns its place is the **transcript**. Every OTHER line the child writes under
+a pty is forwarded verbatim by `printf '%s\n' "$clean"`, so without the strip each one reaches tmux
+scrollback, the terminal drawer, `Dialog.raw` and the push payload with a stray CR inside it. Pinned
+there instead: `expect(r.stdout).not.toContain('\r')` on a `setup-token` run, with a second assertion
+that a known non-token line is present so the first cannot pass by an empty transcript. The mutation is
+now red.
+
+Kept rather than deleted, and the reason is worth stating: the guard is redundant for the two values
+that matter most and load-bearing for everything else, which is the opposite of the plan's reading and
+the opposite of "dead code".
+
+### D-2572 — three writers derive the same secrets-file name and nothing measured that they agree
+
+Task 54's header argues at length that `~/.cc-secrets/<id>-oauth.env` is safe to CONSTRUCT in this
+helper — which reads neither `~/.ccrc/accounts.json` nor any `secretsFile` field — because two other
+writers derive the same name, and ends: *"If a later task changes the naming rule, it changes it in
+three places or it changes it in none."*
+
+Nothing enforced that. Measured, the three are:
+
+- `ccd/ccd-account-auth`: `mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env"`
+- `ccd/ccrc`: `[ "$2" = CLAUDE_CODE_OAUTH_TOKEN ] && ACCT_SECRET_TAG=oauth`
+- `deploy/account-op.mjs`: `` secretsFile: … `.cc-secrets/${id}-${secretTag}.env` ``
+
+They do agree today. The failure mode if they stop is specific and quiet: a live token lands in a file
+the lane's roster entry does not name, `ccrc account credential` reports the lane managed, the wrapper
+sources a file that is not there, and the lane starts unauthenticated with its credential sitting on
+disk one name away.
+
+Pinned by `the mint, the tag and the template all spell the same oauth lane`, three source assertions in
+one case, each naming what must move with it. Measured: renaming the destination in the helper alone
+reds four cases, one of them this one.

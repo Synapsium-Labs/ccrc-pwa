@@ -290,6 +290,69 @@ _auth_close_pipes() {
 }
 
 # ── the pump ──────────────────────────────────────────────────────────────
+# ── the token filter ──────────────────────────────────────────────────────
+# THE ONLY PLACE A CREDENTIAL IS EVER SEEN, and it never leaves this function.
+# `_auth_line` calls it FIRST, before any branch that could print, so no later
+# edit can put a token on a stream by accident: a line that carried one is
+# consumed here and the caller is told to stop.
+_auth_write_secret() {   # <token> — 0600, tmp + rename, and nothing is echoed
+  local tok="$1" tmp
+  mkdir -p "$SECRETS_DIR" || return 1
+  chmod 700 "$SECRETS_DIR" || return 1
+  tmp="$SECRETS_DIR/.$AUTH_ID-oauth.env.$$.tmp"
+  ( umask 077; printf 'export CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$tok" > "$tmp" ) \
+    || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+}
+
+# TWO SPELLINGS, deliberately. `setup-token` prints the export line, and
+# matching only that would let a version that changes its wording put a live
+# token into tmux scrollback, the terminal drawer, `Dialog.raw` and the push
+# payload — every surface the pane feeds. The SHAPE is the backstop.
+_auth_capture_token() {   # <clean line> -> 0 when the line carried a token (captured and substituted)
+  local line="$1" tok=''
+  if [[ "$line" == *"CLAUDE_CODE_OAUTH_TOKEN="* ]]; then
+    tok="${line#*CLAUDE_CODE_OAUTH_TOKEN=}"
+  elif [[ "$line" =~ (sk-ant-oat[0-9]{2}-[A-Za-z0-9_-]{16,}) ]]; then
+    tok="${BASH_REMATCH[1]}"
+  else
+    return 1
+  fi
+  tok="${tok%%[[:space:]]*}"
+  tok="${tok%\"}"; tok="${tok#\"}"
+  tok="${tok%\'}"; tok="${tok#\'}"
+  [[ -n "$tok" ]] || return 1
+  _auth_write_secret "$tok" || _auth_die "could not write $SECRETS_DIR/$AUTH_ID-oauth.env"
+  AUTH_SECRET_WRITTEN=1
+  printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  return 0
+}
+
+# ── script(1): two userlands, two argument orders ─────────────────────────
+# The tree's own platform idiom (CCD_OS) rather than a refusal.
+# `script -qfc "<cmd>" /dev/null` is util-linux; BSD's is
+# `script -q /dev/null <cmd> <args…>` — the typescript file comes FIRST and the
+# command is positional. THE BSD ARM IS UNVERIFIED FROM THIS BOX (decision 9):
+# it ships as a branch with an argv-shape test on both arms, and if it is wrong
+# on a real Mac this method answers `pane-unsupported-here` there while login
+# and paste are unaffected.
+_auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE TOKEN PER LINE
+  local joined
+  # `%q`, not `%s`, and it is load-bearing rather than tidy: the util-linux arm
+  # takes ONE `-c` STRING, which `script` hands to a shell — so a path with a
+  # space in it (a HOME under "/Users/Jane Doe", which is an ordinary macOS
+  # home) would be re-split into two arguments and the mint would run the
+  # wrong program. `%q` is bash's own quoter and leaves ordinary tokens
+  # untouched, so the common case reads exactly as it did.
+  printf -v joined '%q ' "$@"; joined="${joined% }"
+  if [ "$CCD_OS" = darwin ]; then
+    printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
+  else
+    printf '%s\n' "$CCRC_AUTH_SCRIPT" -qfc "$joined" /dev/null
+  fi
+}
+
 _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never on stdout
   # ONLY while the child has actually asked. Forwarding earlier would put a
   # line into a stdin the child is not reading yet, and the code is single-use.
@@ -449,11 +512,45 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
   _auth_state done
 }
-_auth_setup_token()  { _auth_die 'not-implemented: setup-token'; }
+_auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a pty
+  local scratch rc argv=()
+  # THE UPSTREAM LAUNCHER, not the lane's, and the same rule `login` obeys: a
+  # generated wrapper EXPORTS CLAUDE_CONFIG_DIR="$HOME/<suffix>"
+  # (shared/wrapper.mjs), which here would overwrite the scratch dir this
+  # method exists to use. Run the upstream launcher; name the dir you want.
+  [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
+  [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  # BEFORE the pipes, so a box that cannot run this method leaves no FIFOs
+  # behind for the next run to trip over.
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound mint cannot run (use --method login or paste)"
+  # A THROWAWAY dir: setup-token stores nothing and needs no account state, and
+  # a scratch dir carries no settings.json — so no ccrc hook can fire from this
+  # pane.
+  scratch="$SCRATCH_ROOT/$AUTH_ID"
+  mkdir -p "$scratch" || _auth_die "cannot create $scratch"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv \
+    env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$scratch" \
+      "$WRAPPER_DIR/$CCRC_UPSTREAM" setup-token)
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
+    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the mint exited $rc"
+  # A MINT THAT PRINTED NOTHING IS NOT A SUCCESS. `AUTH_SECRET_WRITTEN` is
+  # declared with the other AUTH_* globals and written only by
+  # `_auth_capture_token`; without this line an exit-0 run that showed no
+  # token would stamp `done` over a lane that has no credential.
+  (( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'
+  _auth_state done
+}
 _auth_openai_login() { _auth_die 'not-implemented: openai-login'; }
-# `_auth_capture_token` returning 1 means "this line carried no token", which
-# is the correct answer before it is taught to look.
-_auth_capture_token() { return 1; }
 _auth_user_code()     { :; }
 
 _auth_main() {

@@ -656,3 +656,195 @@ describe('ccd-account-auth — the walk is an order, not a set', () => {
     expect(fs.readFileSync(path.join(h.home, 'seen-code'), 'utf8')).toBe('early-code-777');
   }, 60_000);
 });
+
+/** The token's own shape, as `claude setup-token` prints it. A CANARY, not a
+ *  real credential: the whole point of the assertions below is that this
+ *  string is findable in exactly one place. */
+const CANARY_TOKEN = 'sk-ant-oat01-CANARYCANARYCANARY0123456789';
+
+describe('ccd-account-auth — setup-token, and the token that reaches one file', () => {
+  const runPane = (id: string, env: NodeJS.ProcessEnv = {}): { code: number; stdout: string; stderr: string } => {
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home, timeout: 60_000,
+      env: ghContainedEnv(h.home,
+        { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '15',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN, ...env },
+        { systemd: true, tmux: true }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [HELPER, id, 'setup-token'], opts), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  const TOKEN_REPLAY =
+    '#!/usr/bin/env bash\n'
+    + 'printf %s "$CLAUDE_CONFIG_DIR" > "$HOME/seen-config-dir"\n'
+    + 'echo "Create a long-lived token for Claude Code."\n'
+    + `echo "export CLAUDE_CODE_OAUTH_TOKEN=${CANARY_TOKEN}"\n`
+    + 'echo "This token expires in 1 year."\nexit 0\n';
+
+  it('captures the token to a 0600 file and shows the substitution instead', () => {
+    // `CCRC_UPSTREAM` is `claude` in the fixture roster, and setup-token runs
+    // THAT launcher — a generated wrapper would export the lane's own config
+    // dir back over the scratch one.
+    plantLauncher('claude', TOKEN_REPLAY);
+    const r = runPane('claude-a');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('[token captured to ~/.cc-secrets/claude-a-oauth.env]');
+    const secret = path.join(h.home, '.cc-secrets', 'claude-a-oauth.env');
+    expect(fs.statSync(path.join(h.home, '.cc-secrets')).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(secret).mode & 0o777).toBe(0o600);
+    // Byte-exact, which is also what measures the CR strip: the child runs
+    // under a pty here, so every line it writes arrives CR-terminated.
+    expect(fs.readFileSync(secret, 'utf8')).toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${CANARY_TOKEN}\n`);
+    expect(status('claude-a')).toMatchObject({ state: 'done' });
+    // AND THE TRANSCRIPT CARRIES NO CARRIAGE RETURN. This is where
+    // `_auth_line`'s CR strip actually earns its place, and it is not where
+    // the plan says it is: the file above is CR-free with or without the
+    // strip, because `_auth_capture_token` trims the token at the first
+    // `[[:space:]]` and CR is one. What the strip is really for is every
+    // OTHER line — the child runs under a pty here, whose line discipline
+    // turns NL into CR-NL, so each forwarded line would otherwise reach tmux
+    // scrollback, the terminal drawer, `Dialog.raw` and the push payload with
+    // a stray CR inside it.
+    expect(r.stdout, 'a pty line reached the transcript with its CR still on it')
+      .not.toContain('\r');
+    expect(r.stdout).toContain('This token expires in 1 year.');
+  });
+
+  it('the canary appears in that ONE file and in no stream, no status file, no scratch dir', () => {
+    plantLauncher('claude', TOKEN_REPLAY);
+    const r = runPane('claude-a');
+    expect(r.stdout).not.toContain(CANARY_TOKEN);
+    expect(r.stderr).not.toContain(CANARY_TOKEN);
+    expect(JSON.stringify(status('claude-a'))).not.toContain(CANARY_TOKEN);
+    // Every file under HOME except the one that is supposed to hold it — and
+    // except the FIXTURE LAUNCHER, which of course contains the canary because
+    // printing it is its entire job. It is the stand-in for `claude
+    // setup-token` itself, not an artifact the helper wrote; filtering it is
+    // what keeps this assertion about the helper.
+    const found = execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8' })
+      .split('\n').filter(Boolean)
+      .filter((p) => p !== path.join(harnessBin(h.home), 'claude'))
+      .sort();
+    expect(found).toEqual([path.join(h.home, '.cc-secrets', 'claude-a-oauth.env')]);
+  });
+
+  it('mints in a THROWAWAY config dir, never the lane\'s own', () => {
+    plantLauncher('claude', TOKEN_REPLAY);
+    runPane('claude-a');
+    expect(fs.readFileSync(path.join(h.home, 'seen-config-dir'), 'utf8'))
+      .toBe(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a'));
+    // The scratch dir carries no settings.json, so no ccrc hook can fire from
+    // this pane — and the lane's own dir is untouched.
+    expect(fs.existsSync(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a', 'settings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.claude-a'))).toBe(false);
+  });
+
+  it('captures a bare token line too — the shape, not only the export spelling', () => {
+    plantLauncher('claude',
+      `#!/usr/bin/env bash\necho "Your token: ${CANARY_TOKEN}"\nexit 0\n`);
+    const r = runPane('claude-a');
+    expect(r.stdout).not.toContain(CANARY_TOKEN);
+    expect(fs.readFileSync(path.join(h.home, '.cc-secrets', 'claude-a-oauth.env'), 'utf8'))
+      .toContain(CANARY_TOKEN);
+  });
+
+  it('refuses done when the mint exits 0 having printed no token', () => {
+    // `AUTH_SECRET_WRITTEN` is the guard: an exit-0 run that showed nothing
+    // would otherwise stamp `done` over a lane that has no credential, and
+    // the operator would find out at the next `ccd start`.
+    plantLauncher('claude', '#!/usr/bin/env bash\necho "nothing to see"\nexit 0\n');
+    const r = runPane('claude-a');
+    expect(r.code).toBe(1);
+    expect(String(status('claude-a')['error'])).toContain('printed no token');
+    expect(fs.existsSync(path.join(h.home, '.cc-secrets'))).toBe(false);
+  });
+
+  // ── the two argument orders, measured on BOTH platforms ──────────────────
+  // `CCD_OS` is set INSIDE the snippet, after `fn` has sourced the helper:
+  // the helper derives it from `$OSTYPE` at source time, so an env var of that
+  // name is overwritten before any function exists to read it. Setting it
+  // after the source is the only assignment that survives — and it is what
+  // lets a Linux box measure the BSD arm at all, instead of skipping it
+  // forever on the only box that runs CI.
+  //
+  // ONE TOKEN PER LINE, because `mapfile -t argv < <(…)` is the consumer: a
+  // single space-joined string would have to be re-split by a shell that
+  // would then re-split the command with it.
+  it('spells the util-linux script argument order', () => {
+    expect(fn('CCD_OS=linux; _auth_script_argv /bin/echo hi'))
+      .toBe(['script', '-qfc', '/bin/echo hi', '/dev/null'].join('\n'));
+  });
+
+  it('spells the BSD script argument order — UNVERIFIED against a real Mac, shipped as a branch', () => {
+    // Decision 9: the BSD arm is written as a branch rather than asserted from
+    // a box that cannot run the binary. THIS test pins the argv this tree
+    // builds, which is a different claim from "BSD script accepts it" — and it
+    // is the claim this repo can actually make. If the real binary disagrees
+    // on a Mac, setup-token answers `pane-unsupported-here` there and login
+    // and paste are unaffected.
+    expect(fn('CCD_OS=darwin; _auth_script_argv /bin/echo hi'))
+      .toBe(['script', '-q', '/dev/null', '/bin/echo', 'hi'].join('\n'));
+  });
+
+  it('quotes the util-linux -c string, so a HOME with a space cannot re-split it', () => {
+    // `%q`, not `%s`. The util-linux arm hands ONE STRING to a shell, so
+    // `/Users/Jane Doe/.local/bin/claude` — an ordinary macOS home — would be
+    // re-split into two arguments and the mint would run the wrong program.
+    // bash's own `%q` spelling — a backslash-escaped space, not added quotes.
+    // Asserted as the exact string rather than "contains a backslash", so a
+    // change of quoter is a visible decision.
+    expect(fn("CCD_OS=linux; _auth_script_argv '/Users/Jane Doe/bin/claude' setup-token"))
+      .toBe(['script', '-qfc', '/Users/Jane\\ Doe/bin/claude setup-token', '/dev/null'].join('\n'));
+  });
+
+  it('answers pane-unsupported-here rather than hanging when script(1) is absent', () => {
+    // Through the KNOB, not through an emptied PATH: emptying PATH also
+    // removes mkdir, date, jq, mv and chmod, so `_auth_publish` fails, no
+    // status file is written, and the assertion below would read ENOENT
+    // instead of the refusal.
+    plantLauncher('claude', TOKEN_REPLAY);
+    const r = runPane('claude-a', { CCRC_AUTH_SCRIPT: 'ccrc-no-such-pty-vehicle' });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('pane-unsupported-here');
+    expect(status('claude-a')).toMatchObject({
+      state: 'failed', error: expect.stringContaining('pane-unsupported-here'),
+    });
+    // It refuses BEFORE opening the pipes, so nothing is left holding a FIFO.
+    expect(fs.existsSync(path.join(REG(h.home), '.auth', 'claude-a.run'))).toBe(false);
+  });
+});
+
+describe('the secrets-file name is agreed across three writers, or it is agreed in none', () => {
+  // `ccd-account-auth` does not read `~/.ccrc/accounts.json` and the projection
+  // it DOES read carries no `secretsFile` — `generateAccountsSh` emits ids,
+  // home-ability, CCRC_MEASURED, the upstream id, config dirs, labels and hues
+  // and nothing else. So the mint's destination is CONSTRUCTED here, and it is
+  // only safe to construct because two other writers derive the same name: the
+  // roster entry `ccrc account add` writes, and the path `account-op.mjs`
+  // computes for it. Nothing measured that the three agree; a rename in one
+  // would put a live token in a file the lane's roster entry does not name,
+  // and the lane would start unauthenticated with its credential on disk.
+  const read = (rel: string): string =>
+    fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
+  const code = (rel: string): string =>
+    read(rel).split('\n').filter((l) => !/^\s*[#/]/.test(l)).join('\n');
+
+  it('the mint, the tag and the template all spell the same oauth lane', () => {
+    // 1. the mint's destination, in this helper
+    expect(code('ccd/ccd-account-auth'),
+      'the helper no longer writes <id>-oauth.env — the other two writers must move with it')
+      .toContain('"$SECRETS_DIR/$AUTH_ID-oauth.env"');
+    // 2. the tag `ccrc account` chooses for an OAuth lane
+    expect(code('ccd/ccrc'),
+      'ccrc no longer tags a CLAUDE_CODE_OAUTH_TOKEN lane `oauth` — the mint would land elsewhere')
+      .toContain('ACCT_SECRET_TAG=oauth');
+    // 3. the template that turns id + tag into the roster's own secretsFile
+    expect(code('deploy/account-op.mjs'),
+      'account-op no longer builds .cc-secrets/<id>-<tag>.env — the mint and the roster would disagree')
+      .toContain('`.cc-secrets/${id}-${secretTag}.env`');
+  });
+});
