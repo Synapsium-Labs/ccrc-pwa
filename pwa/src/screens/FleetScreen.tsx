@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
+import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
@@ -117,6 +118,9 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
   const newSession = onNewSession ?? (() => setNewOpen(true));
+  // Keep the subject through vaul's exit animation, as the other fleet sheets do.
+  const [poolProject, setPoolProject] = useState<string | null>(null);
+  const [poolOpen, setPoolOpen] = useState(false);
 
   // The fleet socket is the source of truth: no optimistic row here — the new
   // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
@@ -482,6 +486,7 @@ export function FleetScreen({
                 onActions={openActionsFor}
                 roster={roster}
                 pools={pools}
+                onPool={(p) => { setPoolProject(p); setPoolOpen(true); }}
                 /* Task 4: THIS card's own runs. Scoped here rather than inside
                    the card because "which card does a run belong on" is a
                    question about the run's `project`, and a card handed one
@@ -531,6 +536,13 @@ export function FleetScreen({
       </button>
 
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+
+      <PoolSheet
+        project={poolProject}
+        open={poolOpen}
+        onClose={() => setPoolOpen(false)}
+        fleet={store}
+      />
 
       <SessionActionsSheet
         session={actionsSession}

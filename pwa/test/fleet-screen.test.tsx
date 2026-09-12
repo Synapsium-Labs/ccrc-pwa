@@ -147,6 +147,29 @@ describe('FleetScreen', () => {
     expect(screen.getByText('idle')).toBeInTheDocument();
   });
 
+  it('opens the roster-derived pool picker from a project card', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      roster: TEST_ROSTER.map((account) => ({
+        ...account,
+        pool: account.id === 'claude' ? 'pool-a' : null,
+      })),
+      pools: {
+        listed: true,
+        byProject: { demo: { state: 'tagged', name: 'pool-a' } },
+        enforcement: 'enforced',
+      },
+      sessions: [session({ project: 'demo' })],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'project pool pool-a' }));
+
+    expect(screen.getByRole('heading', { name: 'Which pool runs this project?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'pool pool-a' })).toBeInTheDocument();
+  });
+
   it('shows the attention badge when a dialog is pending', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

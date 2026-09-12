@@ -1618,6 +1618,7 @@ button.sess-held {
   border: 0;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
   white-space: nowrap;
   color: var(--ink-tertiary);
 }
@@ -1625,10 +1626,10 @@ button.proj-card-pool { cursor: pointer; }
 button.proj-card-pool::before {
   content: '';
   position: absolute;
-  top: calc((var(--text-2xs) * var(--leading-tight) - var(--sp-6)) / 2);
-  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--sp-6)) / 2);
-  left: calc((100% - var(--tap-min)) / 2);
-  right: calc((100% - var(--tap-min)) / 2);
+  top: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  left: min(0px, calc((100% - var(--tap-min)) / 2));
+  right: min(0px, calc((100% - var(--tap-min)) / 2));
 }
 /* An untagged project is the worklist, not a fault. Malformed, unreadable and
    unrecognised all need attention; the wording tells their distinct remedies. */
@@ -1651,6 +1652,28 @@ button.proj-card-pool::before {
   white-space: nowrap;
   color: var(--status-attention-text);
 }
+
+/* Roster-derived options only: a free-text pool with no member would strand
+   every constrained session. */
+.pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.pool-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.pool-row[data-none] { color: var(--ink-secondary); }
 
 /* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
    r-md corner — the same treatment .sess-actions gives the ··· below, so

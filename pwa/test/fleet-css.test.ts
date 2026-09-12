@@ -882,12 +882,18 @@ describe('the hold composer', () => {
 });
 
 describe('the pool chip and the strand are real cells, and the chip is a real target', () => {
-  it('gives the tappable form the 44px overlay, not padding that would squeeze it', () => {
-    // The chip is narrow and unshrinkable, so `.sess-held`'s padding formula
-    // would shrink this target instead of growing it.
+  it('gives the tappable form a full-width 44px overlay without growing the chip', () => {
+    const chip = ruleFor('.proj-card-pool');
+    expect(declValue(chip, 'line-height')).toBe('var(--leading-tight)');
+
     const rule = ruleFor('button.proj-card-pool::before');
-    expect(rule).toContain('position: absolute');
-    expect(norm(rule)).toContain('var(--tap-min)');
+    expect(declValue(rule, 'position')).toBe('absolute');
+    const vertical = norm('calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2)');
+    expect(declValue(rule, 'top')).toBe(vertical);
+    expect(declValue(rule, 'bottom')).toBe(vertical);
+    const horizontal = norm('min(0px, calc((100% - var(--tap-min)) / 2))');
+    expect(declValue(rule, 'left')).toBe(horizontal);
+    expect(declValue(rule, 'right')).toBe(horizontal);
   });
 
   it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
@@ -910,5 +916,9 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
 
   it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {
     expect(declValue(ruleFor('.proj-card-stranded'), 'color')).toBe('var(--status-attention-text)');
+  });
+
+  it('keeps every pool option at the shared 44px touch-target floor', () => {
+    expect(declValue(ruleFor('.pool-row'), 'min-height')).toBe('var(--tap-min)');
   });
 });
