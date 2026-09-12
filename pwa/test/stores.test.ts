@@ -1021,6 +1021,22 @@ describe('fleet store', () => {
       store.getState().disconnect();
     });
 
+    it('takes listed:true with unavailable enforcement and keeps its measured project members', () => {
+      const pools = {
+        listed: true,
+        enforcement: 'unavailable',
+        byProject: { demo: { state: 'tagged', name: 'pool-a' } },
+      };
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+
+      expect(store.getState().pools).toEqual(pools);
+      store.getState().disconnect();
+    });
+
     it('keeps a listed:true future project member for its downstream reader to tolerate', () => {
       // This parser owns only the outer envelope. A later reader decides what an
       // unknown member state means; rejecting it here would turn an additive
@@ -1074,12 +1090,42 @@ describe('fleet store', () => {
       ]) expectPriorWireToSurvive(pools);
     });
 
+    it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      const prior = store.getState().pools;
+      const firstSocket = lastSocket();
+
+      store.getState().disconnect();
+      expect(store.getState().pools).toBe(prior);
+      store.getState().connect();
+      expect(lastSocket()).not.toBe(firstSocket);
+      lastSocket().open();
+      expect(store.getState().pools).toBe(prior);
+
+      const next = {
+        listed: true,
+        enforcement: 'enforced',
+        byProject: { demo: { state: 'untagged' } },
+      };
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: next }));
+      expect(store.getState().pools).toEqual(next);
+      store.getState().disconnect();
+    });
+
     it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
       // The offline snapshot is written on every `fleet` frame. Nothing pooled
       // may ride it: `FleetSnapshot` has no field for it, and this asserts
       // that in the two directions that matter — the bytes on disk, and what a
       // cold store reads back.
+      const roster = TEST_ROSTER.map((account) => ({
+        ...account,
+        pool: account.id === 'claude' ? 'pool-a' : null,
+      }));
       const store = createFleetStore({ makeSocket });
+      store.setState({ roster });
       store.getState().connect();
       lastSocket().open();
       lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
@@ -1089,8 +1135,9 @@ describe('fleet store', () => {
 
       const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
       expect(raw).not.toBeNull();
-      expect(raw).not.toContain('pool');
+      expect(raw).not.toContain('enforcement');
       expect(Object.keys(JSON.parse(raw as string) as object).sort()).toEqual(['roster', 'savedAt', 'sessions']);
+      expect((JSON.parse(raw as string) as { roster: typeof roster }).roster).toEqual(roster);
 
       const cold = createFleetStore({ makeSocket });
       expect(cold.getState().sessions.map((s) => s.id)).toEqual(['s1']);  // the snapshot DID hydrate

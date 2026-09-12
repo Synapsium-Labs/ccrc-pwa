@@ -189,6 +189,9 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   // tolerance. A malformed envelope must leave the last live policy standing.
   if (t === 'pools') {
     const pools = (m as { pools?: unknown }).pools;
+    // Array rejection is over-determined by the exact discriminants below, but
+    // this keeps the neighboring envelope-narrowing idiom explicit. Unlike it,
+    // the byProject array guard is load-bearing (stores.test.ts:1087).
     if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
     const outer = pools as { listed?: unknown; enforcement?: unknown; byProject?: unknown };
     const validEnforcement = outer.enforcement === 'enforced'
