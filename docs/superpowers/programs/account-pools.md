@@ -1159,7 +1159,15 @@ the fact it claims does not live in the repo — which is the same blind spot as
 approached from the other side. The mechanism-shaped version names the GATE ("lifted once the fleet runs
 this sha") rather than the outcome, because a gate is checkable and an outcome is not.
 
-## D-TBD-mv-symlink-dir — `_plat_mv_notdir`'s darwin arm, from an outside session
+## D-2187 — `_plat_mv_notdir`'s darwin arm, from an outside session
+
+> **Numbered 2026-09-13, four days after the entry was written.** This heading stood as a concrete
+> `D-TBD` placeholder until the ccd-queue plan
+> (`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`, now on `main`)
+> ISSUED and DEFINED **D-2187** for exactly this finding — same mechanism, not merely the same topic.
+> The placeholder was never a decision; it was the absence of one, and leaving it in a tracked file
+> kept `server/test/dtbd.test.ts` red on this branch for those four days. See the closure note under
+> **Queue, in order** below.
 
 `claude-OpenClawHetzner` (mail 320, working on an unrelated branch) found that `_plat_mv_notdir`'s
 darwin arm mishandles one destination shape. Confirmed on GNU coreutils 9.4 — `mv -f -- src dest` with
@@ -1375,7 +1383,11 @@ FIFO used to wedge the supervisor visibly and now reads as untagged, which reloc
 no strand and no line — the constraint-lifting class arrived at from the other direction. The remedy is
 the measured reader at that site, not reverting the guard.
 
-## D-TBD-doctor-models-timer — the ccd queue takes a third item, and the instance was smaller than the rule
+## D-2190 — the ccd queue takes a third item, and the instance was smaller than the rule
+
+> **Numbered 2026-09-13**, by the same act that numbered D-2187 above: the ccd-queue plan issued and
+> DEFINED **D-2190** for exactly this finding. Same note applies — the placeholder was the absence of a
+> decision, and it is what `dtbd` was refusing.
 
 `claude-OpenClawHetzner` (mail 327) reported that `ccd/ccrc-doctor-checks`'s `_check_services` builds
 `installed` from a hardcoded five-unit `known` list (`:809` on `origin/main`), so the `ccrc-models.timer`
@@ -1408,9 +1420,17 @@ bites. Recommended both, `known` first, and asked them for the catalogue's fresh
 they own its semantics rather than me.
 
 **Queue, in order:** D-2000 (gates wave 3's SERVER deploy) → #69 round 3 (a LIVE log storm) →
-D-TBD-mv-symlink-dir → D-TBD-doctor-models-timer. No numbers minted for the two TBDs: a `D-N` is DEFINED
-in a plan, and one written into this ledger without a plan definition raises `deviation-refs.test.ts`'s
-tree scan without raising its plan scan.
+the mv-symlink-dir item → the doctor-models-timer item. No numbers minted for the two at the time: a
+`D-N` is DEFINED in a plan, and one written into this ledger without a plan definition raises
+`deviation-refs.test.ts`'s tree scan without raising its plan scan.
+
+> **Closed 2026-09-13.** That reasoning was right about `deviation-refs` and blind to `dtbd`. Refusing
+> to invent a number was correct; writing the refusal as a CONCRETE `D-TBD-<slug>` token in a tracked
+> file was not, because `server/test/dtbd.test.ts` greps the tree for exactly that shape and cannot tell
+> a placeholder trying to land from a placeholder being discussed. The ccd-queue plan has since issued
+> and defined **D-2187** and **D-2190**, and the two headings above now carry them. Found by running the
+> union gate (worker tip + this ledger) against the merged wave-5 tip — the one measurement only the
+> coordinator can make, and the first time it has reded on the coordinator's own file.
 
 ## 2026-09-09 — the ccd queue gets a plan and a workspace, and memory follows the ACCOUNT
 
@@ -3768,7 +3788,7 @@ six waves single-file so it has never paid this, but the same cut was available 
 ## 2026-09-12 09:53Z — worker finding on Task 1; D-2591 issued, and the defect was larger than reported
 
 Mail 716 from `ccrc-pwa-clear-meadow`, `kind: finding`, worker correctly stopped before commit with a
-`D-TBD-untagged-account-prevents-empty-pool` token (worker clause 11). **Re-measured against source
+`D-TBD` token — slug `untagged-account-prevents-empty-pool` — per worker clause 11. **Re-measured against source
 rather than against the description**, which is this program's standing rule, and the finding holds —
 and is a size larger than the worker saw.
 
@@ -4774,8 +4794,8 @@ Worker mail 859: D-2636..D-2650 definitions committed before any further impleme
 **Verified rather than accepted.** All seventeen present (2634..2650), definition high-water exactly
 **2650**.
 
-**Read the 22 DELETED lines, not just the 154 added.** They are the two `D-TBD-task-5-*` provisional
-entries being replaced by their issued D-2636/D-2637 entries — the correct lifecycle for a D-TBD: it is
+**Read the 22 DELETED lines, not just the 154 added.** They are the two provisional `D-TBD`
+entries (slugs `task-5-…`) being replaced by their issued D-2636/D-2637 entries — the correct lifecycle for a D-TBD: it is
 SUPERSEDED by the numbered entry, never left standing beside it. Worth stating because a definitions
 commit that deletes is the shape worth opening, and this is the second one today that turned out
 benign for a different reason.
@@ -5419,3 +5439,154 @@ forever — while D-2707 changes the `pending` semantics both of their fixtures 
 coherent pass with D-2701's and D-2702's mutants RE-RUN afterwards rather than trusted.
 
 **D-2703..D-2711 issued** (floor 2712), mails 996, 998 (with the full rulings artifact), 999, 1000.
+
+---
+
+## 2026-09-13 05:25Z — the last three rulings, both pins proved, the integration merge measured, and the union gate finally reds on MY OWN file
+
+**D-2712, D-2713, D-2714 issued (floor 2715), defined at `3aeb8f94` (D-2712/D-2713, +26/−0) and
+`166311b8` (D-2714), all three accepted.** With them every ruling in wave 5 is CLOSED or PARKED.
+
+**D-2712 is mine, and it is the worst kind.** Mail 999 said *"the authoritative text is my ledger,
+pushed at `80c8b890`."* The worker then wrote across **seven** plan entries that the ledger had
+*"upheld and sharpened"* the remedies. Measured: `80c8b890` is 02:03:12Z and the commits it supposedly
+authorised are `06aa3a54` at 00:18:57Z — **1h44m earlier**. The ledger is the record written
+afterwards; the RULING ACT is the mail. I handed the worker a false provenance and it propagated
+verbatim seven times before anyone measured a timestamp. Accepted `82b3efd2`.
+
+**D-2713 — a hand-maintained cardinal in prose.** `StartProgramSheet`'s recovery docstring counted its
+own arms in words, so D-2694 making three arms out of two silently falsified it. Rewritten at
+`4e26ae9c` (+12/−10) into an enumeration that separates SYNTACTIC arms from SEMANTIC copy subcases, and
+that corrects a stale condition description (`accounts poll turns projected null` → `measured placement
+none`). **Verified line by line rather than accepted:** six branches, one-for-one with the docstring,
+and `{recovery}` grepped to exactly two occurrences (`:1008`, `:1083`) matching precisely the two
+conditions the text names as not displacing it.
+
+**D-2714 — I was wrong about which test was the control.** My own dispatch for `45e05c12` asserted the
+pending-race test was the over-correction control for the bridge lifetime. It is not: the
+immediate-clear mutant leaves all 75 shipped tests green, because that fixture never closes and
+reopens the sheet and is satisfied by `PoolSheet`'s own cache. A green mutation is AMBIGUOUS, never
+"untested" — so the missing half was a fixture that actually reaches `poolWrite`. Pinned at
+`8e034700`.
+
+### The two mutation proofs that had never been run
+
+**D-2714 discriminates, both halves.** The new fixture (`keeps the successful-write bridge while its
+route refresh remains unresolved`) DOES close and reopen the sheet mid-flight, so it reaches
+`poolWrite` through the only handler that reads it. Clearing the bridge synchronously at write-kickoff
+instead of in the settle `finally` reds **exactly that fixture** (143 passed / 1 failed) **while**
+`keeps the write response visible while the coherent refresh is pending` stays green. Both halves
+required; both measured.
+
+**D-2708 discriminates — and its evidence was FALSE AS STATED.** Removing the `!dead` conjunct at
+`SessionLine.tsx:381` reds the archived-neutral fixture, so the inertness is a mechanism and not a
+comment. But the verifier reported *"143 passed / 1 failed, no collateral"*, and that number is an
+artifact of WHICH FILES IT RAN: 76 `fleet-screen` + 68 `project-card` = 144, and it never ran
+`session-line.test.tsx` at all — the 130-test file holding the mechanism's own canonical fixture,
+`is silent on a dead row` at `:1438`, which the same mutant ALSO reds. **The mutation kills two tests,
+not one.** The conclusion is right and better supported than claimed; the number beside it was false.
+My dispatch owns a share: it named two files instead of saying *"find the suite that owns the
+mechanism"* — and the pointer was already in the tree, because `project-card.test.tsx`'s own comment
+says *"Its direct suite pins that policy"* and names that file exactly. **Measured on the sample in
+front of you, reported as a fact about the world** — this wave's most repeated failure, in miniature,
+at the very last measurement of it.
+
+### D-2709's park was AUDITED, not accepted
+
+All four structural claims re-checked byte-exact, and the deciding question answered by me rather than
+by the park's author: **no existing non-timer invalidation reaches `StartProgramSheet`.** The shared
+`FleetStore` carries only the `pools` WS frame, never `ProjectRow[]` or placement; the sheet never
+reads `pools` from `fleet`; and turning a pools signal into a placement re-measurement still requires a
+fresh `/api/projects` call — the new fetch path the ruling forbids. Park upheld at `f2d2d7c2`. The
+proposed 20s poll was rejected earlier because it would contradict the plan, my own no-timer ruling
+(D-2663–D-2670) and D-2702 simultaneously.
+
+### The integration merge — measured, not read
+
+Worker mail 1018 reported integrating fresh `origin/main` `ecd953b0` at `030f4ce9` with *"auto-merged
+pool-sensitive PWA overlaps inspected"*. Re-measured independently, and the truth is **stronger than
+the claim**:
+
+- **The merge is provably mechanical.** `git merge-tree f2d2d7c2 ecd953b0` →
+  `de9da8552a40c3a5ebbf2f8eed8b41c4af8b3f17`, byte-identical to `030f4ce9^{tree}`. **Zero hand edits,
+  zero conflict resolutions, no evil merge.** That is the measurement that answers "a merge is a tree
+  nobody ran" — it does not answer it alone, but it reduces the question to: were the gates run on THIS
+  tree? They were.
+- **Parents and base:** `030f4ce9` = `f2d2d7c2` + `ecd953b0`; `merge-base(030f4ce9, origin/main)` =
+  `ecd953b0` exactly, so the PR diff is the branch's own contribution and nothing else.
+- **The overlap is four files and it is all comments.** Old fork point `cbeb682d`; branch touched 32
+  files, main touched 171, and the intersection is exactly `SessionLine.tsx`, `StartProgramSheet.tsx`,
+  `session-line.test.tsx`, `start-program.test.tsx`. **Every main-side change in all four is a
+  line-number CITATION update** (`fleet.ts:316-317`→`:451-452`, `routes.ts:889-897`→`:1077-1085`,
+  `ccd/ccd:13125`→`:13459`, …), equal-add/equal-delete, no line shift, and **not one touches a
+  mechanism** — `SessionLine`'s `!dead` and every `StartProgramSheet` arm are untouched by main.
+- **The inverse risk was the real one, and it is clean.** Main ran a citation sweep between `cbeb682d`
+  and `ecd953b0`; any citation the BRANCH added against pre-sweep line numbers would now be silently
+  stale, and main's sweep could not have fixed it because the line did not yet exist. Measured: the
+  branch adds **13 distinct line-number citations**, and **not one points into any file the sweep
+  shifted**. All 13 verified landing in the merged tree — including `shared/api.ts:1275`
+  (`if (s.archivedAt !== null && s.status === 'dead') {`, D-2708's whole structural proof) and
+  `primitives.css:141` (`background: var(--bg-sheet);`, the ground four D-2706 audit entries assert).
+- **Branch contribution:** 32 files, +6045/−204, entirely `pwa/` plus the two ruled cross-package paths
+  `shared/poolrule.ts` and `server/test/pool-rule-core.test.ts`. **No `ccd/`, no `agent/`, no
+  `server/src/`** — confirmed by path enumeration, not by the claim.
+
+**One stale citation found and deliberately NOT actioned.** The wave-4 plan's Task-mutation-table line
+says 501 renders `UNSUPPORTED_VERB_TEXT` through the `unsupported` key at `api.ts:124`, `:176`; the
+substance is TRUE but the targets are now `:128` and `:180`. Traced: **correct when written** at
+`ece7597a` (#56) and **already stale at `cbeb682d`**, before this branch forked — inherited main-side
+debt, not merge-induced and not this wave's. The wave's rewrite of that line re-emitted it unchanged,
+which is a real if minor instance of the D-2703 class, but CLAUDE.md designates plan anchors as
+snapshots and the substance is sound. Recorded here so it is not rediscovered later as a new finding;
+no number, no reopen at the push gate.
+
+### The union gate reded on the COORDINATOR'S OWN record
+
+The union of worker tip + this ledger is the one measurement nobody but me can make. Run against
+`030f4ce9`: **224 passed / 1 failed** — and the red was **entirely mine**. `server/test/dtbd.test.ts`
+found **five concrete `D-TBD-<slug>` placeholders, all five in this file**, none anywhere in the
+worker's tree.
+
+Two of them were headings — the `D-TBD` tokens for the mv-symlink-dir and doctor-models-timer items
+(slugs deliberately not respelled here: writing this paragraph is what reintroduced the fifth
+placeholder and reded the gate a second time, thirty seconds after I fixed the first four) — and the
+entry at their foot argued, correctly, that a `D-N` is DEFINED in a plan and that writing one into this ledger
+without a plan definition raises `deviation-refs`' tree scan without raising its plan scan. **That
+reasoning was right about `deviation-refs` and blind to `dtbd`**, which greps every tracked file for
+the concrete shape and cannot distinguish a placeholder trying to land from one being discussed.
+
+**And the remedy was already shipped.** The ccd-queue plan
+(`2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`, on `main`) had ALREADY issued and defined
+**D-2187** (`_plat_mv_notdir`'s Darwin arm answers 0 with its own postcondition false) and **D-2190**
+(`_check_services` never asks about `ccrc-models.timer`) — the same mechanisms, not merely the same
+topics. Nothing needed minting; the ledger simply was never back-updated when the numbers arrived four
+days ago. Headings now carry the real numbers with their provenance; the three prose instances are
+respelled so the token is discussed without being written. **Union gate re-run: 225/225 green**
+(`deviation-refs` 31, `dtbd` 1, `single-definition` + `topology-clean` 193), which reconciles exactly
+with the worker's own 31/31 and 194/194 on the same tip.
+
+The lesson is not "the gate was annoying." It is that **the branch that carries the programme's
+decisions was the one branch nobody was gating**, for four days, while I gated the worker's every
+commit.
+
+### My own errors this wave, in one place
+
+Recorded together because the pattern matters more than any one of them:
+
+1. **Mail 999 cited the ledger as the act it records** — 1h44m after the fact, propagated through seven
+   plan entries. D-2712.
+2. **D-2700's ruling named unreadable and malformed and never named ABSENCE**, so the 12/12
+   verification I accepted could not have caught the absent-pool case. D-2705.
+3. **D-2693's ruling ordered an archived fixture asserting a state the wire cannot carry** — its red
+   came off an impossible session. D-2708.
+4. **My dispatch for `45e05c12` named the wrong control** for the bridge lifetime. D-2714.
+5. **My final dispatch named two test files instead of the mechanism**, so a true conclusion shipped
+   with a false count. Above.
+6. **I routed positive confirmations into adversarial refuters** — a category error in my own workflow
+   design. One refuter turned it into the real sampling finding anyway, which is luck, not method.
+7. **I left five concrete `D-TBD` placeholders in this file for four days** while requiring the worker's
+   tree to be clean of exactly that shape. Found by my own union gate, above.
+
+Four of the seven are the same failure: **a ruling, a dispatch or a record that named something
+narrower than the thing it had to cover**, and in every case the gap was found by measurement rather
+than by re-reading.
