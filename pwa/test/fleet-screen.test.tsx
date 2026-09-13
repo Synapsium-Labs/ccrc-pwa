@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SPAWN_STALL_MS, type FleetSession, type ProjectRow, type RunSummary } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type ProjectPoolsWire, type ProjectRow, type RunSummary } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -496,6 +496,64 @@ describe('FleetScreen', () => {
       }
     });
 
+    it('coalesces a recursively reordered equal reconnect pools frame with an unresolved visible refresh', async () => {
+      vi.useFakeTimers();
+      try {
+        let resolveInitial!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        const projects = vi.spyOn(api, 'projects')
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
+          .mockImplementationOnce(() => new Promise(() => {}));
+        const store = makeLiveStore();
+        render(<FleetScreen store={store} />);
+        const pools: ProjectPoolsWire = {
+          listed: true,
+          byProject: {
+            alpha: { state: 'tagged', name: 'pool-a' },
+            beta: { state: 'tagged', name: 'pool-b' },
+          },
+          enforcement: 'enforced',
+        };
+        // Every object is fresh. The equal reconnect changes insertion order at
+        // the frame, map, and each nested project-pool level.
+        const reordered: ProjectPoolsWire = {
+          enforcement: 'enforced',
+          byProject: {
+            beta: { name: 'pool-b', state: 'tagged' },
+            alpha: { name: 'pool-a', state: 'tagged' },
+          },
+          listed: true,
+        };
+
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        expect(projects).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          resolveInitial({ roots: [], projects: [] });
+          await Promise.resolve();
+        });
+
+        act(() => {
+          latestFleetSocket().drop();
+          Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(projects).toHaveBeenCalledTimes(2);
+        act(() => { vi.advanceTimersByTime(500); });
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools: reordered });
+        });
+
+        expect(projects).toHaveBeenCalledTimes(2);
+        store.getState().disconnect();
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+
     it('refreshes immediately for a changed reconnect pools frame during a visible refresh', async () => {
       vi.useFakeTimers();
       try {
@@ -690,7 +748,91 @@ describe('FleetScreen', () => {
       });
     });
 
-    it('makes no account claim while pending or after the project request fails', async () => {
+    it('lets a successful write win until its own remeasurement settles, then lets a later route measurement win', async () => {
+      let resolveEarlier!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+      let resolveWriteRefresh!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveEarlier = resolve; }))
+        .mockResolvedValueOnce({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveWriteRefresh = resolve; }))
+        .mockResolvedValueOnce({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-b' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        });
+      vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+        ok: true,
+        pool: { state: 'tagged', name: 'pool-a' },
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
+        })),
+        pools: { listed: true, byProject: { alpha: { state: 'untagged' } }, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(1));
+
+      // A changed frame starts the current route read while the initial one is
+      // still in flight. Its ready row opens the write path; that older request
+      // must not settle and clear the later write bridge.
+      seed(store, {
+        pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' },
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      const initialPool = await screen.findByRole('button', {
+        name: 'no project pool — any account may serve this project',
+      });
+      fireEvent.click(initialPool);
+      fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(3));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-a.');
+
+      await act(async () => {
+        resolveEarlier({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        });
+      });
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-a.');
+
+      await act(async () => {
+        resolveWriteRefresh({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        });
+      });
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      seed(store, {
+        pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' },
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(4));
+      fireEvent.click(await screen.findByLabelText('project pool pool-b'));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-b.');
+    });
+
+    it('makes no account claim while a cold project read is pending or after it fails', async () => {
       let reject!: (error: Error) => void;
       vi.spyOn(api, 'projects').mockImplementation(
         () => new Promise((_resolve, fail) => { reject = fail; }),
@@ -712,7 +854,39 @@ describe('FleetScreen', () => {
       })).toBeInTheDocument();
     });
 
-    it('drops a prior account claim while a refresh is pending and after it fails', async () => {
+    it('retains the ready pool chip and off-pool cue throughout an unresolved or failed remeasurement', async () => {
+      let rejectRefresh!: (error: Error) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockResolvedValueOnce({ roots: [], projects: [{
+          name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' },
+          placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+        }] })
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
+        })),
+        pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha', wrapper: 'claude2' })],
+      });
+
+      expect(await screen.findByLabelText('project pool pool-a')).toBeInTheDocument();
+      expect(screen.getByText('off-pool')).toBeInTheDocument();
+      seed(store, { pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' } });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(screen.getByLabelText('project pool pool-a')).toBeInTheDocument();
+      expect(screen.getByText('off-pool')).toBeInTheDocument();
+
+      await act(async () => { rejectRefresh(new Error('offline')); });
+      expect(screen.getByLabelText('project pool pool-a')).toBeInTheDocument();
+      expect(screen.getByText('off-pool')).toBeInTheDocument();
+    });
+
+    it('retains a prior account claim while a remeasurement is pending and after it fails', async () => {
       let rejectRefresh!: (error: Error) => void;
       const projects = vi.spyOn(api, 'projects')
         .mockResolvedValueOnce({ roots: [], projects: [
@@ -733,13 +907,15 @@ describe('FleetScreen', () => {
         name: 'New workspace on alpha — team·alt, 91% free',
       })).toBeInTheDocument();
 
-      seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+      seed(store, { pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' } });
       await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
-      expect(screen.getByRole('button', { name: 'New workspace on alpha' })).toBeInTheDocument();
+      expect(screen.getByRole('button', {
+        name: 'New workspace on alpha — team·alt, 91% free',
+      })).toBeInTheDocument();
 
       await act(async () => { rejectRefresh(new Error('offline')); });
       expect(screen.getByRole('button', {
-        name: 'New workspace on alpha — placement check failed; reopen ccrc to retry',
+        name: 'New workspace on alpha — team·alt, 91% free',
       })).toBeInTheDocument();
     });
 

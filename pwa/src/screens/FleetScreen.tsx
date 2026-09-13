@@ -164,6 +164,7 @@ export function FleetScreen({
   // changed frame still starts its own request immediately (D-2702).
   const projectRequest = useRef(0);
   const visibilityRequest = useRef<{ token: number; pools: string } | null>(null);
+  const writeRefresh = useRef<{ token: number; write: { project: string; pool: NonNullable<ProjectRow['pool']> } } | null>(null);
   const poolsFingerprintRef = useRef(pools === null ? null : poolsFingerprint(pools));
   poolsFingerprintRef.current = pools === null ? null : poolsFingerprint(pools);
   const [projectRows, setProjectRows] = useState<
@@ -172,17 +173,28 @@ export function FleetScreen({
     | { kind: 'failed' }
     | { kind: 'ready'; rows: readonly ProjectRow[] }
   >({ kind: 'legacy' });
-  const refreshProjects = useCallback(async (visibilityPools?: string): Promise<void> => {
+  const refreshProjects = useCallback(async (
+    visibilityPools?: string,
+    write?: { project: string; pool: NonNullable<ProjectRow['pool']> },
+  ): Promise<void> => {
     const request = ++projectRequest.current;
     if (visibilityPools !== undefined) visibilityRequest.current = { token: request, pools: visibilityPools };
-    setProjectRows({ kind: 'pending' });
+    if (write !== undefined) writeRefresh.current = { token: request, write };
+    setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
     try {
       const response = await api.projects();
       if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
     } catch {
-      if (request === projectRequest.current) setProjectRows({ kind: 'failed' });
+      if (request === projectRequest.current) {
+        setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'failed' });
+      }
     } finally {
       if (visibilityRequest.current?.token === request) visibilityRequest.current = null;
+      if (writeRefresh.current?.token === request) {
+        const { write } = writeRefresh.current;
+        if (poolWrite.current === write) poolWrite.current = null;
+        writeRefresh.current = null;
+      }
     }
   }, []);
   useEffect(() => {
@@ -626,11 +638,12 @@ export function FleetScreen({
         open={poolOpen}
         onClose={() => setPoolOpen(false)}
         onPoolChanged={(project, pool) => {
-          poolWrite.current = { project, pool };
+          const write = { project, pool };
+          poolWrite.current = write;
           setPoolSelection((selected) => selected?.project === project
             ? { project, pool }
             : selected);
-          void refreshProjects();
+          void refreshProjects(undefined, write);
         }}
         fleet={store}
       />
