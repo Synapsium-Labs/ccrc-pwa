@@ -4217,3 +4217,29 @@ deviation found while executing this plan is allocated in its own call at the mo
   frame with reordered keys at the top level, in `byProject`, and inside each
   project-pool object, and keep the request count coalesced. Removing the sorted
   replacer must red that fixture while the remaining focused suite stays green.
+
+- **D-2712 — Seven review-deviation entries invert ruling provenance by naming
+  the later programme-ledger record as the act that ruled the fix.** D-2688
+  through D-2694 each cite programme-ledger commit `80c8b890` as upholding,
+  sharpening, or narrowing a remedy, but every described fix predates that
+  commit. Coordinator mail 1006 independently measured the chronology and
+  accepted responsibility for the incorrect instruction in mail 999. The
+  ruling acts are the earlier coordinator mails, whose IDs and timestamps
+  precede the fixes; the programme ledger is only the later durable record of
+  what was ruled. Mail 1006 ruled one docs-only correction across all seven
+  entries: cite the actual ruling mail ID, preserve each true closing sentence,
+  and describe the programme ledger only as a record, never as an actor. Before
+  committing, search the whole plan for the ledger SHA and for `programme ledger
+  at`; the search result, including what remains, is required evidence.
+
+- **D-2713 — StartProgramSheet's recovery docstring maintains a cardinal beside
+  the render-chain list and has already gone stale twice.** The same prose first
+  said two other arms, then three, while review disputed whether D-2694's
+  placement refusal is one arm or its `none`, `unmeasurable`, and `pool-blind`
+  branches should be counted separately. Coordinator mail 1006 ruled the
+  durable defect to be the duplicated cardinal rather than any chosen count.
+  Remove the cardinal and enumerate each conditional arm with what it renders
+  and why it displaces the final confirm fragment's recovery. Verify and report
+  that enumeration against current source with file and line evidence; the
+  prose must derive its extent from the list instead of asserting a parallel
+  number that can silently disagree with it.
