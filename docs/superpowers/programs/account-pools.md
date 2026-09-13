@@ -6229,3 +6229,51 @@ completions, and I had that in front of me. **The tell was not missing — I rea
 before the failure log.** That is the same order-of-reading mistake the worker made with the summary
 filter, on the same day, on a different surface. The rule generalises past both: *when a result and a
 log disagree in shape, read the log first.*
+
+### 2026-09-13 20:40Z — LENS 1 of 5 done inline: cross-fix interaction, no finding
+
+The session limit killed the fan-out, so I ran the judgement-heavy lens myself. It is the one that was
+mine to do anyway: six of this wave's fixes (D-2695, D-2702, D-2704/D-2707, D-2714, D-2721, D-2722) all
+land on one refresh path in `FleetScreen.tsx`, and per-commit review structurally cannot see them
+interact.
+
+**1. The D-2714 bridge always clears — refuted by construction, not by luck.** `writeRefresh` is a
+SINGLE SLOT keyed by request token; `poolWrite` clears on OBJECT IDENTITY (`poolWrite.current ===
+write`); and the clear sits in `finally`, which follows the `catch`. All four reachable orderings:
+
+| sequence | outcome |
+|---|---|
+| write N alone | token match + identity match → **clears** |
+| write N, frame N+1 after it | N+1 sets no `writeRefresh`; only N's `finally` sees token N → **clears on N** |
+| write N, write M (M>N) | slot overwritten; N sees token M ≠ N → no clear (correct, superseded); M → **clears** |
+| write N, refresh REJECTS | `finally` runs on the catch path → **clears** |
+
+And **D-2702's coalescing cannot reach the write's refresh at all**: its guard is
+`visibilityRequest.current?.pools === fingerprint`, keyed on the VISIBILITY slot, so it can only ever
+skip a frame-triggered refresh. My sharpest hypothesis — "a coalesced refresh leaves the bridge
+uncleared forever" — is impossible by the shape of the guard.
+
+**2. No effect loop.** The D-2721 effect depends on `[poolOpen, placementFor]`, and `placementFor` is a
+`useCallback` on `projectRows`, so its own `setPoolSelection` cannot re-trigger it. D-2722's early
+return yields the SAME object reference, so React bails the render entirely on non-measured reads —
+strictly better than before the fix.
+
+**3. The superseding-refresh case: probed, then closed on reachability.** I built the pathological input
+— write `pool-a`, its own refresh settles with the new pool, then a later frame-triggered refresh
+settles LAST carrying PRE-WRITE data. Measured:
+
+```
+SHEET = "alpha is in no pool"    CHIP = "no project pool — any account may serve this project"
+```
+
+Both stale — **and they AGREE**, so it is not the D-2721 class (card and sheet disagreeing) but simply
+"the newest route answer wins, and it happened to be older." The PWA orders by request token, which is
+the only ordering it can observe, so its behaviour is correct given that input. **And the input is
+unreachable**: `listProjects` (`server/src/lifecycle.ts:126`) re-reads the box through `io.readdir` on
+every call with no cache, and `poolFor` reads that same live result — a `/api/projects` issued after the
+write cannot answer from before it.
+
+**Lens 1: NO FINDING**, with a mechanism and a probe behind it rather than a shrug.
+
+**Three of five lenses now done** (claims audit, grounds/contrast, interaction). **Seams and test
+integrity remain**, and the run stays at `awaiting-review` until they run.
