@@ -433,7 +433,7 @@ describe('FleetScreen', () => {
       expect(projects).toHaveBeenCalledTimes(2);
     });
 
-    it('carries the row pool with its placement when the pools frame disagrees', async () => {
+    it('carries the row pool into the opened sheet when the pools frame disagrees', async () => {
       vi.spyOn(api, 'projects').mockResolvedValue({
         roots: [],
         projects: [{
@@ -457,10 +457,97 @@ describe('FleetScreen', () => {
         sessions: [session({ id: 'a', project: 'alpha' })],
       });
 
-      expect(await screen.findByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
+      const poolChip = await screen.findByLabelText('project pool pool-b');
+      expect(poolChip).toHaveTextContent('pool-b');
       const add = screen.getByRole('button', { name: /New workspace on alpha/ });
       expect(add.getAttribute('aria-label')).toContain('nothing in pool pool-b is placeable');
       expect(add.getAttribute('aria-label')).not.toContain('pool-a');
+
+      fireEvent.click(poolChip);
+      const sheet = screen.getByRole('dialog', { name: 'Which pool runs this project?' });
+      expect(sheet).toHaveTextContent('alpha is in pool pool-b.');
+      expect(sheet).not.toHaveTextContent('alpha is in pool pool-a.');
+    });
+
+    it('refreshes route-coherent pool and placement after a successful pool write', async () => {
+      const projects = vi.spyOn(api, 'projects').mockResolvedValue({
+        roots: [],
+        projects: [{
+          name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+          placement: { kind: 'unmeasurable' },
+        }],
+      });
+      vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+        ok: true,
+        pool: { state: 'tagged', name: 'pool-a' },
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : null,
+        })),
+        pools: { listed: true, byProject: { alpha: { state: 'untagged' } }, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      fireEvent.click(await screen.findByRole('button', {
+        name: 'no project pool — any account may serve this project',
+      }));
+      fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-a.');
+    });
+
+    it('keeps the write response visible while the coherent refresh is pending', async () => {
+      let resolveRefresh!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockResolvedValueOnce({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+      vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+        ok: true,
+        pool: { state: 'tagged', name: 'pool-a' },
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : null,
+        })),
+        pools: { listed: true, byProject: { alpha: { state: 'untagged' } }, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      const poolChip = await screen.findByRole('button', {
+        name: 'no project pool — any account may serve this project',
+      });
+      fireEvent.click(poolChip);
+      fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-a.');
+
+      await act(async () => {
+        resolveRefresh({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        });
+      });
     });
 
     it('makes no account claim while pending or after the project request fails', async () => {

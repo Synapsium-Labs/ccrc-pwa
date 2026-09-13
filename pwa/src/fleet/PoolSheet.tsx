@@ -14,8 +14,12 @@ import './fleet.css';
 export interface PoolSheetProps {
   /** `null` while no project card has been selected. */
   project: string | null;
+  /** Pool from the same `/api/projects` row as the card; absent on old servers. */
+  selectedPool?: ProjectPoolWire;
   open: boolean;
   onClose: () => void;
+  /** Retain the write read-back and remeasure its route-owned pool/placement pair. */
+  onPoolChanged?: (project: string, pool: ProjectPoolWire) => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
 }
@@ -55,7 +59,14 @@ const measuredToast = (project: string, pool: ProjectPoolWire): string =>
 /** A sheet whose request and frame relevance are both governed by ONE monotonically
  * increasing generation. Every write and every scope transition invalidates work
  * captured before it, so an old route response cannot affect a reopened sheet. */
-export function PoolSheet({ project, open, onClose, fleet = useFleetStore }: PoolSheetProps): ReactNode {
+export function PoolSheet({
+  project,
+  selectedPool,
+  open,
+  onClose,
+  onPoolChanged,
+  fleet = useFleetStore,
+}: PoolSheetProps): ReactNode {
   const roster = fleet((state) => state.roster);
   const pools = fleet((state) => state.pools);
 
@@ -101,7 +112,7 @@ export function PoolSheet({ project, open, onClose, fleet = useFleetStore }: Poo
     && frame.current.number <= measured.frame
     ? measured.pool
     : null;
-  const current = visibleMeasured ?? projectPoolOf(pools, project ?? '');
+  const current = visibleMeasured ?? selectedPool ?? projectPoolOf(pools, project ?? '');
   const options = poolOptions(roster);
   const saving = savingGeneration === generation.current;
 
@@ -124,6 +135,11 @@ export function PoolSheet({ project, open, onClose, fleet = useFleetStore }: Poo
     void api.setProjectPool(requestProject, pool).then(
       (response) => {
         const responseFrame = frame.current.number;
+        // The write succeeded regardless of whether this sheet is still its
+        // visible subject. Remeasure the route pair; only local UI and toast work
+        // stay behind the relevance guard below.
+        onPoolChanged?.(requestProject, response.pool);
+
         // The route re-read this state on the box. Keep it only until the first
         // pools frame that arrives after this response, not a frame already seen.
         // State and toast each need their own relevance check because either

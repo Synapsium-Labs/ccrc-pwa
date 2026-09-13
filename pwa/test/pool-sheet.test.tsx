@@ -42,8 +42,10 @@ const frame = (project: string, pool: ProjectPoolWire): ProjectPoolsWire => ({
  * a toast assertion stays red even when the production branch is intact. */
 const renderPoolSheet = (props: {
   project?: string | null;
+  selectedPool?: ProjectPoolWire;
   open?: boolean;
   onClose?: () => void;
+  onPoolChanged?: (project: string, pool: ProjectPoolWire) => void;
   fleet: FleetStore;
 }) => {
   const project: string | null = Object.hasOwn(props, 'project')
@@ -54,8 +56,10 @@ const renderPoolSheet = (props: {
       <ToastHost />
       <PoolSheet
         project={project}
+        selectedPool={props.selectedPool}
         open={props.open ?? true}
         onClose={props.onClose ?? vi.fn()}
+        onPoolChanged={props.onPoolChanged}
         fleet={props.fleet}
       />
     </>,
@@ -117,6 +121,54 @@ describe('PoolSheet writes', () => {
     expect(successToast).toHaveAttribute('role', 'status');
     expect(screen.queryByText('demo is in pool pool-a.', { selector: '.toast' }))
       .not.toBeInTheDocument();
+  });
+
+  it('remeasures project pool and placement after a successful write', async () => {
+    vi.spyOn(api, 'setProjectPool')
+      .mockResolvedValue({ ok: true, pool: { state: 'untagged' } });
+    const onPoolChanged = vi.fn();
+    const store = storeWith(pooled({ claude: 'pool-a' }));
+    renderPoolSheet({ onPoolChanged, fleet: store });
+
+    fireEvent.click(screen.getByRole('button', { name: /no pool/i }));
+
+    await screen.findByText(/demo is in no pool/i);
+    expect(onPoolChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('remeasures after a successful write that settles after the sheet closes', async () => {
+    const response = deferred<{ ok: true; pool: { state: 'tagged'; name: string } }>();
+    vi.spyOn(api, 'setProjectPool').mockReturnValue(response.promise);
+    const onPoolChanged = vi.fn();
+    const store = storeWith(pooled({ claude: 'pool-a' }));
+    const view = renderPoolSheet({ onPoolChanged, fleet: store });
+
+    fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+    view.rerender(
+      <><ToastHost /><PoolSheet project="demo" open={false} onClose={vi.fn()} onPoolChanged={onPoolChanged} fleet={store} /></>,
+    );
+    await act(async () => {
+      response.resolve({ ok: true, pool: { state: 'tagged', name: 'pool-a' } });
+      await response.promise;
+    });
+
+    expect(onPoolChanged).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/demo is in pool pool-a\./i, { selector: '.toast' })).not.toBeInTheDocument();
+  });
+
+  it('does not remeasure project rows after a refused write', async () => {
+    vi.spyOn(api, 'setProjectPool').mockRejectedValue(new ApiError(502, {
+      ok: false,
+      stderr: 'could not write the pool tag for demo',
+    }));
+    const onPoolChanged = vi.fn();
+    const store = storeWith(pooled({ claude: 'pool-a' }));
+    renderPoolSheet({ onPoolChanged, fleet: store });
+
+    fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+
+    await screen.findByText(/could not write the pool tag for demo/i, { selector: '.toast' });
+    expect(onPoolChanged).not.toHaveBeenCalled();
   });
 
   it('posts explicit null for no pool, never an empty string', () => {
@@ -186,7 +238,19 @@ describe('PoolSheet writes', () => {
 });
 
 describe('PoolSheet current-pool sources', () => {
-  it('uses the frame before the sheet has written', () => {
+  it('uses the selected route snapshot before a divergent frame', () => {
+    const store = storeWith(pooled({ claude: 'pool-a' }));
+    act(() => { store.setState({ pools: frame('demo', { state: 'tagged', name: 'pool-a' }) }); });
+    renderPoolSheet({
+      selectedPool: { state: 'tagged', name: 'pool-b' },
+      fleet: store,
+    });
+
+    expect(screen.getByText(/demo is in pool pool-b/i)).toBeInTheDocument();
+    expect(screen.queryByText(/demo is in pool pool-a/i)).not.toBeInTheDocument();
+  });
+
+  it('uses the frame when an old server omitted the selected route pool', () => {
     const store = storeWith(pooled({ claude: 'pool-a' }));
     act(() => { store.setState({ pools: frame('demo', { state: 'tagged', name: 'pool-a' }) }); });
     renderPoolSheet({ fleet: store });

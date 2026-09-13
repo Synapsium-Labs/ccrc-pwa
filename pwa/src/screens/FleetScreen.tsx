@@ -118,9 +118,14 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
   const newSession = onNewSession ?? (() => setNewOpen(true));
-  // Keep the subject through vaul's exit animation, as the other fleet sheets do.
-  const [poolProject, setPoolProject] = useState<string | null>(null);
+  // Keep the route-owned subject through vaul's exit animation, as the other
+  // fleet sheets do. Pool and project come from the same `/api/projects` row.
+  const [poolSelection, setPoolSelection] = useState<{
+    project: string;
+    pool?: NonNullable<ProjectRow['pool']>;
+  } | null>(null);
   const [poolOpen, setPoolOpen] = useState(false);
+  const poolWrite = useRef<{ project: string; pool: NonNullable<ProjectRow['pool']> } | null>(null);
 
   // The fleet socket is the source of truth: no optimistic row here — the new
   // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
@@ -533,7 +538,17 @@ export function FleetScreen({
                 onActions={openActionsFor}
                 roster={roster}
                 pools={pools}
-                onPool={(p) => { setPoolProject(p); setPoolOpen(true); }}
+                onPool={(p) => {
+                  const read = placementFor(p);
+                  const written = poolWrite.current?.project === p ? poolWrite.current.pool : undefined;
+                  setPoolSelection({
+                    project: p,
+                    ...(written !== undefined
+                      ? { pool: written }
+                      : read.kind === 'measured' ? { pool: read.pool } : {}),
+                  });
+                  setPoolOpen(true);
+                }}
                 /* Task 4: THIS card's own runs. Scoped here rather than inside
                    the card because "which card does a run belong on" is a
                    question about the run's `project`, and a card handed one
@@ -585,9 +600,17 @@ export function FleetScreen({
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
 
       <PoolSheet
-        project={poolProject}
+        project={poolSelection?.project ?? null}
+        selectedPool={poolSelection?.pool}
         open={poolOpen}
         onClose={() => setPoolOpen(false)}
+        onPoolChanged={(project, pool) => {
+          poolWrite.current = { project, pool };
+          setPoolSelection((selected) => selected?.project === project
+            ? { project, pool }
+            : selected);
+          void refreshProjects();
+        }}
         fleet={store}
       />
 

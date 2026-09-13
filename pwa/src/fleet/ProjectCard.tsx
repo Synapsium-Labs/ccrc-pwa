@@ -63,9 +63,10 @@ export type ProjectPlacementRead =
   | { kind: 'legacy' }
   | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
 
-/** The project's pool as one chip. Absence is handled by the caller: no frame
- *  means no claim. Unrecognised residue means this app is older than the fleet,
- *  not a tag that can be diagnosed as unreadable or malformed. */
+/** The project's pool as one chip. The caller supplies one coherent route read,
+ *  falling back to the pools frame only for old-server omission. Unrecognised
+ *  residue means this app is older than the fleet, not a tag that can be
+ *  diagnosed as unreadable or malformed. */
 function PoolChip({ pool, project, dim, onTap }: {
   pool: ProjectPoolWire;
   project: string;
