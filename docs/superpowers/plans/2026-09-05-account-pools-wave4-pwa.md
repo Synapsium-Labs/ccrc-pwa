@@ -4201,7 +4201,20 @@ deviation found while executing this plan is allocated in its own call at the mo
   measured project-specific refusal must not be cleared merely because the
   global projection changes; if the existing invalidation cannot be reused
   without a new fetch path, park this smaller stale-until-reopen defect rather
-  than introduce polling.
+  than introduce polling. The final isolated verification measured that park:
+  FleetScreen privately owns `projectRows` and `refreshProjects`
+  (`pwa/src/screens/FleetScreen.tsx:170`, `:176`); RunsScreen passes
+  StartProgramSheet only `open`, `onClose`, `fleet`, and `openRunProjects`
+  (`pwa/src/screens/RunsScreen.tsx:747`); and StartProgramSheet independently
+  defaults `loadProjects` to `api.projects` and calls it only from its open-keyed
+  effect (`pwa/src/fleet/StartProgramSheet.tsx:339`, `:382`). App mounts the two
+  screens as siblings without a project-state seam (`pwa/src/app.tsx:116`,
+  `:130`). Reuse would therefore require a new shared state/callback seam, not
+  the existing invalidation. Park the stale-until-reopen defect; add no timer or
+  duplicate O(N) sweep. The placement reader already returns every present
+  route `ProjectRow.placement` before consulting the global fallback
+  (`pwa/src/fleet/StartProgramSheet.tsx:267`, `:277`), so a projection change
+  cannot erase a measured project-specific refusal.
 
 - **D-2710 — D-2688's fix commit also added account pool chips to
   NewSessionSheet outside its ruling.** The product change is aligned with this
