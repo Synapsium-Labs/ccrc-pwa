@@ -5801,3 +5801,104 @@ was seven commits past it. They told me their in-flight diff touches no `pwa/` f
 and incomplete, and corrected it unprompted. Neither error was detectable by the receiving side. That
 is the argument for consulting peers by measurement rather than by status, and it is worth more than
 the collision it found.
+
+---
+
+## 2026-09-13 06:45Z — D-2722/D-2723: the worker refuted its own pushed fix, and the verification corrected ME twice
+
+Worker mail 1030, unprompted, against their own `fc8ec80b`: their final adversarial review found that
+**D-2721's remedy violates D-2721's own constraint 4.** Reported before any edit, with a failing
+fixture, no number assumed, no source touched, wave-done held. That is the discipline this programme
+has spent six rounds trying to install, applied unprompted to their own work.
+
+Verified by four independent strands in isolated worktrees (one reproduce on `sonnet`, three
+adversarial on `opus`). **Confirmed, and worse than reported. Issued D-2722 (accepted, wave 5) and
+D-2723 (parked, wave 6); floor 2724.**
+
+### The defect, with a causal control
+
+`poolSelectionFor` omits the `pool` key for any non-`measured` read. Applied by the new effect to an
+already-populated selection, `selectedPool` becomes `undefined` and `PoolSheet:115` falls to its third
+term — the frame. Probed against the fix AND its parent:
+
+```
+fc8ec80b (fix)     sheet flips to "alpha is in pool pool-a."   (the FRAME); card chip absent
+1a9093e8 (pre-fix) sheet holds   "alpha is in pool pool-b."    (the route)
+```
+
+Green pre-fix. **The commit causes it** — that control is what separates "this is broken" from "this
+commit broke it", and I will require it from now on.
+
+Sharper than either of us said: the arm `read.kind === 'measured' ? {pool} : {}` was effectively **DEAD
+at the tap**, because the sheet's only entry point is `PoolChip` and that renders only for a measured
+read (measured: a legacy row renders **0** `.proj-card-pool` nodes). The extraction was byte-faithful
+and moved a dead arm into a live position. That is a new failure shape for the ledger: **a faithful
+refactor can promote dead code to live without changing a character of it.**
+
+### It is not "the sheet shows the previous pool" — it FABRICATES
+
+- frame never listed the project → `projectPoolOf` returns `{state:'untagged'}` → **"alpha is in no
+  pool — every account may serve it."** A fabricated measurement in the **constraint-LIFTING**
+  direction, which `shared/api.ts:1741-1742` forbids by name.
+- agent down, frame `listed:false` → **"The pool tag for alpha could not be read:
+  `~/.cc-sessions/pools/alpha`."** A measurement the route never made, about a file nobody opened.
+
+**HIGH, not Medium.** And reachability is far wider than the worker's "a renamed directory":
+`listProjects` is built entirely on `io.readdir`, which folds every failure to null; **`/api/projects`
+has no 503 arm** unlike its siblings at `:1624`/`:2083`/`:2234`, so an agent-link drop answers **200
+with `projects: []`**; `watch.ts` pushes a changed `{listed:false}` frame during the same outage which
+drives the refresh with **no user action**; and the trigger is routine, because this repo's own
+AGENT-FIRST rule restarts `ccrc-agent` on every `ccd/` change without reloading the PWA.
+
+`legacy` was **REFUTED** as a live arm — it needs a rollback below the pools wave, and that rollback
+ships a new PWA in the same artifact with `registerType:'autoUpdate'`, reloading the client that would
+suffer it. The finding rests on `missing` alone. **Do not accept a two-arm justification when one arm
+self-heals** — it inflates a real finding and teaches the next reviewer to pad.
+
+### TWO CORRECTIONS TO ME, and the second is the serious one
+
+**(a) Mail 1028 overreached.** I wrote *"the remeasurement cannot blank the sheet mid-refresh — I
+checked that specifically."* True for `pending`/`failed`, which is all I checked; stated as clearing the
+class. `missing` reaches it. **Four ledger entries after I recorded that this wave's signature failure is
+a record naming something narrower than what it must cover, I did it again — in the act of clearing the
+fix for push.**
+
+**(b) I was about to rule from a false premise.** I had drafted a refinement saying the remedy wrongly
+"conflates measured-absence with ignorance", resting on *`missing` is a measurement*. **It is not, as
+shipped**: `listProjects` skips its entire root loop when the root `readdir` returns null, and `readdir`
+folds absent, unreadable and timed-out together — `{kind:'missing'}` is itself an overloaded null one
+layer down. Treating it as ignorance, which is what the worker did, is **closer to true** than my
+correction. Had I ruled from my own reading I would have ordered a per-arm policy built on a distinction
+the stack does not measure. **The verification did not confirm my judgement; it stopped it.**
+
+### D-2722 — remedy accepted with four amendments
+
+Keeping is **forced**, not chosen: the seam has no other expressible behaviour. Required with it:
+key the predicate on the **read's kind** rather than on `next.pool === undefined` (a second reader of a
+decision `poolSelectionFor` already made); **pin it** — it is currently **105/105 green with AND without
+the remedy**, and that green is unambiguous rather than empty because the delete-the-effect control
+proves the code is exercised, so it is genuine non-coverage; write the comment to say the seam has no
+vocabulary for measured-absence and the frame **fabricates**, never the false sentence I nearly ordered;
+and rewrite `poolSelectionFor`'s docstring, whose old-server frame-fallback justification names a path
+that does not exist. Plus correct `FleetScreen.tsx:270`, already pushed, which predicts *"this box has
+not said"* where the measured degrade is the frame's pool.
+
+### D-2723 — PARKED to wave 6, because the remedy masks rather than fixes
+
+`projectPoolOf` still invents `{state:'untagged'}` whenever `selectedPool` is undefined; the remedy only
+guarantees this parent never passes it. A second entry point re-exposes it. `selectedPool?:
+ProjectPoolWire` documents `undefined` as "absent on old servers" — one meaning — and none of
+`ProjectPoolWire`'s four members can say "the route answered and this project is not listed"; adding one
+is the wrong lever, since that type is the element type of the frame itself.
+
+**And the carrier is already shipped.** `ProjectPlacementRead` already separates `legacy` (frame
+fallback correct) from `missing` (frame fallback is a false statement) — PWA-local, exported, already a
+prop on the sibling component, already computed by `placementFor` for this exact project, **one**
+production call site, no wire change, no new type. It needs `PoolSheet` edited, so it is wave 6's.
+
+### Everything else verified myself
+
+PR **#95** at `fc8ec80bd35c2bf93106eeea251420e1d7bf7c9a` (`ls-remote` agrees), four REQUIRED checks
+green. `test-macos` fails and does not gate — and `origin/main`'s own tip `ecd953b0` fails the identical
+leg (run 34700007960, same five-job shape), so it is pre-existing and this diff carries no `ccd/` path.
+Mail 1031 carries the ruling and the artifact.
