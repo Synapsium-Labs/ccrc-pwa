@@ -6277,3 +6277,49 @@ write cannot answer from before it.
 
 **Three of five lenses now done** (claims audit, grounds/contrast, interaction). **Seams and test
 integrity remain**, and the run stays at `awaiting-review` until they run.
+
+### 2026-09-13 20:44Z — LENS 2 (seams) done inline: no finding
+
+- **`projectPoolOf` has exactly TWO value-site callers at `e9dd490a`**, and both are the sanctioned
+  ones: `PoolSheet.tsx:115` (the old-server fallback, D-2701's third term) and `SwapSheet.tsx:507` (the
+  eligibility split — the frame in its ENFORCEMENT role). Every other hit is a comment or the
+  definition. **The frame is a pool-value source nowhere unsanctioned**, which is the rule D-2722 was
+  minted for breaking.
+- **`SessionLine.projectPool` is optional, and BOTH call sites pass it** (`ProjectCard.tsx:291` and
+  `:429`) — including `:429`, the archived branch that is D-2708's subject. No silent opt-out, which is
+  the failure shape I warned run 44 about on their `abroad` prop.
+- **L0 holds.** `shared/poolrule.ts`'s only import is `import type { ProjectPoolWire } from './api.js'`
+  — type-only, erased, and L0→L0 besides, so no bundle edge and no ring crossing.
+- **The new `unrecognised` state is the OPPOSITE of this wave's defect class.** `pool-undecidable` grew
+  a third `state` rather than folding an unknown wire member into `unreadable` or `malformed`, and a
+  `const unhandled: never = projectPool` makes a future `ProjectPoolWire` member a COMPILE ERROR here.
+  Three conditions kept distinct, fail-shut, with a mechanism rather than a comment.
+- **`poolChip?: string | null` is three-valued in TYPE and one-valued in MEANING.** `:359` reads
+  `poolChip != null && poolChip !== ''`, so `undefined`, `null` and `''` all render nothing — but that
+  is not an overloaded null, because no caller distinguishes them: it belongs to an inner account row
+  with a SINGLE call site (`:632`, passing `accountPool(roster, w)`), and its docstring says "a missing
+  account pool stays quiet". The defect class is two conditions a caller handles DIFFERENTLY collapsing
+  to one value; here there is one condition with three spellings.
+- One `SwapSheet` call site documents a deliberate omission — *"the omission is the answer, not an
+  oversight (see `SwapSheetProps`)"* — which is the optional-prop hazard being handled explicitly
+  rather than accidentally.
+
+**Lens 2: NO FINDING.**
+
+### Where the review actually stands — 4 of 5, and lens 3 is PARTIAL
+
+| lens | state |
+|---|---|
+| claims audit | done — census exact, one citation, it lands |
+| grounds / contrast | done — 242/242, `problems: 0`, nothing stale, `--accent-tint` verified in the CSS |
+| interaction | done — no finding, traced + probed |
+| seams | done — no finding |
+| **test integrity** | **PARTIAL** |
+
+**Being precise about lens 3 rather than counting it done.** I have mutation-verified the three NEWEST
+pins myself, each with an exact-inverse restore and distinct file hashes: D-2708's `!dead` conjunct,
+D-2714's bridge-lifetime fixture (2 red / 1 red on the two controls), D-2722's keep-clause (exactly 1
+red). What I have NOT done is audit the OLDER fixtures (the D-2688..D-2707 era) for the
+green-but-wrong shapes — a fixture asserting a state the wire cannot carry, a test pinning shape rather
+than effect, coverage that would not red alone. That is the remaining gap and I am naming it rather
+than letting four clean lenses imply five.
