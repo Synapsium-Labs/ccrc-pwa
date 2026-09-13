@@ -55,6 +55,23 @@ export interface HistoryTerm {
   rowHeight(): number;
   /** Scroll the view; negative is up, in lines. */
   scrollLines(amount: number): void;
+  /**
+   * Shift the rendered rows by a SUB-ROW amount, in CSS pixels, positive
+   * downward — the fraction of a row that `scrollLines` cannot express.
+   *
+   * A terminal scrolls in whole rows, and at speed that is invisible: at
+   * 4 px/ms a row goes past every four milliseconds. It stops being invisible
+   * exactly where a throw ends, because the time between whole-row steps is
+   * the row height divided by the speed — so as the glide decays the steps
+   * spread out, the last ones arrive hundreds of milliseconds apart, and the
+   * final one is the longest of all. That is the stutter, and no amount of
+   * tuning the curve removes it: it is the quantum, not the speed.
+   *
+   * So the remainder is rendered rather than merely remembered. Optional on
+   * the interface because a terminal that cannot offer it still scrolls
+   * correctly — it just scrolls in steps.
+   */
+  offset?(px: number): void;
   /** Called when the reader, having scrolled up, comes back down to the newest
    *  line — the gesture that means "I'm done with the history". NOT called for
    *  the arrival at the bottom that writing the history itself causes. */
@@ -168,6 +185,18 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
       return px > 0 && term.rows > 0 ? px / term.rows : 0;
     },
     scrollLines: (n) => term.scrollLines(n),
+    // The TERMINAL element, not the host: `.term-host` is the one with
+    // `overflow: hidden`, so it is what must stay put and clip while its child
+    // slides. A transform is cosmetic to xterm — it lays its rows out inside
+    // this element and never measures against the page — and it costs a
+    // compositor layer rather than a relayout, which is what a per-frame shift
+    // beside a repainting terminal needs.
+    offset: (px) => {
+      const el = host.querySelector('.xterm');
+      if (el instanceof HTMLElement) {
+        el.style.transform = px === 0 ? '' : `translateY(${px}px)`;
+      }
+    },
     onBottom: (cb) => {
       // LATCHED, and that is the whole of it: writing the history scrolls the
       // view to the newest line, which is a bottom arrival nobody asked for.
@@ -227,9 +256,12 @@ const FLING_SMOOTH = 0.35;
  *  frame and applied per elapsed millisecond so a slow frame does not slow the
  *  glide down with it. */
 const GLIDE_DECAY = 0.95;
-/** Below this there is nothing left to show; stop rather than animate a
- *  fraction of a row forever. */
-const GLIDE_STOP_PX_MS = 0.02;
+/** Below this there is nothing left to SHOW — half a pixel per 60 Hz frame.
+ *  Stated in pixels rather than in rows on purpose: since the remainder is
+ *  rendered (`HistoryTerm.offset`), the end of a throw is a sub-pixel creep
+ *  rather than a row waiting to drop, and the question the threshold answers
+ *  is "can the eye still see this move", not "is another step coming". */
+const GLIDE_STOP_PX_MS = 0.5 / (1000 / 60);
 const FRAME_MS = 1000 / 60;
 /** The longest gap a single glide frame may account for. A drawer that was
  *  backgrounded mid-throw comes back with a gap of seconds, and without this
@@ -651,7 +683,16 @@ export function TerminalDrawer({
       // The content follows the finger: dragging DOWN reaches older output,
       // which is a scroll UP.
       if (rows !== 0) term.scrollLines(-rows);
-      return travel - rows * rowPx;
+      const rest = travel - rows * rowPx;
+      // AND THE REMAINDER IS SHOWN, not just carried. Without this the view
+      // only ever moves in whole rows, which is fine at speed and is the whole
+      // of what a decelerating throw looks wrong doing — see `offset`'s own
+      // note. Nothing is snapped back when the motion stops: a view resting
+      // part of a row off its grid is what every pixel-smooth scroller on the
+      // device leaves behind, and snapping to the grid would put back a
+      // hitch at the exact moment this is meant to remove one.
+      term.offset?.(rest);
+      return rest;
     };
 
     /**
@@ -676,9 +717,12 @@ export function TerminalDrawer({
      */
     const glide = (v0: number): void => {
       let v = v0;
-      let prev = 0;
+      // Seeded from the same clock the drag measured its speed with —
+      // `requestAnimationFrame`'s argument and `performance.now()` are one
+      // timeline — so the first frame of the throw carries the gap since the
+      // finger left rather than being spent establishing one.
+      let prev = performance.now();
       const frame = (now: number): void => {
-        if (prev === 0) { prev = now; raf = requestAnimationFrame(frame); return; }
         const dt = Math.min(now - prev, GLIDE_MAX_STEP_MS);
         prev = now;
         carry = advance(v * dt + carry);
