@@ -30,8 +30,16 @@ import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscr
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import type { FleetSession, ProjectRow } from '../../../shared/api';
+import type { FleetSession, ProjectPoolsWire, ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
+
+const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
+  pools,
+  (_key, value: unknown) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
+  },
+);
 
 /** Section-header noun for each bucket — a heading register, not the row's
  *  own state-word adjective (SessionLine.tsx's private `WORD`, which says
@@ -150,36 +158,49 @@ export function FleetScreen({
   // `/api/projects` performs one agent round trip per project, so this lifecycle
   // has no timer. Pools-frame identity and visible-page return invalidate it;
   // the latter remeasures changed limits when a phone is picked up. A successful
-  // add is the only imperative refresh. Generations keep late responses from
-  // overwriting a newer measurement.
+  // add is the other imperative refresh. Generations keep late responses from
+  // overwriting a newer measurement. The visibility token coalesces only an
+  // equal reconnect frame while that visibility read remains unresolved; a
+  // changed frame still starts its own request immediately (D-2702).
   const projectRequest = useRef(0);
+  const visibilityRequest = useRef<{ token: number; pools: string } | null>(null);
+  const poolsFingerprintRef = useRef(pools === null ? null : poolsFingerprint(pools));
+  poolsFingerprintRef.current = pools === null ? null : poolsFingerprint(pools);
   const [projectRows, setProjectRows] = useState<
     | { kind: 'legacy' }
     | { kind: 'pending' }
     | { kind: 'failed' }
     | { kind: 'ready'; rows: readonly ProjectRow[] }
   >({ kind: 'legacy' });
-  const refreshProjects = useCallback(async (): Promise<void> => {
+  const refreshProjects = useCallback(async (visibilityPools?: string): Promise<void> => {
     const request = ++projectRequest.current;
+    if (visibilityPools !== undefined) visibilityRequest.current = { token: request, pools: visibilityPools };
     setProjectRows({ kind: 'pending' });
     try {
       const response = await api.projects();
       if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
     } catch {
       if (request === projectRequest.current) setProjectRows({ kind: 'failed' });
+    } finally {
+      if (visibilityRequest.current?.token === request) visibilityRequest.current = null;
     }
   }, []);
   useEffect(() => {
     if (pools === null) return;
+    const fingerprint = poolsFingerprint(pools);
+    if (visibilityRequest.current?.pools === fingerprint) return;
+    visibilityRequest.current = null;
     void refreshProjects();
   }, [pools, refreshProjects]);
   useEffect(() => {
     const onVisible = (): void => {
-      if (document.visibilityState === 'visible' && pools !== null) void refreshProjects();
+      if (document.visibilityState === 'visible' && poolsFingerprintRef.current !== null) {
+        void refreshProjects(poolsFingerprintRef.current);
+      }
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [pools, refreshProjects]);
+  }, [refreshProjects]);
 
   const placementFor = (project: string): ProjectPlacementRead => {
     if (projectRows.kind !== 'ready') return projectRows;

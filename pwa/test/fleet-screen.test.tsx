@@ -20,6 +20,7 @@ import { TEST_ROSTER } from './rosterFixture';
 beforeEach(() => {
   window.localStorage.clear();
   resetAcks();
+  FleetSocket.instances = [];
 });
 
 afterEach(() => {
@@ -100,6 +101,46 @@ const makeStore = (): FleetStore =>
         close(): void {},
       }) as unknown as WebSocket,
   });
+
+class FleetSocket {
+  static instances: FleetSocket[] = [];
+
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+
+  constructor() {
+    FleetSocket.instances.push(this);
+  }
+
+  close(): void {}
+
+  open(): void {
+    this.onopen?.(new Event('open'));
+  }
+
+  message(data: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
+  }
+
+  drop(): void {
+    this.onclose?.(new Event('close') as CloseEvent);
+  }
+}
+
+const makeLiveStore = (): FleetStore => createFleetStore({
+  makeSocket: () => new FleetSocket() as unknown as WebSocket,
+  catchUp: async () => ({ events: [], epoch: 'test', seq: 0, resync: false }),
+  fetchFeed: async () => ({ events: [] }),
+  fetchAccounts: async () => ({ accounts: [], projected: null, roster: TEST_ROSTER }),
+});
+
+const latestFleetSocket = (): FleetSocket => {
+  const socket = FleetSocket.instances[FleetSocket.instances.length - 1];
+  if (socket === undefined) throw new Error('no fleet socket');
+  return socket;
+};
 
 const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState']>>): void => {
   act(() => {
@@ -403,6 +444,105 @@ describe('FleetScreen', () => {
         Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
         act(() => { document.dispatchEvent(new Event('visibilitychange')); });
         expect(projects).toHaveBeenCalledTimes(2);
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+
+    it('coalesces an equal reconnect pools frame with an unresolved visible refresh', async () => {
+      vi.useFakeTimers();
+      try {
+        let resolveInitial!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        let resolveVisible!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        const projects = vi.spyOn(api, 'projects')
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveVisible = resolve; }));
+        const store = makeLiveStore();
+        render(<FleetScreen store={store} />);
+        const pools = { listed: true as const, byProject: {}, enforcement: 'enforced' as const };
+
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        expect(projects).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          resolveInitial({ roots: [], projects: [] });
+          await Promise.resolve();
+        });
+
+        act(() => {
+          latestFleetSocket().drop();
+          Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(projects).toHaveBeenCalledTimes(2);
+        act(() => { vi.advanceTimersByTime(500); });
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+
+        expect(projects).toHaveBeenCalledTimes(2);
+        await act(async () => {
+          resolveVisible({ roots: [], projects: [] });
+          await Promise.resolve();
+        });
+        store.getState().disconnect();
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+
+    it('refreshes immediately for a changed reconnect pools frame during a visible refresh', async () => {
+      vi.useFakeTimers();
+      try {
+        let resolveInitial!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        const projects = vi.spyOn(api, 'projects')
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
+          .mockImplementation(() => new Promise(() => {}));
+        const store = makeLiveStore();
+        render(<FleetScreen store={store} />);
+        const pools = { listed: true as const, byProject: {}, enforcement: 'enforced' as const };
+
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        await act(async () => {
+          resolveInitial({ roots: [], projects: [] });
+          await Promise.resolve();
+        });
+        expect(projects).toHaveBeenCalledTimes(1);
+
+        act(() => {
+          latestFleetSocket().drop();
+          Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(projects).toHaveBeenCalledTimes(2);
+        act(() => { vi.advanceTimersByTime(500); });
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({
+            type: 'pools',
+            pools: {
+              listed: true,
+              byProject: { alpha: { state: 'tagged', name: 'pool-a' } },
+              enforcement: 'enforced',
+            },
+          });
+        });
+
+        expect(projects).toHaveBeenCalledTimes(3);
+
+        act(() => {
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        expect(projects).toHaveBeenCalledTimes(4);
+        store.getState().disconnect();
       } finally {
         cleanup();
         vi.useRealTimers();
