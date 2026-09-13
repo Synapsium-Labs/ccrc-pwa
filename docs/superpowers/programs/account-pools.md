@@ -5902,3 +5902,56 @@ PR **#95** at `fc8ec80bd35c2bf93106eeea251420e1d7bf7c9a` (`ls-remote` agrees), f
 green. `test-macos` fails and does not gate — and `origin/main`'s own tip `ecd953b0` fails the identical
 leg (run 34700007960, same five-job shape), so it is pre-existing and this diff carries no `ccd/` path.
 Mail 1031 carries the ruling and the artifact.
+
+---
+
+## 2026-09-13 07:00Z — D-2722 accepted at `e9dd490a`; the pin discriminates, and the client we all run is broken
+
+**Worker landed all four amendments and I measured every one rather than reading the commit message.**
+Definitions at `7be55b58` (+66/−0, plan only), fix at `e9dd490a`.
+
+- **Baseline** 106/106 on the two owning suites — 105 before, so the new fixture is the 106th.
+- **Mutant — the keep-clause removed** (`13fa47f7` → `abc14fbc`): **exactly 1 red**, `keeps the last
+  route-measured pool when the project vanishes from a refresh, rather than falling to the frame`;
+  105 passed; `pool-sheet.test.tsx` entirely green. **That closes amendment 2** — the remedy had been
+  105/105 green with AND without it, which was genuine non-coverage rather than ambiguity, because the
+  delete-the-effect control had already proved the code exercised. It is a mechanism now, not a comment.
+- **Union gate 225/225** at `e9dd490a`, with D-2722 and D-2723 both committed and visible.
+- Amendment 1 keyed on `read.kind !== 'measured'`, amendment 3's comment names the missing vocabulary
+  and BOTH fabrications without claiming ignorance, amendment 4's docstring says plainly that a shipped
+  justification for an unreachable path is a false claim — **better written than my ruling was** — and
+  `FleetScreen:270` was corrected without being asked twice.
+- **Both definitions cite MAIL 1031 as the ruling act, not this ledger.** D-2712's lesson applied
+  without being restated, by the worker, unprompted.
+
+**Wave-done cleared** (mail 1036), with the fingerprint discipline restated: measure once from the
+branch's own tip, then stop pushing, and tell me if anything makes you push again.
+
+### The tooling this programme runs on is broken, and it is not in anyone's diff
+
+Run 44 (mail 1032) reports three breaks of `ccrc-api`'s own stated contract, found by eight review
+lenses with two refuters each, fixed as D-2724..D-2731 on their **unmerged** branch. They framed it as
+*"none of that is in your diff's path"*. **It is in the client my session runs.** Verified on this box
+(`~/.local/bin/ccrc-api`, Sep 12 18:32) — it carries all three, including
+`:361 base=$(server_url) || exit $?`, which captures the refusal envelope into a variable and discards
+it, and a `refuse()` that printfs raw argv into JSON unescaped.
+
+**Every session on this fleet is running it**, and will until #92 merges and the agent lane deploys —
+AGENT-FIRST, so the fleet host gets it before the server.
+
+**One refinement sent back, because it decides who is actually exposed.** The empty-stdout break is
+SILENT only for a caller that tests output for emptiness; a caller that PARSES gets a loud throw, and
+exit 2 survives either way. Every call site this session uses parses, which is why neither coordinator
+was bitten and neither could have been. The exposed population is helpers shaped
+`[ -z "$out" ] && echo "no rows"` — a far smaller and more findable set than "anyone using the client",
+and saying it the broad way would send the next reader hardening call sites that were never at risk.
+**A defect's blast radius is the caller shape, not the call count.**
+
+### Intersection with run 44, re-measured at both current tips
+
+`e9dd490a` × `e1b9ce9f`: still **exactly eight**, unchanged across four tip moves. Their two new `pwa/`
+files are not in my 32, and they checked my census before touching them. Their choice to keep D-2731's
+reader surface-local rather than adding an entry to `pwa/src/lib/api.ts`'s error map avoided an
+auto-merge in a file both sides would have been appending to — the `fleet-css.test.ts` shape, in the
+file that would have been hardest to review afterwards. That is the collision report doing its job
+prospectively rather than forensically.
