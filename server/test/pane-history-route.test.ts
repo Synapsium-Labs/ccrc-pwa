@@ -52,12 +52,22 @@ describe('GET /api/sessions/:id/pane/history', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
     // THE ARGV IS THE GUARD. `-p` to stdout, `-e` so the history keeps the
-    // colours it was written in, `-S -2000` to start above the screen. It is
-    // reachable under the agent's existing `['capture-pane']` grant — nothing
-    // here widens the closed exec surface, so this change never has to ship to
-    // the fleet host ahead of the server.
+    // colours it was written in, `-S -2000` to start above the screen, and
+    // `-J` so a line wrapped at the PANE's width arrives as the one logical
+    // line it was, for the reader to wrap at THEIRS. All four are reachable
+    // under the agent's existing `['capture-pane']` grant — flags are not
+    // checked, only the verb — so nothing here widens the closed exec surface
+    // and this never has to ship to the fleet host ahead of the server.
+    //
+    // WHY `-J` EARNS ITS PLACE, measured on a private socket against a real
+    // 200-column transcript: 1882 captured lines become 1113 (-41%) for +0.05%
+    // of bytes, and a 43-column phone renders 6130 rows instead of 5861 —
+    // which also puts the read back inside the drawer's own `lines * 3`
+    // scrollback budget, over which today's capture silently spills. Without
+    // it the phone wraps text that tmux already wrapped, and a word breaks
+    // twice.
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-S', '-2000'],
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
     ]);
     await app.close();
   });

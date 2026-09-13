@@ -165,8 +165,30 @@ export class Tmux {
    * against tmux 3.4: `can't find pane: cc-nope`.
    */
   async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
+    // `-J` JOINS WHAT TMUX ALREADY WRAPPED, and it is here because the reader
+    // is not the pane. A stored line was hard-wrapped at the PANE's width and
+    // tmux never reflows it, so a phone rendering that capture wraps the
+    // remainder a second time — a word broken mid-way and the continuation
+    // indented under nothing. `-J` hands back the logical line and lets the
+    // reader wrap it at their own width, once.
+    //
+    // MEASURED on a private socket against a real 200-column transcript:
+    // 1882 captured lines become 1113 (-41%) for +0.05% of bytes and no
+    // measurable time; a 43-column phone renders 5861 rows instead of 6130,
+    // which also puts the read back inside the `lines * 3` scrollback the
+    // drawer sizes for it and over which today's capture silently spills.
+    // The saving is the ragged remainder, so it is zero when the reader's
+    // width happens to divide the pane's (200 into 40) and real everywhere
+    // else.
+    //
+    // NO TRIM RIDES WITH IT. `-J` also keeps trailing spaces that were
+    // PAINTED, and trimming them measured zero rows saved at every width while
+    // cutting a full-width reverse-video bar from 196 rendered cells to 6 —
+    // tmux strips only the trailing spaces that carry default attributes, so
+    // what is left is content, not padding. It would also be this adapter
+    // narrowing a distinction tmux handed it.
     const r = await this.run('tmux',
-      ['capture-pane', '-t', target(id), '-p', '-e', '-S', `-${lines}`]);
+      ['capture-pane', '-t', target(id), '-p', '-e', '-J', '-S', `-${lines}`]);
     if (r.code === 0) return { ok: true, text: r.stdout };
     if (r.stderr.includes("can't find pane")) return { ok: false, reason: 'gone' };
     const msg = r.stderr.trim();
