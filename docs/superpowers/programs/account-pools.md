@@ -5590,3 +5590,43 @@ Recorded together because the pattern matters more than any one of them:
 Four of the seven are the same failure: **a ruling, a dispatch or a record that named something
 narrower than the thing it had to cover**, and in every case the gap was found by measurement rather
 than by re-reading.
+
+### 2026-09-13 05:35Z — the other ccrc-pwa programme is on the same seven files, and only one of them conflicts
+
+Consulted the fleet before the push rather than after, which is what the standing reconcile instruction
+is for. **Run 44 (`crossrepo-programmes` wave 2, PR #92, `ws/bright-meadow` `3d7b0225`, coordinator
+`claude-ccrc-pwa`) is based on the same `ecd953b0` and overlaps wave 5 on SEVEN files** — and they are
+the four highest-risk files in this wave plus their suites:
+
+| file | PR #92 | wave 5 | my ruling |
+|---|---|---|---|
+| `pwa/src/fleet/ProjectCard.tsx` | +106/−8 | +174 | D-2703 |
+| `pwa/src/screens/FleetScreen.tsx` | +31/−1 | +124 | D-2704 / D-2707 |
+| `pwa/src/fleet/fleet.css` | +85/0 | +116 | D-2688 |
+| `pwa/design/audit.mjs` | +28/0 | changed | D-2706 |
+| `pwa/test/project-card.test.tsx` | +280/0 | +324 | |
+| `pwa/test/fleet-screen.test.tsx` | +62/0 | +827 | |
+| `pwa/test/fleet-css.test.ts` | +6/−1 | +105 | |
+
+**Measured rather than feared.** `git merge-tree --write-tree --name-only 030f4ce9 3d7b0225` exits 1
+with **exactly one textual conflict, `pwa/test/project-card.test.tsx`**. The other six auto-merge — and
+that is the finding, not the relief. Six files where both sides add real executable code produce a tree
+neither programme has ever run, with no conflict marker to make anyone look.
+
+The sharpest is `ProjectCard.tsx`: PR #92 adds an **optional prop with a default**
+(`abroad?: readonly RunSummary[]`, `abroad = []`) plus `orphanNote` and three new `runWords` imports,
+while wave 5 rewrites the same component's placement read. An optional parameter that GATES something
+is the silent-merge archetype — every call site the other side wrote without it compiles and quietly
+opts out, with no conflict, no arity error and no red. `fleet-css.test.ts` is the second shape: both
+sides APPEND to the same selector-list literal, which auto-merges and is exactly where an entry
+vanishes without trace.
+
+**And `deviation-refs` cannot help here.** It compares this branch against `origin/main` WITHOUT
+merging, so neither branch can see the other's D-numbers until one of them lands. The guard that exists
+precisely to catch parallel-branch collision is blind to the only two branches currently colliding.
+
+Reported to run 44's coordinator as mail 1020, with an explicit offer: **if #92 is closer to merge I
+will hold wave 5 behind it and pay the integration myself**, because my branch is the one that can
+still absorb a rebase cheaply — unpushed, and reviewed by nobody outside this programme. Wave 5 is not
+racing it. Awaiting their merge-order answer; the push and the PR proceed regardless, since neither is
+a merge.
