@@ -19665,6 +19665,17 @@ its own is exactly the shape that gets mistaken for coverage.
 
 ### D-2679 — D-2673 alone makes macOS WORSE: a fast failure becomes an indefinite hang. DO NOT SHIP IT WITHOUT D-2661
 
+> **CORRECTED BY D-2734 AND D-2736 — the CONCLUSION held, the MECHANISM below is wrong, and the
+> remedy it prescribes is measured not to work.** Kept unedited beneath this line because it is the
+> record of what was believed, and because the error is instructive. Three corrections: (1) the hang
+> does not depend on the deadline at all — `wait` on a backgrounded PIPELINE waits for the whole job,
+> and the darwin arm hung on the SUCCESS path with the mint exiting normally (D-2734); (2) there are
+> TWO gates, not one — a mint that never exits parks the run in `_auth_pump`, a mint that does exit
+> parks it in `wait`, and each hid the other (D-2736); (3) the prescribed "a `wait` that cannot block
+> forever" was implemented and measured, and the run still hung, because control never reaches `wait`
+> (D-2736). What survives intact: D-2673 alone was a regression, a loud fast failure beats a silent
+> hang on a credential path, and a bound had to land WITH it rather than after it.
+
 **Measured on `295c876c`, macos-latest, and it reverses this branch's own claim one commit earlier.**
 
 D-2673 was reported as working on the strength of one number: `the mint exited 1` went from **9** to
@@ -19703,3 +19714,117 @@ going to zero as "works", when the question was whether the method completes. `t
 disappearing is equally consistent with "the mint now succeeds" and with "the mint never returns", and
 the run that produced it had ALREADY been cut without finishing a single pane-bound case — the evidence
 for the stronger claim was absent in the very log that supplied the weaker one.
+
+### D-2734 — `wait` on a backgrounded PIPELINE waits for the WHOLE job, so D-2673's darwin arm could never terminate. D-2679 named the wrong cause, and so did the correction to it
+
+D-2679 said the deadline was the only thing standing between D-2673 and a hang. **It was not, and the
+deadline is irrelevant.** In bash, `wait PID` on a member of a backgrounded pipeline blocks until EVERY
+process in that job has exited — not just the named one. MEASURED, bash 5.2.21:
+
+    a | b &  with b exiting after 1s and a able to exit  ->  wait rc=7 after 1s
+    a | b &  with b exiting after 1s and a blocked        ->  wait NEVER RETURNS
+
+`_auth_spawn_pty_child`'s darwin arm was `cat <in.child | _auth_timeout … &`, and `cat` cannot exit while
+a writer holds `in.child` open — which `_auth_open_pipes` does deliberately on fd 9. So the arm hung by
+construction. MEASURED on the real helper, same mint (`echo line-one; exit 3`), only `CCD_OS` differing:
+
+    linux arm    pump returned 0s   wait rc=3, 0s
+    darwin arm   pump returned 0s   wait NEVER RETURNED
+
+The mint ran, printed, exited 3, and the pump saw its EOF — and the run still never ended, on the SUCCESS
+path, on Linux. Not intermittent, not macOS-specific, not deadline-dependent; D-2661 has nothing to do
+with it.
+
+**Both prior readings of this were wrong, and in opposite directions.** D-2679 blamed the deadline. The
+objection raised against D-2679 — that `wait` is unreachable because `_auth_pump` precedes it — was also
+wrong, or rather half-right: there are TWO sequential gates. A mint that never exits parks the run in
+`_auth_pump` (D-2736); a mint that DOES exit parks it in `wait` (here). Either way it hangs, which is why
+one gate was enough to hide the other. The source comment that read "`$!` after a backgrounded PIPELINE
+is its LAST element … which is the one whose status the callers' `rc` branches read" was true about `$!`
+and invited exactly the wrong conclusion about `wait`.
+
+**Fix:** the mint is no longer in a pipeline. Process substitution hands it the same PIPE that D-2614
+measured BSD `script` accepting, while leaving `wait` answerable by the mint alone. Pinned by
+`ccd-account-auth.test.ts`'s "the pane-bound spawn has to END", which drives the darwin arm from Linux by
+assigning `CCD_OS` after sourcing — so the defect is red on an ordinary box instead of waiting on a macOS
+leg that gets cancelled before it reports.
+
+### D-2735 — the copier inherits fd 9 and is therefore its own writer, so it can never see EOF
+
+The shipped comment claimed the copier "blocks reading the FIFO until `_auth_close_pipes` drops fd 9, so
+… the `cat` ends with it". MEASURED on the darwin arm: **1 copier before that line and 1 after.** A
+process substitution inherits this shell's descriptors, so the copier held fd 9 — a WRITE end on the very
+FIFO it was reading — and a reader that is its own writer never reaches EOF, no matter what the parent
+closes.
+
+**Fix:** `exec 7<&- 9<&-` inside the substitution, and `exec cat` so the pid that lingers is the copier
+itself rather than a shell around it. After: 1 before, 0 after. The mint drops the same two descriptors
+on BOTH arms, for the same reason — a mint that outlives the helper would otherwise strand the copier by
+holding `in.child` written-open. MEASURED in the backstop case: copier 1 -> 1 before that change, 1 -> 0
+after. The FIFO stays open for the mint regardless, because THIS shell still holds fd 9, which is what
+`_auth_open_pipes` holds it read-write for.
+
+### D-2736 — `_auth_pump` had no deadline, and the bound D-2679 prescribed is measured NOT to work
+
+`_auth_timeout` bounds the CHILD; nothing bounded the LOOP THAT READS IT. `_auth_pump` leaves only on
+EOF, and EOF needs every writer of `$AUTH_RUN/out` to close — so a child that outlives its deadline
+(D-2661, still undiagnosed) parks the loop forever and `wait` is never reached at all.
+
+D-2679 prescribed "a `wait` that cannot block forever". **Implemented and measured, that leaves the run
+hanging exactly as before**, because control never arrives at `wait`. A bound in the PUMP is the one that
+ends it.
+
+**And it must stamp `expired` itself.** The backstop kills the child, so `wait` reports 143 — and 143 is
+indistinguishable from a mint someone else killed, so `(( rc == 124 ))` is false and the caller would
+`_auth_die "the mint exited 143"` over a state `_auth_setup_token` PROMISES as terminal. Hence
+`AUTH_EXPIRED`, set only by the backstop and read by all three callers beside the existing 124 branch.
+The bound is `CCRC_AUTH_TIMEOUT + CCRC_AUTH_PUMP_GRACE` (default 10s) so the ordinary `timeout` path
+always wins the race and this fires only when that path did not.
+
+**Known limitation, stated rather than papered over:** the backstop kills `AUTH_CHILD`, which on either
+arm is the shell wrapping `_auth_timeout`. Descendants whose own deadline failed can outlive it, orphaned.
+On a real pane `ccd account-pane --cancel` kills the pane and takes the tree; under a harness that kills
+only the helper, it does not.
+
+### D-2737 — the cancellation trap exits without closing the pipes, and `_auth_close_pipes` on an unset run dir spells three ABSOLUTE paths
+
+`_auth_cancelled` published `cancelled` and `exit 0` straight past `_auth_close_pipes`, so every cancelled
+or killed run left three FIFOs under `$REG/.auth/<id>.run/` — inside `$HOME` — plus, on the darwin arm, a
+copier still blocked on one of them. The FIFOs are the worse half: a recursive reader that does not skip
+devices blocks on them for ever (see D-2739).
+
+Making the trap call `_auth_close_pipes` **made a latent hazard reachable**, which is why the guard lands
+in the same entry rather than later. Every pre-existing caller runs after `_auth_open_pipes`, so `AUTH_RUN`
+was always set; the trap can fire BEFORE the pipes exist, and with `AUTH_RUN` empty the `rm -f --` spells
+`/in`, `/out`, `/in.child`. Hence `[[ -n "${AUTH_RUN:-}" ]] || return 0` at the top.
+
+### D-2738 — D-2661's suspected cause is REFUTED: `gtimeout` is present on both macOS legs and has been since e51dda34
+
+D-2661 suspected "a missing `gtimeout` degrading `_plat_timeout` to no deadline", and `ci.yml` carries a
+comment recording that signature. It cannot explain any run on this branch. Measured against the files and
+against the real job's own log: **both** macOS jobs run `brew install bash tmux flock jq coreutils`
+(`ci.yml:185` and `:252`); `_auth_timeout` probes `timeout` then `gtimeout` via `command -v`; the fixture
+spawns the helper with `{ ...process.env, HOME: h.home, … }` and `ghContainedEnv` only PREPENDS to PATH, so
+the runner's PATH is inherited intact; and the job log shows `coreutils 9.11` linked cleanly into
+`/opt/homebrew/bin`, a directory that same log shows already on the default PATH. The mechanism D-2661
+leans on was real ONCE — commit a6090b8f ran the brew line with "DELIBERATELY NO coreutils" — and was
+fixed by **e51dda34 on 2026-08-27**, before coreutils became permanent in both jobs.
+
+**So D-2661 is undiagnosed, not explained — and it is a SEPARATE defect from D-2614.** It was measured on
+the `login` lane, which uses no pipeline and no `script(1)`, so D-2734's fix cannot touch it. D-2736's
+backstop bounds its CONSEQUENCE without diagnosing its cause, which is the honest description of what
+landed.
+
+### D-2739 — the canary test's `grep -rl` over the fixture HOME is unbounded, and is the suspected staller of the 25-minute macOS job
+
+SUSPECTED, NOT PROVEN — the verifier that would have settled it died on a session limit, and it is booked
+at that strength deliberately. What IS measured: `ccd-account-auth.test.ts`'s canary case calls
+`execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8' })` with **no `timeout` option**,
+the only unbounded recursive walk in the suite; the helper's FIFOs live at
+`$HOME/.cc-sessions/.auth/<id>.run/`, inside the tree that grep walks; before D-2737 a killed run left them
+there; and the cancelled job's cleanup reported `Terminate orphan process: pid (38105) (grep)` — a grep
+still alive 23.8 minutes after the last test output. GNU grep 3.11 skips devices under `-r` (measured here,
+returns immediately); **BSD grep is UNMEASURED** and is the prime suspect, with `-r` following symlinks a
+second candidate. D-2737 removes the FIFOs that are the suspected input, and the call is now bounded
+(`timeout: 30_000`) so the same situation reports a failure instead of consuming a 25-minute job
+silently. What is NOT closed: why BSD grep stalls there, which still wants the one-line probe.

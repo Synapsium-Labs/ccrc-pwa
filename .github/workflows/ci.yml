@@ -274,6 +274,12 @@ jobs:
       # appeared ZERO times, against NINE before the fix, with the setup-token
       # describe demonstrably reached. That is what says D-2673 works; this
       # narrowing is what lets a run say it without being cut first.
+      # The spawn must TERMINATE — the D-2734 property, asked on the platform
+      # whose arm it is. These cases force `CCD_OS` themselves, so they are red
+      # on Linux too; running them here checks the real userland agrees.
+      - name: The pane-bound spawn terminates (D-2734..D-2737)
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'spawn has to END'
       - name: The two pane-bound methods (what D-2673 changes)
         working-directory: server
         run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'setup-token|openai-login'
