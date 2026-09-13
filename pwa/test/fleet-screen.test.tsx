@@ -715,6 +715,59 @@ describe('FleetScreen', () => {
         .toHaveTextContent('alpha is in pool pool-b.');
     });
 
+    it('keeps the last route-measured pool when the project vanishes from a refresh, rather than falling to the frame', async () => {
+      // D-2722. The frame here says pool-a and the route says pool-b, so a
+      // selection cleared on the `missing` read is visible as the FRAME's
+      // answer rather than as emptiness — and `projectPoolOf` would fabricate
+      // `untagged` ("every account may serve it") for a project the frame had
+      // never listed at all, which is the constraint-lifting direction.
+      const projects = vi.spyOn(api, 'projects')
+        .mockResolvedValueOnce({ roots: [], projects: [{
+          name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-b' },
+          placement: { kind: 'none', pool: 'pool-b' },
+        }] })
+        .mockResolvedValueOnce({ roots: [], projects: [] });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude2' ? 'pool-b' : 'pool-a',
+        })),
+        pools: {
+          listed: true,
+          byProject: { alpha: { state: 'tagged', name: 'pool-a' } },
+          enforcement: 'enforced',
+        },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      fireEvent.click(await screen.findByLabelText('project pool pool-b'));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-b.');
+
+      // An agent-link drop answers 200 with an empty list — `/api/projects` has
+      // no 503 arm — while the same outage emits a changed frame that drives
+      // this very refresh. The session keeps the card on screen.
+      seed(store, {
+        pools: {
+          listed: true,
+          byProject: { alpha: { state: 'tagged', name: 'pool-a' }, beta: { state: 'untagged' } },
+          enforcement: 'enforced',
+        },
+      });
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      await act(async () => { await Promise.resolve(); });
+
+      const sheet = screen.getByRole('dialog', { name: 'Which pool runs this project?' });
+      expect(sheet).toHaveTextContent('alpha is in pool pool-b.');
+      expect(sheet).not.toHaveTextContent('alpha is in pool pool-a.');
+      // The card stops claiming a pool, which is correct — the route no longer
+      // measures one. The sheet must not answer from the frame in its place.
+      expect(screen.queryByLabelText(/project pool/)).not.toBeInTheDocument();
+    });
+
     it('replaces a settled write read-back with a later route pool while the sheet remains open', async () => {
       const projects = vi.spyOn(api, 'projects')
         .mockResolvedValueOnce({ roots: [], projects: [{

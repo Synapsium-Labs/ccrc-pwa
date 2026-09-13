@@ -54,9 +54,16 @@ type PoolWrite = {
 /** The pool the sheet is opened on, and the one it keeps while it stays open —
  *  ONE reading used by both the card tap and the open-sheet remeasurement, so
  *  the two can never drift (D-2721). A live write for THIS project precedes the
- *  route read (D-2704/D-2707; D-2714 pins when the bridge clears), and a
- *  non-measured read yields no pool at all rather than inventing one: an old
- *  server that omitted the field must still reach PoolSheet's frame fallback. */
+ *  route read (D-2704/D-2707; D-2714 pins when the bridge clears).
+ *
+ *  The non-measured arm yields no pool. At the tap site it cannot fire at all:
+ *  the only way to open this sheet is `PoolChip`, and `ProjectCard` renders no
+ *  chip for a non-measured read. It is the REMEASUREMENT that made this arm
+ *  reachable, and its caller — not this function — decides what a read that
+ *  cannot speak means for an already-open sheet (D-2722). Nothing here may
+ *  conclude "old server, fall through to the frame": that path is unreachable
+ *  from both call sites, and a shipped justification for an unreachable path
+ *  is a false claim. */
 const poolSelectionFor = (
   project: string,
   read: ProjectPlacementRead,
@@ -267,13 +274,31 @@ export function FleetScreen({
   //
   // ONLY while open. The snapshot's other job (:129) is to survive vaul's exit
   // animation, so remeasuring through the close would flip the copy mid-flight
-  // — and flip it to "this box has not said" for a row that has since gone.
-  // Frozen on close stays frozen.
+  // — to the FRAME's pool, or to "this box has not said" only in the narrow
+  // case where no frame has arrived at all. Frozen on close stays frozen.
+  //
+  // D-2722: a read that is not `measured` leaves the selection ALONE. This is
+  // forced, not preferred — the seam has no vocabulary for measured absence.
+  // `selectedPool`'s `undefined` already means "old server omitted the field",
+  // and every `ProjectPoolWire` member asserts a tag file was reached, so there
+  // is no value here that says "the route answered and did not list this
+  // project" (D-2723 parks the carrier that could). Clearing it hands the sheet
+  // to `projectPoolOf`, and that FABRICATES rather than going stale: a project
+  // the frame never listed reads back `{state:'untagged'}` — "every account may
+  // serve it", the constraint-LIFTING direction — and a `listed:false` frame
+  // reads back `{state:'unreadable'}`, naming a tag file nobody opened. Keeping
+  // the last value the route actually measured is the only other thing this
+  // seam can express. Keyed on the READ, never on whether the result happens to
+  // carry a pool: that shape is `poolSelectionFor`'s decision, and re-reading it
+  // here would silently change this rule if its convention ever moved.
   useEffect(() => {
     if (!poolOpen) return;
-    setPoolSelection((selected) => selected === null
-      ? selected
-      : poolSelectionFor(selected.project, placementFor(selected.project), poolWrite.current));
+    setPoolSelection((selected) => {
+      if (selected === null) return selected;
+      const read = placementFor(selected.project);
+      if (read.kind !== 'measured') return selected;
+      return poolSelectionFor(selected.project, read, poolWrite.current);
+    });
   }, [poolOpen, placementFor]);
 
   const addWorkspace = async (project: string): Promise<void> => {
