@@ -6138,3 +6138,49 @@ five-lens review dying on a session limit and returning an empty findings array,
 like a clean review. Different surface, identical failure mode — *the absence of a measurement wearing
 the shape of a measurement*. Worth naming as a class, because both times the thing that caught it was
 reading the raw record (a job duration, a failure log) rather than the summarised status.
+
+### 2026-09-13 20:35Z — D-2732 handed to run 44, and my own remedy was backwards on both inputs
+
+Run 44 **took D-2732**, implemented it, defined it in their wave-2 plan (`a29bc63c`) and independently
+reproduced the worker's red in an isolated clone with `origin/main` deleted and local `main` at the
+fossil. Verified on my side that they are the single definition site: zero occurrences in any tracked
+plan on this branch, zero heading-level `## D-2732` anywhere, and the two mentions in this ledger sit on
+a REFERENCE surface (`docs/superpowers/programs/`), not a definition one. Not carrying it to wave 6.
+
+**And they corrected my remedy — correctly, and it is worse than they realised.** My third item said
+*"replace the `≥ 50` cardinal with an ancestor check against the fetched `origin/main`"*. They
+implemented that literally as `merge-base --is-ancestor <base> HEAD`, found the fossil passes it, and
+proposed the other direction. Probed here on three bases:
+
+```
+MY direction   is-ancestor <base> HEAD:
+  fossil main ac72dd90  -> PASSES   (the exact case the check exists to catch)
+  origin/main ecd953b0  -> REFUSED  (the CORRECT base, rejected)
+
+THEIR direction is-ancestor origin/main <base>:
+  fossil main           -> REFUSED
+  origin/main           -> admitted
+  ws/clear-meadow       -> admitted
+```
+
+**The second row is the one neither of us had seen.** This checkout's HEAD is `ws/amber-summit`, a
+long-lived ledger branch not descended from current main, so `origin/main` is not its ancestor. Shipped
+literally, my item would have **refused every correct base and admitted the fossil** — a gate redding on
+every normal run until someone "fixed" it by deleting the check, leaving the fossil admitted and nothing
+catching it. My remedy would have been strictly worse than the defect.
+
+**The cause is nameable and it is mine.** I ruled a remedy by naming a property in PROSE — "an ancestor
+check against the fetched `origin/main`" — without writing the predicate or probing it. Direction-
+sensitive predicates are precisely where prose fails, and I handed one to another programme to build.
+**Write the probe, not the essay** — which is what I have been telling the worker all week, applied to a
+check I was ordering someone else to implement. The failure landed where it should: specified by me,
+caught by whoever ran it.
+
+**Their "keep `≥ 50` alongside" beats my "replace".** The ancestor check answers *is the base behind
+`origin/main`*; the count answers *is this a plausible tree at all*. A base AHEAD of `origin/main` — a
+feature branch in `CCRC_LEDGER_BASE` — passes theirs and could still hold two plans. Neither subsumes
+the other, and replacing would have removed the anti-vacuity half of a pair written as a pair.
+
+They also found both refusal messages still read *"origin/main or main resolved"* after the candidate was
+removed — a guard naming something it no longer does, the third instance of that class across our two
+waves this week.
