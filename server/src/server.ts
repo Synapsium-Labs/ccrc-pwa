@@ -1484,49 +1484,55 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
   };
   /**
-   * The window follows the client only down to a real terminal, and what the
-   * floor protects is the READING OF THE PANE, not the writing to it.
+   * The window follows any client that MEASURED ITSELF, at whatever size that
+   * turned out to be. There is no floor, and the floor this route carried for
+   * one day is worth writing down, because the argument for it was sound and
+   * the measurement killed it.
    *
-   * The obvious argument is the wrong one, and it was measured wrong before it
-   * was believed: `inject/send.ts`'s `paneWidth` clamps with `Math.max(80, …)`
-   * — "the floor (80, the narrowest real terminal)" — but it measures UTF-16
-   * code units, not columns, so it already over-reports (a row of 100
-   * skin-tone emoji on a real 220-column pane captures as 400) and its ceiling
-   * is the only bound on that. A narrow pane is not what breaks the draft
-   * clear; `clearBox`'s terminator accepting the same stale frame that failed
-   * the echo is, at any width.
+   * THE FLOOR WAS 80x24, and it was meant to spare the readers that match a
+   * SENTENCE against a capture: tmux hard-wraps a stored line and nothing
+   * reflows it, so on a 43-column pane "Usage limit reached · continuing
+   * automatically at 14:00" arrives split across two rows and
+   * `autoContinueArmed` (`pane/dialog.ts`) answers FALSE where the same text
+   * at 220 answers true. The footer sentence `hasMenu` looks for straddles the
+   * wrap the same way. The trade was stated as "a phone drawer may cost its
+   * reader a clipped view; it may not blind the machinery watching the
+   * session".
    *
-   * WHAT A NARROW PANE REALLY BREAKS is every reader that matches a SENTENCE
-   * against a capture, because tmux hard-wraps the stored line and nothing
-   * reflows it. Measured against the shipped module on a real 43-column pane:
-   * "Usage limit reached · continuing automatically at 14:00" arrives as
-   * "continuing automatica" / "lly at 14:00", and `autoContinueArmed`
-   * (`pane/dialog.ts`) answers FALSE where the same text at 220 answers true;
-   * `hasMenu`'s "Enter to confirm" straddles the wrap the same way. Those
-   * readers are the limit and dialog detection the fleet's own recovery leans
-   * on. A phone drawer may cost its reader a clipped view; it may not blind
-   * the machinery watching the session.
+   * THE COST WAS NOT A CLIPPED VIEW. Measured on the operator's phone against
+   * this very build: the drawer measures 43 columns, the floor refuses to
+   * follow it, and the window stays at whatever the last real terminal left —
+   * 171 here. tmux then paints for 171 columns into a client that has 43, so
+   * every line beyond the client's width is written off the edge and what
+   * survives on the glass is the tail of the long lines and nothing at all of
+   * the short ones. Not clipped: unreadable. The history layer inherits the
+   * same mismatch one step removed — `capture-pane -J` joins what tmux wrapped
+   * at 171 and the phone re-wraps it at 43, breaking words the pane never
+   * broke. Both of the operator's screenshots are that one fact.
    *
-   * Until this route sized the window a drawer could not do that — a small
-   * client only clipped itself. It can now, from a query string, so the floor
-   * is said here. Below it the drawer clips, exactly as it did before the
-   * window followed anything. The rows floor is its companion: a window
-   * shorter than 24 hides the status row those same readers expect to find.
+   * AND IT NEVER CLOSED THE CLASS IT WAS GUARDING. `ccd` sets `window-size
+   * latest` on every session it spawns, and tmux's own default is `latest`, so
+   * a narrow tmux client attaching directly on the box still shrinks the
+   * window past any number written here. The floor bought a partial guard and
+   * paid the phone's entire usability for it.
    *
-   * IT CLOSES ONE DOOR, NOT THE CLASS. `ccd` sets `window-size latest` on every
-   * session it spawns and tmux's own default is `latest`, so a narrow tmux
-   * client attaching directly still shrinks the window — that is a defect
-   * about the detectors' own robustness, and it is not this route's to fix.
+   * WHERE THE GUARD BELONGS is in the readers, and half of it has moved there:
+   * the DISPLAY path now asks `menuPainted`, which keys on the `❯` cursor
+   * sitting at the head of a numbered row — a short row that survives any
+   * width — rather than on a sentence long enough to wrap. What is still
+   * width-sensitive, and is a defect about those readers rather than about
+   * this route, is `autoContinueArmed` and the footer arm of `hasMenu` that
+   * the WRITERS in `inject/send.ts` lean on. A capture taken with `-J` would
+   * settle both, the way it settled the history route; that change has a wider
+   * blast radius than this one and has not been made.
    *
-   * These are the same digits as the pty defaults below by coincidence of
-   * history, not by shared meaning — 80x24 is both "the classic terminal" and
-   * "the narrowest real one". Changing what an unmeasured client gets must not
-   * move the floor, so they are spelled apart on purpose.
+   * What survives from the original rule is the distinction that earned it:
+   * a client that states NO size, or half a size, still moves nothing. The pty
+   * has to be some grid so it takes the 80x24 default below, but a default is
+   * not a measurement and must never reshape a window someone else is reading.
    */
-  const FLOOR_COLS = 80;
-  const FLOOR_ROWS = 24;
   const mayFollow = (cols: number | null, rows: number | null): boolean =>
-    cols !== null && rows !== null && cols >= FLOOR_COLS && rows >= FLOOR_ROWS;
+    cols !== null && rows !== null;
   /**
    * Every drawer attached to a session right now, with the grid it last
    * reported and a stamp of when it last moved.
@@ -1552,9 +1558,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   interface Drawer {
     cols: number;
     rows: number;
-    /** Whether this grid is allowed to size the window — a measured pair at or
-     *  above the floor. Kept beside the numbers because the answer is made
-     *  once, where the query string is still in hand. */
+    /** Whether this grid is allowed to size the window — i.e. whether the
+     *  client measured itself at all. Kept beside the numbers because the
+     *  answer is made once, where the query string is still in hand. */
     follows: boolean;
     /** Monotonic: which drawer moved most recently, the question `latest` asks. */
     moved: number;
