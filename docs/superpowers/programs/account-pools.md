@@ -5085,3 +5085,211 @@ assertion, with a mutation that reds when the cell leaves the active-row group. 
 remedies use inks this file already audits.
 
 **D-2678 issued** (floor 2679), mail 929, finding 928 acked.
+
+## 2026-09-12 23:05Z — D-2688..D-2691: four found, two ruled on the spot, and a SHA that was not a commit
+
+Worker mails 931/932/934/935 carried four findings out of its own Task 7–10 review. Allocated
+**D-2688..D-2691** (floor 2692) and **D-2692..D-2694** (floor 2695) — two separate allocations, both
+through `ledger allocate`, neither inferred from the gap that the first one opened. The first mint
+returned **2688, not 2679**, off a floor raised by something on no ref I hold; I took the allocator's
+number and did not go looking for the 2679–2687 band. That band is now unissuable, which costs nothing.
+
+**D-2690 and D-2691 upheld on their exact commits, not on the tip.** SwapSheet's `e86f5fa5`: the
+unknown-pool copy claims *"every account is offered"* while the truthful empty-state note renders
+beside it saying zero accounts are actionable — two sentences, same panel, contradicting each other.
+Both reachable paths already have fixtures (all-alternatives-disabled, one-account roster), so this
+needed copy and tests only; baseline 42/42, my candidate copy 42/42, the false universal restored
+**4/42 red**. FleetHostBanner's `42e426f1`: guard exactly right, negatives missing — `(health.projectPools
+?? 'unavailable') === 'unavailable'` stays **green**, so an OLD server omitting the optional field gets
+told to redeploy; deleting `health.mode === 'remote'` stays **green**, so a LOCAL install gets told to
+redeploy an agent lane it does not have. Two green mutants on a correct guard is the absence-permits
+seam with no negative pin. Ruled tests-only, exactly two fixtures.
+
+**The dynamic live-region question was deliberately kept OUT of D-2691** — it is a different contract
+and folding it in would have let a real tests-only fix carry an unruled design change. It came back as
+its own candidate in the review round below, and was refuted there.
+
+**D-2688 and D-2689 held back.** Worker's 513.27px row and its one-for-one census bypass were both
+plausible and both unverified, and a ruling on a plausible mechanism is how a wave acquires a fix for
+something that is not happening. Sent independent verifiers instead. Both came back CONFIRMED; see below.
+
+**Process finding, recorded because it cost a verification round.** Mail 943 reported the definitions
+commit as `6b5578095900c05c2d80f24f4f7bacfe733519d3`. **That object does not exist.** Two verifier
+attempts failed to resolve it — first against `origin`, then against a direct read-only fetch of the
+worker's branch — before I measured the worker's own reflog and found the real commit,
+`6b5578099d43cd0b679c7bb1329d252c18d19857`. The short prefix `6b557809` was correct and the subject
+line matched; **the expansion after the prefix was wrong**, which is the one corruption a plausible
+short prefix hides. A fabricated 40-hex in a `wave-done` fingerprint would wedge the close, so the
+correction sent with it was not about this commit: **re-measure every full SHA with `git rev-parse`
+before it goes in a mail.**
+
+**And the operation it named was wrong too.** Mail 943 said it *"replaced the three D-TBD headings."*
+Measured: `+48/-0`, three complete entries ADDED, and the parent carried **no heading-level `D-TBD` at
+all** — only two historical prose mentions at ~3293 and ~3388. The definitions are sound; the sentence
+describing them was a statement of intent, not of the diff. Reported as its own finding.
+
+**Union gates green throughout** — `deviation-refs` 31/31 at `fa9e794d`+ledger, at `cdc21a49`+ledger,
+and at the corrected `6b557809`+ledger, each in a disposable tree built from the worker's committed
+plan and my committed ledger, merged `--no-commit` and aborted afterwards. That pairing is not optional
+here: definition high-water comes from `plans/*.md` while my ledger only spends numbers, so my own
+branch reds this gate by construction and only the union answers.
+
+## 2026-09-13 00:30Z — D-2692..D-2694: the remedy was already carried, and being ignored
+
+Three more from the worker, all three upheld after independent verification on the right commits.
+
+**D-2694 is the one worth the entry.** `StartProgramSheet` receives the selected `ProjectRow` — pool
+AND server-measured `placement`, coherent from one `poolsRead` — and then obtains its target from
+`useProjectedHome(open)`, the GLOBAL projection, for **every** identity it uses: button label, request
+wrapper, `createSession` target, fleet wait target, timeout/reset identity, collision checks. So a row
+measuring `{pool:{state:'tagged',name:'pool-a'}, placement:{kind:'projected',wrapper:'claude',score:40}}`
+renders *"Start … on claude2"* and submits `claude2`, and the server correctly answers **409
+pool-mismatch** — refusing a start that had an eligible in-pool wrapper already measured and in hand.
+Verified at the integrated tip: the red route-owned expectation observed the literal button
+`Start build9-demo on claude2`, and the positive probe caught `createSession({wrapper:'claude2', …})`.
+
+I did not rule "use placement" and leave it there, because the interesting half is the absence seam.
+`placement` is optional and absence-permits, and **absence is not `none` and not `unmeasurable`** —
+collapsing those three would be an adapter narrowing a distinction it received. Ruled as a matrix:
+`projected` owns every identity; `none` renders no eligible account and names `placement.pool` when
+non-null; `unmeasurable` says it cannot be decided; **absent** falls back to the global projection only
+when `pool` is also absent (old server) or `untagged` (semantically safe), and **refuses** when the
+pool is tagged, malformed or unreadable rather than reinstating a pool-blind global claim. A present
+placement stays authoritative even while the global accounts request is pending, failed, or null. And
+never silently add `crossPool:true`.
+
+**D-2692** — a project selected while in-pool stays selected and startable after a live roster update
+moves its account to another pool, so `createSession` gains `crossPool:true` with no renewed deliberate
+choice from the disclosed crossing side. Ruled transition-aware: clear on the non-crossing→crossing
+transition **only** — not on unrelated rerenders, and not on an already-deliberate crossing selection.
+Both over- and under-correction are failures here and the fix must pin all three.
+
+**D-2693** — both `ProjectCard`→`SessionLine` pool handoffs, active and expanded-archived, deleted
+independently and the suite stayed **262/262 green each time**. Per this programme's own standing rule
+that is AMBIGUOUS, not untested: I made the verifier find or build the fixture before I would rule.
+Route-owned `ProjectRow.pool` is authoritative (frame is invalidation and enforcement capability, not
+a competing source); probes with route `pool-a` against a conflicting frame `pool-b` then redded
+exactly one site each. Ruled tests-only, two fixtures, each pinning its own call site.
+
+**Verification targeting error, mine.** I first pointed a D-2692 verifier at `e86f5fa5` when Task 8's
+feature commit is `dce227df`, and a Task 7 review at `dce227df` when Task 7 is `e86f5fa5`. Both were
+killed and neither result was accepted. A verifier pointed at the wrong commit does not fail loudly —
+it reports honestly about the wrong tree.
+
+All three corrections independently accepted: `0923cbea` (D-2694, scope 2 files, 102/102, route→global
+and none→global and fail-closed-inversion and presence-inversion mutants all red, build green),
+`1bb90666` (D-2692, 9/9, removal red 1/9 on the newly-crossing case AND over-broad clearing red 2/9 on
+the preservation cases — both directions pinned), `ae71792d` (D-2693, tests-only, each deletion redding
+only its own fixture, 264/264).
+
+## 2026-09-13 01:45Z — the wave-5 review round: eight confirmed, one refuted, nothing taken on argument
+
+Ran the bounded panel this wave had been owed: **three Opus reviewers** over `c9408e59`, `e86f5fa5`
++`dce227df`, and `fa9e794d`+`42e426f1`+the correction commits — each in its own disposable worktree,
+never this checkout. Nine candidates came back. **Every one went to a separate Sonnet refutation before
+any number was minted**, and the numbers were minted one at a time as each survived.
+
+**Refuted — the dynamically-mounted live region.** The claim: `FleetHostBanner` renders nothing while
+`health === null` and then mounts `role="status"` already populated, which screen readers may not
+announce; `CapsControl` keeps an empty region mounted first, so it is the house precedent. Measured:
+Task 10's contract specifies the arm, the priority order and the silences, and names **no announcement
+interface**; `CapsControl`'s always-mounted region is justified in its own file by being the sole
+feedback for an operator-initiated SAVE whose success otherwise only rerenders numbers — a different
+referent from a periodically polled health reading. And jsdom cannot establish a missed AT
+announcement; treating generic guidance as proof would have shipped a contract change under a
+tests-only banner. **Not a deviation.** Recorded so the next reviewer who finds it can stop sooner.
+
+**Confirmed and issued (floor 2703):**
+
+- **D-2695** — two health polls can overlap and the OLDER one wins. The 15s interval starts B while A
+  is still pending; the only guard is the unmount `live` flag. Real-store deferred probe: B resolved to
+  the divergent-roster warning, then A resolved to unreachable and **overwrote it**. Ruled an
+  effect-local monotonic generation, `live && mine === issued` — requests still complete, only stale
+  WRITES are dropped.
+- **D-2696** — *"a tag shown here is not being enforced"* renders in four states where **no tag is
+  shown**: zero projects, loading, absent pools frame, all-untagged. Health establishes global ccd
+  capability, never visible UI state. Ruled: the false clause goes, the remedy stays — *"The fleet
+  host's ccd does not honour project pools yet. Redeploy the agent lane."*
+- **D-2697** — a dead session keeps its `stranded` marker (live assembly carries it independently;
+  revival preserves it while deriving `bucket:'dead'`), `SessionLine` deliberately hides the cell on a
+  dead row, and `groupFleet` excluded only ARCHIVED — so the card said `1 stranded` above a row showing
+  nothing to rescue. Ruled: count idle/working/away, exclude dead and archived, and keep **presence**
+  semantics so a live `{at:0}` still counts.
+- **D-2698** — off-pool was `data-offpool` plus an accessible name and **nothing a sighted operator can
+  see**; no CSS consumes the attribute. The plan and the spec both call it the VISIBLE form. Reachable:
+  a retag re-seeds `.home` while `lastswap`/`swapblocked`/non-idle/hold defer the move. Ruled: keep the
+  machine and assistive semantics exactly, add one conditional visible cue, and audit it on BOTH the
+  ordinary and the selected ground.
+- **D-2699** — `.acct-pool` renders on `.proj-row--selected`'s `--accent-tint`, and the audit registers
+  it against `--bg-sheet` only. Today's numbers pass by luck (4.94/4.88); a **one-token** retint of the
+  selected ground left the audit and 239/239 green while the rendered selected state fell to **4.41**.
+  Distinct from D-2689: that is the census missing an identity, this is a registered identity missing a
+  runtime state.
+- **D-2700** — `unreadable`/`malformed` stay correctly fail-open and non-crossing, and then render as
+  ORDINARY eligible rows with no note, until the server re-measures and refuses. The plan's own words:
+  every unknown *"shows MORE, never less … one honest note"*, and Task 8's *"says so once."* Ruled the
+  note only — **not** disabling Start, not hiding the row, not classifying it as crossing, not
+  substituting `placement` for the pool reader. The refutation corrected the review here: the reviewer's
+  framing implied the fail-open presentation was itself the defect, and it is the specified behaviour.
+- **D-2701** — the card shows the route-measured pool, and opening its sheet discards it: `FleetScreen`
+  carries only the project NAME, and `PoolSheet` recomputes `current` from the frame. Fixture: card
+  `pool-b`, sheet *"alpha is in pool pool-a"* — a control opened from one stated value presenting
+  another, which is D-2664's split measurement returning one seam over. Ruled a precedence chain
+  (write read-back → selected route snapshot → frame fallback for old servers) plus a coherent
+  re-measure after a successful write, and **no third pool-policy implementation**.
+- **D-2702** — one phone wake can fire **two** O(N) `/api/projects` sweeps: the store's visibility
+  listener nudges the down socket and reconnect's cold-start `pools` frame lands a fresh object while
+  the screen's own visibility refresh is still in flight. The generation counter suppresses stale
+  WRITES and cancels neither REQUEST. Ruled a fingerprint+in-flight coalesce for an UNCHANGED cold
+  frame only — a genuinely changed frame must still refresh immediately.
+
+**Three evidence defects surfaced during this round, all recorded rather than smoothed over.**
+
+1. **A verifier's first D-2689 mutant was not the mutation it claimed.** It removed the old identity
+   AND registered coverage for the new selector, so neither name appeared in `uncovered` — cardinality
+   held for the wrong reason. Rejected and re-run as a single CSS selector rename
+   (`.acct-gauge` → `.d2689-new-uncovered`, colour and no-ground untouched), which is the real
+   substitution: 255 before, 255 after, one identity swapped, cardinal gate green, subset assertion red
+   on exactly the new name. **A mutant that also edits the registry is not a one-mechanism mutant.**
+2. **A verifier reported `ALL 483 PASS` from a locally modified tree**, against the worker's 482 after
+   D-2698 and 484 after D-2699. On re-measurement at the exact commits the WORKER was right both times
+   — each correction adds one identity measured in dark and light, so `+2` each. An audit total is a
+   quote with a tree attached; I held acceptance until the two numbers were reconciled rather than
+   picking the independent one because it was independent.
+3. **The worker corrected its own D-2688 evidence twice, unprompted** (mails 970, 972): the original red
+   registered **119**, not 120, and the fifth assertion had mutation proof but never a historical red;
+   and the five CSS declaration mutants had been run against a test SHA that a later strengthening
+   superseded, so they were not final-tree evidence. It re-ran all five against the committed test and
+   added an independent `poolChip` call-site mutant. **Both self-corrections arrived before I asked.**
+   It also self-reported a claim-coverage violation: releasing a mistaken claim 239 also released the
+   valid claim on `StartProgramSheet.tsx`, and it edited and committed that file with no active claim.
+   No other owner and no 409 — a protocol breach with no collision, reported rather than buried.
+
+**Also measured: `origin/ws/clear-meadow` is GONE.** `ls-remote` finds no such ref; the local
+remote-tracking label survives as an artefact. The final push must recreate it and be verified against
+the remote, not against that label.
+
+## 2026-09-13 02:00Z — D-2676 answered its own question, in my tree this time
+
+An untracked `.playwright-mcp/` appeared in **this** checkout after it had measured clean, and I
+stopped on the unexpected-change rule and asked the operator. No answer came, and work continued for
+three hours without touching this worktree — which was right for the artifact and wrong for the ledger,
+because the durable record sat at D-2678 while fifteen numbers were issued and ruled.
+
+**The answer was already written here, ninety minutes before the question.** D-2676 measured this exact
+artifact class in the WORKER's tree: fleet-wide Playwright-MCP behaviour writing into whatever cwd
+invoked it, present in four other worktrees across three other projects, contents one
+`console-<ts>.log` and one `page-<ts>.yml`, nothing to inspect, **ruled IGNORE**. Re-measured here
+before acting on that: shape identical (one `console-2026-09-12T22-47…log`, one
+`page-2026-09-12T22-47…yml`), `git check-ignore` still returns nothing, `git log --all
+--diff-filter=A -- .playwright-mcp` still empty on every ref, and **no tracked file in this worktree
+was modified** — the whole event is one untracked directory.
+
+So the ruling stands and applies to my own tree: leave it untouched, do not inspect it, do not stage
+it, do not gitignore it (that spans five worktrees across four projects and is the operator's call,
+D-2676), and **never `git add -A` here — stage explicit paths, every time.** The lesson for the next
+occurrence is narrower than "an unexpected change appeared": *before escalating an anomaly, check
+whether this programme has already measured and ruled on that anomaly's class.* Stopping was correct;
+staying stopped after my own ledger had answered it was not.
+
+**D-2688..D-2702 are now recorded here.** This entry is committed with an explicit path.
