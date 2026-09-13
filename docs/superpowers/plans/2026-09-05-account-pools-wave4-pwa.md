@@ -4237,3 +4237,18 @@ deviation found while executing this plan is allocated in its own call at the mo
   that enumeration against current source with file and line evidence; the
   prose must derive its extent from the list instead of asserting a parallel
   number that can silently disagree with it.
+
+- **D-2714 — The named over-correction control for D-2704 never reads
+  FleetScreen's successful-write bridge.** Coordinator mail 1010 measured that
+  clearing `poolWrite` immediately rather than when its associated route refresh
+  settles leaves all 75 FleetScreen tests green. The existing `keeps the write
+  response visible while the coherent refresh is pending` fixture leaves the
+  sheet open, so PoolSheet's own measured-generation cache satisfies it without
+  exercising the card-chip `onPool` path, the sole reader of `poolWrite`.
+  Mail 1010 ruled a tests-only discriminating fixture: while the write refresh is
+  unresolved, close the sheet, reopen it through the card chip, and require the
+  just-written pool rather than the stale route value. Moving the bridge clear
+  from associated-request settlement to immediate write handling must red this
+  fixture while the existing pending-race test remains green. Do not rewrite the
+  existing test; record that it pins PoolSheet's local cache, not FleetScreen's
+  bridge.
