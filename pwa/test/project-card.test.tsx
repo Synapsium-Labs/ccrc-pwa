@@ -731,17 +731,22 @@ describe('route-owned pool handoff to session rows', () => {
     expect(account).toHaveAttribute('data-offpool', 'true');
   });
 
-  it('passes the route pool to an expanded archived row when the pools frame disagrees', () => {
+  it('keeps an expanded archived dead row neutral when the pools frame disagrees', () => {
+    // Archived membership is the dead/archived wire shape. `SessionLine`
+    // intentionally suppresses off-pool on dead rows: nothing is running, so
+    // the route-owned prop is inert here. Its direct suite pins that policy;
+    // the active case above independently pins ProjectCard's handoff.
     const archived = sess({
       id: 'demo-quiet-basin', wrapper: 'claude2', home: 'claude2',
-      workspace: 'quiet-basin', archivedAt: 1_785_300_000,
+      workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
+      archivedAt: 1_785_300_000,
     });
     render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
                         pools={conflictingFrame} roster={roster} archivedOpen
                         onOpen={() => {}} onActions={() => {}} />);
 
-    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
-    expect(account).toHaveAttribute('data-offpool', 'true');
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 });
 
