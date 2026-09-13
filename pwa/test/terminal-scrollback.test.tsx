@@ -969,6 +969,46 @@ describe('the finger scrolls the history', () => {
     expect(h.scrolled.reduce((a, b) => a + b, 0), 'the drag lost its remainder').toBe(-2);
   });
 
+
+  it('a TOUCH drag scrolls even when the pointer stream is taken away', async () => {
+    // WHY A SECOND PATH AT ALL. Two vaul sheets can be open over one session —
+    // the ask picker and this drawer are siblings in SessionScreen — and each
+    // open one installs a document-level capturing `touchmove` with
+    // preventDefault on iOS. Preventing a touch there cancels the POINTER
+    // stream, so a drag driven by pointer events alone dies as soon as another
+    // sheet is up. Touch listeners still run: preventDefault stops the default
+    // action, not the other listeners.
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    const touch = (y: number) => ({ touches: [{ clientY: y, clientX: 0, identifier: 1 }] });
+    fireEvent.touchStart(el, touch(0));
+    fireEvent.touchMove(el, touch(3 * ROW_PX));
+    fireEvent.touchEnd(el, { changedTouches: [{ clientY: 3 * ROW_PX, clientX: 0, identifier: 1 }] });
+
+    expect(h.scrolled, 'a finger moved nothing').toEqual([-3]);
+  });
+
+  it('a cancelled pointer stream does not kill the finger that is still dragging', async () => {
+    // THE FAILURE THE TOUCH PATH EXISTS FOR, made explicit. Another open sheet
+    // preventDefaults the touch at document level on iOS, and the browser
+    // answers by CANCELLING the pointer stream mid-gesture. The finger has not
+    // lifted; if `pointercancel` ends the drag, the console simply stops
+    // responding — which is how the operator met it, with the ask picker up.
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }] });
+    fireEvent.pointerCancel(el, { pointerId: 1, clientY: 2 * ROW_PX, pointerType: 'touch' });
+    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }] });
+    fireEvent.touchEnd(el, { changedTouches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }] });
+
+    expect(h.scrolled.reduce((a, b) => a + b, 0), 'the cancel killed a live finger').toBe(-4);
+  });
+
   it("a press xterm's own scrollbar has already taken is left alone", async () => {
     const { h, view } = await open();
     h.scrolled.length = 0;

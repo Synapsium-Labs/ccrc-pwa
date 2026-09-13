@@ -539,54 +539,118 @@ export function TerminalDrawer({
      * earlier and break dragging the scrollbar. Reading the flag rather than
      * the target's class survives xterm renaming its internals.
      */
-    const pointers = new Set<number>();
-    let active: number | null = null;
+    let dragging = false;
     let lastY = 0;
     /** Sub-row travel, kept across moves: a slow drag is many fractions of a
      *  row, and truncating each one on its own swallows the whole gesture. */
     let carry = 0;
+    /** MEASURED ONCE PER GESTURE. A cell cannot change height mid-drag, and
+     *  `getBoundingClientRect` forces layout — reading it on every move is a
+     *  synchronous relayout per frame, beside a terminal that repaints on every
+     *  scroll. 0 means "not measurable yet", so the first move that can measure
+     *  fills it in rather than dividing by a number nobody gave us. */
+    let rowPx = 0;
+
+    const begin = (y: number): void => {
+      dragging = true;
+      lastY = y;
+      carry = 0;
+      rowPx = term.rowHeight();
+    };
+    const step = (y: number): void => {
+      if (!dragging) return;
+      if (rowPx <= 0) {
+        rowPx = term.rowHeight();
+        if (rowPx <= 0) { lastY = y; return; }
+      }
+      const travel = y - lastY + carry;
+      lastY = y;
+      const rows = Math.trunc(travel / rowPx);
+      carry = travel - rows * rowPx;
+      // The content follows the finger: dragging DOWN reaches older output,
+      // which is a scroll UP.
+      if (rows !== 0) term.scrollLines(-rows);
+    };
+    const finish = (): void => { dragging = false; };
+
+    /**
+     * TWO INPUT PATHS, AND THE TOUCH ONE IS NOT A LUXURY. The ask picker and
+     * this drawer are siblings that can be open over the same session, and
+     * every open vaul sheet installs a document-level capturing `touchmove`
+     * with `preventDefault` on iOS. Preventing a touch there cancels the
+     * POINTER stream, so a drag driven by pointer events alone dies the moment
+     * another sheet is up — which is how the operator met it: with a picker
+     * raised, the console would not scroll at all. Touch listeners keep
+     * running regardless; `preventDefault` stops the default action, not the
+     * other listeners.
+     *
+     * ONE FINGER IS COUNTED ONCE. A browser fires both families for the same
+     * finger, so a touch gesture takes ownership for its duration and the
+     * pointer echo is ignored until it lifts.
+     */
+    const pointers = new Set<number>();
+    let active: number | null = null;
+    let viaTouch = false;
 
     const down = (ev: PointerEvent): void => {
       pointers.add(ev.pointerId);
-      if (ev.defaultPrevented) return;
+      if (viaTouch) return;                       // the finger already owns this
+      if (ev.defaultPrevented) return;            // xterm's own scrollbar took it
       // A pinch is not a scroll. Abandon rather than follow one of the two.
-      if (pointers.size > 1) { active = null; return; }
+      if (pointers.size > 1) { active = null; finish(); return; }
       active = ev.pointerId;
-      lastY = ev.clientY;
-      carry = 0;
+      begin(ev.clientY);
       try {
         histHost.setPointerCapture(ev.pointerId);
       } catch { /* jsdom, or a pointer someone else already holds */ }
     };
     const move = (ev: PointerEvent): void => {
-      if (active !== ev.pointerId) return;
-      const travel = ev.clientY - lastY + carry;
-      lastY = ev.clientY;
-      const px = term.rowHeight();
-      // UNMEASURABLE IS NOT ZERO: keep the travel and try again on the next
-      // move rather than dividing by a number the terminal could not give.
-      if (px <= 0) return;
-      const rows = Math.trunc(travel / px);
-      carry = travel - rows * px;
-      // The content follows the finger: dragging DOWN reaches older output,
-      // which is a scroll UP.
-      if (rows !== 0) term.scrollLines(-rows);
+      if (viaTouch || active !== ev.pointerId) return;
+      step(ev.clientY);
       ev.preventDefault();
     };
     const end = (ev: PointerEvent): void => {
       pointers.delete(ev.pointerId);
-      if (active === ev.pointerId || pointers.size === 0) active = null;
+      // AND THIS IS THE HALF THAT MATTERS. When another sheet preventDefaults
+      // the touch at document level, iOS answers by CANCELLING the pointer
+      // stream — a `pointercancel` arrives for a gesture the finger is still
+      // making. Ending the drag on it would kill exactly the drag the touch
+      // path exists to keep alive.
+      if (viaTouch) return;
+      if (active === ev.pointerId || pointers.size === 0) { active = null; finish(); }
+    };
+
+    const touchStart = (ev: TouchEvent): void => {
+      viaTouch = true;
+      if (ev.touches.length !== 1) { finish(); return; }   // a pinch, not a scroll
+      begin(ev.touches[0]!.clientY);
+    };
+    const touchMove = (ev: TouchEvent): void => {
+      if (ev.touches.length !== 1) { finish(); return; }
+      step(ev.touches[0]!.clientY);
+    };
+    const touchEnd = (): void => {
+      finish();
+      viaTouch = false;
     };
 
     histHost.addEventListener('pointerdown', down);
     histHost.addEventListener('pointermove', move);
     histHost.addEventListener('pointerup', end);
     histHost.addEventListener('pointercancel', end);
+    histHost.addEventListener('touchstart', touchStart, { passive: true });
+    histHost.addEventListener('touchmove', touchMove, { passive: true });
+    histHost.addEventListener('touchend', touchEnd, { passive: true });
+    histHost.addEventListener('touchcancel', touchEnd, { passive: true });
     return () => {
       histHost.removeEventListener('pointerdown', down);
       histHost.removeEventListener('pointermove', move);
       histHost.removeEventListener('pointerup', end);
       histHost.removeEventListener('pointercancel', end);
+      histHost.removeEventListener('touchstart', touchStart);
+      histHost.removeEventListener('touchmove', touchMove);
+      histHost.removeEventListener('touchend', touchEnd);
+      histHost.removeEventListener('touchcancel', touchEnd);
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
