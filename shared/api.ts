@@ -3849,6 +3849,17 @@ export const RUN_HOLD_NUMBER_MAX = Number.MAX_SAFE_INTEGER;
 export const isPositiveDecimalSafeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 
+/** Parse the one canonical textual spelling of a positive safe integer. Route
+ *  identifiers are resource names, so coercion must not make two spellings name
+ *  the same row. */
+export const parseCanonicalPositiveSafeInteger = (text: unknown): number | null => {
+  if (typeof text !== 'string' || !/^[1-9][0-9]*$/.test(text)) return null;
+  const value = Number(text);
+  return isPositiveDecimalSafeInteger(value) && String(value) === text
+    ? value
+    : null;
+};
+
 /** The widest decimal the RUN ID's slot must reserve room for: SQLite's signed
  *  INTEGER maximum, nineteen digits. Deliberately WIDER than the JavaScript
  *  domain above, which every runtime seam still enforces — `runs.id` is an

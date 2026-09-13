@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Teach the two skills the project boundary wave 1 made mechanical — reuse a `sessionId` only inside one project, state `homeProject` on every open, read a foreign repo's plan from its named Git object and inline its contract, verify a producer through the closed-runs view after closing it, address the worker by role with a `runId` — and make the console say which repo a run is in, which repo its programme is homed in, and which programme a feed record belongs to.
+**Goal:** Teach the two skills the project boundary wave 1 made mechanical — reuse a `sessionId` and transfer a hold only inside one project, release a cross-project producer, state `homeProject` on every open, read a foreign repo's plan and producer source from their named Git objects, prove the producer closed and its exact SHA merged, address the worker by role with a `runId`, and expose the bounded ask operations those skills require — and make the console say which repo a run is in, which repo its programme is homed in, and which programme a feed record belongs to.
 
-**Architecture:** Nine edits, no new decision. The skills get ADDITIVE prose beside pins that already exist: the coordinator's eleven clauses and the worker's thirteen stay verbatim, and every new paragraph ships with its own harvest assertion in the suite that already reads that corpus. The PWA gets ONE new tolerant reader (`runHomeProject`) and ONE new derived note (`crossingNote`) in `pwa/src/fleet/runWords.ts` — the file that already owns every decision `RunsScreen` and `ProjectCard` render but do not make — and three surfaces compose them: the runs row gains a project badge and a crossing marker, the project card marks the rule-3 orphan worker and lists the waves abroad from an ADDITIVE `abroad` prop `FleetScreen` computes, and the mail screen groups the feed by programme through `NotifyEvent.runId` joined against `GET /api/runs`. `nestFleet` and its five rules do not change; nothing here decides anything the server did not already record.
+**Architecture:** The original nine tasks plus the post-handoff acceptance correction make no new schema decision. The skills get ADDITIVE prose beside pins that already exist: the coordinator's eleven clauses and the worker's thirteen stay verbatim, and every new paragraph ships with its own harvest assertion in the suite that already reads that corpus. The bounded client adds three closed-table ask operations and an executable-corpus parity gate without exposing arbitrary URL, identity, or body controls. The PWA gets ONE new tolerant reader (`runHomeProject`) and ONE new derived note (`crossingNote`) in `pwa/src/fleet/runWords.ts` — the file that already owns every decision `RunsScreen` and `ProjectCard` render but do not make — and three surfaces compose them: the runs row gains a project badge and a crossing marker, the project card marks the rule-3 orphan worker and lists the waves abroad from an ADDITIVE `abroad` prop `FleetScreen` computes, and the mail screen groups the feed by programme through `NotifyEvent.runId` joined against `GET /api/runs`. `nestFleet` and its five rules do not change; nothing here decides anything the server did not already record.
 
 **Tech Stack:** Markdown skills under `ccd/` (installed by the four-homes lane), TypeScript (strict, NodeNext) in `pwa/src` and `shared/`, React 19 + `@testing-library/react` under jsdom, vitest for every suite, node >= 22.13.0.
 
@@ -94,12 +94,15 @@ Three of them, and none is optional:
 
 | File | Task | Responsibility after this wave |
 |---|---|---|
-| `ccd/coordinator-skill/SKILL.md` | 1, 3 | Carries the crossing section (reuse rule, `homeProject` on every open, the caps arithmetic, immutable named-plan coordinates and read, post-close Q1, deviations against the home project) and the role-addressing sentence. |
-| `ccd/coordinator-skill/references/wave-lifecycle.md` | 2, 3 | The long form at the call sites: §1 (open), §2 (the foreign-plan source tuple and exact Git-object read), §3 (role addressing and programme history), §5 (post-close Q1 at the wave boundary). |
+| `ccd/coordinator-skill/SKILL.md` | 1, 3, acceptance correction | Carries the crossing section (project-specific succession, `homeProject` on every open, measured caps accounting, immutable plan and producer-source reads, closed-row plus exact-SHA merge proof, deviations against the home project) and the role-addressing sentence. |
+| `ccd/coordinator-skill/references/wave-lifecycle.md` | 2, 3, acceptance correction | The long form at the call sites: §1 (open), §2 (the foreign plan and producer-source tuples with exact Git-object reads), §3 (role addressing and programme history), §5 (same-project transfer versus cross-project release and the two-part dependency gate). |
 | `ccd/coordinator-skill/references/mail-envelope.md` | 3 | The role vocabulary is TWO roles; `to:` is still always the resolved session. |
-| `ccd/worker-skill/SKILL.md` | 4 | The foreign-plan rule (read the named Git object, never mutate the home repo, commit only on this branch) and the note that a reply may be addressed to the role `worker`. |
-| `server/test/coordinator-skill.test.ts` | 1, 2, 3 | Harvest pins for every new coordinator sentence. |
-| `server/test/worker-skill.test.ts` | 4 | Harvest pins for the two new worker paragraphs. |
+| `ccd/worker-skill/SKILL.md` | 4, acceptance correction | The foreign-plan and producer-source rules (read the named Git objects, never mutate the home repo, commit only on this branch), the inline-excerpt authority split, and the note that a reply may be addressed to the role `worker`. |
+| `ccd/ccrc-api` | acceptance correction | Adds the bounded `asks.list`, `asks.answer`, and `asks.release` rows; derives list identity from the current pane and keeps arbitrary URL/identity/body controls closed. |
+| `server/test/ccrc-api.test.ts` | acceptance correction | Pins all twenty-two client rows and ask-list identity/body behaviour. |
+| `server/test/ccrc-api-closed.test.ts` | acceptance correction | Proves every executable coordination command in the shipped corpus maps to a declared client row and preserves the closed invocation surface. |
+| `server/test/coordinator-skill.test.ts` | 1, 2, 3, acceptance correction | Harvest pins for every new coordinator sentence and the corrected lifecycle/provenance/accounting contract. |
+| `server/test/worker-skill.test.ts` | 4, acceptance correction | Harvest pins for the foreign plan and producer-source authority split. |
 | `pwa/src/fleet/runWords.ts` | 5 | Owns `runHomeProject`, `waveLabel`, `CROSSING_GLYPH`, `crossingNote` — the decisions the three surfaces render. |
 | `pwa/src/screens/RunsScreen.tsx` | 5 | Renders the project badge on every row and the crossing marker when there is one. |
 | `pwa/src/fleet/ProjectCard.tsx` | 6, 7 | Marks the rule-3 orphan worker row; renders one line per wave abroad from the additive `abroad` prop. |
@@ -127,23 +130,21 @@ Three of them, and none is optional:
 
 **Spec refs:** §3 F3 (coordinator design, every bullet except the refusal-list one wave 1 shipped), §5 (the caps restatement), §9 wave 2.
 
-**One of three copies, by design.** The two-slot sentence this section carries ("two concurrency slots and two of the daily budget") has two other homes — wave 1 put it in `references/wave-lifecycle.md` §2's `project-mismatch` row, beside the remedy it explains, and wave 3 puts it in README's cross-repo subsection because `box-token-census.test.ts:341-358` forbids a number word in README's caps paragraph. Three copies, each argued; converging them is a later wave's job and needs all three notes.
+**One rule in every prescriptive copy.** Concurrency counts dispatched non-terminal runs, not held workspaces: a terminal producer retained on a hold and a planned undispatched consumer use no running-worker slot. Every actual dispatch still consumes daily budget, and a dispatched non-terminal consumer uses one concurrency slot. The skill, lifecycle reference, current spec, and future README plan must all state that measured accounting; a held-workspace count is not a proxy.
 
 **Mutation table row — "the crossing sentences are pinned":** goes RED when any one of the eight sentences is deleted or paraphrased. Measured in Step 4 by deleting one sentence at a time; the `it.each` row names which sentence went.
 
-Anchor quotes, verified against the working tree. Wave 1 edits this file too (the refusal-list sentence, `:167-173`), so find the site by the quoted text rather than by the number. `ccd/coordinator-skill/SKILL.md:283-291`:
+The lifecycle step this correction produces must name both procedures rather than presenting one as universal:
 
 ```markdown
-5. **Review the handoff commit** like any other commit, update the ledger,
-   then `POST /api/runs` **for wave N+1 first** — same `sessionId`, same
-   workspace, and it re-holds with the wave N+1 reason — and only THEN
-   `POST /api/runs/:id/close` this wave's run with `final:false`. Order
-   matters: closing first, even briefly, leaves the program with zero open
-   runs, and the server retires a program with none — silently breaking
-   every `toId:'coordinator'` mail from that point on. Opening first never
-   lets the count reach zero. After close succeeds, run `"$API" runs list
-   --closed 1`, find the producer by run id, and require `state:done`; only
-   then dispatch wave N+1 (step 2) **fresh into the same workspace**.
+5. **Review the handoff commit** like any other commit and update the ledger.
+   Open wave N+1 BEFORE closing this producer. If it stays in this project,
+   open with this run's `sessionId`, close with `final:false`, and let the hold
+   transfer to the already-open successor on the same workspace. If it changes
+   project, open without this run's `sessionId`, close with `final:true`, and
+   require `released:true`. Then verify the producer through `"$API" runs list
+   --closed 1`; before a dependent dispatch, independently prove the producer
+   interface PR merged at the exact `producerSha`.
 ```
 
 `ccd/coordinator-skill/SKILL.md:296-302` — the insertion point is the blank line at `:299`:
@@ -188,18 +189,32 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       'Reuse `sessionId` ONLY when the next wave stays in the same project.'],
     ['what a crossing wave does instead',
       'A wave that CHANGES project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo'],
-    ['the caps arithmetic, so a cap refusal reads as arithmetic',
-      'two concurrency slots and two of the daily budget'],
+    ['the running-worker cap counts dispatched non-terminal runs',
+      'concurrency counts dispatched non-terminal runs, not held workspaces'],
+    ['the daily cap counts each actual dispatch',
+      'each actual dispatch still consumes daily budget'],
     ['homeProject on every open',
       'Every `POST /api/runs` for this programme carries `homeProject`'],
-    ['the brief carries the immutable-plan source tuple',
-      'carries `homeRepoRoot`, `planRepoPath`, and `planSha`'],
-    ['the brief inlines the contract excerpt verbatim',
-      'INLINES the contract excerpt the wave depends on, verbatim from the merged file'],
+    ['every foreign-plan brief carries the immutable-plan source tuple',
+      'Every brief for a foreign-repo wave carries the three immutable-plan coordinates'],
+    ['producer-source provenance is conditional',
+      'Only a consumer that depends on a producer interface carries the producer contract'],
+    ['the no-dependency arm invents no producer evidence',
+      'A foreign-repo wave with no producer-interface dependency carries none of those producer fields and no invented excerpt.'],
+    ['the producer contract names its own repository root',
+      '`producerRepoRoot`, `producerSourceRepoPath`, `producerSha`'],
     ['the named plan blob is read exactly',
       'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
-    ['Q1 — the producer is verified after close through closed runs',
-      'then successfully close the producer, then run `"$API" runs list --closed 1`'],
+    ['the named producer blob is read in the producer repository',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['same-project succession transfers the hold',
+      'close the producer with `final:false` so its hold transfers'],
+    ['cross-project succession releases the producer',
+      'close the producer with `final:true` and require `released:true`'],
+    ['the producer is verified after close through closed runs',
+      'run `"$API" runs list --closed 1` and require that producer\'s own `state` to be `done`'],
+    ['the exact producer SHA is independently proven merged',
+      'independently prove its interface PR merged at the exact `producerSha`'],
     ['deviations are minted against the home project',
       'minted against the HOME project'],
   ];
@@ -284,28 +299,48 @@ session's workspace belongs to — at the open, and again at the dispatch resume
 the open ever let one through.
 
 **What a crossing costs, so a cap refusal reads as arithmetic rather than a
-fault.** The programme now holds TWO live workspaces, the home wave's and the
-foreign wave's, and the caps are global to this box: that is two concurrency slots
-and two of the daily budget. `cap-concurrency` or `cap-daily` during a cross-repo
-programme is this, not a bug — stop, say which cap, and wait to be woken, exactly
-as you would for any other.
+fault.** Concurrency counts dispatched non-terminal runs, not held workspaces: a
+terminal producer retained on a hold and a planned undispatched consumer consume
+no running-worker slot. Each actual dispatch still consumes daily budget, and a
+dispatched non-terminal consumer consumes one concurrency slot. `cap-concurrency`
+or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+exactly as you would for any other run.
 
-**A brief for a foreign-repo wave carries `homeRepoRoot`, `planRepoPath`, and
-`planSha`, and INLINES the contract excerpt the wave depends on, verbatim from the
-merged file.** `homeRepoRoot` is the absolute home-repository root;
-`planRepoPath` is the tracked repository-relative plan path with no leading slash;
-and `planSha` is the full 40-hex commit SHA. The worker reads exactly
+**Every brief for a foreign-repo wave carries the three immutable-plan
+coordinates: `homeRepoRoot`, `planRepoPath`, and `planSha`.** `homeRepoRoot` is the
+absolute home-repository root; `planRepoPath` is the tracked repository-relative
+plan path with no leading slash; and `planSha` is the full 40-hex plan commit SHA.
+The worker reads exactly
 `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolved repository,
 commit, or path means report and stop, without substituting `HEAD`, reading the
-current checkout, fetching, checking out, or mutating the home repo. The inline
-excerpt controls interface shape; the plan blob controls wave scope and
-requirements. `ledgerAbsPath` names only the programme ledger.
+current checkout, fetching, checking out, or mutating the home repo.
 
-**Before dispatching a wave that consumes another wave's output, first open the
-consumer run, then successfully close the producer, then run `"$API" runs list
---closed 1` and find the producer by run id.** Require its own state to be `done`;
-the default listing omits closed rows, and a missing row or any other state means
-report and do not dispatch. This post-close read is the whole guard.
+**Only a consumer that depends on a producer interface carries the producer
+contract:** `producerRepoRoot`, `producerSourceRepoPath`, `producerSha`, and the
+contract excerpt inlined verbatim from the merged file. A foreign-repo wave with
+no producer-interface dependency carries none of those producer fields and no
+invented excerpt. `producerRepoRoot` is the absolute producer-repository root;
+`producerSourceRepoPath` is the producer source file's repository-relative path;
+and `producerSha` is the exact full merged producer SHA. The worker proves its
+provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. The
+inline excerpt remains the dispatched authority for interface shape; the
+immutable producer blob proves where that shape came from; and the plan blob
+controls wave scope and requirements. `ledgerAbsPath` names only the programme
+ledger.
+
+**Open every successor before closing its producer, then follow the procedure for
+that project relationship.** For a same-project successor, open with the producer's
+`sessionId`, close the producer with `final:false` so its hold transfers to the
+already-open successor, run `"$API" runs list --closed 1`, and require that
+producer's own `state` to be `done`. For a cross-project successor, open without
+the producer's `sessionId`, close the producer with `final:true` and require
+`released:true`, then perform the same closed-row check. Before dispatching any
+dependent consumer, independently prove its interface PR merged at the exact
+`producerSha` carried in the foreign interface contract. A missing or non-`done`
+row, failed release, or absent exact-SHA merge proof means report and do not
+dispatch. The closed row proves the fingerprint and terminal run state; it does
+not prove the interface merged.
 
 **Deviations found during a foreign-repo wave are minted against the HOME
 project** — `POST /api/ledger/deviations` with the home project's name — and
@@ -326,11 +361,13 @@ Run each mutation, confirm the named red, then revert it before the next.
 1. Delete the sentence `Reuse \`sessionId\` ONLY when the next wave stays in the same project.` from the section.
    Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
    Expected: FAIL — 1 failing: `states the reuse rule — a sessionId is a same-project idiom`, message `SKILL.md no longer states the reuse rule — a sessionId is a same-project idiom`.
-2. Paraphrase `two concurrency slots and two of the daily budget` to "two slots and two of the budget".
-   Run: same. Expected: FAIL — `states the caps arithmetic, so a cap refusal reads as arithmetic`.
-3. Delete `project-mismatch` from the section (leaving the rule).
+2. Replace `concurrency counts dispatched non-terminal runs, not held workspaces` with a held-workspace count.
+   Run: same. Expected: FAIL — `states the running-worker cap counts dispatched non-terminal runs`.
+3. Delete `each actual dispatch still consumes daily budget`.
+   Run: same. Expected: FAIL — `states the daily cap counts each actual dispatch`.
+4. Delete `project-mismatch` from the section (leaving the rule).
    Run: same. Expected: FAIL — `the crossing section never names project-mismatch`.
-4. Add the string `/clear` to the section.
+5. Add the string `/clear` to the section.
    Run: same. Expected: FAIL — `the crossing section names /clear`.
 
 - [ ] **Step 6: Commit**
@@ -377,15 +414,15 @@ settled, the deviations already ledgered, and whatever your review of the last
 handoff decided.
 ```
 
-`ccd/coordinator-skill/references/wave-lifecycle.md:468-473`:
+The §5 boundary keeps the programme non-zero while making succession project-specific:
 
 ```markdown
-3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
-   session this wave's run has) — this opens wave N+1's run row and re-holds
-   the same workspace with reason `program:<slug> wave:<N+1>/M`. The program
-   now has two open runs (this wave's, still `working`/`awaiting-review`/
-   `merging`, and the new `planned` one) — it can never read as zero from
-   here.
+3. `POST /api/runs` for wave N+1 before closing wave N. Name this producer's
+   `sessionId` only for a same-project successor; omit it for a cross-project
+   successor. The programme now has two open runs and cannot retire between
+   them. Close and release/transfer according to the matching procedure, then
+   verify the closed producer and any required exact-SHA merge proof before
+   dispatching wave N+1.
 ```
 
 - [ ] **Step 1: Write the failing test**
@@ -408,28 +445,48 @@ Append inside the describe added in Task 1, in `server/test/coordinator-skill.te
       'both are null while the stored home is null'],
     ['§1 — ledgerAbsPath is not a plan coordinate',
       '`ledgerAbsPath` is ONLY that home\'s programme ledger'],
-    ['§2 — what a foreign-repo brief carries beyond the ordinary list',
+    ['§2 — every foreign-repo brief carries the plan tuple',
       '`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`'],
     ['§2 — the named plan is read mechanically',
       'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
-    ['§2 — failure cannot fall back to a mutable checkout',
-      'If the repository, commit, or path cannot be resolved, it reports and stops.'],
-    ['§5 — Q1 uses the closed listing after close',
-      'After that close succeeds'],
+    ['§2 — producer-source provenance is conditional',
+      'Only a consumer with a producer-interface dependency carries the producer contract'],
+    ['§2 — no dependency means no producer fields or excerpt',
+      'A foreign-repo wave with no such dependency carries none of these producer fields and no invented excerpt.'],
+    ['§2 — the producer repository root is named',
+      '`producerRepoRoot`, the absolute producer-repository root'],
+    ['§2 — producer-source provenance is named',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['§2 — the named producer source is read mechanically',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['§2 — plan failure cannot fall back to a mutable checkout',
+      'If that repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§2 — producer failure cannot fall back to consumer cwd',
+      'If that producer repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§5 — same-project close transfers the hold',
+      'close the producer with `final:false`'],
+    ['§5 — cross-project close releases the producer',
+      'close the producer with `final:true` and require `released:true`'],
     ['§5 — Q1 invokes the declared client query',
       '"$API" runs list --closed 1'],
+    ['§5 — merge is proved independently at the producer SHA',
+      'independently prove the producer interface PR merged at the exact `producerSha`'],
   ];
 
-  it('orders the producer gate after close and before consumer dispatch', () => {
+  it('orders the complete producer gate: open, applicable close, done proof, merge proof, dispatch', () => {
     const lifecycle = refs('wave-lifecycle.md');
     const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
       lifecycle.indexOf('## 6 — Final merge'));
-    const closeAt = boundary.indexOf('POST /api/runs/:id/close');
+    const openAt = boundary.indexOf('POST /api/runs` for wave N+1');
+    const closeAt = boundary.indexOf('close the producer');
     const checkAt = boundary.indexOf('"$API" runs list --closed 1');
+    const mergeAt = boundary.indexOf('independently prove the producer interface PR merged');
     const dispatchAt = boundary.indexOf('Dispatch wave N+1');
-    expect(closeAt).toBeGreaterThanOrEqual(0);
+    expect(openAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(openAt);
     expect(checkAt).toBeGreaterThan(closeAt);
-    expect(dispatchAt).toBeGreaterThan(checkAt);
+    expect(mergeAt).toBeGreaterThan(checkAt);
+    expect(dispatchAt).toBeGreaterThan(mergeAt);
   });
 
   it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
@@ -466,32 +523,52 @@ Expected: FAIL — every new lifecycle row whose source tuple, immutable read, l
 3b. `references/wave-lifecycle.md` §2 — insert immediately after the brief-content paragraph (`:167-172`), before `**The execution skill is the one list item that is not merely useful.**`:
 
 ```markdown
-**A brief for a wave in ANOTHER project carries four more things:**
-`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`, the
-tracked repository-relative plan path under `docs/superpowers/plans/`, with no
-leading slash; `planSha`, the full 40-hex commit SHA; and the contract excerpt
-inlined verbatim from the merged file. These are separate from `ledgerAbsPath`,
-which names only `docs/superpowers/programs/<slug>.md`. The worker reads the
-immutable plan object exactly with
-`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If the repository, commit,
-or path cannot be resolved, it reports and stops. It must not substitute `HEAD`,
-directly read the current checkout, fetch, checkout, or otherwise mutate the home
-repository. The inline excerpt controls interface shape; the plan blob at
-`planSha` controls wave scope and requirements; the current checkout's plan is
-not authoritative for this dispatch. It commits only on its own workspace's
-branch in the repo it is running in.
+**Every brief for a wave in ANOTHER project carries three immutable-plan
+coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
+`planRepoPath`, the tracked repository-relative plan path under
+`docs/superpowers/plans/`, with no leading slash; and `planSha`, the full 40-hex
+plan commit SHA. These are separate from `ledgerAbsPath`, which names only
+`docs/superpowers/programs/<slug>.md`. The worker reads the immutable plan object
+exactly with `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If that
+repository, commit, or path cannot be resolved, it reports and stops. It must not
+substitute `HEAD`, directly read a mutable checkout as authority, fetch, checkout,
+or otherwise mutate the home repository.
+
+**Only a consumer with a producer-interface dependency carries the producer
+contract:** `producerRepoRoot`, the absolute producer-repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+inlined verbatim from the merged file. A foreign-repo wave with no such dependency
+carries none of these producer fields and no invented excerpt. The worker proves
+producer-source provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. If that
+producer repository, commit, or path cannot be resolved, it reports and stops.
+The inline excerpt controls dispatched interface shape; the immutable producer
+blob proves its provenance; the plan blob at `planSha` controls wave scope and
+requirements; and the current checkout's plan is not authoritative for this
+dispatch. It commits only on its own workspace's branch in the repo it is running
+in.
 ```
 
-3c. `references/wave-lifecycle.md` §5 — insert as a paragraph immediately after step 3 (`:468-473`), before step 4:
+3c. `references/wave-lifecycle.md` §5 — replace the universal transfer step with two explicit procedures:
 
 ```markdown
-   **After that close succeeds**, if wave N+1 consumes what this wave produced,
-   run `"$API" runs list --closed 1`, find this producer by its run id, and
-   require its own `state` to be `done`. The default `runs list` excludes `done`
-   and `failed` rows, so it cannot perform this check. A missing producer row or
-   any state other than `done` means report and do not dispatch. There is no
-   `dependsOn` column: this post-close read is the only gate between a consumer
-   and an interface that has not landed, especially across repositories.
+   **Same project:** open wave N+1 first with this producer's `sessionId`, then
+   close the producer with `final:false`; the hold transfers to the already-open
+   successor on the same workspace. After close, run `"$API" runs list --closed 1`,
+   find this producer by run id, and require its own `state` to be `done`.
+
+   **Different project:** open wave N+1 first without this producer's `sessionId`,
+   then close the producer with `final:true` and require `released:true`; there is
+   no same-workspace successor to receive a synthetic hold. Perform the same
+   closed-row `done` check. Before dispatching a consumer that depends on this
+   producer, independently prove the producer interface PR merged at the exact
+   `producerSha` carried with `producerSourceRepoPath` in the foreign interface
+   contract. The closed row proves fingerprint and terminal state, not merge.
+
+   A missing/non-`done` producer row, failed release, or absent exact-SHA merge
+   proof means report and do not dispatch. The default `runs list` excludes `done`
+   and `failed` rows, so it cannot perform the state check.
 ```
 
 - [ ] **Step 4: Run it to verify it passes, then measure the mutation**
@@ -505,10 +582,12 @@ Mutations, one at a time, reverted between:
    Run: same command. Expected: FAIL — two rows: `wave-lifecycle.md states §1 — why sessionId is a same-project field` and `… §1 — the crossing open sends none`.
 2. Change `"homeProject":"<the home project>"` to `"home":"<the home project>"`.
    Run: same. Expected: FAIL — `wave-lifecycle.md states §1 — homeProject rides the open body`.
-3. Delete the §5 post-close paragraph.
-   Run: same. Expected: FAIL — both §5 rows and `orders the producer gate after close and before consumer dispatch`.
-4. Move the closed-list check before the close call.
-   Run: same. Expected: FAIL — `orders the producer gate after close and before consumer dispatch`.
+3. Delete either the same-project `final:false` transfer or cross-project `final:true`/`released:true` procedure.
+   Run: same. Expected: FAIL — the matching §5 lifecycle row.
+4. Delete the independent exact-`producerSha` merge proof while keeping the `done` read.
+   Run: same. Expected: FAIL — the merge-proof lifecycle row and the complete ordering test.
+5. Move the closed-list check before the close call, or move dependent dispatch before merge proof.
+   Run: same. Expected: FAIL — `orders the complete producer gate: open, applicable close, done proof, merge proof, dispatch`.
 
 - [ ] **Step 5: Commit**
 
@@ -746,17 +825,33 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
       '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
     ['planSha is a full immutable identifier',
       '`planSha`, a full 40-hex commit SHA'],
-    ['read the named Git object exactly',
+    ['read the named plan Git object exactly',
       'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
-    ['an unresolved named object fails closed',
+    ['producer evidence is conditional on a real dependency',
+      'Only a wave that depends on a producer interface carries a producer contract'],
+    ['a no-dependency foreign wave carries no producer contract',
+      'A foreign-plan wave with no producer-interface dependency requires none of those producer fields and no excerpt.'],
+    ['the producer repository root is absolute',
+      '`producerRepoRoot`, the absolute path to the producer repository root'],
+    ['the producer source path is repository-relative',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['the producer SHA is the exact merged commit',
+      '`producerSha`, the exact full merged producer SHA'],
+    ['read the named producer Git object exactly',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['an unresolved plan object fails closed',
       'If the repository, commit, or path cannot be resolved, report and stop.'],
-    ['ledgerAbsPath does not double as a plan coordinate',
+    ['an unresolved producer object fails closed',
+      'If that producer repository, commit, or path cannot be resolved, report and stop under the same immutable-read rule above.'],
+    ['ledgerAbsPath does not double as a plan or producer coordinate',
       '`ledgerAbsPath` is only the absolute programme-ledger path'],
     ['commit only on this workspace branch, in this repository',
       "commit only on this workspace's own branch in THIS repository"],
-    ['the contract excerpt is inlined in the brief, and is the authority',
-      'The contract excerpt your wave depends on is INLINED in the brief'],
-    ['the named blob controls wave requirements',
+    ['the contract excerpt is inlined and remains the dispatched shape authority',
+      'that inline copy remains the authority for the DISPATCHED INTERFACE SHAPE'],
+    ['the producer blob proves provenance without replacing the excerpt',
+      'The producer blob at `producerSha` proves the excerpt\'s provenance'],
+    ['the named plan blob controls wave requirements',
       'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
     ['the current checkout cannot override the dispatch',
       'The current checkout\'s plan is not authoritative for this dispatched wave.'],
@@ -810,33 +905,45 @@ Insert into `ccd/worker-skill/SKILL.md` between the `**Clause 5 is not a style p
 ## The plan the brief names may live in another repository
 
 A programme is homed in ONE repo and its waves may run in any, so the plan file
-your brief names can sit OUTSIDE this workspace. For a foreign plan, the brief
-carries three separate values: `homeRepoRoot`, the absolute path to the home
-repository root; `planRepoPath`, the tracked repository-relative plan path with
-no leading slash; and `planSha`, a full 40-hex commit SHA. Read exactly the
-immutable Git object:
+your brief names can sit OUTSIDE this workspace. Every foreign-plan brief carries
+three separate values: `homeRepoRoot`, the absolute path to the home repository
+root; `planRepoPath`, the tracked repository-relative plan path with no leading
+slash; and `planSha`, a full 40-hex commit SHA. Read that immutable Git object:
 
 ```bash
 git -C "$homeRepoRoot" show "$planSha:$planRepoPath"
 ```
 
 If the repository, commit, or path cannot be resolved, report and stop. Never
-substitute `HEAD`, read the current checkout directly with `cat` or a file read,
-fetch, checkout, or otherwise mutate the home repository. `ledgerAbsPath` is
-only the absolute programme-ledger path under `docs/superpowers/programs/`; it is
-not `homeRepoRoot` and it is not `planRepoPath`. You commit only on this
-workspace's own branch in THIS repository (clause 2).
+substitute `HEAD`, treat a mutable checkout read as authority, fetch, checkout, or
+otherwise mutate the home repository. `ledgerAbsPath` is only the absolute
+programme-ledger path under `docs/superpowers/programs/`; it is not
+`homeRepoRoot` and it is not `planRepoPath`. You commit only on this workspace's
+own branch in THIS repository (clause 2).
 
-The contract excerpt your wave depends on is INLINED in the brief, verbatim from
-the merged file, and that inline copy is the authority for the INTERFACE — the
-shape of the thing you build against, frozen at the moment the brief was cut.
-The plan blob read at `planSha` is the authority for the WAVE'S REQUIREMENTS —
-what to build and why (clause 6). The current checkout's plan is not authoritative
-for this dispatched wave. Those are different questions, so a disagreement is
-not a tie to break: the excerpt still wins on shape, the named plan blob still
-wins on scope, and you say so either way in your `wave-done` mail so the ledger
-gets it. A deviation you find is still never a number you invent (clause 11):
-report it, and the coordinator mints it against the programme's home project.
+Only a wave that depends on a producer interface carries a producer contract:
+`producerRepoRoot`, the absolute path to the producer repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+INLINED in the brief, verbatim from that merged file. A foreign-plan wave with no
+producer-interface dependency requires none of those producer fields and no
+excerpt. When the producer contract is present, read its immutable Git object:
+
+```bash
+git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"
+```
+
+If that producer repository, commit, or path cannot be resolved, report and stop
+under the same immutable-read rule above. The inline copy remains the authority
+for the DISPATCHED INTERFACE SHAPE — the thing you build against, frozen when the
+brief was cut. The producer blob at `producerSha` proves the excerpt's provenance;
+it does not replace the excerpt as shape authority. The plan blob read at
+`planSha` is the authority for the WAVE'S REQUIREMENTS — what to build and why
+(clause 6). The current checkout's plan is not authoritative for this dispatched
+wave. Those are different questions, so a disagreement is not a tie to break:
+report it in your `wave-done` mail so the ledger gets it. A deviation you find is
+still never a number you invent (clause 11): report it, and the coordinator mints
+it against the programme's home project.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,
@@ -852,16 +959,20 @@ Expected: PASS — whole file green: thirteen clauses verbatim, `1..13` with no 
 Mutations, reverted between:
 
 1. Replace `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"` with a direct read of the current checkout.
-   Run: same. Expected: FAIL — `states read the named Git object exactly` and the mutable-checkout fallback guard.
-2. Replace `planSha` in the command with `HEAD`.
-   Run: same. Expected: FAIL — `states read the named Git object exactly` and the explicit `show "HEAD:` negative guard.
-3. Delete `If the repository, commit, or path cannot be resolved, report and stop.`
+   Run: same. Expected: FAIL — `states read the named plan Git object exactly` and the mutable-checkout fallback guard.
+2. Replace `planSha` in the plan command with `HEAD`.
+   Run: same. Expected: FAIL — `states read the named plan Git object exactly` and the explicit `show "HEAD:` negative guard.
+3. Replace `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"` with a direct read of the mutable source file or with a read through `$PWD`.
+   Run: same. Expected: FAIL — `states read the named producer Git object exactly`; the `$PWD` form also fails the two-repository behavioral fixture because the producer object exists only in the producer repository.
+4. Delete `If either repository, commit, or path cannot be resolved, report and stop.`
    Run: same. Expected: FAIL — `states an unresolved named object fails closed`.
-4. Delete the whole role-reply paragraph.
+5. Make the producer blob, rather than the inline excerpt, authoritative for dispatched interface shape.
+   Run: same. Expected: FAIL — the dispatched-shape authority and producer-provenance rows.
+6. Delete the whole role-reply paragraph.
    Run: same. Expected: FAIL — `states a reply may arrive addressed to the role`.
-5. Add a numbered list to the new section (`1. read the plan`).
+7. Add a numbered list to the new section (`1. read the plan`).
    Run: same. Expected: FAIL — this task's `adds no new clause and no second numbered list` AND the existing `numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps`.
-6. Write `two clauses` anywhere in the new section.
+8. Write `two clauses` anywhere in the new section.
    Run: same. Expected: FAIL — the existing count-word pin, message `SKILL.md says two where the CONTRACT pins 13`.
 
 - [ ] **Step 5: Commit**
@@ -2427,14 +2538,28 @@ cd pwa && npm run build
 ```
 Expected: both clean. The PWA build is the one that matters here: `tsc --noEmit` is what proves every `RunSummary` literal in `pwa/test` still satisfies the type, that `abroad` is declared and destructured, and that `RunSummary` is imported as a type in `MailScreen.tsx`.
 
-- [ ] **Step 3: Re-measure two mutation rows on the assembled tree**
+- [ ] **Step 3: Re-measure the vulnerable mutation rows on the assembled tree**
 
-The rows most likely to have been quietly repaired by a later task:
+The rows most likely to have been quietly repaired by a later task or acceptance edit:
 
-1. Delete the `.run-project` span (Task 5). Run `cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx`. Expected: FAIL, 2 cases. Revert.
-2. Delete the `abroad={…}` prop (Task 7). Run `cd pwa && ./node_modules/.bin/vitest run test/fleet-screen.test.tsx`. Expected: FAIL, 1 case. Revert.
+1. Delete the `.run-project` span (Task 5). Run `cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx`. Expected: FAIL, 3 cases — both dedicated badge cases plus the legacy-null case, which also asserts the project badge remains while the crossing marker stays absent. Revert with a distinct sentinel.
+2. Delete the `abroad={…}` prop (Task 7). Run `cd pwa && ./node_modules/.bin/vitest run test/fleet-screen.test.tsx`. Expected: FAIL, 1 case. Revert with a distinct sentinel.
+3. Remove one `asks.list` identity injection (`parent` or `fromUuid`). Run `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts`. Expected: FAIL in the matching derived-identity case. Revert with a distinct sentinel.
+4. Remove one executable corpus command from the client table or add a real command whose row is absent. Run `cd server && ./node_modules/.bin/vitest run test/ccrc-api-closed.test.ts`. Expected: FAIL in corpus-to-table parity. Revert with a distinct sentinel.
+5. Restore the old held-workspace concurrency sentence in either coordinator corpus. Run `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`. Expected: FAIL in the dispatched-nonterminal accounting pin. Revert with a distinct sentinel.
+6. Remove the independent exact-`producerSha` merge-proof sentence while leaving the closed-row check. Run the same coordinator suite. Expected: FAIL in the merge-proof pin, demonstrating that `state:done` is not treated as merge evidence. Revert with a distinct sentinel.
+7. Replace `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"` in the worker skill with `git -C "$PWD" show "$producerSha:$producerSourceRepoPath"`. Run `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`. Expected: FAIL in the producer-source provenance pin and the two-repository behavioral fixture. Revert with a distinct sentinel.
+8. Replace the ask lane's derived 409 split sentence with a PARAPHRASED three-condition claim the negative regex does not know — `A 409 here is limited to three possible causes.` Run `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`. Expected: FAIL in the arithmetic pin (`(3 + 10) distinct codes`), which is the assertion that survives a paraphrase; the phrasing-matched negative stays green on this mutant, which is exactly why the positive pin carries the guard. Revert with a distinct sentinel.
 
-Then re-run both files clean and confirm `git status --short` is empty of unintended edits.
+Then re-run all four focused files clean and confirm the scratch trees used for mutation are clean before removing only those scratch trees created for this step.
+
+- [ ] **Step 3a: Complete the bounded ask client correction (D-2683)**
+
+Add exactly three rows to `ccd/ccrc-api`: `asks.list` (`GET /api/asks`, no positional id), `asks.answer` (`POST /api/asks/{id}/answer`), and `asks.release` (`POST /api/asks/{id}/release`). The route table has twenty-two rows afterwards and its self-description derives or states that exact count. `asks.list` derives both `parent=<current pane identity>` and `fromUuid=<that identity's UUID>` through the existing `derive_identity`; neither value is caller-selectable. If a compatibility `--parent` spelling is retained, accept it only when it equals the derived parent. Never accept `--fromUuid`, an arbitrary host/path/URL, raw request fragments, or another generic identity override. Answer and release bodies still enter only through `--json`.
+
+Extend `server/test/ccrc-api.test.ts` to pin all twenty-two rows, the exact ask URLs, no-pane and malformed-identity refusal, matching-only parent compatibility if present, rejection of caller-selected `fromUuid`, and JSON-only answer/release bodies. Render the three ask operations as executable fenced commands in the coordinator corpus; positional ids must be quoted shell variables, not angle-bracket placeholders that Bash parses as redirection. Extend `server/test/ccrc-api-closed.test.ts` with executable corpus-command-to-route-table parity in both directions needed by the shipped examples: harvest actual `ccrc-api <group> <verb>` commands from the coordinator and worker corpora, normalise positional ids without interpreting arbitrary shell, pin the harvested set to `asks.answer`, `asks.list`, `asks.release`, `mail.send`, and `runs.open`, require every harvested pair to exist in the declared table, and reject shell-significant ask-id placeholders. Preserve `EXEC_COMMANDS = ['tmux', 'ccd']`; never add `gh`.
+
+Run both focused client suites green, then run the two mutations in Step 3 above in isolated scratch trees. An import-time or parser crash is not evidence; each mutation must reach the named assertion. Restore by a distinct sentinel and prove each scratch tree clean before removing only the scratch tree created for that mutation.
 
 - [ ] **Step 4: The deploy — AGENT FIRST, and it is not a preference**
 
@@ -2453,13 +2578,13 @@ Expected: the agent lane rsyncs, installs both skills atomically and restarts th
 
 Measure all four fields at one moment, after the last push, and send them once — `branchTip` from `git -C <this worktree> rev-parse HEAD`, `handoffCommit` the same sha, `prNumber` and `prPhase` from the PR this wave opened. Then stop pushing.
 
-The report says, in prose: which spec sections this wave closed (§3 F3, §3 F4, §4's mail-screen bullet, §7's skill and PWA rows, §8's within-wave ordering); that the eleven coordinator clauses and thirteen worker clauses are byte-identical to what they were on `origin/main`; that `nestFleet.ts` and `nestFleet.test.ts` are untouched; every mutation row and the red it produced; and the `## Deviations found` entries below, each with the number the coordinator minted for it.
+The report says, in prose: which spec sections this wave closed (§3 F3, §3 F4, §4's mail-screen bullet, §7's skill, client and PWA rows, §8's within-wave ordering); that the eleven coordinator clauses and thirteen worker clauses are byte-identical to what they were on `origin/main`; that `nestFleet.ts` and `nestFleet.test.ts` are untouched; that the client has exactly twenty-two declared rows and executable corpus parity; that same-project succession transfers a hold while cross-project succession releases it; that a closed `done` producer and exact-`producerSha` merge proof were measured as separate gates; every mutation row and the red it produced; and the `## Deviations found` entries below, each with the number the coordinator minted for it.
 
 ---
 
 ## Deviations found
 
-Forty. **Four were found while PLANNING** against `origin/main` `d0064e6e` — every one is a place where the spec's or the cross-wave contract's own words could not be followed exactly against the tree as it stands. Each carried a `D-TBD-<kebab-slug>` while this plan was drafted; the orchestrator has since minted the contiguous block D-2062–D-2065 and defined the numbers into those entries in one act, so `server/test/dtbd.test.ts` is GREEN and the four below are allocated, not pending. **The fifth, sixth and seventh, D-2560, D-2561 and D-2567, were allocated by the coordinator DURING EXECUTION.** D-2560 and D-2561 were found while measuring D-2545's read surface before its brief was written, and both were ruled OUT of this wave's work in the same act that recorded them. D-2567 was found during Task 3's first review round against the plan's own fenced text, not against a measurement of the tree, and its ruling — correct the three occurrences to `toId` — was implemented in the same commit that records it. All three are records here rather than open tasks. **The eighth, ninth and tenth, D-2574, D-2575 and D-2576, were also allocated by the coordinator DURING EXECUTION**, all three found in Task 6's fix round 1 — a review of Task 6's own committed diff, not a fresh measurement of the wider tree. D-2574 names three guards the plan's own mutation table asserted but never actually put a witness against; D-2575 names a predicate `orphanNote` re-spelled rather than consuming, byte for byte, the decision Task 5 already made; D-2576 names a comparison the card ran against the run's own project where the spec's words name the card's. All three were fixed in the same fix-round commit that records them. **The eleventh, D-2580, was allocated by the coordinator DURING EXECUTION** as well, found in the re-review of Task 6's fix round 1: a pre-existing marker string this same fix round was the first artifact to pin with a test against the exact scenario that makes it false. Fixed in the fix-round-2 commit that records it. **The twelfth and thirteenth, D-2581 and D-2582, were also allocated by the coordinator DURING EXECUTION**, both found in Task 7's fix round 1 — a review of Task 7's own committed diff, not a fresh measurement of the wider tree. D-2581 corrects the coordinator's OWN prior ruling on Task 7's report, which held that a pending-shaped fixture alone would be a complete witness for "the abroad list never reaches `nestFleet`"; the review refuted that by measurement, building a settled-shaped witness that reds under the mutation and stays green against the shipped tree, proving the settled path is independently reachable and was previously unwitnessed. D-2582 corrects a false comment claiming two run filters are exact complements when they are merely disjoint on one card. Both were fixed in the same fix-round commit that records them. **The fourteenth, D-2583, was also allocated by the coordinator DURING EXECUTION**, found in Task 8's own new test cases (`pwa/test/mail-screen.test.tsx`): two of the six new grouping cases mounted fixtures with no explicit `at`, so their expected `.mail-group-head` order (`['Build 9b: peers and claims', 'Cross-repo programmes']`) was really asserting array-CONSTRUCTION order — a tie (or near-tie) between two `e()` calls made back to back on `Date.now()` does not make that order accidentally correct; it is exactly what makes the assertion deterministically FAIL, because `lib/feed.ts`'s `mergeBySeq` (ascending `x.at - y.at || x.seq - y.seq`) puts the first-constructed event first in the store, and `MailScreen.tsx`'s own `rows = [...feed].reverse()` line — whose comment reads "newest first on screen; oldest-first in the store", pre-existing, shipped, untouched by this task — renders the SECOND-constructed event, never the first, on top. Measured against the implementation transcribed byte-for-byte from this same task's brief, both cases failed deterministically (3/3 identical runs, same failure each time). The worker correctly stopped rather than picking a side. The candidate fix of making the grouping iterate ascending `feed` instead of newest-first `rows` was REJECTED: it would have silently reversed this screen's shipped, documented display order for every user, for the sole purpose of making an untested assumption in a new test pass. RULING (coordinator): the tests' expected order was wrong, not the screen. Fixed by giving both cases explicit, well-separated (60-second) `at` values so the intended order is stated rather than inherited from the clock, asserting the newest-first order the screen has always used, and naming `MailScreen.tsx`'s own "newest first on screen" comment as the authority for that convention (cited by that text rather than a line number, per D-2586). Fixed in the same commit that records it. **The fifteenth through eighteenth, D-2584, D-2585, D-2586 and D-2587, were allocated by the coordinator DURING EXECUTION** as well, all four found in the review of Task 8's own committed diff (fix round 1), not a fresh measurement of the wider tree. D-2584 names a stale mail-filter selection that renders the screen completely blank with no message, once the runs read resolves and changes the selected group's own key out from under it. D-2585 names `eventRunId`'s own stated purpose — protecting a row that reached the renderer without going through revival — as unwitnessed anywhere in the repo, sharpening the worker's own Step-5 report that mutation 3 stayed green under the brief's stated command. D-2586 names four citations of `MailScreen.tsx:108` (two in the test file, two in this plan) that were FALSE ON ARRIVAL rather than falsified later: `59881c7b` (this task's own round-0 commit) is the SAME commit that both introduced them and moved that line to `:141`, so there was never a window in which they were true, plus an overreaching CSS comment claim not true of the All chip. D-2587 names a "keeps rendering every record when the runs read fails" claim measured over a population of one record, where a mutation dropping every record but the first would have stayed green. All four were fixed in the same fix-round commit that records them. **The nineteenth, twentieth and twenty-first — D-2589, D-2590 and D-2616 — belong to the FINAL WHOLE-BRANCH REVIEW and to the two carried items, and only D-2590 is wave-2 work.** D-2589 and D-2616 were allocated by the coordinator and are RECORDS ONLY, each naming a pre-existing defect this wave surfaced without touching; D-2590 was allocated by the worker session itself under the coordinator's standing ruling that self-allocation is fine for the rest of this programme, and defined in the same act. **The twenty-second through twenty-fourth — D-2625, D-2626 and D-2627 — are the three places D-2545's IMPLEMENTATION departed from its own brief**, each found while executing it, each argued by the implementer rather than discovered by a reviewer, and all three allocated by the worker session in one act and defined here in the same one. **The twenty-fifth through thirtieth — D-2653 and D-2656–D-2660 — were allocated by this worker during the post-handoff acceptance correction round and defined here in the same act.** They record the six coordinator findings that required a new pushed head after the original `wave-done`: the executable producer gate, immutable named-plan reads, ledger/plan path separation, complete programme-mail history semantics, the live 11/13 skill cardinalities, and stable D-2567 evidence. The non-contiguous numbers are the allocator's answer: D-2653 was issued first, then the remaining five as one block. **The thirty-first and thirty-second — D-2654 and D-2655 — were allocated to this worker for the next acceptance correction.** **The thirty-third through fortieth — D-2680–D-2687 — were allocated to the coordinator for the same correction round.** All ten are defined below before their guards land: exact generated ask IDs, canonical route IDs, the open-before-close boundary, project-specific succession, the complete open payload, bounded ask operations, producer merge proof, cross-project final release, actual cap accounting, and immutable foreign-interface provenance.
+Forty-six. **Four were found while PLANNING** against `origin/main` `d0064e6e` — every one is a place where the spec's or the cross-wave contract's own words could not be followed exactly against the tree as it stands. Each carried a `D-TBD-<kebab-slug>` while this plan was drafted; the orchestrator has since minted the contiguous block D-2062–D-2065 and defined the numbers into those entries in one act, so `server/test/dtbd.test.ts` is GREEN and the four below are allocated, not pending. **The fifth, sixth and seventh, D-2560, D-2561 and D-2567, were allocated by the coordinator DURING EXECUTION.** D-2560 and D-2561 were found while measuring D-2545's read surface before its brief was written, and both were ruled OUT of this wave's work in the same act that recorded them. D-2567 was found during Task 3's first review round against the plan's own fenced text, not against a measurement of the tree, and its ruling — correct the three occurrences to `toId` — was implemented in the same commit that records it. All three are records here rather than open tasks. **The eighth, ninth and tenth, D-2574, D-2575 and D-2576, were also allocated by the coordinator DURING EXECUTION**, all three found in Task 6's fix round 1 — a review of Task 6's own committed diff, not a fresh measurement of the wider tree. D-2574 names three guards the plan's own mutation table asserted but never actually put a witness against; D-2575 names a predicate `orphanNote` re-spelled rather than consuming, byte for byte, the decision Task 5 already made; D-2576 names a comparison the card ran against the run's own project where the spec's words name the card's. All three were fixed in the same fix-round commit that records them. **The eleventh, D-2580, was allocated by the coordinator DURING EXECUTION** as well, found in the re-review of Task 6's fix round 1: a pre-existing marker string this same fix round was the first artifact to pin with a test against the exact scenario that makes it false. Fixed in the fix-round-2 commit that records it. **The twelfth and thirteenth, D-2581 and D-2582, were also allocated by the coordinator DURING EXECUTION**, both found in Task 7's fix round 1 — a review of Task 7's own committed diff, not a fresh measurement of the wider tree. D-2581 corrects the coordinator's OWN prior ruling on Task 7's report, which held that a pending-shaped fixture alone would be a complete witness for "the abroad list never reaches `nestFleet`"; the review refuted that by measurement, building a settled-shaped witness that reds under the mutation and stays green against the shipped tree, proving the settled path is independently reachable and was previously unwitnessed. D-2582 corrects a false comment claiming two run filters are exact complements when they are merely disjoint on one card. Both were fixed in the same fix-round commit that records them. **The fourteenth, D-2583, was also allocated by the coordinator DURING EXECUTION**, found in Task 8's own new test cases (`pwa/test/mail-screen.test.tsx`): two of the six new grouping cases mounted fixtures with no explicit `at`, so their expected `.mail-group-head` order (`['Build 9b: peers and claims', 'Cross-repo programmes']`) was really asserting array-CONSTRUCTION order — a tie (or near-tie) between two `e()` calls made back to back on `Date.now()` does not make that order accidentally correct; it is exactly what makes the assertion deterministically FAIL, because `lib/feed.ts`'s `mergeBySeq` (ascending `x.at - y.at || x.seq - y.seq`) puts the first-constructed event first in the store, and `MailScreen.tsx`'s own `rows = [...feed].reverse()` line — whose comment reads "newest first on screen; oldest-first in the store", pre-existing, shipped, untouched by this task — renders the SECOND-constructed event, never the first, on top. Measured against the implementation transcribed byte-for-byte from this same task's brief, both cases failed deterministically (3/3 identical runs, same failure each time). The worker correctly stopped rather than picking a side. The candidate fix of making the grouping iterate ascending `feed` instead of newest-first `rows` was REJECTED: it would have silently reversed this screen's shipped, documented display order for every user, for the sole purpose of making an untested assumption in a new test pass. RULING (coordinator): the tests' expected order was wrong, not the screen. Fixed by giving both cases explicit, well-separated (60-second) `at` values so the intended order is stated rather than inherited from the clock, asserting the newest-first order the screen has always used, and naming `MailScreen.tsx`'s own "newest first on screen" comment as the authority for that convention (cited by that text rather than a line number, per D-2586). Fixed in the same commit that records it. **The fifteenth through eighteenth, D-2584, D-2585, D-2586 and D-2587, were allocated by the coordinator DURING EXECUTION** as well, all four found in the review of Task 8's own committed diff (fix round 1), not a fresh measurement of the wider tree. D-2584 names a stale mail-filter selection that renders the screen completely blank with no message, once the runs read resolves and changes the selected group's own key out from under it. D-2585 names `eventRunId`'s own stated purpose — protecting a row that reached the renderer without going through revival — as unwitnessed anywhere in the repo, sharpening the worker's own Step-5 report that mutation 3 stayed green under the brief's stated command. D-2586 names four citations of `MailScreen.tsx:108` (two in the test file, two in this plan) that were FALSE ON ARRIVAL rather than falsified later: `59881c7b` (this task's own round-0 commit) is the SAME commit that both introduced them and moved that line to `:141`, so there was never a window in which they were true, plus an overreaching CSS comment claim not true of the All chip. D-2587 names a "keeps rendering every record when the runs read fails" claim measured over a population of one record, where a mutation dropping every record but the first would have stayed green. All four were fixed in the same fix-round commit that records them. **The nineteenth, twentieth and twenty-first — D-2589, D-2590 and D-2616 — belong to the FINAL WHOLE-BRANCH REVIEW and to the two carried items, and only D-2590 is wave-2 work.** D-2589 and D-2616 were allocated by the coordinator and are RECORDS ONLY, each naming a pre-existing defect this wave surfaced without touching; D-2590 was allocated by the worker session itself under the coordinator's standing ruling that self-allocation is fine for the rest of this programme, and defined in the same act. **The twenty-second through twenty-fourth — D-2625, D-2626 and D-2627 — are the three places D-2545's IMPLEMENTATION departed from its own brief**, each found while executing it, each argued by the implementer rather than discovered by a reviewer, and all three allocated by the worker session in one act and defined here in the same one. **The twenty-fifth through thirtieth — D-2653 and D-2656–D-2660 — were allocated by this worker during the post-handoff acceptance correction round and defined here in the same act.** They record the six coordinator findings that required a new pushed head after the original `wave-done`: the executable producer gate, immutable named-plan reads, ledger/plan path separation, complete programme-mail history semantics, the live 11/13 skill cardinalities, and stable D-2567 evidence. The non-contiguous numbers are the allocator's answer: D-2653 was issued first, then the remaining five as one block. **The thirty-first and thirty-second — D-2654 and D-2655 — were allocated to this worker for the next acceptance correction.** **The thirty-third through fortieth — D-2680–D-2687 — were allocated to the coordinator for the same correction round.** All ten are defined below before their guards land: exact generated ask IDs, canonical route IDs, the open-before-close boundary, project-specific succession, the complete open payload, bounded ask operations, producer merge proof, cross-project final release, actual cap accounting, and immutable foreign-interface provenance. **The forty-first through forty-sixth — D-2715–D-2720 — were allocated to this worker in one call during the final independent acceptance review and are defined below in the same act.** They correct the repository used for immutable producer reads, make producer evidence conditional on an actual interface dependency, independently pin cross-project close/check ordering, make copied ask mutations fail safe without a deliberately supplied id, align `asks list` with its documented held/open view, and extend executable-corpus parity to Markdown's indented code blocks.
 
 - **D-2062** — the wave brief asks the offline snapshot revive to tolerate a missing `runId` and a missing `RunSummary.homeProject`. Measured: it can tolerate neither, because it carries neither. `FleetSnapshot` (`pwa/src/lib/offline.ts:23-37`) is `{ savedAt, sessions, roster }`, its one writer is `stores/fleet.ts:347` (`saveFleetSnapshot(msg.sessions, get().roster)`), and no run row or feed record is ever persisted — `runs`/`runsFrameSeen` and `feed` are in-memory store slots only. So the tolerance the brief asks for is vacuous at that seam and REAL at two others, where the data actually crosses a version boundary: `reviveNotifyEvent` (`shared/api.ts`, wave 1) for `runId`, and `runHomeProject` (`pwa/src/fleet/runWords.ts`, Task 5) for `homeProject`. Task 8 therefore pins the FACT instead of writing a reviver with nothing to revive: `offline.test.ts` asserts the persisted key set is exactly `roster,savedAt,sessions`, so the day anyone persists runs or the feed, the missing reviver is a red suite rather than a silent half-revival.
 
@@ -2509,9 +2634,9 @@ Forty. **Four were found while PLANNING** against `origin/main` `d0064e6e` — e
 
 - **D-2627** — `hydrateAsk`'s TIMESTAMP columns (`at`, `askAt`, `answeredAt`, `releasedAt`) are deliberately NOT guarded, though "ask hydration" is one of the five reads D-2545 names. They are epoch milliseconds, not run ids: they are outside `isPositiveDecimalSafeInteger`'s domain (that predicate asks `>= 1`, which is true of every real timestamp and says nothing useful about one), and `insertAsk`'s own ruling names `runId` alone. Stated in `ASK_COLS`'s comment and attributed there to D-2560, which already carries the wider persisted-integer surface. **The line to revisit if this is wrong:** if total coverage of `hydrateAsk` was intended rather than coverage of its ID columns, this is the entry that says it was not done, and the remedy is a domain predicate for timestamps rather than reusing the run-id one — reusing it would be a guard whose message names a cause it cannot detect.
 
-- **D-2653** — the between-wave dependency rule could not execute the state proof it required. The coordinator reference placed the producer-state check before the close that makes the producer `done`, while plain `GET /api/runs` omits `done` and `failed` rows and the closed client declared no `closed` query on `runs list`. Fixed claim-wide: `ccd/ccrc-api` now declares `closed` for its existing `runs.list` row without widening the nineteen-route table; `server/test/ccrc-api.test.ts` behaviorally proves `ccrc-api runs list --closed 1` reaches exactly `/api/runs?closed=1`; and both coordinator corpora now order OPEN successor, successful CLOSE producer, closed-row read by exact run id, then DISPATCH. Missing or non-`done` rows fail shut. The 2026-08-11 spec retains its historical body and gains this current operational correction; the 2026-09-08 spec and both future plan copies carry the executable sequence.
+- **D-2653** — the between-wave dependency rule could not execute the state proof it required. The coordinator reference placed the producer-state check before the close that makes the producer `done`, while plain `GET /api/runs` omits `done` and `failed` rows and the closed client declared no `closed` query on `runs list`. Fixed claim-wide: `ccd/ccrc-api` now declares `closed` for its existing `runs.list` row; `server/test/ccrc-api.test.ts` behaviorally proves `ccrc-api runs list --closed 1` reaches exactly `/api/runs?closed=1`; and both coordinator corpora now order OPEN successor, project-appropriate CLOSE producer, closed-row read by exact run id, independent exact-SHA merge proof when there is a dependent interface, then DISPATCH. Missing or non-`done` rows fail shut. The historical 2026-08-11 specification remains byte-for-byte identical to `origin/main`; the 2026-09-08 spec and both active plan copies carry the executable current procedure.
 
-- **D-2656** — the foreign-plan contract named a SHA but read a mutable filesystem file, so the citation's content was not mechanically frozen. Fixed after the coordinator verified the exact tuple: `homeRepoRoot` is the absolute home repository root, `planRepoPath` is a tracked repository-relative path with no leading slash, and `planSha` is a full 40-hex commit SHA. A worker reads exactly `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolvable repository, commit, or path means report and stop, never `HEAD`, direct current-checkout reading, fetch, checkout, or writing the home repo. The inline excerpt remains authoritative for interface shape; the blob at `planSha` is authoritative for wave scope and requirements. Both shipped skills, their tests, the live 2026-09-08 spec, and the prescriptive wave-2/wave-3 copies now state the same contract.
+- **D-2656** — the foreign-plan contract named a SHA but read a mutable filesystem file, so the citation's content was not mechanically frozen. Fixed after the coordinator verified the exact tuple: `homeRepoRoot` is the absolute home repository root, `planRepoPath` is a tracked repository-relative path with no leading slash, and `planSha` is a full 40-hex commit SHA. A worker reads exactly `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolvable repository, commit, or path means report and stop, never `HEAD`, direct current-checkout reading as authority, fetch, checkout, or writing the home repo. The inline excerpt remains authoritative for dispatched interface shape; the blob at `planSha` is authoritative for wave scope and requirements. D-2687 adds the separate producer-source provenance tuple rather than overloading this plan tuple. Both shipped skills, their tests, the live 2026-09-08 spec, and the prescriptive wave-2/wave-3 copies state the same split.
 
 - **D-2657** — live cross-repo prose overloaded `ledgerAbsPath` as a plan location or repository root even though the API returns only the programme ledger at `docs/superpowers/programs/<slug>.md`. Fixed claim-wide by keeping `ledgerAbsPath` ledger-only and carrying the plan coordinates separately from the home checkout root under `docs/superpowers/plans/`. The correction covers the coordinator corpus and harvest test, the 2026-09-08 spec, and both wave plans; historical wave-1 D-2349 material and the superseded 2026-08-11 spec's original account remain untouched.
 
@@ -2529,9 +2654,9 @@ Forty. **Four were found while PLANNING** against `origin/main` `d0064e6e` — e
 
 - **D-2681** — the coordinator lifecycle presented same-session, same-workspace succession as universal even though a workspace belongs to one project. A same-project successor reuses `sessionId` and transfers the hold; a cross-project successor opens without it and spawns in the target repository. Split the generic lifecycle into those two procedures in both coordinator corpora and every active prescriptive copy.
 
-- **D-2682** — the coordinator skill's canonical `runs open` body omitted `homeProject`, contradicting its own rule that every open carries the programme's immutable home. Add `homeProject` to the executable example so copying the documented call cannot create a legacy-null programme row.
+- **D-2682** — the coordinator skill's canonical `runs open` body omitted `homeProject`, contradicting its own rule that every open carries the programme's immutable home. Add `homeProject` to the executable example so copying the documented call cannot create a legacy-null programme row, and derive the example's complete key set in `coordinator-skill.test.ts` so deleting that field from the call site turns red.
 
-- **D-2683** — the bounded `ccrc-api` documented ask listing, answering, and releasing but exposed none of those routes, leaving both skill clause 11/13 and live operator ask notifications unusable without the forbidden raw-HTTP escape hatch. Add closed-table rows for `asks.list`, `asks.answer`, and `asks.release`; derive the ask-list caller identity narrowly from the current pane, inject `fromUuid`, reject a supplied parent that differs from that identity, keep arbitrary host/path/raw and general identity overrides absent, and mechanically prove every executable corpus command maps to a declared row.
+- **D-2683** — the bounded `ccrc-api` documented ask listing, answering, and releasing but exposed none of those routes, leaving both skill clause 11/13 and live operator ask notifications unusable without the forbidden raw-HTTP escape hatch. Add closed-table rows for `asks.list`, `asks.answer`, and `asks.release`; derive the ask-list caller identity narrowly from the current pane, inject `fromUuid`, reject a supplied parent that differs from that identity, keep arbitrary host/path/raw and general identity overrides absent, render all three skill commands as executable fenced blocks, and mechanically prove every executable corpus command maps to a declared row. Acceptance review found two executable-corpus defects: leaving the commands as prose-inline examples made the corpus harvester see only `mail.send` and `runs.open`, so deleting an ask row stayed green; then fencing a bare `<id>` made copied Bash parse it as input redirection. The fenced variable-based examples, pinned five-command harvested set, explicit shell-placeholder guard, and individual ask-row deletion mutations close both gaps.
 
 - **D-2684** — a producer run in `state:'done'` proves that its handoff fingerprint passed and the run closed; it does not prove the producer interface PR merged. Before dispatching a dependent consumer, require both the closed producer row and independently measured proof that its PR merged at the producer SHA named in the foreign interface contract.
 
@@ -2540,3 +2665,15 @@ Forty. **Four were found while PLANNING** against `origin/main` `d0064e6e` — e
 - **D-2686** — the crossing corpus said two held workspaces consume two running-worker concurrency slots. The server's cap counts dispatched non-terminal runs, not held workspaces: a terminal retained producer and a planned undispatched consumer consume no running-worker slot, while each actual dispatch still consumes daily budget. Replace the false slot arithmetic with the measured accounting and keep ordinary cap refusals authoritative.
 
 - **D-2687** — the foreign contract excerpt named an immutable plan tuple but not the source artifact whose interface the consumer uses or the exact merged producer commit providing it. Require the excerpt to name the producer repository-relative source-file path and full merged producer SHA. Read interface shape from that immutable producer blob, keep the inline excerpt as the dispatched shape authority, and gate dependent dispatch on merge proof for that same SHA.
+
+- **D-2715** — D-2687's immutable producer read used `git -C "$PWD"`, but a cross-project worker's current repository is the CONSUMER and Git object lookup is repository-scoped. The producer commit will normally not exist there, so the documented proof fails even when every named producer coordinate is correct. Carry an independently resolved `producerRepoRoot` and read exactly `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. A two-repository behavioral fixture runs from the consumer repository, proves the producer blob resolves only through the producer root, and turns red if the command regresses to `$PWD`.
+
+- **D-2716** — D-2687 made producer coordinates and an inline interface excerpt mandatory for every foreign-plan wave, but a wave may work in another repository without consuming an interface from its predecessor. The plan tuple (`homeRepoRoot`, `planRepoPath`, `planSha`) remains mandatory for every foreign-plan wave. The producer tuple (`producerRepoRoot`, `producerSourceRepoPath`, `producerSha`) and inline interface excerpt are mandatory only when dispatch depends on a producer interface; a no-dependency foreign brief must not invent them. Contract tests pin both arms independently.
+
+- **D-2717** — the lifecycle ordering test found the first `close the producer` and first closed-row read in a combined section, constraining only the same-project procedure. Moving the cross-project closed-row check before its `final:true` close remained green even though that read cannot prove the post-close `done` state. Give each branch its own explicit open, close, and closed-list sequence, then slice and assert open → close → closed-row proof independently for same-project and cross-project succession.
+
+- **D-2718** — the executable ask examples initialized `ask_id=123`, a canonical positive resource id that may name a real held ask. Copying either block without replacing that line can therefore answer or release live work. Require the caller to supply a canonical positive ask id through a fail-fast expansion before any client invocation, with no valid default. Execute each complete documented block against a fixture client and assert both the no-id refusal and the exact expanded argv; deleting or weakening the initializer must turn the intended test red before any request occurs.
+
+- **D-2719** — the bounded client's `asks list` query carried only derived `parent` and `fromUuid`, while the surrounding documentation promises the caller's open asks. Server omission of `state` is deliberately an unfiltered diagnostic read and returns held, answering, answered, released, and stale rows. Keep that server capability, but hard-code `state=held` in the closed client's derived query; do not expose arbitrary state selection. The behavior test pins the exact URL so deleting the held filter turns red.
+
+- **D-2720** — executable-corpus parity harvested fenced blocks only, but the shipped references also use Markdown's four-space indented code blocks. Five real client operations (`runs.list`, `peers.list`, `claims.take`, `claims.release`, and `ledger.allocate`) were therefore invisible: changing an indented `peers list` call to an undeclared verb left every parity test green. Harvest both fenced and indented executable blocks and pin the exact ten-operation set, so mutating or deleting any newly visible command turns red.

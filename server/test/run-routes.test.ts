@@ -157,14 +157,14 @@ const queueWorkerBrief = (coord: CoordStore, runId: number, to: string): number 
   return d.id;
 });
 const postDispatch = (
-  app: FastifyInstance, id: number, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
+  app: FastifyInstance, id: number | string, body: unknown = { brief: 'do the thing' }, token: string | null = TOKEN,
 ) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
-const postClose = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+const postClose = (app: FastifyInstance, id: number | string, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/close`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
-const postAdvance = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+const postAdvance = (app: FastifyInstance, id: number | string, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/advance`, headers: tokenHeaders(token),
     payload: body as Record<string, unknown> });
 // The fixture leaves auth disabled, so both GETs retain their dark-box
@@ -709,6 +709,23 @@ describe('POST /api/runs', () => {
 describe('POST /api/runs/:id/dispatch', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical run id %s before dispatch fleet work', async (id) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      expect(opened.id).toBe(1);
+      const callsBefore = calls.length;
+
+      const res = await postDispatch(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(opened.id))!.state).toBe('planned');
+      expect(calls).toHaveLength(callsBefore);
+    },
+  );
 
   it.each([
     ['hold-oversize', 413],
@@ -1620,6 +1637,26 @@ const OTHER_TIP = 'b'.repeat(40);
 describe('POST /api/runs/:id/close', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical run id %s before close fleet work', async (id) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      expect(opened.id).toBe(1);
+      const callsBefore = calls.length;
+
+      const res = await postClose(app, id, {
+        fingerprint: { branchTip: TIP, handoffCommit: TIP, prPhase: 'open', prNumber: 7 },
+        final: true,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(opened.id))!.state).toBe('planned');
+      expect(calls).toHaveLength(callsBefore);
+    },
+  );
 
   /** Opens and dispatches a wave-1 run for real, through the routes, so the
    *  run row carries a genuine sessionId/workspace/branch the way close's
@@ -2603,6 +2640,24 @@ describe('a retried close does not spam wave-done-rejected mail (review finding 
 describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical run id %s before advance work', async (id) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home);
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      expect(opened.id).toBe(1);
+      const callsBefore = calls.length;
+
+      const res = await postAdvance(app, id,
+        { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(opened.id))!.state).toBe('planned');
+      expect(calls).toHaveLength(callsBefore);
+    },
+  );
 
   it('answers 404 reject unknown-run for a run id that does not exist', async () => {
     const home = mkTmp('ccrc-runs-');

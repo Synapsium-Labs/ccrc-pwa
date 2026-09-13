@@ -109,7 +109,7 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
   return { app, coord };
 };
 
-const answer = (app: FastifyInstance, id: number, body: Record<string, unknown>,
+const answer = (app: FastifyInstance, id: number | string, body: Record<string, unknown>,
                 headers: Record<string, string> = TOK) =>
   app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers, payload: body });
 
@@ -146,6 +146,19 @@ describe('POST /api/asks/:id/answer', () => {
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
   });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical ask id %s without touching ask 1', async (id) => {
+      const setupResult = await setup(Date.now());
+      expect(setupResult.id).toBe(1);
+      const res = await answer(app!, id,
+        { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okAsk(setupResult.coord.askById(setupResult.id))?.state).toBe('held');
+      expect(sendKeysCalls(setupResult.calls)).toEqual([]);
+    },
+  );
 
   it('403s a caller that is not this ask\'s derived parent', async () => {
     const { id } = await setup(Date.now());
@@ -326,7 +339,7 @@ describe('POST /api/asks/:id/release', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  const release = (id: number, body: Record<string, unknown>,
+  const release = (id: number | string, body: Record<string, unknown>,
                    headers: Record<string, string> = TOK) =>
     app!.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
 
@@ -386,6 +399,18 @@ describe('POST /api/asks/:id/release', () => {
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
   });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical ask id %s without releasing ask 1', async (id) => {
+      const setupResult = await setup(Date.now());
+      expect(setupResult.id).toBe(1);
+      const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okAsk(setupResult.coord.askById(setupResult.id))?.state).toBe('held');
+      expect(heldMap(setupResult.w).has(CHILD)).toBe(true);
+    },
+  );
 
   it('fires the operator push immediately when the parent declines', async () => {
     const { coord, w, id, sent, calls } = await setup(Date.now());

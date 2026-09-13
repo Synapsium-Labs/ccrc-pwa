@@ -99,7 +99,17 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
-| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo. Expect the programme to hold two live workspaces from then on, which costs two concurrency slots and two of the daily budget |
+| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
+
+**Caps count runs, not holds.** Concurrency counts dispatched non-terminal runs,
+not held workspaces: a terminal producer retained on a hold and a planned
+undispatched consumer consume no running-worker slot. Each actual dispatch still
+consumes daily budget, and a dispatched non-terminal consumer consumes one
+concurrency slot. Each refusal's own numbers are the authority, and the two
+carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
+`cap-daily` carries `limit` and `used` — it never carries `running`, so a
+coordinator refused `cap-daily` that goes looking for one is reading a field
+the frame does not have.
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's
@@ -221,20 +231,32 @@ skill the worker should invoke** (`superpowers:executing-plans` or
 settled, the deviations already ledgered, and whatever your review of the last
 handoff decided.
 
-**A brief for a wave in ANOTHER project carries four more things:**
-`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`, the
-tracked repository-relative plan path under `docs/superpowers/plans/`, with no
-leading slash; `planSha`, the full 40-hex commit SHA; and the contract excerpt
-inlined verbatim from the merged file. These are separate from `ledgerAbsPath`,
-which names only `docs/superpowers/programs/<slug>.md`. The worker reads the
-immutable plan object exactly with
-`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If the repository, commit,
+**Every brief for a wave in ANOTHER project carries three immutable-plan
+coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
+`planRepoPath`, the tracked repository-relative plan path under
+`docs/superpowers/plans/`, with no leading slash; and `planSha`, the full 40-hex
+plan commit SHA. These are separate from `ledgerAbsPath`, which names only
+`docs/superpowers/programs/<slug>.md`. The worker reads the immutable plan object
+exactly with
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If that repository, commit,
 or path cannot be resolved, it reports and stops. It must not substitute `HEAD`,
-directly read the current checkout, fetch, checkout, or otherwise mutate the home
-repository. The inline excerpt controls interface shape; the plan blob at
-`planSha` controls wave scope and requirements; the current checkout's plan is
-not authoritative for this dispatch. It commits only on its own workspace's
-branch in the repo it is running in.
+directly read a mutable checkout as authority, fetch, checkout, or otherwise
+mutate the home repository.
+
+**Only a consumer with a producer-interface dependency carries the producer
+contract:** `producerRepoRoot`, the absolute producer-repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+inlined verbatim from the merged file. A foreign-repo wave with no such
+dependency carries none of these producer fields and no invented excerpt. The
+worker proves producer-source provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. If that
+producer repository, commit, or path cannot be resolved, it reports and stops.
+The inline excerpt controls dispatched interface shape; the immutable producer
+blob proves its provenance; the plan blob at `planSha` controls wave scope and
+requirements; and the current checkout's plan is not authoritative for this
+dispatch. It commits only on its own workspace's branch in the repo it is
+running in.
 
 **The execution skill is the one list item that is not merely useful.** The
 worker's own clause 6 reads "Invoke the execution skill the brief names rather
@@ -545,42 +567,42 @@ whole time, which is the only prevention this ordering rule buys.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.
-3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
-   session this wave's run has) — this opens wave N+1's run row and re-holds
-   the same workspace with reason `program:<slug> wave:<N+1>/M run:<id>`,
-   naming the run row it has just opened. The program
-   now has two open runs (this wave's, still `working`/`awaiting-review`/
-   `merging`, and the new `planned` one) — it can never read as zero from
-   here.
-4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
-   wave's** run id — re-measures the SAME facts, against the SAME codes, as
-   `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
-   closes this wave's run row as `done`, and places the SAME hold reason
-   again (`program:<slug> wave:<N+1>/M run:<id>` — idempotent; step 3 already
-   wrote it, and close takes its SURVIVOR arm here, so it re-writes that same
-   run's reason byte for byte). The response SHAPE differs from §4's table, though: a mismatch here
-   answers `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
+3. `POST /api/runs` for wave N+1 (§1, step 2) before closing this run. The
+   program now has two open runs (this wave's, still `working`/
+   `awaiting-review`/`merging`, and the new `planned` one), so it can never
+   read as zero between waves.
+
+   **Same project:** open wave N+1 first with this producer's `sessionId`, then
+   close the producer with `final:false`; the hold transfers to the already-open
+   successor on the same workspace. After that same-project close, run
+   `"$API" runs list --closed 1`, find this producer by run id, and require its
+   own `state` to be `done`.
+
+   **Different project:** open wave N+1 first without this producer's `sessionId`,
+   then close the producer with `final:true` and require `released:true`; there is
+   no same-workspace successor to receive a synthetic hold. After that
+   cross-project close, run `"$API" runs list --closed 1`, find this producer by
+   run id, and require its own `state` to be `done`. If the consumer depends on
+   an interface from this producer, independently prove the producer interface
+   PR merged at the exact `producerSha` carried with `producerRepoRoot` and
+   `producerSourceRepoPath` in the conditional producer contract. The closed row
+   proves fingerprint and terminal state, not merge.
+
+   A missing/non-`done` producer row, failed release, or required exact-SHA merge
+   proof that is absent means report and do not dispatch. The default `runs list`
+   excludes `done` and `failed` rows, so it cannot perform the state check.
+4. The close re-measures the SAME facts, against the SAME codes, as `/advance`
+   does (skipped only on an explicit `"state":"failed"` abandon). Its response
+   SHAPE differs from §4's table: a mismatch answers
+   `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
    `reject.code` — so read `$body.error` on this route, not `$body.reject`.
-   Two refusals besides the re-measurement codes: `not-dispatched` (this
-   run's `sessionId` is null — it was never dispatched, so there is nothing
-   to re-measure or mail) and `prhistory-unreadable` (`.prhistory` could not
-   be read — the route refuses to close on a ledger it cannot verify; retry
-   once the file is readable again) — both of THESE two ride `refused`, the
-   third shape this one route can answer with. A re-hold that would exceed
-   the hook's 127-character display window instead answers
-   `error:'hold-oversize'` (413): no fleet act runs and the run remains open.
-   Shorten the programme slug through an operator correction before retrying.
-   `error:'hold-invalid'` (400) has the same no-act/no-close guarantees, but
-   means the stored programme or numeric domain cannot satisfy the hook grammar;
-   stop and report it rather than retrying unchanged.
-5. **After that close succeeds**, if wave N+1 consumes what this wave produced,
-   run `"$API" runs list --closed 1`, find this producer by its run id, and
-   require its own `state` to be `done`. The default `runs list` excludes `done`
-   and `failed` rows, so it cannot perform this check. A missing producer row or
-   any state other than `done` means report and do not dispatch. There is no
-   `dependsOn` column: this post-close read is the only gate between a consumer
-   and an interface that has not landed, especially across repositories.
-6. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
+   Two refusals besides the re-measurement codes are `not-dispatched` and
+   `prhistory-unreadable`; both ride `refused`. A hold write that would exceed
+   the hook's display window answers `error:'hold-oversize'` (413), while an
+   invalid stored programme or numeric domain answers `error:'hold-invalid'`
+   (400). Both leave the run open; report rather than retrying unchanged.
+5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
+   proof, release proof, and exact-SHA merge proof above succeed.
 
 ## 6 — Final merge
 
@@ -645,41 +667,67 @@ a child's pane, and this session never does it by any other means. All three rou
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
 
-- `POST /api/asks/:id/answer` — press an answer in. Body `{"fromId":"<your id>","fromUuid":"<your
-  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of THREE different
-  conditions, and none of them is interchangeable with another. Nothing was pressed in any of
-  the three — every gate on this route runs before the keystroke.
-  - `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
-    endings, not one: another principal is mid-answer, the grace window lapsed and the operator
-    was notified after all, the child's dialog went away, or someone already ruled. Only the
-    first is a race a retry could win, and you cannot tell which from this code alone — read the
-    row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
-    against another principal that already took the row" for one wave, naming one of the four:
-    the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
-  - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
-    on its screen right now may be a different instance of what looks like the same question.
-    This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
-    same call — a blind retry risks pressing a digit into a menu that has since moved on.
-  - `child-unmeasurable` — the server could not read the child's live state at all (no session
-    record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
-    wrong with your call: re-reading the ask will show you the same `held` row it showed before,
-    so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
-    the operator's own notification on schedule regardless.
-- `POST /api/asks/:id/release` — decline to rule on it. Body `{"fromId":"<your
-  id>","fromUuid":"<your uuid>"}`. A decline is not a failure: it is what turns the grace window
-  into a CEILING rather than a flat tax on every question you cannot answer — the operator's
-  notification fires AT ONCE on release, instead of the child's question sitting quiet until the
-  window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
-  words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
-  guessing at it.
-- `GET /api/asks?parent=<your id>&fromUuid=<your uuid>` — read your own children's open asks, to
-  see whether two of them are asking contradictory things before either grace window lapses.
-  **`&fromUuid=` is not optional the moment `CCRC_AUTH` is armed on the box you are running on.**
-  The box token alone proves only "a process on this box", never WHICH parent is asking, so an
-  armed box additionally requires the same attribution proof `/answer` and `/release` already
-  take above — omit it and the call answers `400` on every armed box, not just some. A dark box
-  (the shipped default) accepts the bare `?parent=` form, but nothing here tells you which kind
-  of box you are on, so always send both.
+```bash
+: "${ask_id:?set ask_id to the held ask row positive decimal id}"
+"$API" asks answer "$ask_id" --json - <<JSON
+{"fromId":"$id","fromUuid":"$uuid","optionIndexes":[0]}
+JSON
+```
+
+Press an answer in with that body. A 409 from this route can come from three
+route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or
+`child-unmeasurable`) or from a downstream `answerAsk` refusal. No refusal path
+presses a digit when the eligible ask is single-select, which is the only shape
+this hold lane mints; after a downstream refusal the route rolls the row back to
+`held`.
+- `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
+  endings, not one: another principal is mid-answer, the grace window lapsed and the operator
+  was notified after all, the child's dialog went away, or someone already ruled. Only the
+  first is a race a retry could win, and you cannot tell which from this code alone — read the
+  row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
+  against another principal that already took the row" for one wave, naming one of the four:
+  the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+- `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
+  on its screen right now may be a different instance of what looks like the same question.
+  This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
+  same call — a blind retry risks pressing a digit into a menu that has since moved on.
+- `child-unmeasurable` — the server could not read the child's live state at all (no session
+  record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
+  wrong with your call: re-reading the ask will show you the same `held` row it showed before,
+  so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
+  the operator's own notification on schedule regardless.
+- Downstream `answerAsk` refusals include `stale-ask`, `not-waiting`,
+  `ask-mismatch`, `multi-question`, `range`, `multiselect`, `duplicate-index`,
+  `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
+  option, or pane guard; stop and re-read rather than treating 409 as three
+  possible conditions or retrying blind. Counting both halves, this route answers
+  409 with thirteen (3 + 10) distinct codes.
+```bash
+: "${ask_id:?set ask_id to the held ask row positive decimal id}"
+"$API" asks release "$ask_id" --json - <<JSON
+{"fromId":"$id","fromUuid":"$uuid"}
+JSON
+```
+
+Decline to rule on it with that body. A decline is not a failure: it is what turns the grace window
+into a CEILING rather than a flat tax on every question you cannot answer — the operator's
+notification fires AT ONCE on release, instead of the child's question sitting quiet until the
+window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
+words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+guessing at it.
+```bash
+"$API" asks list
+```
+
+Read your own children's HELD asks — the ones still waiting on a ruling — to see whether two of
+them are asking contradictory things before either grace window lapses. The client hard-codes
+`state=held`, which is NARROWER than the open set the route itself can return: an ask another
+principal has already taken reads `answering`, and this view deliberately omits it, because a row
+someone else is mid-answer on is not yours to rule on. The client derives this pane's parent id and
+current uuid and sends both; neither is caller-selectable. `--parent <your id>` is accepted only
+  as a matching compatibility assertion and cannot select another parent. The box token alone proves
+  only "a process on this box", never WHICH parent is asking, so the derived uuid supplies the same
+  attribution proof `/answer` and `/release` take above.
 
 What the ask row does NOT carry is the reason to answer it. `question` and `options` are its
 entire evidentiary surface — no rationale, no chat history, no transcript of the child's

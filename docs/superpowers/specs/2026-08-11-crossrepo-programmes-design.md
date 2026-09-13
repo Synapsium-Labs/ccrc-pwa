@@ -424,7 +424,7 @@ in programme terms — a **role**, not a session. The run row already knows both
 derivable from `{runId, role}` — and `'coordinator'` already resolves exactly this way today.
 
 **Proposed ruling:**
-1. Programme mail addresses `toId: 'coordinator' | 'worker'` + `runId`. Raw session-id addressing remains
+1. Programme mail addresses `to: 'coordinator' | 'worker'` + `runId`. Raw session-id addressing remains
    only for ad-hoc, non-programme mail.
 2. Resolution moves from send time to **delivery time** — each sweep resolves the role against the run
    row's *current* occupant. This closes a latent bug: today's frozen `toId` keeps replaying at a dead
@@ -453,13 +453,6 @@ consumer wave, GET /api/runs and read the producer run's state; not `done` → d
 and the door stays open additively (an optional `dependsOn` + one typed refusal) to be walked
 through only when a measured incident of the phased-cutover class justifies it. Evidence
 drives schema.
-
-**Operational correction, 2026-09-12.** The ruling above remains the historical decision,
-but its literal read could not observe the producer after close because the ordinary runs
-listing omits `done` and `failed` rows. Preserve the programme first: open the consumer run,
-successfully close the producer, then run `ccrc-api runs list --closed 1`, find the producer
-by exact run id, and require its own `state` to be `done` before dispatching the consumer.
-A missing row or any state other than `done` means report and do not dispatch.
 
 **Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.** Ruled against this spec's provisional
 "defaulted": inference-from-wave-1 is the defect class that caused this fleet's worst

@@ -213,6 +213,9 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    [['asks', 'list'], 'GET', '/api/asks'],
+    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer'],
+    [['asks', 'release', '7'], 'POST', '/api/asks/7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
@@ -220,7 +223,9 @@ describe('the closed route table', () => {
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    await run(args as string[]);
+    if (args[0] === 'asks' && args[1] === 'list') plantPane('demo-ws');
+    await run(args as string[], undefined,
+      args[0] === 'asks' && args[1] === 'list' ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.method).toBe(method);
     // Query strings are the caller's (`mail list --to x` appends one); the path
@@ -241,9 +246,8 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Nineteen since `feed list` landed — the programme-scoped read of the
-    // durable feed, which the coordinator corpus is about to name.
-    expect(keys).toHaveLength(19);
+    // Twenty-two since the bounded ask list/answer/release operations landed.
+    expect(keys).toHaveLength(22);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -524,6 +528,51 @@ describe('a query key rides only if its row declared it', () => {
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
   });
+
+  it('derives the ask-list parent and uuid from this pane', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['asks', 'list'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('/api/asks?parent=demo-ws&fromUuid=uuid-7&state=held');
+  });
+
+  it('accepts only the derived parent when asks list is given --parent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const same = await run(['asks', 'list', '--parent', 'demo-ws'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(same.status).toBe(0);
+    expect(seen[0]!.url).toBe('/api/asks?parent=demo-ws&fromUuid=uuid-7&state=held');
+
+    seen = [];
+    const other = await run(['asks', 'list', '--parent', 'someone-else'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(other.status).not.toBe(0);
+    expect(other.stdout).toContain('parent-mismatch');
+    expect(seen, 'a caller-selected parent reached the wire').toHaveLength(0);
+  });
+
+  it('does not expose fromUuid as a caller-supplied ask-list query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['asks', 'list', '--fromUuid', 'forged'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('refuses ask listing with no pane or a non-URL-safe derived uuid', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const noPane = await run(['asks', 'list'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(noPane.status).not.toBe(0);
+    expect(noPane.stdout).toContain('no-pane');
+    expect(seen).toHaveLength(0);
+
+    plantPane('demo-ws', 'uuid?forged=1');
+    const badUuid = await run(['asks', 'list'], undefined, { TMUX_PANE: '%7' });
+    expect(badUuid.status).not.toBe(0);
+    expect(badUuid.stdout).toContain('bad-uuid');
+    expect(seen).toHaveLength(0);
+  });
 });
 
 describe('the body comes from --json, and only from there', () => {
@@ -550,6 +599,18 @@ describe('the body comes from --json, and only from there', () => {
     fs.writeFileSync(f, '{}');
     await run(['runs', 'open', '--json', f]);
     expect(seen).toHaveLength(1);
+  });
+
+  it.each([
+    ['answer', '/api/asks/7/answer'],
+    ['release', '/api/asks/7/release'],
+  ])('carries only the declared ask %s id and JSON body', async (verb, url) => {
+    const body = verb === 'answer'
+      ? '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'
+      : '{"fromId":"parent","fromUuid":"u"}';
+    await run(['asks', verb, '7', '--json', '-'], body);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: 'POST', url, body });
   });
 });
 

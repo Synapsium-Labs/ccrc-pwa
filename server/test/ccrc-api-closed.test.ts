@@ -4,7 +4,9 @@
 // false in a month, and each is the kind of thing whose loss is invisible until
 // a session on a locked-down repo cannot talk to the server at all.
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { CCRC_API } from './ccdWsHelpers.js';
 
@@ -26,6 +28,13 @@ const corpusFiles = (): string[] => {
 
 const client = (): string => fs.readFileSync(CCRC_API, 'utf8');
 
+const routeKeys = (): Set<string> => {
+  const src = client();
+  const start = src.indexOf('declare -A ROUTES=(');
+  const table = src.slice(start, src.indexOf('\n)', start));
+  return new Set([...table.matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!));
+};
+
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
  *  deliberately does not have ("no `--url`, no `--host`, no `--path`, no
@@ -35,19 +44,46 @@ const clientCode = (): string => client().split('\n')
   .filter((l) => !/^\s*#/.test(l))
   .join('\n');
 
-/** Every fenced code block in a markdown file. What a reader RUNS lives in
- *  these; the prose around them is where an invariant explains itself. */
-function fences(md: string): string[] {
+/** Every executable Markdown block: backtick/tilde fences plus runs of
+ *  four-space-indented code. The corpora deliberately use both forms. */
+function executableBlocks(md: string): string[] {
   const out: string[] = [];
-  let inside = false, buf: string[] = [];
-  for (const line of md.split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      if (inside) { out.push(buf.join('\n')); buf = []; }
-      inside = !inside;
+  const lines = md.split('\n');
+  let fence: '`' | '~' | null = null;
+  let buf: string[] = [];
+
+  const flush = (): void => {
+    if (buf.some((line) => line.trim() !== '')) out.push(buf.join('\n'));
+    buf = [];
+  };
+
+  for (const line of lines) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence !== null) {
+      if (marker?.[0] === fence) {
+        flush();
+        fence = null;
+      } else {
+        buf.push(line);
+      }
       continue;
     }
-    if (inside) buf.push(line);
+    if (marker) {
+      flush();
+      fence = marker[0] as '`' | '~';
+      continue;
+    }
+    if (/^(?: {4}|\t)/.test(line)) {
+      buf.push(line.replace(/^(?: {4}|\t)/, ''));
+      continue;
+    }
+    if (buf.length > 0 && line.trim() === '') {
+      buf.push('');
+      continue;
+    }
+    flush();
   }
+  flush();
   return out;
 }
 
@@ -66,7 +102,7 @@ describe('the corpora no longer invoke curl', () => {
     // which is what the deny rule is about too. Prose may discuss curl; no
     // block a reader would run may call it. (D-739.)
     for (const f of corpusFiles()) {
-      const bad = fences(fs.readFileSync(f, 'utf8'))
+      const bad = executableBlocks(fs.readFileSync(f, 'utf8'))
         .filter((b) => /(^|[|;&(`$]\s*)curl\s/m.test(b));
       expect(bad, `${path.relative(root, f)} still runs curl in a code block`).toEqual([]);
     }
@@ -75,6 +111,80 @@ describe('the corpora no longer invoke curl', () => {
   it('the corpora that call the API name the client', () => {
     const callers = corpusFiles().filter((f) => /```[\s\S]*?\$\("?\$?API/.test(fs.readFileSync(f, 'utf8')));
     expect(callers.length, 'no corpus file calls the client — the rewrite went missing').toBeGreaterThan(0);
+  });
+
+  it('every executable corpus client command maps to the closed route table', () => {
+    const declared = routeKeys();
+    const invoked = new Set<string>();
+    const command = /(?:"\$HOME\/\.local\/bin\/ccrc-api"|"?\$API"?)\s+([a-z][a-z0-9-]*)(?:\s+([a-z][a-z0-9-]*))?/g;
+    for (const file of corpusFiles()) {
+      for (const block of executableBlocks(fs.readFileSync(file, 'utf8'))) {
+        for (const match of block.matchAll(command)) {
+          if (match[1] === 'whoami') continue;
+          expect(match[2], `${path.relative(root, file)} has an incomplete client command`)
+            .toBeDefined();
+          invoked.add(`${match[1]}.${match[2]}`);
+        }
+      }
+    }
+    expect(invoked.size, 'the executable corpus no longer calls a routed operation')
+      .toBeGreaterThan(0);
+    expect([...invoked].sort()).toEqual([
+      'asks.answer',
+      'asks.list',
+      'asks.release',
+      'claims.release',
+      'claims.take',
+      'ledger.allocate',
+      'mail.send',
+      'peers.list',
+      'runs.list',
+      'runs.open',
+    ]);
+    expect([...invoked].filter((key) => !declared.has(key)),
+      'an executable corpus command has no ccrc-api route row').toEqual([]);
+  });
+
+  it('executes ask examples with no valid default and exact expanded calls', () => {
+    const lifecycle = fs.readFileSync(path.join(
+      root, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    const askBlocks = executableBlocks(lifecycle)
+      .filter((block) => /"\$API"\s+asks\s+(?:answer|release)\b/.test(block));
+    expect(askBlocks, 'the lifecycle must carry answer and release examples').toHaveLength(2);
+
+    for (const block of askBlocks) {
+      const operation = /"\$API"\s+asks\s+(answer|release)\b/.exec(block)?.[1];
+      expect(operation).toBeDefined();
+      expect(block, `${operation}: a copied example must not default to a valid ask id`)
+        .not.toMatch(/(?:^|\n)\s*ask_id=\d+/);
+      expect(block, `${operation}: the ask id must fail closed before client invocation`)
+        .toContain(': "${ask_id:?set ask_id to the held ask row positive decimal id}"');
+      expect(block, `${operation}: the client receives one quoted ask id`)
+        .toMatch(/asks\s+(?:answer|release)\s+"\$ask_id"\s+--json/);
+
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), `ccrc-ask-example-${operation}-`));
+      const calls = path.join(dir, 'calls');
+      const client = path.join(dir, 'client');
+      fs.writeFileSync(client,
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CALLS"\ncat >> "$CALLS"\n', { mode: 0o755 });
+      try {
+        const baseEnv = { ...process.env, API: client, id: 'parent-id', uuid: 'parent-uuid', CALLS: calls };
+        const missing = spawnSync('bash', ['-c', block], { env: baseEnv, encoding: 'utf8' });
+        expect(missing.status, `${operation}: an absent ask_id must stop the example`).not.toBe(0);
+        expect(fs.existsSync(calls), `${operation}: the client ran before ask_id was supplied`).toBe(false);
+
+        const supplied = spawnSync('bash', ['-c', block], {
+          env: { ...baseEnv, ask_id: '37' }, encoding: 'utf8',
+        });
+        expect(supplied.status, `${operation}: supplied example stderr: ${supplied.stderr}`).toBe(0);
+        const expected = operation === 'answer'
+          ? 'asks answer 37 --json -\n{"fromId":"parent-id","fromUuid":"parent-uuid","optionIndexes":[0]}\n'
+          : 'asks release 37 --json -\n{"fromId":"parent-id","fromUuid":"parent-uuid"}\n';
+        expect(fs.readFileSync(calls, 'utf8')).toBe(expected);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
   });
 });
 

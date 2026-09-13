@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, nineteen rows, and nothing else.
+#   * The route comes from ROUTES below, twenty-two rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,17 +73,12 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Nineteen rows, and that word is SCANNED: `server/test/ccrc-api.test.ts` derives
-# the count from the table below and reds if this line or the bullet at the top
-# of this file states a different one. The rows were CHOSEN on 2026-08-26 by
-# `grep -rhoE '(GET|POST) /api/[A-Za-z0-9/:_-]+' ccd/coordinator-skill ccd/worker-skill`,
-# which is how they were measured once and is NOT a guard that re-runs — an
-# earlier version of this comment claimed it was, and nothing in the tree ever
-# compared those corpora to this table. What does exist is narrower and worth
-# knowing before you rely on it: `coordinator-skill.test.ts` checks the
-# COORDINATOR corpus against `server/src/coord/routes.ts`, and the worker corpus
-# has no route parity at all — so a skill that starts calling a route this table
-# lacks fails in the field, not in the suite.
+# Twenty-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# derives the count from the table below and reds if this line or the bullet at
+# the top of this file states a different one. The original rows were chosen on
+# 2026-08-26 by measuring the skill corpora; the standing executable-corpus
+# parity in `server/test/ccrc-api-closed.test.ts` now fails whenever either skill
+# starts calling an operation this table does not declare.
 declare -A ROUTES=(
   [runs.list]='GET|/api/runs|no|closed'
   [runs.open]='POST|/api/runs|no|-'
@@ -118,6 +113,21 @@ declare -A ROUTES=(
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+  # A token-authenticated session may list only its own children's asks. The
+  # client derives both identity fields below; `--parent` is accepted only as a
+  # compatibility assertion and may never select somebody else.
+  [asks.list]='GET|/api/asks|no|parent'
+  # ASYMMETRY, deliberate: `list` derives identity because its identity rides the
+  # QUERY the client builds, and a caller-selected `parent` there would be the
+  # client choosing whose children to read. `answer` and `release` take theirs
+  # from the `--json` body, the same shape every other POST row here uses
+  # (`mail.send`, `claims.take`, `claims.release`), and the guard is the route's:
+  # it re-measures `fromUuid` against the registry and refuses unless the caller
+  # IS the ask's parent. Deriving here would read as a security boundary this
+  # client cannot be — identity on this fleet is attribution, not authentication,
+  # and every `.uuid` is readable by the one UNIX user these sessions share.
+  [asks.answer]='POST|/api/asks/{id}/answer|yes|-'
+  [asks.release]='POST|/api/asks/{id}/release|yes|-'
   # The durable feed. `--program` filters through `feed_events.runId` and answers
   # one programme's events; without it the read is the whole box's, oldest-first.
   # An event that names no run is programless and appears only unfiltered.
@@ -230,6 +240,7 @@ derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call i
   [[ -r "$REG/$DERIVED_ID.uuid" ]] || refuse 'no-uuid' "no $REG/$DERIVED_ID.uuid for this session"
   DERIVED_UUID=$(tr -d '[:space:]' < "$REG/$DERIVED_ID.uuid")
   [[ -n "$DERIVED_UUID" ]] || refuse 'no-uuid' "$REG/$DERIVED_ID.uuid is empty"
+  [[ "$DERIVED_UUID" =~ $SAFE_RE ]] || refuse 'bad-uuid' 'session uuid is not a usable value'
 }
 
 cmd_whoami() {
@@ -265,7 +276,7 @@ main() {
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
   fi
 
-  local body_src='' query='' by=''
+  local body_src='' query='' by='' ask_parent=''
   while (( $# )); do
     case "$1" in
       --json)
@@ -284,7 +295,12 @@ main() {
         # undeclared one refuses rather than riding along.
         [[ ",$qkeys," == *",$k,"* ]] || refuse 'unknown-query' "$group $verb takes no --$k"
         [[ "$v" =~ $SAFE_RE ]] || refuse 'bad-query' "--$k value is not a plain value"
-        query+="${query:+&}$k=$v"; shift 2 ;;
+        if [[ "$key" == 'asks.list' && "$k" == 'parent' ]]; then
+          ask_parent="$v"
+        else
+          query+="${query:+&}$k=$v"
+        fi
+        shift 2 ;;
       *) refuse 'bad-args' "unexpected argument: $1" ;;
     esac
   done
@@ -355,6 +371,16 @@ main() {
         if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
         else body="{\"byId\":\"$who\",$rest"; fi ;;
     esac
+  fi
+
+  if [[ "$key" == 'asks.list' ]]; then
+    derive_identity
+    [[ -z "$ask_parent" || "$ask_parent" == "$DERIVED_ID" ]] \
+      || refuse 'parent-mismatch' '--parent must name this pane-derived session'
+    # The corpus promises OPEN asks. Server omission of `state` is intentionally
+    # an unfiltered diagnostic read, so the bounded client fixes the held view
+    # rather than exposing caller-selected state.
+    query="parent=$DERIVED_ID&fromUuid=$DERIVED_UUID&state=held"
   fi
 
   local base token path url

@@ -38,7 +38,7 @@ const send = (app: FastifyInstance, body: unknown, token: string | null = TOKEN)
     headers: token === null ? {} : { 'x-ccrc-mail-token': token },
     payload: body as Record<string, unknown> });
 
-const ack = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+const ack = (app: FastifyInstance, id: number | string, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/mail/${id}/ack`,
     headers: token === null ? {} : { 'x-ccrc-mail-token': token },
     payload: body as Record<string, unknown> });
@@ -942,6 +942,19 @@ describe('POST /api/mail/:id/ack', () => {
     expect(unknownSender.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
   });
 
+  it('preserves bad-kind and bad delivery id for a non-canonical id', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const deliveryId = ackIdFromEnvelope(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope);
+
+    const res = await ack(app, `${deliveryId}.0`, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind', detail: 'bad delivery id' });
+    expect(w.coord.delivery(deliveryId)?.state).toBe('queued');
+  });
+
   it('refuses to let one session ack another session\'s delivery', async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
@@ -1029,13 +1042,15 @@ describe('GET /api/mail/:id', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
   });
 
-  it('400s a non-integer id', async () => {
-    const home = mkTmp('ccrc-mail-');
-    const w = await withMail(home); app = w.app;
-    const res = await getEnvelope(app, 'not-a-number');
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
-  });
+  it.each(['not-a-number', '1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    '400s the non-canonical id %s', async (id) => {
+      const home = mkTmp('ccrc-mail-');
+      const w = await withMail(home); app = w.app;
+      const res = await getEnvelope(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    },
+  );
 
   it('401s without the box token — the same gate as GET /api/mail?to=, a read with no attribution to check', async () => {
     const home = mkTmp('ccrc-mail-');

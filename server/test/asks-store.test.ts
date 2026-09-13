@@ -7,6 +7,7 @@ import { COORD_SCHEMA_VERSION, openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okAsk, okAsksByChild } from './coordReadHelpers.js';
+import { RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
@@ -354,6 +355,20 @@ describe('the ask read surface refuses an unrepresentable row, and tells absent 
     plantUnsafe(s, 'id', 'bad', 'p');
     expect(s.currentAsksFor(['good', 'bad'])).toMatchObject({ ok: false, kind: 'ask-unreadable' });
     expect(s.asksForParent('p')).toMatchObject({ ok: false, kind: 'ask-unreadable' });
+  });
+
+  it('insertAsk refuses an unsafe generated id inside its transaction', () => {
+    const s = mk();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('asks', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    let escaped: number | undefined;
+    expect(() => {
+      escaped = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+    }).toThrow('insertAsk: generated ask id is not a positive safe integer');
+    expect(escaped).toBeUndefined();
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM asks').get() as { n: number }).n).toBe(0);
   });
 
   // The DEFENSIVE write-side guard. Unreachable by construction today — its one

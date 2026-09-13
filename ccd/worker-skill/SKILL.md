@@ -90,33 +90,48 @@ gets answered.
 ## The plan the brief names may live in another repository
 
 A programme is homed in ONE repo and its waves may run in any, so the plan file
-your brief names can sit OUTSIDE this workspace. For a foreign plan, the brief
+your brief names can sit OUTSIDE this workspace. Every foreign-plan brief
 carries three separate values: `homeRepoRoot`, the absolute path to the home
 repository root; `planRepoPath`, the tracked repository-relative plan path with
-no leading slash; and `planSha`, a full 40-hex commit SHA. Read exactly the
-immutable Git object:
+no leading slash; and `planSha`, a full 40-hex commit SHA. Read that immutable
+Git object:
 
 ```bash
 git -C "$homeRepoRoot" show "$planSha:$planRepoPath"
 ```
 
 If the repository, commit, or path cannot be resolved, report and stop. Never
-substitute `HEAD`, read the current checkout directly with `cat` or a file read,
+substitute `HEAD`, read a mutable checkout directly with `cat` or a file read,
 fetch, checkout, or otherwise mutate the home repository. `ledgerAbsPath` is
 only the absolute programme-ledger path under `docs/superpowers/programs/`; it is
 not `homeRepoRoot` and it is not `planRepoPath`. You commit only on this
 workspace's own branch in THIS repository (clause 2).
 
-The contract excerpt your wave depends on is INLINED in the brief, verbatim from
-the merged file, and that inline copy is the authority for the INTERFACE — the
-shape of the thing you build against, frozen at the moment the brief was cut.
-The plan blob read at `planSha` is the authority for the WAVE'S REQUIREMENTS —
-what to build and why (clause 6). The current checkout's plan is not authoritative
+Only a wave that depends on a producer interface carries a producer contract:
+`producerRepoRoot`, the absolute path to the producer repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+INLINED in the brief, verbatim from that merged file. A foreign-plan wave with
+no producer-interface dependency requires none of those producer fields and no
+excerpt. When the producer contract is present, read its immutable Git object:
+
+```bash
+git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"
+```
+
+If that producer repository, commit, or path cannot be resolved, report and
+stop under the same immutable-read rule above. The inline copy is the authority
+for the INTERFACE — the shape of the thing you build against, frozen at the
+moment the brief was cut. The producer blob at `producerSha` proves the
+excerpt's provenance; it does not replace the excerpt as shape authority. The
+plan blob read at `planSha` is the authority for the WAVE'S REQUIREMENTS — what
+to build and why (clause 6). The current checkout's plan is not authoritative
 for this dispatched wave. Those are different questions, so a disagreement is
-not a tie to break: the excerpt still wins on shape, the named plan blob still
-wins on scope, and you say so either way in your `wave-done` mail so the ledger
-gets it. A deviation you find is still never a number you invent (clause 11):
-report it, and the coordinator mints it against the programme's home project.
+not a tie to break: the excerpt still wins on shape, the producer blob proves
+provenance, the named plan blob still wins on scope, and you say so either way
+in your `wave-done` mail so the ledger gets it. A deviation you find is still
+never a number you invent (clause 11): report it, and the coordinator mints it
+against the programme's home project.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,

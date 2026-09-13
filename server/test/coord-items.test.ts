@@ -27,7 +27,7 @@ const open = async (home: string) => {
   return { app, coord };
 };
 
-const postItems = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+const postItems = (app: FastifyInstance, id: number | string, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/runs/${id}/items`,
     headers: token === null ? {} : { 'x-ccrc-mail-token': token },
     payload: body as Record<string, unknown> });
@@ -96,14 +96,15 @@ describe('POST /api/runs/:id/items', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-run' });
   });
 
-  it('400 bad-request on a non-integer :id', async () => {
-    const home = mkTmp('ccrc-items-');
-    const w = await open(home); app = w.app;
-    const res = await app.inject({ method: 'POST', url: '/api/runs/not-a-number/items',
-      headers: { 'x-ccrc-mail-token': TOKEN }, payload: { items: [{ id: 1, state: 'done' }] } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
-  });
+  it.each(['not-a-number', '1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    '400 bad-request on the non-canonical :id %s', async (id) => {
+      const home = mkTmp('ccrc-items-');
+      const w = await open(home); app = w.app;
+      const res = await postItems(app, id, { items: [{ id: 1, state: 'done' }] });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    },
+  );
 
   it('404 unknown-item, naming the id, for an item of a DIFFERENT run', async () => {
     const home = mkTmp('ccrc-items-');
@@ -248,7 +249,7 @@ describe('GET /api/runs/:id/items — the ids the settle has always required', (
   let app: FastifyInstance | undefined;
   afterEach(async () => { await app?.close(); app = undefined; });
 
-  const getItems = (a: FastifyInstance, id: number, token: string | null = TOKEN) =>
+  const getItems = (a: FastifyInstance, id: number | string, token: string | null = TOKEN) =>
     a.inject({ method: 'GET', url: `/api/runs/${id}/items`,
       headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
 
@@ -296,12 +297,13 @@ describe('GET /api/runs/:id/items — the ids the settle has always required', (
     expect((unknown.json() as { error: string }).error).toBe('unknown-run');
   });
 
-  it('refuses a non-integer id as bad-request, never as unknown-run', async () => {
-    const home = mkTmp('coord-items-badid-');
-    const o = await open(home); app = o.app;
-    const res = await app.inject({ method: 'GET', url: '/api/runs/not-a-number/items',
-      headers: { 'x-ccrc-mail-token': TOKEN } });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toBe('bad-request');
-  });
+  it.each(['not-a-number', '1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'refuses non-canonical id %s as bad-request, never as unknown-run', async (id) => {
+      const home = mkTmp('coord-items-badid-');
+      const o = await open(home); app = o.app;
+      const res = await getItems(app, id);
+      expect(res.statusCode).toBe(400);
+      expect((res.json() as { error: string }).error).toBe('bad-request');
+    },
+  );
 });

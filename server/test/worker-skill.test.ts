@@ -15,7 +15,9 @@
 // own census pins all three of ITS verbs to SKILL.md's clause 3), so pointing
 // at them licenses nothing this file cannot see.
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
@@ -429,17 +431,34 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
       '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
     ['planSha is a full immutable identifier',
       '`planSha`, a full 40-hex commit SHA'],
-    ['read the named Git object exactly',
+    ['read the named plan Git object exactly',
       'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
-    ['an unresolved named object fails closed',
+    ['producer evidence is conditional on a real dependency',
+      'Only a wave that depends on a producer interface carries a producer contract'],
+    ['a no-dependency foreign wave carries no producer contract',
+      'A foreign-plan wave with no producer-interface dependency requires none of those producer fields and no excerpt.'],
+    ['producerRepoRoot is the absolute producer repository root',
+      '`producerRepoRoot`, the absolute path to the producer repository root'],
+    ['producerSourceRepoPath is repository-relative',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['producerSha is the exact merged producer identifier',
+      '`producerSha`, the exact full merged producer SHA'],
+    ['read the named producer Git object exactly',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['an unresolved plan object fails closed',
       'If the repository, commit, or path cannot be resolved, report and stop.'],
+    ['an unresolved producer object fails closed',
+      'If that producer repository, commit, or path cannot be resolved, report and stop under the same immutable-read rule above.'],
+
     ['ledgerAbsPath does not double as a plan coordinate',
       '`ledgerAbsPath` is only the absolute programme-ledger path'],
     ['commit only on this workspace branch, in this repository',
       "commit only on this workspace's own branch in THIS repository"],
     ['the contract excerpt is inlined in the brief, and is the authority',
-      'The contract excerpt your wave depends on is INLINED in the brief'],
-    ['the named blob controls wave requirements',
+      'the contract excerpt INLINED in the brief, verbatim from that merged file'],
+    ['the producer blob proves provenance without replacing shape authority',
+      'The producer blob at `producerSha` proves the excerpt\'s provenance'],
+    ['the named plan blob controls wave requirements',
       'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
     ['the current checkout cannot override the dispatch',
       'The current checkout\'s plan is not authoritative for this dispatched wave.'],
@@ -455,6 +474,47 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
     expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
   });
 
+  it('resolves producer provenance through its own repository, not the consumer cwd', () => {
+    const sectionStart = skill.indexOf('## The plan the brief names may live in another repository');
+    const sectionEnd = skill.indexOf('\n## ', sectionStart + 1);
+    const section = skill.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
+    const command = section.match(/^git -C "\$producerRepoRoot" show "\$producerSha:\$producerSourceRepoPath"$/m)?.[0];
+    expect(command, 'the documented producer read is missing').toBeDefined();
+
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'ccrc-producer-read-'));
+    const producer = path.join(fixture, 'producer');
+    const consumer = path.join(fixture, 'consumer');
+    try {
+      for (const repo of [producer, consumer]) {
+        mkdirSync(repo);
+        execFileSync('git', ['init', '--quiet'], { cwd: repo });
+        execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: repo });
+        execFileSync('git', ['config', 'user.email', 'fixture@example.invalid'], { cwd: repo });
+      }
+      const sourcePath = 'src/interface.txt';
+      mkdirSync(path.join(producer, 'src'));
+      writeFileSync(path.join(producer, sourcePath), 'producer interface\n');
+      execFileSync('git', ['add', sourcePath], { cwd: producer });
+      execFileSync('git', ['commit', '--quiet', '-m', 'fixture producer'], { cwd: producer });
+      const producerSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: producer, encoding: 'utf8',
+      }).trim();
+
+      const read = execFileSync('bash', ['-c', command!], {
+        cwd: consumer,
+        env: { ...process.env, producerRepoRoot: producer, producerSha,
+          producerSourceRepoPath: sourcePath },
+        encoding: 'utf8',
+      });
+      expect(read).toBe('producer interface\n');
+      expect(() => execFileSync('git', ['show', `${producerSha}:${sourcePath}`], {
+        cwd: consumer, stdio: 'pipe',
+      })).toThrow();
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   it('rejects every mutable-checkout fallback in the foreign-plan section', () => {
     const start = skill.indexOf('## The plan the brief names may live in another repository');
     const end = skill.indexOf('\n## ', start + 1);
@@ -463,6 +523,22 @@ describe('the worker skill: a plan in another repository (cross-repo wave 2)', (
     expect(section).not.toContain('cat "$planAbsPath"');
     expect(section).not.toContain('show "HEAD:');
     expect(section).not.toContain('current checkout is authoritative');
+
+    // GENERALISED from the single `-C "$PWD"` spelling this replaced. The D-2715
+    // defect is "the producer object is looked up somewhere that is not the
+    // producer repository", and `$PWD` is only its most legible form — `git -C .`,
+    // or a bare `git show` inheriting the consumer's cwd, are the same bug and
+    // walked straight past a `not.toContain` of one string. Every immutable read
+    // the section documents is harvested and required to name its own root.
+    const shows = [...section.matchAll(/git\b[^\n]*\bshow "\$(planSha|producerSha):[^"]*"/g)]
+      .map((m) => ({ cmd: m[0], sha: m[1]! }));
+    expect(shows.length, 'the foreign-plan section documents no immutable read at all')
+      .toBeGreaterThanOrEqual(2);
+    for (const { cmd, sha } of shows) {
+      const expected = sha === 'planSha' ? 'homeRepoRoot' : 'producerRepoRoot';
+      expect(cmd, `a $${sha} read is not rooted at $${expected}`)
+        .toMatch(new RegExp(`^git -C "\\$${expected}" show `));
+    }
   });
 
   it('adds no new clause and no second numbered list', () => {

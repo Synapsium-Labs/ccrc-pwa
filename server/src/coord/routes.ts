@@ -28,6 +28,7 @@ import { queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
@@ -939,8 +940,8 @@ export function registerCoordRoutes(
     }
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) {
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) {
       return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
@@ -1077,8 +1078,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
@@ -1331,8 +1332,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
@@ -1362,8 +1363,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1395,8 +1396,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1441,8 +1442,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // Read BEFORE the mutex, not inside it: a malformed body is decided by this
     // request alone, and queueing it behind a live dispatch would make the
     // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
@@ -1529,8 +1530,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as
       { to?: unknown;
@@ -1630,8 +1631,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
@@ -1955,8 +1956,8 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // An unknown run and a run with no declared ledger are DIFFERENT answers a
     // caller acts on differently: the first means the id is wrong, the second
     // means this wave declared none (the board renders `—`, not `0/0`). They
@@ -2414,8 +2415,8 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
@@ -2459,8 +2460,8 @@ export function registerCoordRoutes(
   app.post('/api/claims/:id/break', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     return sendClaimEndOutcome(reply, deps.coord.claimBreak(id, 'operator', Date.now()));
   });
 
@@ -2751,12 +2752,10 @@ export function registerCoordRoutes(
     // session, exactly as the mail ingress and the claims lanes do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses (dispatch/close/advance/claims/ledger above) — a
-    // non-numeric id must 400 before it ever reaches `node:sqlite`, not
-    // throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const askRead = coord.askById(id);
     // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
     // for a row that is gone; this row is not gone, it is unreadable, and the
@@ -2927,11 +2926,10 @@ export function registerCoordRoutes(
     // session, exactly as `/answer` and the mail ingress do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses — a non-numeric id must 400 before it ever reaches
-    // `node:sqlite`, not throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const askRead = coord.askById(id);
     // D-2545, `/answer`'s arm exactly — see its comment.
     if (!askRead.ok) {

@@ -30,10 +30,14 @@ non-goals — and Build 2.5's programme/ledger discipline
 3. **Foreign-repo workers read the named plan Git object.** A brief carries the absolute home
    repository root, the tracked repository-relative plan path, and a full 40-hex commit SHA; the
    worker resolves exactly that blob rather than the mutable checkout (§3 F3, §6).
-4. **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Preserve open-before-close, then
-   successfully close the producer, then query closed runs and require that producer's own `state`
-   to be `done` before dispatching the consumer. No `dependsOn` column until a measured incident of
-   the phased-cutover class justifies one.
+4. **Q1 — cross-run dependency edge: DISCIPLINE, not schema.** Preserve open-before-close. A
+   same-project successor opens with the producer's `sessionId`, then the producer closes with
+   `final:false` so the hold transfers. A cross-project successor opens without that `sessionId`,
+   then the producer closes with `final:true` and must answer `released:true`. Before dispatching a
+   dependent consumer, query closed runs and require that producer's own `state` to be `done`, then
+   independently prove its interface PR merged at the exact `producerSha` carried in the foreign
+   interface contract. No `dependsOn` column until a measured incident of the phased-cutover class
+   justifies one.
 5. **Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.** Not inferred from wave 1. Accepted-and-logged
    as legacy when absent for one deploy generation, then required on the first wave's open and stored
    on the programme row.
@@ -169,25 +173,35 @@ as its pin.
 
 **Design — coordinator skill:**
 
-- Reuse `sessionId` ONLY when the next wave stays in the same project. A wave that changes project
-  opens WITHOUT `sessionId` and spawns fresh in the target repo — the path that already works
-  (`dispatch.ts:326`). Consequence stated in the same paragraph: the programme now holds two live
-  workspaces, both counted by the global caps — two concurrency slots and two of the daily budget;
-  `cap-concurrency` or `cap-daily` during a cross-repo programme is this, not a bug.
+- Reuse `sessionId` ONLY when the next wave stays in the same project. A same-project successor opens
+  first with that `sessionId`, then the producer closes with `final:false` so the hold transfers to the
+  already-open row. A wave that changes project opens first WITHOUT the producer's `sessionId` and
+  spawns fresh in the target repo — the path that already works (`dispatch.ts:326`) — then closes the
+  producer with `final:true` and requires `released:true`. Using `final:false` across that boundary
+  would strand a synthetic next-wave hold on the producer workspace.
 - Every `POST /api/runs` carries `homeProject`. (During the legacy generation the server tolerates its
   absence; the skill never omits it.)
-- A brief for a foreign-repo wave carries `homeRepoRoot` (the absolute home-repository root),
-  `planRepoPath` (the tracked repository-relative path under `docs/superpowers/plans/`, no leading
-  slash), and `planSha` (a full 40-hex commit SHA), plus the contract excerpt inlined verbatim. The
-  worker reads exactly `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; failure to resolve any
-  part means report and stop, with no `HEAD`, current-checkout, fetch, checkout, or mutation fallback.
-  `ledgerAbsPath` remains only the absolute programme-ledger path. The inline excerpt controls
-  interface shape; the named plan blob controls wave scope and requirements. Paths, not payloads;
-  8 KB stands.
-- Q1's discipline sentence: open the consumer run first, successfully close the producer, then run
-  `"$API" runs list --closed 1`, find the producer by run id, and require its state to be `done`. The
-  default runs listing omits closed rows; a missing producer or any other state means report and do
-  not dispatch.
+- Every brief for a foreign-repo wave carries the immutable-plan tuple: `homeRepoRoot` (the absolute
+  home-repository root), `planRepoPath` (the tracked repository-relative path under
+  `docs/superpowers/plans/`, no leading slash), and `planSha` (a full 40-hex commit SHA). The worker
+  reads the plan exactly with `git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. Only a consumer
+  that depends on a producer interface also carries `producerRepoRoot` (the absolute producer-
+  repository root), `producerSourceRepoPath` (the producer repository-relative source-file path),
+  `producerSha` (the exact full merged producer SHA), and the contract excerpt inlined verbatim. The
+  worker then reads the producer interface exactly with
+  `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. A foreign-plan wave with no
+  producer-interface dependency carries no producer tuple and no invented excerpt. Failure to
+  resolve a required immutable blob means report and stop, with no `HEAD`, mutable-checkout, fetch,
+  checkout, or mutation fallback. `ledgerAbsPath` remains only the absolute programme-ledger path.
+  When present, the inline excerpt controls dispatched interface shape and the producer source blob
+  proves its provenance; the named plan blob always controls wave scope and requirements. Paths, not
+  payloads; 8 KB stands.
+- Q1's discipline sentence: after opening the consumer and closing the producer by the applicable
+  procedure above, run `"$API" runs list --closed 1`, find the producer by run id, and require its state
+  to be `done`. The default runs listing omits closed rows; a missing producer or any other state means
+  report and do not dispatch. Then independently prove the producer's interface PR merged at the same
+  exact `producerSha` carried in the foreign interface contract. `done` proves the fingerprint and
+  close, not the merge; missing or mismatched merge proof also means do not dispatch.
 - The refusal-list sentence in the skill names `project-mismatch` and `home-mismatch`, and
   `references/wave-lifecycle.md` explains both — in WAVE 1, not here, because the skill test requires
   every `RunRefuseCode` to be named in the skill corpus the moment it exists
@@ -208,6 +222,12 @@ as its pin.
 - The plan the brief names may live in ANOTHER repository. Read exactly the Git object named by
   `homeRepoRoot`, `planSha`, and `planRepoPath`; never fall back to the current checkout, never mutate
   the home repo, and commit only on this workspace's own branch in this repository.
+- Only when this wave depends on a producer interface does its contract also name `producerRepoRoot`,
+  `producerSourceRepoPath`, and `producerSha`, with the interface excerpt inlined. Read exactly
+  `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`; never substitute the
+  consumer repository, `HEAD`, or the mutable source file. The inline excerpt remains the dispatched
+  shape authority, while the immutable source blob proves where that shape came from. With no such
+  dependency, the brief carries no producer tuple and no invented excerpt.
 - Address the coordinator as `toId: 'coordinator'` with this run's `runId` — unchanged — and note that a
   reply from the coordinator may arrive addressed to the ROLE `worker`, which resolves to this session.
 
@@ -325,10 +345,11 @@ mail screen renders the feed and nothing filters either by programme.
 ## 5. Caps and safety — unchanged, restated
 
 - Caps stay global (`store.ts:1882`): one row, whole box, no per-programme or per-project cap.
-- A crossing costs two live workspaces, two concurrency slots and two of the daily budget. Three
-  corpora say so, each argued: the skill (§3 F3), wave 1's `wave-lifecycle.md` refusal row beside the
-  remedy it explains (D-2061), and README's cross-repo subsection — not its caps paragraph, which a
-  census test keeps number-free (D-2068).
+- Running-worker concurrency is the count of runs whose `dispatchedAt` is non-null and whose state is
+  not `done` or `failed`; it is not a count of held workspaces. A terminal producer retained on a hold
+  consumes no running-worker slot, and a planned consumer not yet dispatched consumes none. Each
+  actual producer or consumer dispatch still consumes the daily dispatch budget. `cap-concurrency`
+  and `cap-daily` remain authoritative when their respective measured counts are exhausted (D-2686).
 - `$REG/coordinator-paused` is global and still stops everything.
 - The hold reason still names programme, wave and run id, never a project; the run row carries the
   project.
@@ -347,9 +368,10 @@ mail screen renders the feed and nothing filters either by programme.
   home-plan Git object and never write the home repository.
 - No multi-repo workspace; the whitelisted verbs cannot re-point one and will not learn to.
 - No cross-box anything; §3 F3's `homeRepoRoot` depends on one box, one user, and says so.
-- No cross-run dependency edges or server-side gates (Q1); `blockedBy` stays within a run.
-- No server-side contract registry; the contract excerpt is prose in a brief and a file in the
-  producing repo.
+- No cross-run dependency edges or server-side gates (Q1); `blockedBy` stays within a run. The
+  coordinator's closed-row and exact-merge proofs are executable discipline, not persisted edges.
+- No server-side contract registry; the contract excerpt is prose in a brief and is provenance-checked
+  against the named immutable source blob in the producing repo.
 - No documents in mail bodies; paths, not payloads; 8 KB stands.
 - No home-project derivation from the registry or the claimant.
 - No true delivery-time re-resolution in the sweep — §4 meets the promise at occupant change; if a
@@ -377,7 +399,7 @@ mail screen renders the feed and nothing filters either by programme.
 | runs-screen badge and marker | the badge is absent; the marker shows while `homeProject` is null |
 | home-card abroad line | the second list is dropped |
 | skill pins | any clause sentence drifts from the pinned literal |
-| `ccrc-api` table | `--program` on `mail list` or the `feed list` row is missing, or the row-count sentence at `ccrc-api:24` is stale |
+| `ccrc-api` table | `--program` on `mail list`, the `feed list` row, or any of `asks.list` / `asks.answer` / `asks.release` is missing; an executable corpus command has no table row; or the row-count sentence at `ccrc-api:24` is stale |
 
 `typecheck-tests` covers the compile-time rows; the rest are vitest suites run in isolation before
 the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
@@ -408,7 +430,8 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
   that lives in `server/test`. Agent-first for that skill edit. Rebases over account-pools wave 3,
   which touches the same server files now.
 - **Wave 2 — skills and PWA:** F3 (both skills, both pins, the installers unchanged), F4 (runs screen,
-  both card changes), the mail screen's grouping and chip. Deploys agent-first.
+  both card changes), the mail screen's grouping and chip, plus the bounded client's ask list/answer/
+  release operations and executable corpus parity. Deploys agent-first.
 - **Wave 3 — docs and the flip:** README "Programs, runs and mail — the operator's view" and "Fleet
   coordination" sections; the Aug 11 spec's status line; the ledger closes; and the legacy flip as its
   own commit when §3 F2's measured criterion holds, else deferred with the measurement recorded. Not
@@ -416,10 +439,16 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
 
 **Dogfood, as its own programme after wave 2 is live:** home `custom-tools`, wave 1 there, wave 2 in
 `data-internal` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
-draft and unchanged: the wave-2 brief carries `homeRepoRoot`, `planRepoPath`, and `planSha`, reads
-that exact plan blob, and inlines the contract verbatim from the merged file; the board shows the crossing on the wave-2 row and the abroad
-line on the home card; the ledger's wave table records both PRs across two repos; no content moved by
-copy-paste; `project-mismatch` never fires in anger — its proof is a test, not an incident.
+draft with D-2684/D-2687 and D-2715/D-2716's provenance corrections: the wave-2 brief carries
+`homeRepoRoot`, `planRepoPath`, and `planSha` and reads that exact plan blob. Because this consumer
+depends on wave 1's producer interface, the brief also carries `producerRepoRoot`,
+`producerSourceRepoPath`, the exact merged `producerSha`, and the inline excerpt; the worker reads
+that immutable producer source blob through the producer repository while treating the inline
+excerpt as the dispatched interface-shape authority. Before dispatch, the coordinator requires the
+closed producer row to be `done` and independently proves the producer PR merged at that same SHA.
+The board shows the crossing on the wave-2 row and the abroad line on the home card; the ledger's
+wave table records both PRs across two repos; no content moved by copy-paste; `project-mismatch`
+never fires in anger — its proof is a test, not an incident.
 
 ---
 

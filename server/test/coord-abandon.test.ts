@@ -103,7 +103,7 @@ const sibling = (coord: CoordStore, sessionId: string, wave: number, program = '
   return opened.id;
 };
 
-const postAbandon = (app: FastifyInstance, id: number, payload?: unknown) =>
+const postAbandon = (app: FastifyInstance, id: number | string, payload?: unknown) =>
   app.inject({
     method: 'POST', url: `/api/runs/${id}/abandon`,
     ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }),
@@ -130,6 +130,21 @@ describe('POST /api/runs/:id/abandon', () => {
     // `planned → failed` edge was used, and `RUN_TRANSITIONS` is untouched.
     expect(w.coord.runEvents(id).map((e) => [e.fromState, e.toState]))
       .toEqual([['planned', 'failed']]);
+  });
+
+  it('a rounded non-canonical id cannot abandon run 1 or reach the fleet boundary', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const id = wedged(w.coord, home, 'working', `${PROJECT}-canonical-id`);
+    expect(id).toBe(1);
+    const callsBefore = calls.length;
+
+    const res = await postAbandon(app, '1.0000000000000001');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    expect(okRun(w.coord.run(id))!.state).toBe('working');
+    expect(calls).toHaveLength(callsBefore);
   });
 
   it('planned WITH a session (a wave≥2 reclaim, D-45): ws-release, then planned → failed', async () => {

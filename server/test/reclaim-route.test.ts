@@ -243,6 +243,23 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
   });
 
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'a non-canonical id %s answers 400 without reclaiming run 1', async (id) => {
+      const home = mkTmp('ccrc-reclaim-');
+      seed(home, HEIR);
+      const { run, execs } = makeRunner();
+      const w = await openApp(home, run); app = w.app;
+      const runId = openWave(w.coord, 1);
+      expect(runId).toBe(1);
+
+      const res = await post(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(runId))!.claimedBy).toBe(DEAD);
+      expect(execs).toEqual([]);
+    },
+  );
+
   it('a NON-INTEGER id answers 400 before anything is measured — the sweep probe', async () => {
     // `auth-gate.test.ts:93`'s `concrete()` rewrites `:id` to `x` and injects
     // with NO payload at all, three times (dark, armed-anonymous, armed with a

@@ -126,7 +126,7 @@ API="$HOME/.local/bin/ccrc-api"
 # so neither can be got wrong one caller at a time.
 
 body=$("$API" runs open --json - <<JSON
-{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
+{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
 JSON
 )
 ```
@@ -298,16 +298,24 @@ not after.
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
 5. **Review the handoff commit** like any other commit, update the ledger,
-   then `POST /api/runs` **for wave N+1 first** — same `sessionId`, same
-   workspace, and it re-holds with the wave N+1 reason — and only THEN
-   `POST /api/runs/:id/close` this wave's run with `final:false`. Order
-   matters: closing first, even briefly, leaves the program with zero open
-   runs, and the server retires a program with none — silently breaking
-   every `toId:'coordinator'` mail from that point on. Opening first never
-   lets the count reach zero. After close succeeds, run `"$API" runs list
-   --closed 1`, find the producer by run id, and require its own `state` to be
-   `done`; a missing row or any other state means report and do not dispatch.
-   Only then dispatch wave N+1 (step 2) **fresh into the same workspace**.
+   then `POST /api/runs` **for wave N+1 first**. Order matters: closing first,
+   even briefly, leaves the program with zero open runs, and the server retires
+   a program with none — silently breaking every `toId:'coordinator'` mail
+   from that point on. Opening first never lets the count reach zero.
+   **Same project:** open wave N+1 first with this producer's `sessionId`, close
+   the producer with `final:false` so its hold transfers to the already-open
+   successor on the same workspace, then run `"$API" runs list --closed 1`,
+   find the producer by run id, and require its own `state` to be `done`.
+   **Different project:** open wave N+1 first without this producer's
+   `sessionId`, close the producer with `final:true` and require
+   `released:true`, then run `"$API" runs list --closed 1`, find the producer
+   by run id, and require its own `state` to be `done`. If the consumer depends
+   on an interface from that producer, independently prove the producer
+   interface PR merged at the exact `producerSha` carried in the conditional
+   producer contract. A missing or non-`done` row, failed release, or required
+   exact-SHA merge proof that is absent means report and do not dispatch. The
+   closed row proves the fingerprint and terminal run state; it does not prove
+   a required interface merged. Only then dispatch wave N+1 (step 2).
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. Nothing
    archives the workspace on its own after that: the merged sweep only pushes
@@ -345,31 +353,36 @@ session's workspace belongs to — at the open, and again at the dispatch resume
 the open ever let one through.
 
 **What a crossing costs, so a cap refusal reads as arithmetic rather than a
-fault.** The programme now holds TWO live workspaces, the home wave's and the
-foreign wave's, and the caps are global to this box: that is two concurrency slots
-and two of the daily budget. `cap-concurrency` or `cap-daily` during a cross-repo
-programme is this, not a bug — stop, say which cap, and wait to be woken, exactly
-as you would for any other.
+fault.** The cap rule is exact: concurrency counts dispatched non-terminal runs,
+not held workspaces. A terminal producer retained on a hold and a planned
+undispatched consumer consume no running-worker slot, while each actual dispatch
+still consumes daily budget and a dispatched non-terminal consumer consumes one
+concurrency slot. `cap-concurrency`
+or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+exactly as you would for any other run.
 
-**A brief for a foreign-repo wave carries `homeRepoRoot`, `planRepoPath`, and
-`planSha`, and INLINES the contract excerpt the wave depends on, verbatim from the
-merged file.** `homeRepoRoot` is the absolute home-repository root;
-`planRepoPath` is the tracked repository-relative plan path, with no leading slash;
-and `planSha` is the full 40-hex commit SHA. The worker reads exactly
-`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; inability to resolve the
-repository, commit, or path means report and stop. It never substitutes `HEAD`,
-reads the current checkout directly, fetches, checks out, or otherwise mutates the
-home repository. The inline excerpt controls interface shape; the plan blob at
-`planSha` controls wave scope and requirements; the current checkout's plan is not
-authoritative for this dispatch. Paths, not payloads: the 8 KB ceiling is unchanged.
+**Every brief for a foreign-repo wave carries the three immutable-plan
+coordinates: `homeRepoRoot`, `planRepoPath`, and `planSha`.** `homeRepoRoot` is
+the absolute home-repository root; `planRepoPath` is the tracked
+repository-relative plan path with no leading slash; and `planSha` is the full
+40-hex plan commit SHA. The worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolved repository,
+commit, or path means report and stop, without substituting `HEAD`, reading the
+current checkout, fetching, checking out, or mutating the home repo.
 
-**Before dispatching a wave that consumes another wave's output, first open the
-consumer run, then successfully close the producer, then run `"$API" runs list
---closed 1` and find the producer by run id.** The default runs listing omits
-`done` and `failed` rows, so only the closed listing can prove the producer's own
-`state` is `done`. A missing row or any other state means report and do not
-dispatch. There is no dependency edge in the schema and none is coming: this
-post-close measurement is the whole guard.
+**Only a consumer that depends on a producer interface carries the producer
+contract:** `producerRepoRoot`, `producerSourceRepoPath`, `producerSha`, and the
+contract excerpt inlined verbatim from the merged file. A foreign-repo wave with
+no producer-interface dependency carries none of those producer fields and no
+invented excerpt. `producerRepoRoot` is the absolute producer-repository root;
+`producerSourceRepoPath` is the producer source file's repository-relative path;
+and `producerSha` is the exact full merged producer SHA. The worker proves its
+provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. The
+inline excerpt remains the dispatched authority for interface shape; the
+immutable producer blob proves where that shape came from; and the plan blob
+controls wave scope and requirements. `ledgerAbsPath` names only the programme
+ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
 
 **Deviations found during a foreign-repo wave are minted against the HOME
 project** — `POST /api/ledger/deviations` with the home project's name — and

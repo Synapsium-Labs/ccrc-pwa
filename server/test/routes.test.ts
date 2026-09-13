@@ -10,7 +10,11 @@ import { ccdRunner } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
-import { HOLD_ROUTE_REASON_MAX_BYTES, type SessionStreamMsg } from '../../shared/api.js';
+import {
+  HOLD_ROUTE_REASON_MAX_BYTES,
+  parseCanonicalPositiveSafeInteger,
+  type SessionStreamMsg,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { unreadableField } from './ioDoubles.js';
@@ -114,6 +118,35 @@ function serverRouteSources(): { src: string; routes: RouteSource[] } {
   };
 }
 
+/** Every `:id` registration in `coord/routes.ts`, whether or not it parses its
+ *  id the canonical way. This is the COMPLEMENT of `canonicalCoordIdRoutes` and
+ *  the half that makes the rule enforceable: a census built from call sites can
+ *  only notice a seam it already covers, so a NEW `:id` route spelled
+ *  `Number(idParam)` would never enter the list and the pin would stay green on
+ *  exactly the defect the parser exists to prevent. */
+function coordIdPathRoutes(): Omit<RouteSource, 'code'>[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  expect(starts.length, 'the coord route scan found no registrations').toBeGreaterThan(10);
+  return starts.flatMap((start) => (start[2]!.includes(':id')
+    ? [{ method: start[1]!.toUpperCase() as 'GET' | 'POST', routePath: start[2]! }]
+    : []));
+}
+
+function canonicalCoordIdRoutes(): Omit<RouteSource, 'code'>[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  return starts.flatMap((start, i) => {
+    const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
+    return /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+      ? [{
+          method: start[1]!.toUpperCase() as 'GET' | 'POST',
+          routePath: start[2]!,
+        }]
+      : [];
+  });
+}
+
 function knownIdCalls(): KnownIdCall[] {
   const calls: KnownIdCall[] = [];
   for (const { method, routePath, code } of serverRouteSources().routes) {
@@ -156,6 +189,57 @@ describe('HTTP pool-reader policy census', () => {
         method === expectedCall.method && routePath === expectedCall.routePath,
       );
       expect(route?.code, `${expectedCall.method} ${expectedCall.routePath} lost the bounded callback root`).toMatch(callbackAndBudget);
+    }
+  });
+});
+
+describe('canonical positive-safe decimal parser', () => {
+  it.each(['1', '42', String(Number.MAX_SAFE_INTEGER)])('accepts %s', (text) => {
+    expect(parseCanonicalPositiveSafeInteger(text)).toBe(Number(text));
+  });
+
+  it.each([
+    1, '', '0', '-1', '+1', ' 1', '1 ', '01', '1.0', '1.0000000000000001',
+    '1e0', '0x1', String(Number.MAX_SAFE_INTEGER + 1),
+  ])('rejects non-canonical or unsafe input %j', (text) => {
+    expect(parseCanonicalPositiveSafeInteger(text)).toBeNull();
+  });
+});
+
+describe('canonical coordination id route census', () => {
+  it('keeps all thirteen textual resource-id seams on the shared parser', () => {
+    expect(canonicalCoordIdRoutes()).toEqual([
+      { method: 'POST', routePath: '/api/mail/:id/ack' },
+      { method: 'GET', routePath: '/api/mail/:id' },
+      { method: 'POST', routePath: '/api/runs/:id/dispatch' },
+      { method: 'POST', routePath: '/api/runs/:id/close' },
+      { method: 'POST', routePath: '/api/runs/:id/abandon' },
+      { method: 'POST', routePath: '/api/runs/:id/reclaim' },
+      { method: 'POST', routePath: '/api/runs/:id/advance' },
+      { method: 'POST', routePath: '/api/runs/:id/items' },
+      { method: 'GET', routePath: '/api/runs/:id/items' },
+      { method: 'POST', routePath: '/api/claims/:id/release' },
+      { method: 'POST', routePath: '/api/claims/:id/break' },
+      { method: 'POST', routePath: '/api/asks/:id/answer' },
+      { method: 'POST', routePath: '/api/asks/:id/release' },
+    ]);
+  });
+
+  it('leaves no `:id` route off the parser, and no second spelling in the file', () => {
+    // The inverse scan. Positive census ∩ every `:id` registration must be the
+    // whole of the latter — so a route added tomorrow with its own coercion
+    // reds HERE, naming itself, rather than silently sitting outside the census.
+    expect(canonicalCoordIdRoutes()).toEqual(coordIdPathRoutes());
+
+    // And the old idiom is gone from the file entirely. `Number(q.limit)` and
+    // friends are deliberately untouched — a limit is not a resource id — so
+    // this is scoped to the param spellings a resource id actually arrives in.
+    const src = withoutComments(
+      readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8'),
+    );
+    for (const idiom of [/\bNumber\(\s*idParam\s*\)/, /\bNumber\(\s*\(?\s*req\.params\b/]) {
+      expect(src, `coord/routes.ts coerces a resource id with ${idiom} again`)
+        .not.toMatch(idiom);
     }
   });
 });

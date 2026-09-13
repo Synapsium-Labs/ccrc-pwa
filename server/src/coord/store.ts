@@ -4483,12 +4483,22 @@ export class CoordStore {
       // The COLUMN and nothing else — the offending value never leaves here.
       throw new Error('insertAsk: ask runId is not a positive safe integer');
     }
-    const res = this.db.prepare(
+    const insertAsk = this.db.prepare(
       'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, ' +
       "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
-    ).run(a.now, a.childId, a.parentId, a.runId, a.askKey, a.askAt, a.dialogId,
-      a.question, JSON.stringify(a.options));
-    return Number(res.lastInsertRowid);
+    );
+    insertAsk.setReadBigInts(true);
+
+    return tx(this.db, () => {
+      const exactId = insertAsk.run(
+        a.now, a.childId, a.parentId, a.runId, a.askKey, a.askAt, a.dialogId,
+        a.question, JSON.stringify(a.options),
+      ).lastInsertRowid;
+      if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('insertAsk: generated ask id is not a positive safe integer');
+      }
+      return Number(exactId);
+    });
   }
 
   /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
