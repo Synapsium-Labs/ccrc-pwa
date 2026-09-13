@@ -765,16 +765,18 @@ export function StartProgramSheet({
    *  its copy and its posture, and simply stops eating something that was never
    *  its business.
    *
-   *  KNOWN INCOMPLETE, and measured rather than assumed. Three OTHER arms above
-   *  the confirm fragment still retire this node. The D-284 arm swallows it when
-   *  the accounts poll turns `projected` null twenty seconds later — no operator
-   *  act at all, the same poll-tick shape the run arm had. The D-292 arm swallows
-   *  it when the operator picks a DIFFERENT project that already has a live main
-   *  checkout. D-2694 added the authoritative project-placement refusal between
-   *  those arms and the confirm fragment, and it likewise renders instead of
-   *  this node. The first two interactions predate this wave; the third is this
-   *  wave's addition. They are named here so the next reader MEASURES the rest
-   *  of the chain rather than reading this fix as having cleaned it.
+   *  THE CURRENT CHAIN, enumerated so this warning cannot drift behind a hand-kept
+   *  cardinal. The existing-checkout condition renders its refusal alone and
+   *  displaces recovery. The run-board condition renders its refusal together
+   *  with recovery, so it does not displace it. Measured placement `none` renders
+   *  one refusal arm and displaces recovery; its global, no-pool and named-pool
+   *  messages are semantic copy subcases, not additional syntactic arms. Measured
+   *  `unmeasurable` renders its refusal alone and displaces recovery. Old-server
+   *  `pool-blind` renders its refusal alone and displaces recovery. The final
+   *  confirmation fragment renders the ordinary confirmation together with
+   *  recovery. This list deliberately names each live condition and its effect,
+   *  so the next reader measures the chain rather than treating this fix as
+   *  having cleaned every arm.
    *
    *  `null` when no failure is standing, so an arm that renders it says nothing
    *  extra in the ordinary case. */
