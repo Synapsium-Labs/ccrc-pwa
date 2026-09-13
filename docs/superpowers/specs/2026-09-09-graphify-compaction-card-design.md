@@ -6,15 +6,17 @@ payload measurement of §0.2 came back negative — the subagent guard became th
 operator's direction that compaction works for a subagent exactly as for the main thread. The first draft of
 §3.0 (newest file wins) was refuted by an adversarial review the same day and replaced by the liveness rule,
 which answers `ambiguous` where it cannot answer. A second review of that rule and of Plan A (2026-09-10, four
-agents) closed the remaining holes named in §3.0–§3.4 and Plan A's ledger (D-2411–D-2420). **Amended again
-before Task 9 on 2026-09-12 (D-2605):** the journal is the sole measurement sink, and an immutable ccrc row
-generation authorizes every compaction-lifecycle mutation. A permanent per-session lock is published only by a
-private `mktemp` source plus atomic hard link, never by shared-path redirection. PreCompact,
+agents) closed the remaining holes named in §3.0–§3.4 and Plan A's ledger (D-2411–D-2420). **D-2605 round 5
+(2026-09-12) consolidates the final pre-Task-9 contract:** the journal is the sole measurement sink; immutable
+ccrc row generation authorizes every compaction-lifecycle mutation; and a permanent per-session lock is published
+only by a private `mktemp` source plus atomic hard link, never opened at its canonical pathname. PreCompact,
 SessionStart(compact), PostCompact, registry-row creation, and purge use that one lock; ordinary hook paths remain
-lock-free. Compact SessionStart holds it across match, claim, emit, and nonce-marker publication. PostCompact
-keeps an identity-checked private claim FD through measurement and performs its final journal transaction under the
-same stable lock. The honest crash and replay limits are stated in §3.4. Plan A is written and Tasks 1–8 are
-implemented; Task 9 is not.
+lock-free. Compact SessionStart validates generation and safely acquires/revalidates the lock before every
+lifecycle observation, then holds it through match, claim, emit, and nonce-marker publication. PostCompact
+retains an identity-checked private claim FD, unlinks canonical before touching that claim, and performs final
+journal work and any cleanup only under a safely reacquired validated lock. The raw JSONL predicate, exact family
+inventory, row/spawn/purge ownership, and honest crash/replay limits are in §3.4. Plan A is written and Tasks 1–8
+are implemented; Task 9 is not.
 **Branch:** `ws/graphify-compaction-card`
 **Predecessors:** `2026-08-27-graphify-fleet-integration-design.md` (App. B),
 `2026-09-02-graphify-read-side-ccrc-level-design.md` (R1, R4, R5), and the gpt-lane wedge plan
@@ -146,7 +148,7 @@ measured for whether it changed.**
 
 Goals: (1) *fidelity* — the files, symbols and dependents a context was working in survive compaction
 exactly, not as the model remembers them; (2) *size* — the summary stops pasting code it can cite;
-(3) *measured* — the effect is a number per compaction on the wire, never an assertion.
+(3) *measured* — the effect is a number per compaction in the per-session journal, never an assertion.
 
 Non-goals, stated: compaction time and the gpt-lane wedge (PR #70); Claude Code's re-injection;
 Claude Code's summariser prompt; anything in a `CLAUDE.md`; the graph's write side.
@@ -177,16 +179,16 @@ summariser  (Claude Code; reads Additional Instructions)
 SessionStart(compact) ──► lock, generation validate, atomically claim matching card, emit envelope, then publish
                           $REG/.<id>.compactserved.<nonce> from an owned private source before unlock
 PostCompact ──► lock, generation validate, record canonical age, hard-link it to an absent private claim, retain
-                a verified read FD of that claim, require claim touch and canonical-alias unlink before release
+                a verified read FD of that claim, unlink canonical alias, then touch claim before release
    └─► helper `measure` reads only the retained FD (or its FD-derived private snapshot), never a reopened claim path
        └─► lock again, generation/claim-FD revalidate, FD-validate old JSONL, stage old bytes + one record, then rename
 The journal is Plan A's sole authoritative measurement sink; readers derive ordinal from physical line position.
 Task 9 creates no hookstate field and Plan A has no wire/chip hop.
 ```
 
-**Staging.** Stage 1 ships everything except the print: card, measurement, wire. Stage 2, a separate PR
-after a baseline window, ships the print. Every measurement carries `steered: true|false`, so the delta
-is measured against unsteered compactions that were recorded with the card already present.
+**Staging.** Stage 1 ships card and measurement; Plan A has no wire. Stage 2, a separate PR after a
+baseline window, ships the print. Every measurement carries `steered: true|false`, so the delta is
+measured against unsteered compactions that were recorded with the card already present.
 
 **Runtime.** The helper is plain node with no imports beyond `node:*` — the `shared/mark.mjs` precedent
 for a deploy-side script the PWA never bundles — installed beside the hook by `deploy.sh`'s agent lane
@@ -302,8 +304,8 @@ implemented may also replace it; once PostCompact's successful under-lock hard l
 claim, its identity controls recovery too. Under the same stable lock, PreCompact scans only exact-this-session
 claim names and uses `-ef` against canonical. A same-inode pair is the predecessor's already-settled alias:
 PreCompact final-rechecks it, unlinks only the redundant canonical alias, and leaves that claim and its marker
-untouched before it publishes its successor. Otherwise, after PostCompact has touched its new claim and unlinked
-canonical, no later PreCompact may rewrite, relabel or delete that claimed predecessor. It can say only that overlap
+untouched before it publishes its successor. Otherwise, after PostCompact has unlinked canonical and touched its new claim,
+no later PreCompact may rewrite, relabel or delete that claimed predecessor. It can say only that overlap
 was observed and degrade its own card/set. A failed compaction followed within the window can therefore cost the
 successor its card, but cannot falsify the predecessor after settlement.
 
@@ -367,7 +369,7 @@ never waits on any of this. Guard chain, in order, every failure silent and tota
    equals the ccrc-owned `$REG/<id>.generation`; validate it again immediately before each publication or
    destructive mutation. A hook with no generation (including an already-running pre-upgrade process) fails
    closed for compaction lifecycle work only; ordinary hookstate behavior is unchanged. Then scan only
-   exact-this-session regular claims matching `$REG/.<id>.compactpost.<pid>.<random>.<random>.claim`. If
+   exact-this-session regular claims matching `$REG/.<id>.compactpost.<pid>.<RANDOM>.<RANDOM>.claim`. If
    canonical and one such claim are the same
    inode under `-ef`, final-recheck that identity and unlink only the redundant canonical alias; do not read,
    touch, process, remove, consume, or alter that predecessor claim or its nonce marker. Then perform the
@@ -377,20 +379,20 @@ never waits on any of this. Guard chain, in order, every failure silent and tota
    helper/rollback/card temp families plus new PostCompact artifacts older than the window. Parse each
    basename by first removing an exactly quoted literal `.<id>.` prefix and then matching its remaining
    suffix grammar; never put the id inside an unescaped glob or ERE. New candidates are deleted only after
-   their basenames match one exact grammar: `compactpost.<digits>.<digits>.<digits>.claim`,
-   `compactserved.compact-<digits>-<digits>-<digits>-<digits>`,
-   `compactserved.<digits>.<digits>.<digits>.tmp`, or
-   `compactions.<digits>.<digits>.<digits>.tmp`. The marker temp independently reserves its own decimal
-   random components but uses the same PID-plus-two-random-component shape. All lead with a dot and are
-   invisible to `_reg_purge`. `$REG/.<id>.compactions.lock` matches none of those grammars, is explicitly
-   excluded before deletion, and is never swept, repaired, replaced, or unlinked. This exact-prefix parse
-   protects a second legal id such as `demo.quiet` when this id is `demo`, and vice versa.
+   their full suffix matches an age-eligible residual family in §3.4's exhaustive inventory. The scanner
+   never uses a broad `.*compact*.tmp` matcher or an old loose pid/random/tmp grammar. After Task 9's
+   producer migration it applies only target suffixes; during the one migration window it may additionally apply
+   only §3.4's complete legacy grammar after age expiry. It does not remove live claims or foreign helper
+   rollback reservations. `$REG/.<id>.compactions.lock` is explicitly excluded:
+   it is never swept, repaired, replaced, or unlinked. This exact-prefix parse protects a second legal id such
+   as `demo.quiet` when this id is `demo`, and vice versa.
 4. Still under that lock, `_hook_graph_measure` runs — for its `GM_CWD`, `GM_BUILT` and `GM_FRESH`, which
    the set records whatever comes next — and **the set is written here, always**, by the hook (`jq -cn --arg …`,
-   temp-then-rename, the temp `$REG/.<id>.$$.compactset.tmp`):
+   temp-then-rename, the Task 9 target §3.4 private set-temp family
+   `$REG/.<id>.compactset.<pid>.<nonce>.hook-write.tmp`):
 
    ```json
-   {"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<random>-<random>","scope":"main","agent":null,
+   {"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<RANDOM>-<RANDOM>","scope":"main","agent":null,
     "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
     "parentLive":null,"liveAgents":0,"overlap":false,
     "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh","steered":false,
@@ -444,9 +446,9 @@ same no-clobber link from its claim. The foreign claim remains after either a fa
 restore, because C can replace canonical afterward. The card uses the equivalent claim protocol,
 inspecting its claimed first line and deleting only an A-owned partial. Regular placeholders mean a
 canonical directory cannot be moved over a claim; exact-target `link` treats a current directory as
-occupied rather than creating a child inside it. Claims and any failed-A restore artifacts are direct
-dot files eligible for the existing stale `.*compact*.tmp` sweep. A later owner is never overwritten
-or unlinked. The existing `state="working"` write is unchanged.
+occupied rather than creating a child inside it. Claims and failed-A restore artifacts are age-eligible
+only through their complete §3.4 inventory suffixes, never a broad stale-temp sweep. A later owner is never
+overwritten or unlinked. The existing `state="working"` write is unchanged.
 
 **Cost, and the contract it amends (§6, R2).** The helper is bounded by `COMPACT_HELPER_TIMEOUT` = 8 s.
 The inputs: node startup ~0.05 s; `graph.json` parsed once and indexed; a window of at most
@@ -561,20 +563,20 @@ another commit says so the way the graph card does, in the graph card's own voca
 anything was dropped — a short card must never read as a small working set (the prototype's `(not in
 graph)` sentinel meant both, and the repo calls that an overloaded null).
 
-**Files.** Both written to a dot-prefixed temp name carrying the writer's pid
-(`$REG/.<name>.<pid>.tmp`, the hook's own `$$` idiom, so two writers never share a temp) and renamed
-into place; a temp orphaned by `timeout`'s SIGTERM is swept by the next PreCompact (§3.1 step 3). The
-ordinary dot-free registry suffix loop does not see dot-leading lifecycle names, but D-2605's locked
-exact-id purge additionally owns its private claims, served markers, marker temps, and journal stages;
-it never touches the permanent lock. Names carry **no second dot** on purpose: the generic `_reg_purge`
-loop unlinks `$REG/<id>.<suffix>` for every dot-free suffix except `archived` and `reaping` (which it
-removes last, in that order) plus the one explicitly named `<id>.hookstate.json`; the `.generation`
-file is skipped by that loop and deleted last by its locked lifecycle cleanup. The set the helper writes
+**Files.** Task 9 first migrates every current helper/hook set/card temporary and rollback creator to §3.4's
+target families. The helper then uses `compactset.<pid>.<nonce>.helper-write.tmp` or
+`compactcard.<pid>.<nonce>.helper-write.tmp`; the hook uses
+`compactset.<pid>.<nonce>.hook-write.tmp` or `compactcard.<pid>.<nonce>.hook-write.tmp`; and their rollback
+reservations/sources use the separate exact target families in that table. No generic
+`.<name>.<pid>.tmp` rule exists. A timeout orphan is age-cleaned by the next validated PreCompact lock holder
+only when its full exact suffix is an eligible family. The ordinary dot-free registry suffix loop does not see
+dot-leading lifecycle names, so D-2605's locked exact-ID purge owns every residual family in §3.4 and deletes
+`.generation` last; it never touches the permanent lock. The set the helper writes
 — key order is part of the contract: `at`, `nonce`, and
 `transcript` sit in the first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`:
 
 ```json
-{"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<random>-<random>","scope":"main","agent":null,
+{"v":1,"at":1789330000000,"nonce":"compact-1789330000000-<pid>-<RANDOM>-<RANDOM>","scope":"main","agent":null,
  "transcript":"/home/u/.claude/projects/-home-u-tree/<session>.jsonl",
  "parentLive":null,"liveAgents":0,
  "cwd":"/home/u/tree","built":"40706e0c","fresh":"fresh",
@@ -585,235 +587,223 @@ file is skipped by that loop and deleted last by its locked lifecycle cleanup. T
 
 The already-implemented Task 1–8 helper rewrite above does not carry the hook document's ordinary
 `overlap:false`; D-2605 therefore defines absent as legacy ordinary/false. It never rewrites an
-`overlap:true` document because PreCompact stops before invoking the helper for an ambiguous scope.
+`overlap:true` document because PreCompact stops before invoking the helper for an ambiguous scope. The
+pre-Task-9 helper code still emits its old temporary/rollback basenames; the migration paragraph in §3.4,
+not this target-shape prose, governs their transition.
 
 Exit codes: 0 card and set written; 3 empty working set (set written with `files: []`, no card); 2 usage;
 1 any failure (unreadable input, malformed or oversized graph, a slot no longer the helper's, write
 error — nothing written, the hook's own set stands). Reads only the three input files; writes only the
-two named outputs, each through `.<name>.<pid>.tmp`.
+two named outputs through the helper's exact §3.4 set/card temp families.
 
 ### 3.3 SessionStart(compact) arm (hook)
 
-Inside the existing `SessionStart` arm, **only when `src == compact`**, after the three standing
-subjects are built and before the D-306 `exit 0`. **No scope resolution here** — this arm cannot tell
-which context it serves (§3.0), so it serves the card iff the card is the set's own:
+Inside the existing `SessionStart` arm, only when `src == compact`, after the standing subjects are
+built and before the D-306 `exit 0`. It never resolves scope. The compact arm begins with its
+operator-off guard. **Immediately after that guard, before any lifecycle pathname is inspected,
+aged, read, matched, claimed, deleted, emitted, or published, it validates the environment generation,
+acquires the §3.4 stable lock, and validates the generation again under that lock.** It retains that
+one validated lock FD through every action below and final generation recheck.
 
-0. `~/.ccrc/compact-card-off` absent — **before any card, set or marker is touched**.
-1. `f="$REG/$id.compactcard"` exists; younger than `COMPACT_CARD_MAX_AGE` (`find -mmin`, one fork) —
-   an older card belongs to no compaction that can still arrive and is **removed**, never served.
-2. **The pair.** The canonical set exists, and its `nonce` (a bounded `read -N 4096` of the set's head,
-   fork-free) equals the card's first line. The nonce must match
-   `^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+\z` before it can enter a pathname (the implementation uses jq Oniguruma `test()`, whose exact end anchor is `\z`, never `$`). A set naming another nonce,
-   or no set, is a crossed pair — nothing is served and the card stays for overlap/age retirement.
-3. **Acquire before inspecting, claiming or emitting.** Compact SessionStart calls the same safe stable-lock
-   helper, validates `CCRC_SESSION_GENERATION` as a strict lowercase UUID equal byte-for-byte to
-   `$REG/<id>.generation` before and under that lock, and retains the verified FD until marker publication.
-   It atomically renames the card to its existing pid-scoped private claim, then reads its bounded body.
-   Exactly one concurrent SessionStart can win. The winning arm exports the validated nonce in
-   `CARD_COMPACT_NONCE`; a losing, crossed or body-less arm exports nothing and restores as already
-   specified. The canonical compactset is **never rewritten** by SessionStart.
-4. **Two clips, one site.** `_hook_emit_context` takes two arguments now: the standing join, which it
-   clips at `CARD_MAX_CHARS` exactly as today — that clip is the *only* defence for the ungated
-   `GM_NODES` — and the compact subject, appended after it under `COMPACT_CARD_MAX_CHARS`, the result
-   clipped at derived `CARD_TOTAL_MAX_CHARS`. Both clips live inside the one emitter.
-5. **The fact of serving is a nonce marker, not a raced set cache.** The same compact-SessionStart lock
-   remains held after the emitter returns successfully and `CARD_COMPACT_NONCE` is non-empty. It revalidates
-   the generation immediately before publication, creates a private regular marker source with GNU/BSD-compatible
-   `mktemp "$REG/.${id}.compactserved.XXXXXX"` under `umask 077`, rejects a non-regular/symlink source, and
-   publishes `$REG/.<id>.compactserved.<nonce>` only with POSIX `link "$private" "$marker"`; it removes only
-   its private source on `EEXIST` after validating the extant marker, or after any refusal. It never uses a
-   shared-path redirection or a pre-created marker target. An existing same-nonce marker is idempotent; any
-   other create failure records nothing. Marker names accept only the nonce grammar above, so payload bytes
-   never shape a path. Only after this publication (or validated idempotent extant marker) does SessionStart
-   release the lock. PostCompact sets `served:true` only when its **privately claimed** set's nonce matches
-   that exact marker, and it removes only that marker after the journal attempt; a successor's marker is never
-   touched. Markers older than `COMPACT_CARD_MAX_AGE` are swept by PreCompact only, never by broad `rm`.
+1. The environment `CCRC_SESSION_GENERATION` must be the strict lowercase ASCII UUID value for this row
+   (§3.4 generation protocol). Missing, malformed, mismatched, absent, unsafe, unreadable, or replaced
+   generation refuses silently. No card, set, marker, claim, or age probe occurs first.
+2. Under the lock, inspect the regular/non-symlink card and canonical set, including age. An aged card is
+   deleted only under this lock. Read the bounded set head and card claim only through owned, verified
+   private aliases/FDs where §3.4 requires; validate the nonce with `^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+\z`.
+   A missing or crossed pair serves nothing. A barrier that replaces either pair member before lock
+   acquisition is observed as that replacement, never as a stale pre-lock observation.
+3. Atomically claim the matching card under the retained lock. The winner alone can read its body and
+   form the compact subject. A losing, crossed, or body-less claim restores only its verified owned
+   card through no-clobber link and creates no marker. The canonical set is never rewritten.
+4. `_hook_emit_context` emits the two clips only after the current claimed pair is valid. A successful
+   envelope is deliberately not filesystem-atomic. A crash after stdout and before marker publication
+   is an honest possible `served:false` false negative.
+5. Before unlock and only after successful output, revalidate environment generation and publish the
+   exact nonce marker via §3.4's owned marker-source protocol. Same-nonce extant marker is idempotent
+   only after it validates as a regular, non-symlink final marker under this lock. A marker is never
+   created before output and no broad marker deletion is permitted. Close the FD on every exit.
 
-   The deliberate order is `emit -> marker publish -> unlock`, not an impossible filesystem/output atomicity
-   claim. Stdout can become externally observable before marker publication; a crash in that interval leaves
-   false-negative served evidence. A deterministic pause after emit proves PostCompact blocks on the same lock
-   and then observes `served:true`; if PostCompact settles first, the later compact SessionStart emits no card.
+The arm retains no process-specific lock after return. Missing/mismatched generation has the deliberately
+strong property that an aged card, set, and marker remain byte-identical. Tests use a lock-acquisition
+barrier plus pair replacement to prove no lifecycle observation leaks before the lock, and a mutation
+which moves any first inspection above lock acquisition must turn red.
 
-Where the context lands is **measured** (§0.2): a subagent's SessionStart(compact) context is attached
-to the subagent's own transcript, beside its own boundary and summary. Startup, resume and clear
-**never** read the file: a card describes the compacted context and nothing else. Hookstate is **not**
-written — D-306 holds exactly as today, and its early structural `exit 0` remains before the hookstate
-reader/writer. Cost is one `find`, bounded reads, atomic card claim, emit, and one atomic empty-marker
-create only after a successful card emit; the arm keeps its own interleaved ratio test.
+### 3.4 PostCompact arm (hook), registry lifecycle, and helper `measure`
 
-Nothing new is reachable: with a pathological `GM_NODES` the standing join is clipped at 2,400 exactly
-as today (the graph card loses its tail, unchanged behaviour) and the compact card is intact; the
-second clip never fires. A mutation row pins that the standing clip cannot be deleted or moved without
-a red.
+The per-session journal is Plan A's sole authoritative measurement sink. There is no hookstate compaction
+cache, no Plan-A wire, and no persisted `n`; a reader derives ordinal from committed physical JSONL position.
+All compaction lifecycle processes use one stable lock implementation, generation storage implementation,
+and exact family inventory below.
 
-### 3.4 PostCompact arm (hook) and helper subcommand `measure`
+#### Stable lock: permanent canonical inode and private open alias
 
-The per-session journal is **Plan A's sole authoritative measurement sink**. Task 9 does not add a
-`compaction` member to hookstate, a future wire type, or a console cache: keeping a second mutable copy
-would race the journal transaction and make two sources disagree. A reader that needs “compaction N”
-derives N from the committed physical JSONL position (one-based), never from a persisted `n` field.
+`$REG/.<id>.compactions.lock` is permanent for the registry ID/slot, deliberately spanning row generations
+and safe reuse. No compliant path unlinks, replaces, repairs, truncates, recreates, or sweeps it. It is not
+slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD protocol is:
 
-**Shared safe lock-open/acquire helper.** Only PreCompact, SessionStart(compact), PostCompact, ccrc row
-creation, and `_reg_purge` use exactly one safe stable-lock protocol; ordinary hook hot paths take no compaction
-lock. It receives only the literal-derived path `$REG/.<id>.compactions.lock`, never a payload-derived pathname.
-The lock inode is permanent for that registry-row identity: neither hook cleanup nor purge may unlink, repair,
-truncate, replace, or recreate it. Its supported Bash 4.4+ GNU/BSD mechanism is explicit:
+1. To initialize an absent canonical lock, under `umask 077`, call `mktemp` with template
+   `.<id>.compactions.lock-init.XXXXXX`. The literal terminal `XXXXXX` is a template only: the created source
+   basename is `.<id>.compactions.lock-init.<mktemp6>`, where `<mktemp6>` is mktemp's six-character result.
+   Validate that source as a regular, non-symlink file; publish canonical only by POSIX
+   `link "$source" "$lock"`; remove the owned source on success, `EEXIST`, and every handled error.
+   `EEXIST` means validate the incumbent; it never means open or recreate it. Never redirect or open canonical
+   itself.
+2. To acquire a lock, make an absent exact-family private hard-link open alias from canonical:
+   `.<id>.compactions.lock-open.<pid>.<RANDOM>.<RANDOM>`. Both `$RANDOM` components are decimal, candidate
+   collisions retry, and no final alias is precreated. Validate source canonical and alias as regular,
+   non-symlink files; open the alias R/W on an anonymous FD; unlink that owned alias after FD acquisition,
+   both on success and every handled failure. Thus an acquisition never has a create-capable operation at
+   canonical, and all lock owners flock the one canonical inode.
+3. Via `/proc/self/fd/$fd` or `/dev/fd/$fd`, require a regular FD target; require current canonical regular
+   and non-symlink; and require `fd_path -ef canonical` before `flock`, after bounded
+   `flock -w "$COMPACT_JOURNAL_LOCK_WAIT" "$fd"`, and immediately before each mutation. Any unavailable
+   inspection, FIFO, symlink (including dangling or to FIFO/regular), directory, disappearance, replacement,
+   link/open/flock race, or mismatch closes the FD and refuses. It never recreates canonical. A test holds
+   the old inode while canonical disappears and requires prompt refusal, zero recreated canonical, and no
+   split critical section.
 
-1. Under `umask 077`, create a **private source only** with GNU/BSD-compatible
-   `mktemp "$REG/.${id}.compactions.lock.XXXXXX"`. Validate that source as a non-symlink regular file. Never
-   redirect, open, or otherwise create the shared `$lock` pathname. Publish solely with POSIX
-   `link "$private" "$lock"`, an atomic no-clobber operation. On `EEXIST`, remove only the private source and
-   validate the extant `$lock`; on any other failure remove only the private source and refuse.
-2. Require the accepted pathname to be a non-symlink regular file (`[[ -f "$lock" && ! -L "$lock" ]]`). Open it
-   read/write with Bash's `exec {fd}<>"$lock"`; read/write is load-bearing because opening a raced FIFO read-only
-   can wait for a writer. The precheck plus read/write open makes malformed-path refusal prompt on supported
-   platforms rather than borrowing the lock deadline.
-3. Immediately inspect the descriptor through `/proc/self/fd/$fd` on GNU hosts or `/dev/fd/$fd` on BSD hosts:
-   it must name a regular file. Reinspect the current pathname as non-symlink regular, then use
-   `[[ "$fd_path" -ef "$lock" ]]` to prove descriptor and pathname are the same inode. If any inspection is
-   unavailable or fails, close the descriptor and refuse; never lock an old inode after pathname replacement.
-   Run `flock -w "$COMPACT_JOURNAL_LOCK_WAIT" "$fd"` (exactly two seconds), then repeat descriptor-regular,
-   pathname non-symlink-regular, and descriptor/path-same-inode checks **after successful flock and immediately
-   before each critical mutation**. Retain the descriptor only if all checks pass. The deadline covers genuine
-   contention only: FIFO, directory, symlink-to-regular, symlink-to-FIFO, replacement before `flock`, replacement
-   after flock, and mismatched-inode fixtures must all refuse promptly. The caller always closes the retained
-   descriptor after its critical section.
+The first-publish source never leaks: implementation removes it before taking the common open-alias flow
+(or safely uses it as the initial alias with the same single cleanup). Exact aged cleanup of crashed init or
+open-alias residue is allowed only while a later validated stable lock is held (or by exact purge), parses
+the literal `.<id>.` prefix first, and cannot select another dotted/shared-prefix ID. Mutation back to
+`exec {fd}<>"$lock"` must red.
 
-**Threat boundary.** This helper guarantees mutual exclusion among ccrc hook processes because every ccrc
-publisher, claimer, and journal writer uses it and never unlinks or replaces the stable lock. It safely refuses
-malformed artifacts it observes. A hostile or arbitrary same-UID actor that changes a pathname after the final
-check and before a filesystem syscall is outside Plan A's portable Bash threat boundary; the same bounded
-statement applies to claim and journal pathname compare-and-swap checks. The implementation must not describe
-those bounded checks as protection from an adversary it cannot exclude.
+#### Generation: immutable row authorization
 
-**Guard and settlement order, fixed.** Every guard is silent; stdout and stderr stay empty.
+`$REG/<id>.generation` contains **exactly 36 lowercase ASCII UUID bytes and no terminal LF**. It is
+ccrc-owned row authorization, not `.uuid`, a payload `session_id`, or journal data, and it never occurs in
+the sixteen-key record. Under a stable lock, pathname metadata is classified before reading: genuine absence
+is distinct from every present-invalid condition. A present value is accepted only from a readable,
+non-symlink regular canonical file with exactly the byte grammar `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`.
+FIFO, directory, symlink (including dangling or to a FIFO/regular file), unreadable, uppercase, empty,
+multiline, malformed, replaced, and FD/path-mismatched values refuse promptly and are never repaired,
+replaced, removed, or folded into absence.
 
-1. `~/.ccrc/compact-card-off` is absent. When it is present PostCompact does not touch the pending
-   canonical set, card, marker, claims, journal, lock or temps.
-2. `.compact_summary` exists and has JSON type `string`.
-3. `find` exists.
-4. **Validate generation before and under lock, then acquire before settlement, age, parse, provenance or
-   helper/tool guards.** Require `CCRC_SESSION_GENERATION` to be a strict lowercase UUID and byte-equal to
-   `$REG/<id>.generation` before the safe open, again while holding the stable lock, and immediately before the
-   claim link or final commit. A missing/malformed/mismatched generation is a compaction-lifecycle refusal only.
-   Use the shared safe helper above for `$REG/.<id>.compactions.lock`. On missing/unsafe/replaced/contended lock,
-   leave the canonical
-   pathname untouched and write no journal record. While it is held, scan only exact-this-session private claim
-   basenames and compare each with canonical using `-ef`. A preexisting same-inode claim proves that canonical is
-   an alias of an already-settled predecessor: final-recheck that same inode, unlink **only** canonical, release
-   the lock, and process the current summary-only. That recovery path never reads, touches, processes, removes,
-   consumes, or derives a served marker from the predecessor claim; it leaves the claim and its nonce marker for
-   their normal lifecycle. If its final recheck or canonical unlink fails, it processes nothing.
+Existing bytes are read through an exact owned generation-read hard-link alias
+`.<id>.generation-read.<pid>.<RANDOM>.<RANDOM>` opened on a retained FD, then alias-unlinked and FD/current
+canonical inode rechecked. Never use `_reg_get`, `_reg_read`, or `cat` on a raced canonical generation path.
+For genuine absence only, `_plat_uuid` mints and validates, then writes the no-LF bytes under `umask 077` to a
+private source made by template `.<id>.generation-init.XXXXXX`. Its resulting basename is
+`.<id>.generation-init.<mktemp6>`, not a literal `XXXXXX` pathname; validate source bytes and publish only by
+no-clobber `link`. It removes source on success/failure; `EEXIST` reclassifies the incumbent rather than
+repairing it. Source/read-alias crashes are exact-family, age-gated cleanup under a later stable lock or exact
+purge. `.generation` and any private generation residue block slug reuse; permanent lock does not.
 
-   Otherwise, require a readable, non-symlink regular canonical set in the same `$REG` filesystem, measure its
-   original age into a saved boolean, and require `command -v touch` before any link. Generate an exact-grammar
-   `$REG/.<id>.compactpost.<pid>.<random>.<random>.claim` identity using only shell-owned values. `<pid>` and both
-   `<random>` components are decimal digits and the whole name must match the exact internal grammar before use.
-   Do **not** pre-create, reserve, touch, or otherwise materialize the final claim pathname. Instead, use POSIX
-   `link "$set" "$claim"` as the atomic exact-target no-clobber operation. Its success is the sole settlement
-   publication: it refuses an existing file, symlink, or directory target and never creates a child below a
-   directory. A collision, malformed candidate, link failure, or failed absence-safe target handling retries a
-   fresh candidate or refuses with canonical untouched and no record.
+#### Exact lifecycle family inventory
 
-   For a newly linked claim, `touch "$claim"` and then unlink only the canonical alias while still locked. The
-   writer may release that new claim for measurement **only after both operations succeed**. If touch fails, remove
-   only this writer's newly linked claim when possible, preserve canonical, and invoke no helper, journal commit,
-   marker cleanup, or processing. If canonical unlink fails after successful touch, likewise remove only this
-   writer's new claim when possible, preserve canonical, and invoke none of those later actions. If that private
-   cleanup itself fails, aliases can remain; a later locked PostCompact or PreCompact follows the same-inode rule
-   above, so it cannot duplicate processing. The saved original-age boolean, not the touched claim mtime, decides
-   whether provenance and `--set` are usable; the touched claim mtime means a successfully settled active claim
-   cannot be stale-swept during the eight-second helper plus two-second journal-lock interval. A kill after link
-   can leave aliases and is recovered by the same rule. If no readable regular canonical set exists, release the
-   lock and proceed without a set. This is a same-filesystem `$REG` protocol, not a cross-device move.
-5. Only after successful new-claim settlement, open and retain a **read FD** for that private claim while still
-   locked. Require the retained FD target to be regular, the claim pathname to remain non-symlink regular, and
-   `[[ "$claim_fd_path" -ef "$claim" ]]`; refuse and cleanup only the same verified claim otherwise. Feed helper
-   input through that retained FD or an FD-derived private snapshot, never by reopening a mutable claim pathname,
-   and keep its FD open through helper execution. Immediately before journal staging/rename, reacquire the stable
-   lock, revalidate the immutable generation and all retained claim FD/path identity checks, then hold the lock
-   through the full journal transaction. Claim cleanup is also under that lock and may unlink the claim only after
-   a same-inode recheck, never a replacement inode. Only then parse only the FD-backed private claim.
-   Independently validate its nonce first: when safe, derive `served` from exact marker
-   `$REG/.<id>.compactserved.<nonce>` and clean only that marker; when unsafe, `served:false` and no marker path
-   is formed. This nonce-only parse is permitted when the
-   **saved original age** is aged so marker ownership can settle without reading any canonical successor. An
-   originally aged claim runs without `--set` and supplies null scope/provenance even though its active claim mtime
-   is young. Only an originally young claim is additionally validated against §3.0's exact provenance grammar.
-   Only an originally young, valid claim with `overlap` absent or `false` is passed to `measure` and supplies `cwd`,
-   `built`, `agent`, `transcript`, `parentLive` and `liveAgents`; every normalization case proceeds without `--set`,
-   preserving summary-only metrics. No broad marker glob participates.
-6. Require `flock`, a resolved `timeout`/`gtimeout`, `node`, and the helper. Any missing dependency or
-   helper failure consumes only a successfully settled private claim and matching marker, leaves any canonical
-   successor untouched, writes no journal line, and exits 0. `find` is earlier because it is needed to establish
-   the settlement/age contract; `touch` is the one pre-link dependency, and all remaining dependency guards are
-   after settlement by design.
+This is Task 9's exhaustive **target** compaction-lifecycle pathname inventory, not a claim about the current
+pre-Task-9 implementation. Before either ordinary PreCompact age recovery or `_reg_purge` selects a private
+artifact from it, Task 9 migrates every pre-D-2605 hook/helper set/card temporary and rollback creator named
+in the transition paragraph below to these target families. A checker first strips the exact literal `.<id>.`
+prefix for private files, or `$REG/<id>.` for canonical fields, then matches the entire remaining basename
+against one table grammar. `<pid>` is `[1-9][0-9]*`; `<RANDOM>` is one decimal Bash `$RANDOM` result
+(`0` through `32767`), and two occurrences are independent samples; `<at>` is decimal; `<nonce>` is exactly
+`compact-<at>-<pid>-<RANDOM>-<RANDOM>` after its safe grammar has been validated; and `<mktemp6>` is the
+six ASCII alphanumeric characters that replace a source template's terminal literal `XXXXXX`. `XXXXXX` occurs
+only in a `mktemp` template, never in a created-name matcher. No lifecycle checker relies on a loose
+pid/random/tmp glob. The permanent lock is the sole intentionally non-residual family.
 
-Feed the summary through the existing pipeline form. The helper prints JSON; the hook accepts it only
-with an **exact-one-document gate**:
+| family | creator / precreated | exact basename after prefix | success cleanup / crash cleanup | purge / slug residue |
+| --- | --- | --- | --- | --- |
+| canonical set/card/journal | hook/helper; final path only from its owner | `compactset`, `compactcard`, `compactions` | normal lifecycle; never broad cleanup | exact purge; yes |
+| helper atomic set/card temp | helper; private exclusive writer source | `compactset.<pid>.<nonce>.helper-write.tmp` / `compactcard.<pid>.<nonce>.helper-write.tmp` | after rename/failure; age under lock | exact purge; yes |
+| hook atomic set/card temp | hook; private exclusive writer source | `compactset.<pid>.<nonce>.hook-write.tmp` / `compactcard.<pid>.<nonce>.hook-write.tmp` | after rename/failure; age under lock | exact purge; yes |
+| helper rollback claim/source | helper; private regular reservation/source, never precreated | `compactset.<pid>.<nonce>.helper-rollback-claim.tmp`, `compactset.<pid>.<nonce>.helper-rollback-restore.tmp`, `compactcard.<pid>.<nonce>.helper-rollback-claim.tmp` | verified owner/recovery rules; age under lock | exact purge; yes |
+| hook rollback claim/source | hook; private regular reservation/source, never precreated | `compactset.<pid>.<nonce>.hook-rollback-claim.tmp`, `compactset.<pid>.<nonce>.hook-rollback-restore.tmp`, `compactcard.<pid>.<nonce>.hook-rollback-claim.tmp` | verified owner/recovery rules; age under lock | exact purge; yes |
+| SessionStart card claim | SessionStart regular reservation; never precreated | `compactcard.<pid>.<nonce>.session-claim.tmp` | restore/remove under retained stable lock; age under later lock | exact purge; yes |
+| PostCompact claim | PostCompact `link`; never precreated | `compactpost.<pid>.<RANDOM>.<RANDOM>.claim` | under validated final lock; age under later lock | exact purge; yes |
+| final served marker | SessionStart `link`; never precreated | `compactserved.<nonce>` | PostCompact only under validated final lock; age under later lock | exact purge; yes |
+| permanent lock | one-time init | `compactions.lock` | never | never; no |
+| lock init source | `mktemp` template `compactions.lock-init.XXXXXX` | `compactions.lock-init.<mktemp6>` | every handled result; age under lock | exact purge; yes |
+| lock open alias | every acquisition `link`; never precreated | `compactions.lock-open.<pid>.<RANDOM>.<RANDOM>` | after FD open/failure; age under lock | exact purge; yes |
+| marker source | `mktemp` template `compactserved-source.<nonce>.XXXXXX` | `compactserved-source.<nonce>.<mktemp6>` | after `link`, EEXIST, every failure; age under lock | exact purge; yes |
+| generation | row lifecycle | `generation` (non-dot canonical) | generation last on purge | generation-last; yes |
+| generation source | `mktemp` template `generation-init.XXXXXX` | `generation-init.<mktemp6>` | every handled result; age under lock | exact purge; yes |
+| generation read alias | generation reader `link`; never precreated | `generation-read.<pid>.<RANDOM>.<RANDOM>` | after FD open/failure; age under lock | exact purge; yes |
+| journal stage/snapshot | journal writer; private exclusive file | `compactions-stage.<pid>.<RANDOM>.<RANDOM>.tmp` / `compactions-snapshot.<pid>.<RANDOM>.<RANDOM>.tmp` | after commit/failure; age under lock | exact purge; yes |
 
-```bash
-jq -r '.compact_summary' <<<"$payload" \
-  | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure [--set "$claim"] --trigger "$trig" \
-  | jq -ce -s 'if length == 1 and (.[0] | <COMPACT_SHAPE_PRED>) then .[0] else empty end'
-```
+**Pre-D-2605-to-target migration.** Before enabling an ordinary target-family sweep, Task 9 changes every
+current compaction writer and rollback creator, not just its scanner. The current hook's set/card writer names
+are `<pid>.compactset.tmp` and `<pid>.compactcard.tmp`; its rollback names are
+`<pid>.<nonce>.compactset-rollback.tmp`, `<pid>.<nonce>.compactset-restore.tmp`, and
+`<pid>.<nonce>.compactcard-rollback.tmp`; and its SessionStart claim is `<pid>.compactcard-claim.tmp`.
+The current helper's atomic names are `compactset.<pid>.tmp` and `compactcard.<pid>.tmp`; its rollback names
+are `compactset.<pid>.<sha256nonce16>.<uuid36>.compactset.tmp`,
+`compactset.<pid>.<sha256nonce16>.<uuid36>.compactset-restore.tmp`, and
+`compactcard.<pid>.<sha256nonce16>.<uuid36>.compactcard.tmp`, where `<sha256nonce16>` is exactly the first
+16 lowercase hex characters of SHA-256 over the validated nonce and `<uuid36>` is exactly the lowercase UUID
+byte grammar in the generation section. Task 9 replaces all of those producers with the table's target names
+before an ordinary sweep relies on the table. A transition cleanup may select an old artifact only after exact
+literal-ID stripping, the complete corresponding legacy grammar above, age expiry, and a validated stable lock;
+it never uses an old `*compact*.tmp`, generic pid/tmp, or broad glob matcher, and no new writer emits a legacy
+name.
 
-`jq -ce -s` is load-bearing: zero, plural, concatenated or wrong-shaped helper output is rejected even
-when the helper exits 0. The accepted measurement contains no `n`. Merge into its journal record the
-claim provenance **`cwd`, `built`, `agent`, `transcript`, `parentLive`, `liveAgents`**, and the marker-derived
-`served` value (overriding the helper's legacy set copy). With no usable set those six provenance fields
-are null, `cited`/`setSize` are null, and scope is null except that an explicit `overlap:true` claim
-retains the honest `ambiguous` tag; `served` follows only the separately safe exact nonce marker.
-`chars`, `filesChars`, `fences`, `trigger`, `at` and `steered` retain the helper's normal meanings. A valid `files: []` still yields `cited:0` and
-`setSize:0`; malformed entries never shrink the denominator.
+The marker source grammar is deliberately disjoint from the final marker grammar while carrying the already
+validated nonce verbatim. After `link "$source" "$marker"`, unlink the owned source on success, on `EEXIST`
+after validating the exact same-nonce final marker, and on every handled failure. Crash before or after link
+leaves only the exact source residue, never a served-marker lookalike. Independent mutations remove source
+cleanup and change its family matcher; each must red.
 
-**Journal transaction — no `>>` fiction.** The stable lock inode is exactly
-`$REG/.<id>.compactions.lock`. It is dot-prefixed, per-session, and **never unlinked** by PostCompact,
-marker cleanup, stale-temp cleanup, PreCompact or purge-adjacent code; all writers therefore contend on the
-same inode rather than locking replaced inodes. After the helper completes and the final compact object is
-accepted, **reacquire it with the same shared safe helper**. While locked, repeat strict environment-generation/
-file-byte equality plus every retained claim FD/path regularity and same-inode check before journal staging or
-rename. If `flock` is absent, safe opening fails, the pathname was replaced, generation/claim identity changes,
-or the mutex cannot be acquired inside two seconds, record nothing. No fallback append, and the helper's
-eight-second deadline is never held inside this critical section.
+#### Settlement, final transaction, and cleanup
 
-Define one exact `JOURNAL_RECORD_PRED` and use it for both the accepted merged helper/claim object and every
-physical journal line. It requires exactly these keys, in no other combination: `agent`, `at`, `built`, `chars`,
+PostCompact's operator-off, summary-type, and `find` guards precede lifecycle work. It then validates
+generation, takes the stable lock, and revalidates before every age, canonical, claim, marker, journal, or
+cleanup mutation. It never reads or ages canonical before this lock. Under the lock it saves canonical age,
+requires `touch`, links canonical set to a never-precreated exact private claim, and proves same inode.
+It unlinks canonical **before** touching claim: hard links share mtime. If canonical unlink fails, remove
+only the verified claim; canonical bytes and mtime remain unchanged. Only after canonical unlink succeeds
+does it `touch claim` to mark active. If touch fails, restore canonical only with no-clobber
+`link "$claim" "$set"`, prove same inode, then remove only verified claim. If restore collides, fails, or
+cannot be proved, never overwrite its occupant or discard the only verified claim: retain that exact claim
+as stale-recovery residue. Kill windows are explicit: before link leaves canonical; link-to-unlink leaves
+same-inode aliases; after unlink-before-touch leaves claim; failed restore retains claim; later exact aged
+recovery handles only eligible private residue.
+
+After settlement, helper input is only a retained verified claim FD or its FD-derived private snapshot.
+No canonical or reopened claim path feeds helper. For final journal work the process reacquires and validates
+the stable lock, revalidates generation and claim-FD/current-path identity, then holds it through raw JSONL
+validation, stage/whole-file atomic rename, and any claim/marker cleanup. The existing sixteen-key
+`JOURNAL_RECORD_PRED`, integer and relation requirements, exact `\z` anchors, full physical-line/terminal-LF
+predicate, exact-one helper output, no `n`, FD CAS, and stage cleanup remain binding.
+
+**One cleanup rule covers every post-settlement noncommit failure, including touch-restore residue:** claim
+and marker cleanup happens only while a stable lock was successfully reacquired and validated. If helper,
+dependency, final lock, generation, FD identity, or journal transaction fails and that lock cannot safely be
+held, close retained FDs, remove only this process's unlinked snapshot/stage, and leave verified claim plus
+exact marker as residue. No unlocked cleanup. If final lock is available, a noncommit failure may consume only
+this verified owned claim and exact safe-nonce marker under all fences. Later exact age recovery, under a
+validated stable lock, removes only this ID's claim and separately safe nonce marker/source after
+`COMPACT_CARD_MAX_AGE`; it writes no retroactive record. A real-process final-lock-timeout test proves no
+journal, no unlocked cleanup, exact residue retention, and later age cleanup.
+
+The final marker lookup is nonce-only and occurs only from the privately claimed set under the final lock;
+an originally aged set remains nonce-only/no-provenance regardless of active claim mtime. A successor canonical
+set/card/marker survives predecessor paths byte-for-byte. One actual PostCompact process makes at most one
+commit attempt; external replay after a post-rename crash can duplicate a measurement.
+
+#### Journal contract: raw physical JSONL and FD compare-and-swap
+
+One exact `JOURNAL_RECORD_PRED` gates both the accepted merged helper/claim object and every physical
+journal line. It permits exactly these sixteen keys, with no persisted `n`: `agent`, `at`, `built`, `chars`,
 `cited`, `cwd`, `fences`, `filesChars`, `liveAgents`, `parentLive`, `scope`, `served`, `setSize`, `steered`,
-`transcript`, and `trigger` (there is specifically no persisted `n`). `at`, `chars`, and `fences` are
-nonnegative integers; `filesChars` is null or a nonnegative integer no greater than `chars`; `cited` and
-`setSize` are both null or nonnegative integers satisfying `cited <= setSize`; `trigger` is `auto` or `manual`;
-`scope` is `main`, `subagent`, `ambiguous`, or null; and `steered` and `served` are booleans. The six provenance
-keys are exact types: `cwd` is null or a nonempty string; `built` is null or 7--40 lowercase hex and requires a
-non-null `cwd`; `agent` is null or a 1--128-character `[A-Za-z0-9_-]` id; `transcript` is null or a nonempty
-string; `parentLive` is null or boolean; and `liveAgents` is null or a nonnegative integer. When provenance is
-usable it also obeys the §3.0 trigger/scope cross-field matrix; normalized no-set and overlap forms use the
-already specified null provenance distinctions. In jq terms, the predicate must make these integer and relation
-requirements explicit with `floor == .`, not merely `type == "number"`.
+`transcript`, and `trigger`. `at`, `chars`, and `fences` are nonnegative integers; `filesChars` is null or a
+nonnegative integer no greater than `chars`; `cited` and `setSize` are both null or nonnegative integers
+with `cited <= setSize`; `trigger` is `auto` or `manual`; `scope` is `main`, `subagent`, `ambiguous`, or null;
+and `steered` and `served` are booleans. `cwd` is null or nonempty; `built` is null or 7--40 lowercase hex and
+requires non-null `cwd`; `agent` is null or a 1--128-character `[A-Za-z0-9_-]+` id; `transcript` is null or
+nonempty; `parentLive` is null or boolean; and `liveAgents` is null or a nonnegative integer. Normal
+provenance obeys §3.0's matrix, including auto/main `parentLive:null`, `liveAgents:0`; normalized no-set forms
+have all six provenance values null, `cited:null`, and `setSize:null`, with scope only null or `ambiguous`.
+Every integer requirement explicitly uses `floor == .`.
 
-While holding the safe descriptor lock, remove only stale stage temps older than `COMPACT_CARD_MAX_AGE` whose
-full basenames match the exact owner grammar `.<id>.compactions.<digits>.<digits>.<digits>.tmp`; parse the
-literal id prefix before matching the suffix, so another legal id sharing a prefix or dot is never selected.
-Never remove the stable lock.
-
-Create this writer's stage as `$REG/.<id>.compactions.<pid>.<random>.<random>.tmp` with noclobber, verify the
-stage pathname remains this writer's non-symlink regular temp, and reuse the two random decimal components from
-this writer's independent claim identity (also when no canonical set was present). If the live journal exists,
-open it read-only on a descriptor only after requiring a readable non-symlink regular pathname, then verify the
-descriptor is regular and descriptor/path inode identity; copy/read/validate exact old bytes from that still-open
-FD, not by reopening the pathname. If absent, record that absence as the expected final state. Never overwrite a
-directory fixture. Before final replacement, revalidate that an initially present journal pathname is still
-non-symlink regular and names the same open FD; an initially absent journal must still be absent. Any mismatch
-refuses, removes only this writer's stage, and preserves the old journal's bytes and pathname identity. The
-journal-read FD and stable-lock FD are distinct resources; one unified cleanup closes both on success and every
-refusal/failure, without a shell-wide stderr redirect.
-
-The raw validator is truth-valued: `jq -Rse` receives **one raw string**, not an array, so bind it as `$raw`,
-require `$raw == ""` or a terminal LF, split it, and remove **only** the final split element that the required
-terminal LF creates. Every remaining physical line, including a blank line created by a second trailing LF, must be
-non-empty and satisfy `((fromjson? // false) | JOURNAL_RECORD_PRED)`. The `// false` turns a `fromjson?` parse
-failure (which otherwise yields no value) into a predicate failure rather than a vacuous `all` success. Invoke
-`jq -e` so successful validation emits `true`, never `empty`. Its shape is:
+The validator consumes one raw string through `jq -Rse`, not an array. It accepts only empty content or content
+ending in exactly the line structure below: a nonempty journal has a terminal LF, and after splitting it removes
+only the final element introduced by that terminal LF. Thus every physical line must be nonempty JSON; a missing
+final LF, blank line (including a second terminal LF), garbage, concatenated object, scalar, array, unknown key,
+`n` key, fractional/negative number, bad relation, or escaped-newline-suffixed identifier fails. `fromjson? //
+false` turns no parse result into a false predicate rather than a vacuous `all`, and `jq -e` must emit `true`,
+never `empty`:
 
 ```jq
 def NONNEG_INT: type == "number" and . >= 0 and floor == .;
@@ -872,57 +862,46 @@ def JOURNAL_RECORD_PRED:
        end)
 ```
 
-The predicate matrix must accept valid normal/main, no-set, overlap/ambiguous, and set-backed/subagent
-records. It must refuse no-terminal-LF and newline-terminated blank, garbage, scalar, array,
-concatenated-object, wrong-shape, unknown-key, `n`-bearing, negative, fractional, impossible-relation,
-bad-provenance/cross-field, and JSON-escaped newline-suffixed identifier lines. Copy the FD-validated old bytes
-byte-for-byte to the private stage; append exactly one compact JSON object already
-validated by `JOURNAL_RECORD_PRED` plus exactly one LF. Verify the exact old-byte prefix, then rerun that raw
-truth-valued validation over the **entire** stage and require exactly one additional valid line whose compact JSON
-bytes equal the accepted object. Immediately after the journal identity/absence and stage-target rechecks,
-atomically `mv -f` the stage over `$REG/<id>.compactions` while still holding the descriptor lock, then close it.
-A stage write, validation, identity, or rename failure removes only this writer's temp and preserves the old
-journal byte-for-byte. `printf >>` to the live file is forbidden: shell append is not a record-atomic
-multi-process commit.
+While holding the validated final lock, age-clean only this ID's exact journal stage/snapshot families; never
+remove the permanent lock. Create the private stage with a never-precreated exact table name and validate it as
+this writer's regular non-symlink file. If the live journal exists, open it read-only only after current-path
+regular/non-symlink validation, retain that FD, and copy/read/validate its exact bytes from that FD; initial
+absence is recorded as an expected final state. Before rename, an initially present pathname must still be the
+same retained regular FD and an initially absent pathname must still be absent. A mismatch removes only this
+writer's stage and preserves the old journal's bytes and pathname identity. Append exactly one compact JSON
+object already accepted by `JOURNAL_RECORD_PRED` plus exactly one LF, verify the unchanged old-byte prefix, rerun
+the raw validator over the entire stage, and require exactly one additional line byte-equal to that object. Then,
+still under the retained FD and stable lock, atomically rename the stage over `$REG/<id>.compactions`. Journal-read
+FD, claim FD, and lock FD are distinct resources and all close on every outcome. No `printf >>` path exists.
 
-After a successfully settled new claim's attempt, while holding the stable lock and after rechecking that the
-claim pathname is still the retained claim FD's same regular inode, remove only that private claim and, when its
-separately parsed nonce was safe, only `$REG/.<id>.compactserved.<nonce>` — on success or failure, including the
-aged-claim path. A replaced claim is never unlinked. Touch or canonical-alias-unlink failure happens before an
-attempt: it removes only the new writer claim when possible, preserves canonical, and neither processes nor
-removes a marker. The same-inode recovery path removes only canonical and never consumes its predecessor claim or
-marker. Never remove a canonical pathname after helper execution. Thus a canonical successor and its marker
-survive every predecessor path byte-for-byte.
+#### ccd row creation, spawn, purge, and ordering
 
-**Generation and registry lifecycle.** `$REG/<id>.generation` is ccrc-owned, contains exactly one strict lowercase
-UUID, and identifies the registry row rather than the `.uuid` value or a hook payload `session_id`. `ccd` mints it
-under the same stable lock once before every controlled Claude spawn/resume, including immediate pre-upgrade mint
-for a row that lacks it; both `_spawn_start` command constructions pass it as `CCRC_SESSION_GENERATION`. It
-survives `.uuid` rotation, `/clear`, compaction, wrapper/account swaps, supervisor restart, and a same-row resume.
-New-row creation takes that lock while rejecting incompatible residue and minting/reusing the generation. `_reg_purge`
-takes the same lock, cleans only exact-id compaction artifacts, skips `.generation` in its generic purge, never
-unlinks the permanent lock, and deletes generation last. `_ws_slug_free` treats a remaining `.generation` as residue,
-so an interrupted purge blocks id reuse. If the old hook wins first, it can finish before purge deletes its result;
-if purge wins first, it removes generation/artifacts and a delayed old hook fails its under-lock generation check.
-Generation is authorization only: it never appears in the sixteen-key journal record.
+Row creation takes the stable lock only for exact residue check and generation initialization, closes it on
+every return before arbitrary setup work and before `_spawn_start`. `_spawn_start` acquires exactly once
+immediately before primary `_tmux_new_session`, safely ensures/reads the current generation, exports
+`CCRC_SESSION_GENERATION=<exact value>` in that child environment, retains the lock through the nonblocking
+tmux creation, and closes on every result before `SPAWN_RESUME_SETTLE_S` sleep/settle work. The resume
+`--session-id` fallback independently acquires exactly once immediately before retry creation, requires the
+same generation selected for that invocation/current same row (never mints into a purged/reused row), exports
+it, and closes immediately after. No nested open and no sourced-ccd FD leak. Tests inject every early return,
+prove immediate same-shell reacquire, prove primary/retry env, safe fresh-create setup/spawn deadline, and
+red a retained outer/primary FD mutant.
 
-**Attempt and replay boundary.** One actual PostCompact hook-process invocation makes at most one journal commit
-attempt: after a successful journal rename it performs no internal retry or reappend. This is not exactly-once across
-an externally replayed PostCompact event because there is no durable invocation id. A crash after rename and before
-cleanup followed by external replay may commit a duplicate measurement; same-inode aliases prevent concurrent
-pre-commit owners, not a prior committed record. Do not synthesize identity from summary bytes, timestamps,
-transcripts, session id, or nonce; a separate receipt merely creates another before/after crash window and is
-rejected. Exactly-once replay safety needs a future durable event-source invocation ID in the same atomic journal
-transaction.
-Nothing is printed; the existing done/working hookstate transition is unchanged and carries no
-compaction measurement.
+`_reg_purge` acquires/validates stable lock before lifecycle `purge` completion record or registry mutation,
+captures measurement fields under lock, deletes exact-ID lifecycle artifacts and fields, deletes generation
+last, and never deletes permanent lock. It emits `_lc_done purge` only after successful purge using captured
+values. A lock miss, unsafe lock, or removal failure returns nonzero, emits no purge-done fact, and never
+claims success. Ordering is stable-compaction-lock then lifecycle journal/rotation lock; no path holds the
+reverse order. Its four callers are `cmd_ws_rm`, `_ws_reap_locked`, `_ws_gc_prune_row` dead-reg, and
+`cmd_forget`: each branches on the result. Before irreversible action it declines unchanged; after worktree,
+session, branch, clips, or supervisor action it reports explicit partial failure naming completed action and
+remaining registry/generation, suppresses reclaimed/removed/forgot/success output and terminal successful
+caller `_lc_done`, and returns its documented non-success/partial shape. No rollback fiction. `_ws_slug_free`
+uses the same exact literal-ID family inventory: it sees `.generation` and private residue but ignores permanent
+lock. Interrupted purge preserves generation until last; safe reuse mints a fresh generation.
 
-**Normalisation and measurement fields.** The helper first mirrors Claude Code: drop the first
-`<analysis>…</analysis>` block; replace `<summary>X</summary>` with `Summary:` plus `X.trim()`; collapse
-blank runs; trim. It measures `chars`, fence-aware `filesChars`, `fences`, set-relative `cited`,
-`setSize`, `steered`, `trigger`, `scope` and `at` exactly as already implemented. `served` in the final
-journal record is the marker-derived fact above; Task 9 stops treating the earlier set field as a served
-cache, and future writers do not persist it in `.compactset`.
+The cooperative ccrc boundary safely refuses what it can measure, not hostile same-UID replacement after the
+last portable-Bash identity check.
 
 ### 3.5 Stage 2: the steering text (hook constant, pinned verbatim)
 
@@ -968,122 +947,60 @@ Plan A.
 
 | condition | behaviour |
 | --- | --- |
-| served session (`transcript_path` empty) | no PreCompact set/card; PostCompact still measures summary-only fields and commits a no-set record if every dependency and journal stage succeeds |
-| transcript unreadable | nothing written by PreCompact, nothing printed |
-| no tool calls in the window | helper exit 3: set has `files: []`, no card |
-| no graph, stale graph or graph over `GRAPH_MAX_BYTES` | no card; set retains `files:null`; journal provenance still includes measured `cwd`/`built` where available |
-| `find` missing | PreCompact says nothing; PostCompact does not claim or alter the pending set and records nothing |
-| canonical set has an unsafe/missing nonce or unsafe provenance | settlement still happens before inspection; consume the private claim as normalized no-set, commit summary-only metrics if dependencies permit, and never form a marker name |
-| PostCompact wins the atomic claim; a successor then writes canonical set/card/marker | predecessor uses and removes only its private claim and exact marker; successor survives byte-for-byte |
-| PostCompact loses/no canonical set | measure without a set; never unlink a pathname another arm may have installed |
-| canonical set was originally aged at settlement | save that age before the hard link; touch the new private claim active, parse only its nonce from it, consume it as no-set provenance, and remove only the exact safe-nonce marker; an immediate later PreCompact preserves the young active claim, while a killed claim ages out after 1200 s |
-| claimed set is malformed, has unsafe provenance, or is overlap-marked | keep summary-only measurement; malformed/unsafe provenance gives null scope, overlap gives `scope:"ambiguous"`, and all six provenance fields are null; a separately safe claimed nonce still controls only its exact served marker |
-| helper, `node`, deadline, `flock` or lock-open missing/fails | if failure is before settlement, canonical remains untouched; after settlement consume only private claim and its safe-nonce marker; no journal line; canonical successor and old journal unchanged |
-| lock path is FIFO, directory, symlink (including to FIFO), replaced before or between validation and `flock`, or descriptor/path inode differs | shared read/write safe-open refuses promptly before critical mutation; canonical remains untouched before settlement and no journal line is written |
-| lock wait exceeds `COMPACT_JOURNAL_LOCK_WAIT` (2 s) | miss this ownership/journal attempt silently; no unlocked fallback; canonical is untouched if settlement has not occurred |
-| claim target candidate collides, is malformed, symlinked, or directory-shaped | `link "$set" "$claim"` atomically refuses it; retry a fresh exact candidate or refuse, never pre-create a final claim, create a directory child, or touch canonical on a failed link |
-| hard link succeeds but `touch` fails | remove only the new writer claim when possible; canonical, marker and journal remain untouched; process nothing |
-| hard link and touch succeed but canonical alias unlink fails | remove only the new writer claim when possible; canonical, marker and journal remain untouched; process nothing; if aliases remain, the later same-inode rule prevents duplicate processing |
-| canonical is a same-inode alias of an exact-session predecessor claim | final-recheck, unlink only canonical, then summary-only process; never read, touch, consume, remove or derive marker state from that predecessor claim |
-| journal pathname changes after FD validation or before final replacement; initially absent journal appears | final identity/absence compare-and-swap refuses; remove only the writer stage and preserve the old journal bytes/path identity, never overwrite a directory |
-| helper prints zero, plural, concatenated, garbage or wrong-shape JSON with exit 0 | `jq -ce -s` exact-one gate refuses; no journal line |
-| journal is a symlink, directory, unreadable, non-newline-terminated, blank-lined, garbage, scalar, array, concatenated, wrong-shaped, unknown-key, or `n`-bearing JSONL file | raw-line validation refuses commit; preserve old pathname/bytes |
-| stage write/validation/rename fails | remove only this writer's dot-temp; old journal byte-for-byte unchanged |
-| concurrent valid PostCompact hook processes | stable never-unlinked lock serializes their full read+stage+rename transactions; each actual invocation makes at most one attempt, so their committed objects are complete, noninterleaved and not lost. This is not exactly-once across an externally replayed event after a post-rename crash. |
-| compaction blocked/failed after PreCompact | canonical card/set remain; a later PreCompact within the window degrades itself for overlap; after the window stale cleanup retires them |
-| second PreCompact before predecessor settlement | existing symmetric degradation may replace canonical predecessor; both lose the card |
-| second PreCompact after predecessor atomic claim | sees young claim, degrades only its own set/card and cannot rewrite the predecessor claim |
-| SessionStart emit succeeds | while the same lock is held it exports the served nonce and atomically hard-links an owned private regular source to exactly `$REG/.<id>.compactserved.<nonce>`; it never rewrites canonical set |
-| crash after SessionStart stdout but before marker publication | externally observed card can lack served evidence; the eventual record may be a false negative, because output and filesystem publication are not one atomic operation |
-| SessionStart emit fails or pair is crossed | no marker; `served:false` for the eventual matching claim |
-| marker and successor race | PostCompact removes only marker named by its claimed nonce; a successor marker survives |
-| `compact-card-off` flips on before PostCompact | all pending canonical files remain byte-for-byte; no claim, marker removal, lock or journal write |
-| stale private claims/markers/stage temps | PreCompact sweeps only this id's matching dot-files older than 1200 s; young claims remain overlap evidence; `.compactions.lock` is never swept/unlinked |
-| stage 2 forfeits precomputed compaction | measured never used here; `steered` recorded; steer switch exists |
-| card text reaches the model | repo-controlled labels and paths only, bounded twice, passed through `jq --arg`, never interpolated into shell |
-| summary not in the nine-section format | `filesChars:null`, everything else measurable |
-| model ignores steering | `filesChars`, `fences` and `cited` expose that in the journal |
+| compact SessionStart missing/mismatched generation | before lock acquisition, no lifecycle pathname is inspected; card/set/marker remain byte-identical |
+| stable canonical lock absent | initializer may publish it only from the private init source using `link`; a later canonical disappearance/replacement refuses, never recreates it |
+| lock source/alias/FIFO/symlink/directory/mktemp/link/flock failure | close owned FD/source/alias; no critical mutation, no split critical section |
+| card/set pair changes while SessionStart waits | acquire first, then inspect the current pair; no stale age/match/claim observation is reused |
+| marker source link succeeds, EEXIST, or fails | unlink owned source on every handled result; only valid same-nonce final marker is idempotent |
+| canonical claim link fails | canonical remains untouched; no processing or record |
+| canonical unlink after same-inode claim fails | remove only verified claim; canonical bytes and original mtime remain unchanged |
+| claim touch fails after canonical unlink | no-clobber restore only; if restore cannot prove same inode or collides, retain claim as exact stale residue and never overwrite occupant |
+| helper/final lock/generation/FD/journal failure after settlement | no unlocked claim/marker cleanup; leave verified claim/exact marker unless a safely reacquired validated lock permits exact owned cleanup; no journal |
+| later aged recovery | only matching exact-ID claim plus separately safe nonce marker/source is removed under stable lock; no retroactive journal record |
+| generation canonical present but invalid or unreadable | refuse promptly; never repair, replace, remove, or classify as absent |
+| generation canonical genuinely absent | only stable-lock protected private source plus no-clobber link may mint; EEXIST reclassifies winner |
+| ccd purge lock/mutation failure | no purge-done fact, generation and registry remain; callers decline or report explicit partial rather than success |
+| crash after successful SessionStart stdout before marker | emitted card may later measure `served:false`; output and publication are not atomic |
+| external replay after journal rename | an external later event may duplicate one committed record; process itself makes no internal reattempt |
 
 ## 5. Mutation targets (red first, one mutation each)
 
-The helper's existing Task 1–8 mutation rows remain binding: transcript window/boundary, mining and
-resolution, graph cap, nonce ownership and rollback, rendering/truncation, summary normalization,
-fence-aware `filesChars`, aligned citations, malformed `files[]`, two-clip SessionStart output and
-atomic card consume-once. Task 9 adds the hook-level table below; each dependency is broken one at a
-time against fixture HOME/PATH.
+The existing Task 1–8 mutation table remains binding for scope, card, helper, normalization, citations,
+fences, exact-one helper output, raw JSONL, sixteen keys, no persisted `n`, and no hookstate cache. Task 9
+adds the following real process and source pins, each through fixture HOME/PATH only.
 
 | Task 9 mutation | expected red |
 | --- | --- |
-| PostCompact emits stdout or first-journal failure leaks stderr | first journal run under a deliberately failed stage has `{stdout:'',stderr:''}` |
-| compact-summary type guard removed | absent/non-string summary claims no set and writes no journal |
-| `find` guard removed | PATH without `find` changes pending-set bytes; shipped arm leaves it untouched |
-| set claimed after age/parse/helper work | concurrent successor test loses or reads successor; shipped claim is first after the three guards |
-| private claim removed in favor of reading canonical | successor installed after settlement is changed or consumed |
-| private claim cleanup removed | success, helper failure and journal failure leave a full-basename `.<id>.compactpost.<digits>.<digits>.<digits>.claim` |
-| canonical `rm` retained after helper | successor set survival test loses exact bytes |
-| young-claim overlap ignored | PreCompact writes an exact scope/card while a young private claim exists instead of degrading only itself |
-| settled predecessor rewritten by later PreCompact | predecessor claim bytes change after the later PreCompact |
-| overlap marker omitted/trusted as provenance | an overlap-marked claim reaches `measure`, loses its `ambiguous` tag, or invents agent/transcript/cwd/built instead of normalized provenance |
-| ordinary provenance type/cross-field grammar relaxed | one valid-row fixture or one rejected tuple flips classification; every §3.0 matrix row and each field domain has a diagnostic case |
-| aged claim treated as measurement provenance or nonce read from canonical | aged fixture permits only nonce parsing from the settled claim, proves no `--set`/provenance use, and requires cleanup of only that nonce's exact marker |
-| SessionStart marker set rewrite restored | SessionStart changes canonical set bytes; marker-only test requires byte identity |
-| marker created before successful emit | targeted jq-envelope failure leaves a served marker |
-| marker creation non-atomic/unsafe nonce admitted | concurrent compact starts produce malformed/foreign marker names |
-| broad marker deletion | predecessor PostCompact deletes a successor's different-nonce marker |
-| exact marker lookup removed | journal says `served:true` without the claim-nonce marker, or false with it |
-| marker/claim stale sweep or exact owner match removed | stale matching artifacts survive or another legal id with a shared prefix/dot loses bytes; mutate each family matcher independently while claim, marker, marker-temp, stage, and lock fixtures prove only this id is selected |
-| generated claim/marker-temp/stage grammar, saved-age decision, `link`, touch, or canonical-alias unlink changed | planted collision/file/symlink/directory candidates plus full-basename assertions reject a missing/changed PID or either decimal random component; `link` must fail without a claim/canonical change, link-to-copy mutation must redden, a missing/failed `touch` or failed canonical unlink must preserve canonical and allow no processing, an originally aged set paused after release remains a young active no-set claim through concurrent PreCompact then ages out after 1200 s if killed, and an alias pair from a kill/failed cleanup is recovered exactly once by the same-inode rule |
-| helper stdout gate uses scalar `jq -c` | helper printing two valid objects is accepted; `jq -ce -s length==1` must reject it |
-| `n` added to helper, journal or future type | source and record assertions forbid an `n` key; ordinal is line index + 1 |
-| any of helper file, `node`, deadline or `flock` dependencies bypassed | one PATH mutation per dependency must produce no line, clean streams, cleaned claim/marker and unchanged old journal/successor |
-| private-`mktemp`/hard-link stable publication, safe lock open, descriptor regularity, pathname regularity, pre- or post-`flock` inode identity, or 2-second `flock` wait removed | FIFO raced into the shared lock path after the absence decision, directory, symlink-to-regular, symlink-to-FIFO, pre-`flock` and pre-critical-mutation path replacement, and mismatched-inode fixtures fail promptly; a mutation to shared-path redirection hangs without a FIFO peer and is killed by a strict outer harness deadline; a held safe lock returns within the measured 2 s wait plus harness allowance and leaves canonical/no journal according to phase |
-| stable lock unlinked, repaired, or replaced | source pin plus two-writer test detects replacement-inode serialization failure; every stale sweep leaves it byte-identical |
-| live `printf >>` used | source pin and concurrency stress reject append to the authoritative file |
-| journal transaction serialized only around rename | N concurrent PostCompact processes lose records; shipped journal has N complete parseable lines |
-| stage omits old bytes or rewrites them | preplanted byte fixture differs before the appended newline |
-| raw validator treats `jq -Rs` as an array, emits `empty`, accepts only a terminal-LF check, or uses `$` for an exact jq identifier | the full predicate matrix accepts normal/no-set/overlap/set-backed rows; `jq -e` emits true for a first valid record; no-terminal-LF, newline-terminated blank, garbage, scalar, array, concatenated-object, wrong-shape, unknown-key, `n`, negative, fractional, impossible `filesChars`/`chars` or `cited`/`setSize` relations, bad provenance, and JSON-escaped newline-suffixed identifier lines each refuse |
-| stage/rename failure mutates live journal | injected write failure and injected rename failure each preserve exact old bytes |
-| old journal symlink/non-regular/unreadable guard, FD/path identity recheck, or unified FD cleanup removed | dedicated symlink, directory, unreadable, and replacement-before-final-CAS cases each refuse replacement with no stderr, remove only the writer stage, preserve the old journal bytes/path identity, and close independent read/lock FDs |
-| operator guard moved after settlement | `compact-card-off` no longer preserves pending set/card/marker bytes |
-| generation validation or under-lock recheck omitted | missing/malformed/mismatched environment token or changed `.generation` reaches publication, settlement, or journal rename; shipped paths refuse compaction lifecycle work while ordinary hookstate behavior remains unchanged |
-| retained claim FD/input binding/final identity or guarded cleanup omitted | a pathname replacement after settlement changes helper input, reaches journal staging, or is unlinked by cleanup; shipped path uses the retained verified FD and never deletes a replacement inode |
-| at-most-one attempt/replay boundary omitted | instrumentation observes a second internal journal attempt after successful rename, or claims exactly-once for an external replay despite the deliberate duplicate-after-crash fixture |
-| provenance omission | committed line lacks any of `cwd,built,agent,transcript,parentLive,liveAgents` |
-
-**SessionStart and existing scope mutations made explicit by D-2605:** successful emit exports the served
-nonce; marker creation follows the emit; compact keeps D-306's early structural exit; no compact arm
-rewrites canonical `.compactset`; a crossed pair restores its claimed card and creates no marker. The
-Task 11 inventory pin names only dot-free `compactcard`, `compactset`, `compactions`: private dot-files
-are lifecycle artifacts, not registry fields.
+| move any compact SessionStart age/read/match/claim/delete/emission before stable acquisition | missing/mismatched old generation leaves aged card/set/marker byte-identical; a replacement barrier cannot reuse pre-lock observations |
+| restore `exec {fd}<>"$lock"` or create-capable canonical open | canonical-disappearance/old-inode holder race refuses promptly, recreates no canonical, and never admits split critical sections |
+| delete lock init/open alias cleanup or loosen a family matcher | successful publication/open leaves zero owned source/alias; crash residue ages out exact-ID only; dotted/shared-prefix neighbors survive |
+| delete marker-source cleanup or make source grammar overlap final marker | success/EEXIST/failure leaves no owned source; crash source does not read as served marker; independent family matcher red |
+| touch claim before canonical unlink | unlink-failure fixture changes canonical mtime; shipped path retains exact bytes+mtime |
+| delete no-clobber restore/same-inode proof/claim retention | touch failure cannot restore original bytes+mtime; restore collision loses occupant or only verified claim |
+| cleanup claim or marker after failed final lock without reacquiring validated lock | final-lock-timeout writes no journal and leaves exact residue; later aged locked cleanup alone removes it |
+| generation via `_reg_get`, direct `cat`, shared write, or repair | malformed object fixture spawns/mutates/replaces generation; source pin and safe alias FD test red |
+| omit generation source/read alias cleanup or loosen exact family | successful mint/read leaves no private residue; crashes age out exact-only; adjacent ID survives |
+| retain row-creation or primary lock across setup/sleep, omit retry lock/env, or ignore an early close | deadline/same-shell reacquire/retry-reuse fixtures red; both primary/retry child envs carry exact generation |
+| ignore `_reg_purge` result in any of four callers | held-lock real fixture emits false purge/success or hides completed irreversible action; every caller's decline/partial shape red |
+| delete generation-last or make `_ws_slug_free` ignore generation/private residue | interrupted purge permits reuse or safe reuse retains old generation; permanent lock alone remains ignored |
 
 ## 6. Rings, invariants, and the waiting amendment
 
-- **Rings.** `compact-card.mjs` is a deploy-side node script (the `shared/mark.mjs` class: `node:*`
-  only, never bundled). Plan A adds no L0/wire type and no hookstate reader; the future `CompactionMeas`
-  shape in §3.6 belongs to Plan B. The journal record keeps null-vs-0 on
-  `cited`/`setSize`/`filesChars`, and malformed provenance never becomes a smaller invented set.
-- **The hook's standing contract** remains exit 0, silent failures, atomic writes and no network.
-  Amendment R2 names exactly two waits: the eight-second helper deadline and the two-second stable-lock deadline.
-  Only PreCompact, SessionStart(compact), and PostCompact take the compaction lock; ordinary hook hot paths are
-  lock-free. The hookstate write still lands before these arms. The header must say **"ordinary hook paths are
-  lock-free; only PreCompact, SessionStart(compact), and PostCompact take the never-unlinked compaction flock; no
-  waiting except the 8 s helper and 2 s compaction-lock deadlines"**. Safe-open malformed-path refusal is prompt,
-  not lock contention. Missing dependencies and deadline expiry are silent missed measurements, never unbounded
-  fallbacks.
-- **Registry versus lifecycle names.** `compactcard`, `compactset`, `compactions`, and ccrc-owned `generation`
-  are row artifacts. Private claims, nonce-keyed served markers, journal stage temps and `.compactions.lock` are
-  dot-prefixed lifecycle files. `_reg_purge` takes the same stable lock, cleans exact-id compaction artifacts,
-  skips `.generation` in its generic purge, deletes generation last, and never unlinks the permanent lock.
-  `_ws_slug_free` observes a surviving generation as residue, preventing id reuse after an interrupted purge.
-  PreCompact age-sweeps only stale private claims/markers/temps for its id. A new generation is minted only under
-  the same lock before controlled spawn/resume and is passed through both spawn command sites as
-  `CCRC_SESSION_GENERATION`; it outlives `.uuid` rotation and same-row lifecycle changes.
-- **Plan A stdout.** It remains silent on PreCompact and PostCompact. SessionStart retains D-306's early
-  structural exit after its one envelope. The read-side R1/header amendment that adds PreCompact
-  steering stdout is Plan C only; Task 9 must not weaken the stage-1 silence test.
-- **Rulings honoured.** Only ccrc-owned artifacts change. No `CLAUDE.md`. The graph is read, never built
-  — App. B's rejection of session-side extraction stands. Plan A's effect is measured at PostCompact in
-  the journal; console visibility waits for a journal-based Plan B adapter.
+- **Rings and authority.** `compact-card.mjs` remains deploy-side `node:*` only. Plan A has no wire or
+  hookstate compaction cache; journal physical-line ordinal is derived. Null-vs-zero, the sixteen-key
+  predicate, `\z`, exact-one output, retained journal FD/CAS, atomic stage/rename, and replay boundary remain
+  unchanged.
+- **Waits and lock division.** Ordinary hook paths are lock-free. PreCompact, compact SessionStart, and
+  PostCompact use the permanent compaction flock only after their non-lifecycle guards; helper calls use the
+  eight-second deadline. Row creation, spawn, and purge use the same lock outside hook hot paths. No lock is
+  held over arbitrary setup, TUI settle, or `SPAWN_RESUME_SETTLE_S` sleep.
+- **Exact lifecycle ownership.** §3.4's family table is the sole inventory for initial sources, open/read
+  aliases, claim, marker, stage/snapshot, generation and cleanup. The stable lock spans generations and is
+  intentionally excluded from slug residue; all other private families and `.generation` are residue.
+- **Purge honesty.** The stable lock precedes lifecycle journaling/rotation. `_reg_purge` may not emit its
+  terminal fact until completed; callers must expose partial action instead of calling it reclaimed/removed/forgot.
+- **Plan A stdout.** PreCompact/PostCompact stay silent. Compact SessionStart has its one envelope and marker
+  crash boundary; Plan C alone adds steering stdout.
 
 ## 7. Deploy and staging
 

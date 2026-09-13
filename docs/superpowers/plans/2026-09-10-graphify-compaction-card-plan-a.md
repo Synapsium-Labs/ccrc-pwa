@@ -4,18 +4,18 @@
 
 **Goal:** After every compaction — the main thread's or a subagent's — the session is re-injected with a computed card of the files it was working in (symbols, community, dependents, from graphify's graph), and the summary is measured for whether it changed; the measurements start filling a per-session journal on the fleet box with no console change.
 
-**Architecture:** `ccd/session-hook.sh` gains behaviour in its three existing compaction arms. One stable,
-never-unlinked per-session `.compactions.lock` is the safe shared ownership-and-journal mutex: PreCompact
-acquires it around scope/overlap inspection and every canonical set/card publication or rollback; PostCompact
-acquires it before settlement, saves canonical age, atomically hard-links canonical set to an absent independently
-named private PID/random claim, touches the active claim and unlinks only canonical alias, releases it for
-measurement, then reacquires it for a complete FD-validated journal transaction. SessionStart(compact) atomically
-serves a matching card, exports its validated nonce and creates a nonce-keyed dot marker only after the one
-envelope prints; it never rewrites the set. The journal is Plan A's sole measurement sink: no hookstate
-`compaction`, no persisted `n`; readers derive ordinal from physical line position. A successor canonical
-set/card/marker survives every predecessor path byte-for-byte. The helper is plain node (`node:*` only, the
-`shared/mark.mjs` class) installed beside the hook by `deploy.sh`'s agent lane
-and `ccrc install`. No new hook events; PreCompact and PostCompact print nothing in Plan A (steering is Plan C).
+**Architecture:** `ccd/session-hook.sh` gains behavior in its three existing compaction arms. One permanent
+per-row `.compactions.lock` inode is initialized by a private `mktemp` source and POSIX `link`, but is never
+opened at its canonical pathname: each holder opens a verified private hard-link alias and verifies its FD against
+the current canonical inode before/after flock and before mutation. Compact SessionStart validates generation,
+locks, then observes/matches/claims/emits/marks in that order. PostCompact settles by link, canonical unlink,
+then claim touch; it reads only a retained claim FD and reacquires the stable lock for its complete journal
+transaction and any cleanup. Generation is an exact no-LF UUID authorization, private residue blocks reuse, and
+permanent lock does not. `_reg_purge` returns an honest lock-guarded result that all four callers branch on.
+The journal is Plan A's sole measurement sink: no hookstate `compaction`, no persisted `n`; readers derive ordinal
+from physical line position. The helper is plain node (`node:*` only, the `shared/mark.mjs` class) installed beside
+the hook by `deploy.sh`'s agent lane and `ccrc install`. No new hook events; PreCompact and PostCompact print
+nothing in Plan A (steering is Plan C).
 
 **Tech Stack:** bash 4.4+ (the hook), node 22+ ESM (`.mjs`, no npm deps), jq, vitest 4 (`server/test`), TypeScript declaration sibling (`.d.mts`).
 
@@ -30,7 +30,7 @@ Every task's requirements implicitly include this section.
 - **The hook's standing contract** (`ccd/session-hook.sh` header): exit 0 on every path, write atomically or not at all, no network. Spec §6 R2 now declares the only waits: the eight-second helper deadline and the two-second compaction-lock deadline. Only PreCompact, SessionStart(compact), and PostCompact take the permanent `$REG/.<id>.compactions.lock`; ordinary hook hot paths stay lock-free. Stable publication uses a private `mktemp` regular source plus POSIX `link`, never shared-path noclobber redirection; then it opens read/write, verifies descriptor regularity plus current non-symlink pathname and descriptor/path inode identity before **and after** `flock -w 2`, before critical mutation. FIFO/directory/symlink/replacement refusal is prompt; only genuine contention consumes two seconds. The guarantee is among ccrc hook processes; hostile same-UID pathname changes after a final portable-Bash check are outside the threat boundary. Both waits are after hookstate. Missing `flock`, unsafe lock, helper or deadline command, deadline expiry and lock contention are silent missed measurements; a pre-settlement failure leaves canonical state untouched. Every call site remains total. **Plan A prints nothing new**: SessionStart remains the only context event and retains D-306's early compact exit; PreToolUse is the only decision event; PreCompact and PostCompact stay in the stdout/stderr-silence loop. Plan C alone amends R1 for steering stdout.
 - **Only ccrc-owned artifacts change**: the hook, the helper, `deploy/deploy.sh`, `ccd/ccrc`, tests, README, this plan and the spec's status line. No `CLAUDE.md` anywhere (operator ruling 2026-09-02).
 - **Constants are defined once, in the hook, with the spec §2 values**: `COMPACT_CARD_MAX_CHARS=4000`, `CARD_MAX_CHARS=2400` (exists — **never moved, never raised**: it is the only defence for the ungated `GM_NODES`, D-1899), `CARD_TOTAL_MAX_CHARS` DERIVED as `$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))`, `COMPACT_CARD_MAX_AGE=1200` (also the PostCompact claim/marker/temp age), `COMPACT_LIVE_S=120`, `COMPACT_HELPER_TIMEOUT=8`, `COMPACT_JOURNAL_LOCK_WAIT=2`, `COMPACT_WORKSET_MAX=12`, `GRAPH_GATE_MAX_BEHIND=10` (exists). In the helper: `WINDOW_CAP` = 16 MiB, `WORKSET_CAP` = 100, `GRAPH_MAX_BYTES` = 96 MiB. `COMPACT_SHAPE_PRED` is spelled once and used by the `jq -ce -s` exact-one-document gate; there is no hookstate read-back use.
-- **Registry fields versus lifecycle files.** `.compactcard`, `.compactset`, `.compactions` are the only dot-free suffixes, so `_reg_purge` and slug-residue scans own them. Dot-prefixed lifecycle names are exact: PostCompact claim `$REG/.<id>.compactpost.<pid>.<random>.<random>.claim`; served marker `$REG/.<id>.compactserved.<nonce>`; marker temp `$REG/.<id>.compactserved.<pid>.<random>.<random>.tmp`; stable lock `$REG/.<id>.compactions.lock`; stage `$REG/.<id>.compactions.<pid>.<random>.<random>.tmp`; existing helper/rollback/card claims stay as implemented. PreCompact sweeps only this id's exact-shape claims, markers and temps older than `COMPACT_CARD_MAX_AGE`; young PostCompact claims are overlap evidence. Match ownership by stripping an exact literal `.<id>.` prefix and then validating the remaining full suffix grammar, never a glob/regex embedding the id: another legal shared-prefix/dotted id must survive every family byte-for-byte. The stable lock inode is NEVER swept, repaired, replaced, or unlinked.
+- **Registry fields versus lifecycle files.** The spec §3.4 table is Task 9's authoritative target inventory. `.compactcard`, `.compactset`, `.compactions`, and `.generation` are canonical row artifacts; every private source, alias, claim, marker, stage and snapshot uses only its target grammar after exact literal-ID prefix stripping. Before an ordinary sweep relies on it, Task 9 migrates every current hook/helper set/card temporary and rollback producer to that table; its explicitly enumerated legacy transition grammars are lock-held, age-gated, exact-only, and never a broad glob. The permanent lock is intentionally not slug residue; every other generation/private family is. `XXXXXX` occurs only in a `mktemp` template and `<mktemp6>` names its resulting six-character basename. Locked age cleanup and purge are exact-ID only; a dotted/shared-prefix neighbor must survive byte-for-byte.
 - **The `case "$event" in … esac` block is parsed by `server/test/install-session-hooks.test.ts`** (`^\s{2}([A-Za-z|]+)\)` on each line). Arm labels stay at two-space indent; never add a two-space-indented `Word)` line inside that block; add no event. New work hangs off the existing arms and off two call sites placed OUTSIDE the block (Tasks 2 and 9 say where).
 - **TDD, red first, with a measured mutation per guard.** Each test is written and shown failing before the code; each guard task ends with a mutation step — apply the named mutation in an isolated disposable copy, run the named file, and observe the named case red. Do not use `git checkout`, `reset` or `stash` as a restore mechanism. The spec's §5 tables are the checklist; every row this plan owns is named in a task.
 - **Deviation numbers are MINTED, never chosen.** This plan's `## Deviations found` section carries numbers allocated through `~/.local/bin/ccrc-api ledger allocate` at plan time. If execution finds a new deviation, allocate before writing it (`printf '{"project":"ccrc-pwa","count":1,"title":"<what>"}' | ~/.local/bin/ccrc-api ledger allocate --json -`); a session that cannot reach the allocator writes `D-TBD-<slug>` and reports it.
@@ -44,13 +44,14 @@ Every task's requirements implicitly include this section.
 | File | Responsibility | Tasks |
 | --- | --- | --- |
 | `ccd/session-hook.sh` | constants block; safe shared compaction-lock open/acquire helper; `_hook_compact_scope`; `_hook_write_atomic`; `_hook_compact_pre` with locked canonical-set + young-claim overlap (§3.1); `_hook_compact_card` exporting the served nonce, marker-after-emit and two-clip emitter (§3.3); `_hook_compact_post` with absent-target settlement and complete locked journal transaction (§3.4); the header's complete R2 sentence | 2, 6, 7, 9 |
+| `ccd/ccd` | Task 9 only: row generation initialization; `_spawn_start` primary/retry generation export and FD boundaries; locked `_reg_purge`; exact family cleanup; `_ws_slug_free`; required provenance re-stamp | 9 |
 | `ccd/compact-card.mjs` | the helper: `card` (window, mining, resolution, ranking, rendering, set) and `measure` (normalisation, fields, `cited`); removes future set `served` persistence and corrects journal-only/whole-list comments while retaining isolated legacy measurement tolerance; CLI + exit codes | 3, 4, 5, 8, 9 |
 | `ccd/compact-card.d.mts` | the helper's types for the vitest import; separates future canonical set shape from accepted legacy measurement input if required | 3 (extended in 4, 5, 8, 9) |
 | `server/test/compactCardFixtures.ts` | shared fixture builders: transcript lines, the five-file graph, `graphJson()` | 1 |
 | `server/test/compact-card.test.ts` | the helper's unit tests, including Task 9 set-shape/comment-compatible legacy input coverage | 3, 4, 5, 8, 9 |
 | `server/test/session-hook.test.ts` | the hook's tests: `plantSession`, `plantHelper`, `plantGraph({content})`, the four describes | 1, 2, 6, 7, 9 |
 | `deploy/deploy.sh`, `ccd/ccrc`, `server/test/installTreeFixture.ts`, `server/test/ccrc-install.test.ts`, `server/test/compact-card-ship.test.ts` | install the helper beside the hook, backed up like the hook; the fixture tree ships it; pins | 10 |
-| `README.md`, `ccd/ccd` (the purge inventory comment, re-stamped), the spec's status line | the operator-facing paragraph; the inventory names the three files; "Plan A written" | 11 |
+| `README.md`, the spec's status line | final operator-facing journal/lifecycle wording and audit status only | 11 |
 
 **Task order and why.** 1 (fixtures) → 2 (liveness, overlap, hook-written set) → 3, 4, 5 (helper `card`) → 6 (PreCompact invokes helper) → 7 (SessionStart atomically serves; Task 9 amends its served fact to marker-only) → 8 (helper `measure`) → 9 (PostCompact atomic settlement and sole-authority journal) → 10 (ship, scope unchanged) → 11 (docs updated to journal authority). Task 9 depends on Tasks 2, 7 and 8 and amends their integration contract without changing Task 10.
 
@@ -337,12 +338,14 @@ git commit -m "test(compaction-card): the shared fixtures — measured transcrip
 
 ### Task 2: The liveness rule, the overlap check and the hook-written set (spec §3.0, §3.1 steps 1–4)
 
+> **Historical implementation task.** These Task 2 examples preserve the completed commit's pre-D-2605 behavior. Task 9 migrates every lifecycle temporary, rollback, and SessionStart claim producer to the §3.4 target inventory before any ordinary cleanup relies on that inventory.
+
 **Files:**
 - Modify: `ccd/session-hook.sh` — a constants block after `CARD_MAX_CHARS=2400`; three functions after `_hook_hold_card` (before `[[ -n "${HOME:-}" ]] || exit 0`); one call site before the final `exit 0`
 - Test: `server/test/session-hook.test.ts` — new `describe('the compaction card — which context is compacting (spec §3.0)')`
 
 **Interfaces:**
-- Produces: `_hook_compact_scope <transcript_path> <trigger>` → sets `CS_SCOPE` (`main` | `subagent` | `ambiguous`), `CS_TRANSCRIPT` (empty for ambiguous), `CS_AGENT` (empty unless subagent), `CS_LIVE_N` (the live-agent count; empty on a manual trigger), `CS_PARENT_LIVE` (`true`/`false` when it decided, else empty); rc 1 = nothing may be said. `_hook_write_atomic <path> <text>` → rc 0 written whole, 1 nothing left behind; temp `$REG/.<id>.<pid>.<suffix>.tmp`. `_hook_compact_pre` → the overlap check, the stale-temp sweep, then writes `$REG/<id>.compactset` with numeric `at`, one collision-resistant `nonce`, `overlap:true|false`, and `files:null` — NOT MINED; it stops for `ambiguous`. Task 6 extends it with the helper call and nonce-gated rollback. Task 9 removes the earlier `served` set-cache behavior and extends overlap to young private PostCompact claims. Constants `COMPACT_CARD_OFF`, `COMPACT_HELPER`, `COMPACT_CARD_MAX_CHARS`, `CARD_TOTAL_MAX_CHARS`, `COMPACT_CARD_MAX_AGE`, `COMPACT_LIVE_S`, `COMPACT_HELPER_TIMEOUT`, `COMPACT_JOURNAL_LOCK_WAIT`, `COMPACT_WORKSET_MAX`, `COMPACT_SHAPE_PRED`.
+- Produces through the historical Task 2 commit: `_hook_compact_scope <transcript_path> <trigger>` → sets `CS_SCOPE` (`main` | `subagent` | `ambiguous`), `CS_TRANSCRIPT` (empty for ambiguous), `CS_AGENT` (empty unless subagent), `CS_LIVE_N` (the live-agent count; empty on a manual trigger), `CS_PARENT_LIVE` (`true`/`false` when it decided, else empty); rc 1 = nothing may be said. `_hook_write_atomic <path> <text>` → rc 0 written whole, 1 nothing left behind; pre-D-2605 temp `$REG/.<id>.<pid>.<suffix>.tmp`. `_hook_compact_pre` → the overlap check, the stale-temp sweep, then writes `$REG/<id>.compactset` with numeric `at`, one collision-resistant `nonce`, `overlap:true|false`, and `files:null` — NOT MINED; it stops for `ambiguous`. Task 6 extends it with the helper call and nonce-gated rollback. Task 9 replaces every lifecycle temporary/rollback producer with the §3.4 target table before ordinary sweeping, removes the earlier `served` set-cache behavior, and extends overlap to young private PostCompact claims. Constants `COMPACT_CARD_OFF`, `COMPACT_HELPER`, `COMPACT_CARD_MAX_CHARS`, `CARD_TOTAL_MAX_CHARS`, `COMPACT_CARD_MAX_AGE`, `COMPACT_LIVE_S`, `COMPACT_HELPER_TIMEOUT`, `COMPACT_JOURNAL_LOCK_WAIT`, `COMPACT_WORKSET_MAX`, `COMPACT_SHAPE_PRED`.
 - Consumes: `_hook_graph_measure` (sets `GM_CWD GM_BUILT GM_FRESH`, rc 0/1/2), `_hook_epoch_ms`, `CCRC_ID_MAX`, `$payload`, `$id`, `$REG`; the fixtures of Task 1 (`plantSession`, `LIVE`, `DEAD`, `minimalPath`, the payload builders).
 
 - [ ] **Step 1: Write the failing tests**
@@ -545,16 +548,14 @@ In `ccd/session-hook.sh`, immediately after the line `CARD_MAX_CHARS=2400` (and 
 
 ```bash
 # ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
-# Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
-# loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
-# `reaping`) unlinks them with the row: `.compactset` (PreCompact writes it,
-# PostCompact atomically claims and consumes it), `.compactcard` (PreCompact writes it when the tree
-# has a graph the gate would trust; SessionStart(compact) serves it ONCE and
-# deletes it), `.compactions` (the per-session journal PostCompact replaces
-# atomically with old bytes plus one line, never read by hookstate). The same dot-free shape is what `_ws_slug_free` scans, so
-# every arm removes what it will not serve — an aged card, an aged set — and
-# PreCompact sweeps this id's stale `.compact*.tmp` temps, which lead with a
-# dot and are therefore invisible to `_reg_purge`.
+# Canonical row artifacts are `.compactset`, `.compactcard`, `.compactions`,
+# and `.generation`; Task 9's §3.4 inventory names every private lifecycle
+# source, alias, claim, marker, stage and snapshot. PreCompact publishes the
+# set, SessionStart serves the card once through a private claim, and
+# PostCompact replaces the journal atomically with old bytes plus one line;
+# hookstate never reads it. `_ws_slug_free` sees canonical generation and every
+# private residual family, while locked exact-ID cleanup ignores only the
+# permanent lock. No broad `.compact*.tmp` sweep is permitted.
 # The kill-switch is the same shape as GRAPH_GATE_OFF and CCRC_CARD_OFF: a file
 # the operator touches by hand, honoured by all three arms.
 COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
@@ -706,12 +707,11 @@ _hook_compact_pre() {
     overlap=true; CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""
   fi
   [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
-  # THE SWEEP. A helper killed by `timeout` between its temp write and its
-  # rename leaves `.<id>.<name>.<pid>.tmp`, which leads with a dot and is
-  # therefore invisible to `_reg_purge`; nothing else would ever remove it.
-  # Only THIS id's compaction temps, only older than the window — a young one
-  # may belong to a helper in flight.
-  find "$REG" -maxdepth 1 -name ".$id.*compact*.tmp" -mmin "+$mins" -delete 2>/dev/null || true
+  # THE SWEEP. A helper killed by `timeout` can leave only an exact §3.4
+  # private family. It is invisible to the old dot-free purge loop, so a later
+  # validated lock holder ages only this ID's eligible residual suffixes; a
+  # young one may belong to a helper in flight.
+  _hook_compact_sweep_exact_families "$mins"  # §3.4 inventory; never a broad compact glob
   rc=0; _hook_graph_measure || rc=$?
   at=$(_hook_epoch_ms)
   nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
@@ -1897,6 +1897,8 @@ git commit -m "feat(compact-card): the card from the graph — symbols, communit
 ---
 ### Task 6: PreCompact runs the helper — the card with a graph, under the helper's declared wait (spec §3.1 steps 5–6, §6 R2)
 
+> **Historical implementation task.** Its temporary-name examples document the completed pre-D-2605 commit. Task 9 replaces every such producer with the §3.4 target inventory before ordinary exact-family sweeping; only the explicitly listed, lock-held, age-gated legacy transition matcher may recognize an old residue.
+
 **Files:**
 - Modify: `ccd/session-hook.sh` — `_hook_compact_pre` (the helper call), the file header's contract sentence, the `COMPACT_HELPER_TIMEOUT` comment (the measured p95 and RSS)
 - Test: `server/test/session-hook.test.ts` — new `describe('the compaction card — PreCompact and the helper (spec §3.1)')`
@@ -2171,7 +2173,7 @@ git commit -m "feat(hook): PreCompact runs compact-card.mjs under the helper's d
 
 ### Task 7: SessionStart(compact) serves the card once, to its set (spec §3.3; served-set cache superseded by Task 9/D-2605)
 
-> **Historical implementation task.** Steps below describe the Task 7 commit so its completed fix-round evidence remains reproducible. They are not the final integration contract: Task 9 deletes the served-set rewrite and replaces its tests/call site with marker-after-emit behavior.
+> **Historical implementation task.** Steps below describe the Task 7 commit so its completed fix-round evidence remains reproducible. They are not the final integration contract: Task 9 deletes the served-set rewrite, replaces its tests/call site with marker-after-emit behavior, and migrates its pre-D-2605 SessionStart claim producer to the §3.4 target inventory before ordinary cleanup relies on that inventory.
 
 **Files:**
 - Modify: `ccd/session-hook.sh` — `_hook_emit_context` (two arguments, two clips), a new `_hook_compact_card` after `_hook_compact_pre`, the SessionStart arm
@@ -2686,69 +2688,58 @@ git commit -m "feat(compact-card): measure the summary the session sees — norm
 ### Task 9: Close D-2605 ownership, generation, and journal semantics (spec §§2–3.4)
 
 **Files:**
-- Modify: `ccd/session-hook.sh` — shared stable-lock/generation helpers; locked PreCompact, compact SessionStart marker protocol, claim-FD PostCompact, journal transaction, and header contract.
-- Modify: `ccd/compact-card.mjs`, and `ccd/compact-card.d.mts` only if its exported writer shape changes — remove future canonical-set `served` persistence; retain isolated legacy measure-input tolerance only where API compatibility requires it.
-- Modify: `ccd/ccd` — ccrc row generation, guarded new-row creation, both `_spawn_start` command constructions, locked `_reg_purge`, exact-id artifact cleanup, and `_ws_slug_free` residue behavior; re-stamp with `shared/mark.mjs` in this task.
-- Test: `server/test/session-hook.test.ts`, `server/test/compact-card.test.ts`, `server/test/ccd-lifecycle-purge.test.ts`, `server/test/ccd-workspaces.test.ts`, `server/test/ccd-spawn-split.test.ts`, and the nearest existing `ccd` lifecycle/gen test for row-generation behavior.
+- Modify: `ccd/session-hook.sh` — one lock/generation/family implementation; locked PreCompact; strict compact-SessionStart order; marker source; settlement; retained claim FD; final journal and cleanup behavior.
+- Modify: `ccd/compact-card.mjs`, `ccd/compact-card.d.mts` only if writer/API shape needs removal of future canonical-set `served` persistence while preserving isolated legacy input tolerance.
+- Modify: `ccd/ccd` — row-generation initialization, `_spawn_start` primary/retry environments and FD boundaries, `_reg_purge`, exact cleanup, and `_ws_slug_free`; re-stamp in this task.
+- Test: `server/test/session-hook.test.ts`, `server/test/compact-card.test.ts`, `server/test/ccd-lifecycle-purge.test.ts`, `server/test/ccd-workspaces.test.ts`, `server/test/ccd-spawn-split.test.ts`, `server/test/ccd-session-lifecycle.test.ts`, and `server/test/ownership.test.ts`.
 
 **Interfaces and non-negotiable order:**
-- `$REG/<id>.generation` is ccrc-owned and contains exactly one strict lowercase UUID for the registry-row identity. It is neither `.uuid` nor hook payload `session_id`, is authorization only, and never appears in the exact 16-key journal record. Mint/reuse it only under `$REG/.<id>.compactions.lock` immediately before controlled spawn/resume. It survives `.uuid` rotation, `/clear`, compaction, account/wrapper swaps, supervisor restart, and same-row resume. A pre-upgrade row mints it before its next controlled spawn/resume. Both `_spawn_start` command constructions independently export `CCRC_SESSION_GENERATION=<value>`.
-- Every PreCompact, SessionStart(compact), and PostCompact lifecycle mutation requires a strict environment generation that byte-equals `$REG/<id>.generation`: validate before lock, again under lock, and immediately before publication/claim/final commit as applicable. Existing hook processes without it fail closed only for compaction lifecycle work; ordinary hookstate behavior is unchanged.
-- The permanent stable lock is `$REG/.<id>.compactions.lock`. Under `umask 077`, create a private regular source with `mktemp "$REG/.${id}.compactions.lock.XXXXXX"`; reject non-regular/symlink source; publish only via POSIX `link "$private" "$lock"`. Never create/open the shared pathname with redirection. On `EEXIST`, remove only private source and validate extant lock as regular/non-symlink. Open accepted lock read/write on a Bash anonymous FD; choose `/proc/self/fd/$fd` or `/dev/fd/$fd`, require descriptor/path regularity and `[[ "$fd_path" -ef "$lock" ]]`, call `flock -w 2`, then repeat every check before mutation. FIFO, symlink, directory, replacement, or mismatched inode fails closed promptly; the permanent inode is never unlinked/replaced, including purge. This cooperative ccrc-hook boundary does not promise protection from arbitrary same-UID mutation after the final portable-Bash check.
-- Only PreCompact, SessionStart(compact), and PostCompact take the hook compaction lock; ordinary hot paths stay lock-free. The hook header must state the division and the only waits: eight-second helper deadline and two-second lock deadline. `ccd` row creation and `_reg_purge` use the same stable-lock protocol outside the hook.
-- SessionStart(compact) obtains stable lock and validates generation **before** match/claim. It retains lock through matching card/set, atomic card claim, successful stdout envelope, and exact marker publication. Create a private regular marker source with `mktemp` under `umask 077`, validate it, and publish `.$id.compactserved.<safe-nonce>` only by `link`; never use shared-path redirection. Then unlock. Stdout may be externally visible before marker publication: a crash there can leave false-negative served evidence. Do not claim filesystem/output atomicity.
-- PostCompact under lock links canonical set to a never-precreated private claim; proves canonical/claim same inode, unlinks only that same canonical alias, opens/retains a claim read FD, then requires retained FD target regular, claim pathname regular/non-symlink, and FD/path identity before reading. Helper input comes through retained FD or an FD-derived private snapshot, never a reopened mutable claim pathname; retain FD through helper. Before stage/rename, reacquire stable lock, revalidate generation and claim FD/path identity, and hold it across journal transaction. Cleanup under lock deletes claim only after same-inode recheck; never unlink a replacement inode. Capture canonical mtime before optional required-success `touch`: mtime is liveness/provenance, never identity.
-- `_reg_purge` takes this lock, cleans exact-id `compactset`, `compactcard`, `<id>.compactions`, exact private claims/served markers/marker temps/stages, but never lock. Skip `.generation` during generic purge and delete it last. New-row creation uses the same lock while checking residue and minting/reusing generation; reusing after deletion receives fresh generation. `_ws_slug_free` sees `.generation` so interrupted purge blocks reuse. Ordering is explicit: old hook first may finish before purge deletes its result; purge first deletes generation/artifacts and delayed old hook fails its under-lock generation check.
-- The journal remains `$REG/<id>.compactions`, retains the exact 16-key predicate, `\z` jq anchors, full physical-line validation, no persisted `n`, no hookstate cache, exact-one helper gate, numeric/relational rules, retained journal-FD CAS checks, and atomic stage/rename. One actual PostCompact hook process makes at most one journal commit attempt; after successful rename it has no internal retry/reappend. This is not exactly-once for an externally replayed event: a crash after rename before cleanup can replay a duplicate measurement. Same-inode alias rules prevent concurrent pre-commit owners, not a prior committed record. Do not invent invocation identity from summary bytes, timestamps, transcript, session id, or nonce; a receipt merely has its own before/after crash window. Exactly-once needs a future durable event-source invocation ID in the same transaction.
 
-- [ ] **Step 1: Write failing tests through real fixture HOME processes**
+1. **Generation contract.** `$REG/<id>.generation` is authorization only and has exactly 36 lowercase ASCII UUID bytes, no terminal LF. It is neither `.uuid`, payload `session_id`, nor journal data. Under the stable lock, classify pathname metadata before reading: genuine absence differs from all present-invalid inputs. Read a present valid regular non-symlink file only through owned hard-link read alias `generation-read.<pid>.<RANDOM>.<RANDOM>` plus retained FD/current-canonical same-inode checks; never `_reg_get`, `_reg_read`, or direct `cat`. FIFO, directory, all symlink forms, unreadable, uppercase, empty, multiline, malformed, replacement, and mismatch refuse promptly and are never repaired/replaced/removed/folded to absent. Only genuine absence mints from validated `_plat_uuid`, writes to a source made by `mktemp` template `generation-init.XXXXXX` (result `generation-init.<mktemp6>`), then no-clobber links it; EEXIST reclassifies winner. Sources/aliases clean on every handled path and age out exact-only under later lock. `.generation` and private generation residue block reuse.
+2. **Permanent lock protocol.** Canonical `$REG/.<id>.compactions.lock` spans generations/reuse and is never unlinked, replaced, repaired, truncated, recreated or swept. Initializer under `umask 077` uses `mktemp` template `compactions.lock-init.XXXXXX` (result `compactions.lock-init.<mktemp6>`), validates source, publishes only `link source canonical`, removes source on success/EEXIST/failure, and never opens canonical. Acquirer links canonical to absent exact `compactions.lock-open.<pid>.<RANDOM>.<RANDOM>` alias (two independent decimal `$RANDOM` values, collision retry, no precreated final alias), validates alias, opens alias R/W anonymous FD, then unlinks owned alias. Require FD regularity, current canonical regular/non-symlink, and FD/canonical same inode before flock, after `flock -w 2`, and before mutation. Canonical disappearance/replacement, FIFO, symlink, directory, `mktemp`/`link`/`flock` absence, alias race, or mismatch refuses and never recreates canonical. Cleanup is one owned source/alias path. Mutation to direct `exec {fd}<>"$lock"` must red.
+3. **SessionStart order.** Immediately after operator-off guard, validate environment generation, acquire stable lock, and revalidate under lock **before every card/set/marker existence or age inspection, read, match, claim, deletion, emission, or marker publication**. Retain that FD through all actions and final generation check. Barrier replacement before acquisition sees only new state. Match/claim under lock; emit before exact marker source publication; only same-nonce extant final marker is idempotent. From the already validated safe nonce, make source with `mktemp` template `compactserved-source.<nonce>.XXXXXX` (result `compactserved-source.<nonce>.<mktemp6>`), disjoint from final `compactserved.<nonce>`, and remove it after successful `link`, EEXIST, and all handled failures. No set rewrite. Crash after output before marker remains honest false-negative evidence.
+4. **Settlement order.** Under lock save canonical age, use no-clobber hard link to never-precreated `compactpost.<pid>.<RANDOM>.<RANDOM>.claim`, prove same inode, unlink canonical first, then touch claim. If unlink fails, remove only verified claim and prove canonical original bytes+mtime unchanged. If touch fails after unlink, no-clobber link claim back to canonical, prove same inode, then remove only verified claim. A restore collision/failure/unprovable case never overwrites occupant or discards only verified claim; retains claim as exact recovery residue. Claim FD input is retained/verified; no reopened claim or canonical path reaches helper.
+5. **Final transaction and cleanup.** Reacquire/validate lock and generation/claim FD identity before raw JSONL stage/rename; retain the existing exact 16 keys, full physical-line JSONL and terminal LF predicate, `\z`, integer/relational rules, no persisted `n`, exact-one helper gate, FD CAS, stage cleanup, and one-attempt/external-replay boundary. Claim and marker cleanup occurs **only** under successfully reacquired/validated stable lock. If helper/dependency/final lock/generation/FD/journal transaction fails and final lock is not safely held, close retained FDs, remove only unlinked own snapshot/stage, leave verified claim plus exact marker residue, and write no journal. Later locked age recovery removes only this ID's exact claim and separately safe nonce marker/source, with no retroactive record. This rule also covers touch-restore residue.
+6. **Target family table and exact sweeps.** Before any ordinary sweep relies on the spec §3.4 target table, migrate every current pre-D-2605 hook/helper set/card temporary and rollback producer to it. The table has exact grammars for set/card/journal, helper and hook writer/rollback names, SessionStart claim, PostCompact claim, final marker, permanent lock, lock init source, lock-open alias, marker source, generation, generation source/read alias, and stage/snapshot. It defines `<pid>`, safe `<nonce>`, `$RANDOM`, and `<mktemp6>`; it has no undefined placeholders. A transition cleanup may match only one fully enumerated legacy grammar after literal exact-ID stripping, age expiry, and validated stable locking. Every ordinary checker strips literal exact ID prefix then validates the full target suffix; no family uses a loose terminal/pid/random/tmp pattern, `*compact*.tmp`, or broad glob. Successful source/alias paths leave zero owned artifacts; crash cleanup is age-gated under stable lock or exact purge. Permanent lock is ignored for slug reuse; `.generation` and all other listed private residue are not.
+7. **Row creation/spawn boundaries.** Row creation locks only residue check/generation initialization and closes before arbitrary setup or `_spawn_start`. `_spawn_start` acquires once immediately before primary `_tmux_new_session`, safely ensure/reads generation, exports `CCRC_SESSION_GENERATION=<exact value>`, holds through nonblocking creation, closes on every result before `SPAWN_RESUME_SETTLE_S`. Resume fallback independently acquires immediately before retry, requires the invocation's same current-row generation (never mints into purged/reused row), exports it, closes before return. No nested opens/leaked sourced-ccd FDs.
+8. **Locked purge and honest callers.** `_reg_purge` locks/validates before measurement, mutation, or `_lc_done purge`; captures measurements under lock; deletes exact artifacts/fields and generation last; never permanent lock. Lock miss/unsafe/removal failure is nonzero, emits no purge-done and no success assertion. Ordering is stable-compaction lock then lifecycle journal/rotation lock, never reverse. `cmd_ws_rm`, `_ws_reap_locked`, `_ws_gc_prune_row` dead-reg, and `cmd_forget` branch on it: before irreversible action decline unchanged; after action report explicit partial naming completed action and retained registry/generation, suppress successful output/terminal `_lc_done`, and return non-success/partial. No rollback fiction.
 
-Keep `runFull` as exit-0/stdout/stderr seam. Extend `runConcurrent` for distinct payloads/environments and deterministic pause seams. Add `touch`, `flock`, and `mktemp` to fixture PATH and extend the missing-tool matrix one dependency at a time. Every live `ccd` invocation uses `makeCcdHarness` fixture HOME.
+- [ ] **Step 1: Write failing fixture-HOME tests**
 
-1. Pin private stable-lock publication: absent lock creates private `mktemp` source then `link`; `EEXIST` deletes only source; no shared-path redirection/open creates it; stable inode survives all cleanup/purge. Race a FIFO into shared lock after absence decision and require prompt refusal. Mutate to shared-path redirection, run without FIFO peer under strict outer harness deadline, and prove the mutant hangs then is killed. Cover malformed existing lock, `mktemp`/`link`/`flock` absence, symlink/directory/FIFO, pre/post-flock replacement, and descriptor/path mismatch.
-2. Pin locked compact SessionStart order with deterministic barriers: SessionStart emits then pauses before marker; PostCompact blocks until marker publication/unlock and commits `served:true`. Conversely let PostCompact settle first and assert compact SessionStart emits no card. Failed emit/crossed pair/body-less card makes no marker. Assert marker source is owned private regular, marker target uses `link`, marker is exact nonce-only, and canonical set bytes do not change. Add the stdout-before-marker crash seam and assert only the honest false-negative result, never atomicity.
-3. Pin claim-FD fencing: link canonical to a never-precreated claim; same-inode proof; no claim pathname reopen feeds helper; retained FD is regular and identity-checked before read, final staging, rename, and cleanup. Replace claim pathname after settlement and prove helper input/journal/cleanup cannot use or delete replacement. Cover failed touch/canonical unlink, same-inode predecessor recovery, age saved before touch, and own-only cleanup.
-4. Pin generation lifecycle in actual ccd/hook flows: strict UUID file, both spawn command sites carry `CCRC_SESSION_GENERATION`, same-row preservation across `.uuid` rotation/clear/swap/resume, pre-upgrade mint, and hook absent/malformed/mismatched token refusals before/under lock/final mutation while ordinary hookstate still proceeds. Test purge-vs-hook deterministic orderings, delete-generation-last, interrupted purge slug reuse refusal, fresh generation after full purge/reuse, and exact-id/prefix/dotted-id artifact isolation.
-5. Preserve and extend journal tests: exact 16-key `jq -Rse` predicate, `\z`, exact-one helper gate, retained journal FD/CAS, unchanged old bytes/successor, raw physical-line matrix, and no `hookstate.compaction`/`n`. Instrument a process invocation to prove at most one commit attempt; force crash-after-rename then external replay and assert duplicate records are possible and documented, not hidden by a receipt.
+1. Add deterministic compact SessionStart barriers proving generation/off guard order, pair replacement before acquisition, retained FD lock scope, aged byte identity on old/mismatched generation, marker-after-output, same-nonce idempotence, and source cleanup; plus target-family producer migration before ordinary sweep and exact legacy-transition-only cleanup.
+2. Add real-process lock race tests: old inode held while canonical disappears; alias link/open/flock/final-check replacement; no recreated canonical or split critical section; FIFO/symlink/directory/missing `mktemp`/`link`/`flock`; zero successful source/alias artifacts and exact crashed residue cleanup.
+3. Add settlement tests for hard-link mtime order, unlink failure exact canonical bytes+mtime, touch failure restoration, restore collision preserving occupant/claim, kill windows, and final-lock-timeout residue/no-journal/later-age-cleanup.
+4. Add generation tests for absent concurrent mint, valid same row over spawn/resume, every invalid object refusal/no mutation, missing `_plat_uuid`, source cleanup/crash residue, and literal direct-shared-write mutation. Add row/create/primary/retry sleep-boundary and all early-return same-shell FD tests.
+5. Hold lock more than two seconds through `_reg_purge` and all four actual fixture-HOME caller routes. Require unchanged registry/no purge-done/no false success and each applicable decline/partial form; pin generation-last, reuse fresh generation, dotted/shared-prefix isolation, and lock ignored for slug residue.
 
 - [ ] **Step 2: Run red**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/compact-card.test.ts test/ccd-lifecycle-purge.test.ts test/ccd-workspaces.test.ts test/ccd-spawn-split.test.ts
+cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/compact-card.test.ts test/ccd-lifecycle-purge.test.ts test/ccd-workspaces.test.ts test/ccd-spawn-split.test.ts test/ccd-session-lifecycle.test.ts test/ownership.test.ts
 ```
 
-Expected: every new lock, marker ordering, claim-FD, generation/purge, and replay assertion is red against the pre-Task-9 implementation.
+Expected: all new guards are red against pre-Task-9 implementation.
 
-- [ ] **Step 3: Implement the shared lock, compact hooks, and journal**
+- [ ] **Step 3: Implement Task 9 completely**
 
-Implement one shared stable-lock acquisition/close helper exactly as the Interfaces prescribe. It must publish lock only from an owned `mktemp` source through `link`; never fall back to noclobber redirection. Add generation validation helper and use it before lock, under lock, and immediately before each lifecycle mutation/final journal commit.
-
-Rewrite PreCompact so it uses the stable lock through generation validation, same-inode predecessor recovery, overlap/cleanup, canonical publication, helper rewrite/rollback. Rewrite compact SessionStart so it obtains/retains the same lock through card matching/claim, envelope emit, owned-source marker publication, then release. Remove canonical set `served` rewrites; future set writers omit `served`.
-
-Rewrite PostCompact to settle before any mutable set parsing, bind helper set input to verified retained claim FD/snapshot, and repeat generation/FD checks under final journal lock before any stage/rename. Preserve all existing predicate, FD-CAS, stage cleanup, exact-owner, success/failure and silence contracts. Claim cleanup must recheck same inode under lock before unlink.
-
-- [ ] **Step 4: Implement ccd row lifecycle and re-stamp it**
-
-In `ccd/ccd`, introduce strict UUID generation mint/read helpers and wire them into controlled row creation and both `_spawn_start` command constructions independently. Add `_reg_purge` locked exact-id cleanup, permanent-lock preservation, `.generation` skip/delete-last order, and generation-aware `_ws_slug_free` residue behavior. Keep all runtime work in Task 9; Task 11 does not defer it.
-
-After editing `ccd/ccd`, run the established ownership stamp command exactly:
+Implement one safe lock/generation/family helper contract exactly above. Before enabling an ordinary PreCompact or purge sweep, migrate every current pre-D-2605 helper/hook set/card temporary, rollback, and SessionStart-claim producer to the §3.4 target table; use a narrow, locked, age-gated legacy transition matcher only for the expressly listed old names. Rewrite PreCompact, compact SessionStart, and PostCompact to honor their lock and cleanup boundaries. Implement ccd row setup/spawn/retry/purge/slug behavior here, not in Task 11. Re-stamp `ccd/ccd` immediately after its edit:
 
 ```bash
 node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; const { markGenerated } = await import('./shared/mark.mjs'); writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
 ```
 
-- [ ] **Step 5: Run green and mutation matrix**
+- [ ] **Step 4: Run green and mutation matrix**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/compact-card.test.ts test/ccd-lifecycle-purge.test.ts test/ccd-workspaces.test.ts test/ccd-spawn-split.test.ts test/ownership.test.ts
+cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/compact-card.test.ts test/ccd-lifecycle-purge.test.ts test/ccd-workspaces.test.ts test/ccd-spawn-split.test.ts test/ccd-session-lifecycle.test.ts test/ownership.test.ts
 ```
 
-In an isolated copy mutate one seam at a time: `mktemp`/private-source validation/`link` lock publication; each descriptor/path/recheck; lock timing; SessionStart lock scope/marker order; generation validation at every required point; claim FD source/final recheck/cleanup guard; purge lock/delete-last/residue behavior; each spawn site; raw predicate/exact-one/CAS; and journal retry logic. Each named test must redden. Repeat the real-process concurrency mutations deterministically.
+In an isolated copy mutate each order/identity/family/cleanup/purge-status/spawn-lock seam above. Every stated control must red; structural FD-close pins are acceptable only where a behavior test cannot observe the close.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add ccd/session-hook.sh ccd/compact-card.mjs ccd/compact-card.d.mts ccd/ccd server/test/session-hook.test.ts server/test/compact-card.test.ts server/test/ccd-lifecycle-purge.test.ts server/test/ccd-workspaces.test.ts server/test/ccd-spawn-split.test.ts server/test/ownership.test.ts
+git add ccd/session-hook.sh ccd/compact-card.mjs ccd/compact-card.d.mts ccd/ccd server/test/session-hook.test.ts server/test/compact-card.test.ts server/test/ccd-lifecycle-purge.test.ts server/test/ccd-workspaces.test.ts server/test/ccd-spawn-split.test.ts server/test/ccd-session-lifecycle.test.ts server/test/ownership.test.ts
 git commit -m "feat(hook): close compaction ownership, generation and journal fencing"
 ```
 
@@ -2911,90 +2902,58 @@ git commit -m "feat(deploy): ship compact-card.mjs beside the hook on every door
 ### Task 11: Final D-2605 documentation and committed-byte audit
 
 **Files:**
-- Modify: `README.md` only for final operator-facing journal/lifecycle wording, and `docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md` only for final implementation status if Tasks 9–10 landed.
-- Test/audit: `server/test/session-hook.test.ts`, `server/test/ownership.test.ts`, plus the completed Task 9 ccd lifecycle suites. Task 11 implements no `ccd/ccd`, lock, purge, generation, spawn, or restamp mechanism; those are Task 9.
-- Generate but do not commit: `.superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a/task-9-brief.md`, `task-11-brief.md`, and their separate `.source-commit` provenance sidecars.
+- Modify: `README.md` only for final operator-facing journal/lifecycle wording, and `docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md` only for landed implementation status.
+- Test/audit: Task 9 lifecycle suites and `server/test/ownership.test.ts`. Task 11 implements no `ccd/ccd`, lock, purge, generation, spawn, or restamp mechanism; those are solely Task 9.
+- Generate but do not commit: `.superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a/task-9-brief.md`, `task-11-brief.md`, and separate `.source-commit` provenance sidecars. Do not regenerate/edit Task 10 ignored brief.
 
-- [ ] **Step 1: Add final operator documentation only**
+- [ ] **Step 1: Audit final contract and preserve frozen task bytes**
 
-After Task 9 is implemented, describe the journal as sole authority, permanent stable lock, retained claim FD, nonce marker, ccrc row generation, and replay boundary in the README without inventing a Plan B wire or weakening the spec. Update the spec status only to report landed task state; do not rewrite mechanism architecture here.
+Sweep operative spec/plan/Task 9/Task 11 text for direct canonical lock `<>`, touch-before-unlink, pre-lock compact SessionStart inspection, unlocked final cleanup, successful source leaks, conflicting families, unsafe generation reads/repair, ignored purge status, recursive retained FD, Task 11 ccd ownership, stale wire/hookstate/persisted-`n` claims. Preserve Task 8 final citation/fence prose byte-for-byte and preserve Task 10 byte-for-byte. Under the committed physical-line extractor, Task 10 must be exactly **7,810 bytes**, SHA-256 **`e7d246d721e30605cf95eae203bcc40384f0978f29f6222f0491cd0d78195088`**; the superseded 7,804-byte/`199586...` slice dropped its retained terminal separator.
 
 - [ ] **Step 2: Regenerate equality-bound ignored briefs from a committed source**
 
-The controller supplies `SOURCE_COMMIT`, the full 40-lowercase-hex SHA of the commit whose plan bytes are authority. A commit cannot self-name its own SHA, so do not infer `HEAD`, a branch, working-tree content, a base copy, or an uncommitted file. The destination brief contains **only** extracted task bytes; provenance is the separate ignored `.source-commit` sidecar and must never be prepended/appended to the brief.
+The controller supplies `SOURCE_COMMIT`, the full 40-lowercase-hex SHA of the commit whose plan bytes are authority. A commit cannot self-name its own SHA, so do not infer `HEAD`, a branch, working-tree content, a base copy, or uncommitted file. Brief contains only extracted task bytes; separate sidecar contains provenance.
 
-Run this exact byte-preserving algorithm once for task 9 and once for task 11 after the final docs commit. It reads only the literal `git show` object path below, decodes nothing, uses no `splitlines()`, trims nothing, normalizes no EOL, and verifies each destination with `cmp -s`.
+Run this exact byte-preserving algorithm once for Task 9 and once for Task 11 **after the final tracked docs commit**. It reads only literal `git show` object bytes, decodes nothing, uses no `splitlines()`, trims nothing, normalizes no EOL, and verifies with `cmp -s`.
 
 ```bash
 SOURCE_COMMIT=<controller-supplied-full-40-hex-sha> TASK=9 python3 - <<'PY'
 import os, re, subprocess
 from pathlib import Path
-
-source = os.environ['SOURCE_COMMIT']
-task = os.environ['TASK']
-if not re.fullmatch(r'[0-9a-f]{40}', source):
-    raise SystemExit('SOURCE_COMMIT must be exactly 40 lowercase hexadecimal bytes')
-if not re.fullmatch(r'[0-9]+', task):
-    raise SystemExit('TASK must be decimal')
+source = os.environ['SOURCE_COMMIT']; task = os.environ['TASK']
+if not re.fullmatch(r'[0-9a-f]{40}', source): raise SystemExit('SOURCE_COMMIT must be exactly 40 lowercase hexadecimal bytes')
+if not re.fullmatch(r'[0-9]+', task): raise SystemExit('TASK must be decimal')
 plan = 'docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md'
 raw = subprocess.check_output(['git', 'show', f'{source}:{plan}'])
 start_re = re.compile(rb'^#+[ \t]+Task[ \t]+' + task.encode('ascii') + rb'([^0-9]|$)')
 next_re = re.compile(rb'^#+[ \t]+Task[ \t]+[0-9]+([^0-9]|$)')
-out = bytearray(); started = False; fenced = False
-for physical in re.findall(rb'[^\n]*\n|[^\n]+', raw):
-    body = physical[:-1] if physical.endswith(b'\n') else physical
-    if not started:
-        if not fenced and start_re.match(body):
-            started = True
-        else:
-            if physical[:3] == b'```':
-                fenced = not fenced
-            continue
-    if not fenced and out and next_re.match(body):
-        break
-    out.extend(physical)
-    if physical[:3] == b'```':
-        fenced = not fenced
-if not out:
-    raise SystemExit('requested task heading not found')
+def extract(data):
+    out = bytearray(); started = False; fenced = False
+    for physical in re.findall(rb'[^\n]*\n|[^\n]+', data):
+        body = physical[:-1] if physical.endswith(b'\n') else physical
+        if not started:
+            if not fenced and start_re.match(body): started = True
+            else:
+                if physical[:3] == b'```': fenced = not fenced
+                continue
+        if not fenced and out and next_re.match(body): break
+        out.extend(physical)
+        if physical[:3] == b'```': fenced = not fenced
+    if not out: raise SystemExit('requested task heading not found')
+    return bytes(out)
+out = extract(raw)
 dst = Path('.superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a') / f'task-{task}-brief.md'
-dst.parent.mkdir(parents=True, exist_ok=True)
-dst.write_bytes(out)
-sidecar = dst.with_suffix('.source-commit')
-sidecar.write_bytes(source.encode('ascii') + b'\n')
-expected = subprocess.check_output(['git', 'show', f'{source}:{plan}'])
-# Re-run the same byte state machine against committed bytes for equality verification.
-check = bytearray(); started = False; fenced = False
-for physical in re.findall(rb'[^\n]*\n|[^\n]+', expected):
-    body = physical[:-1] if physical.endswith(b'\n') else physical
-    if not started:
-        if not fenced and start_re.match(body): started = True
-        else:
-            if physical[:3] == b'```': fenced = not fenced
-            continue
-    if not fenced and check and next_re.match(body): break
-    check.extend(physical)
-    if physical[:3] == b'```': fenced = not fenced
-verify = dst.with_suffix('.expected')
-verify.write_bytes(check)
+dst.parent.mkdir(parents=True, exist_ok=True); dst.write_bytes(out)
+dst.with_suffix('.source-commit').write_bytes(source.encode('ascii') + b'\n')
+dst.with_suffix('.expected').write_bytes(extract(subprocess.check_output(['git', 'show', f'{source}:{plan}'])))
 PY
 cmp -s .superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a/task-9-brief.md .superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a/task-9-brief.expected
 rm .superpowers/sdd/2026-09-10-graphify-compaction-card-plan-a/task-9-brief.expected
 ```
 
-Repeat with `TASK=11` and its matching paths. The physical-line loop starts outside a fence at first `^#+[ \t]+Task[ \t]+<N>([^0-9]|$)`, stops immediately before the next such Task heading only while outside a fence, and toggles fence state only when a physical line's first three bytes are `` ``` ``. It retains each original physical LF exactly, including a missing final LF. The isolated `---` line is ordinary task content, not a terminator.
+Repeat with `TASK=11`; do not run it for Task 10. The extractor begins at the first matching heading outside a fence, stops before next task heading only outside a fence, toggles only when a physical line begins exactly with three backticks, and preserves every physical LF including missing final LF and the retained separator.
 
-- [ ] **Step 3: Audit the contract and mutation-proof it**
-
-Run the full foreground suite and deterministic focused mutation checks. The extraction tests must reject/turn red for working-tree reads, nonliteral/short source SHA, deleted fence, `---` stopping, decoded/text-normalized content, trimming, synthesized final LF, sidecar insertion into brief, and any `cmp` mismatch. Preserve Task 8 final fence/citation prose and verify Task 10 plus its ignored brief byte-for-byte against the original base without regenerating Task 10 brief.
-
-```bash
-cd server && ./node_modules/.bin/vitest run
-```
-
-Then run stale-claim searches over operative spec/plan/Task 9/Task 11 text: no shared-path lock redirection, lock-after-settlement, canonical set served rewrite, reopened claim input, purge-owned lock deletion, generation deferred to Task 11, persisted `n`, hookstate compaction cache, live-journal append, or exactly-once replay claim. Historical D-2605 prose may retain superseded facts only when explicitly marked superseded by final protocol.
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add README.md docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md
@@ -3030,8 +2989,8 @@ The second review (2026-09-10, three opus refuters and a scout over the amended 
 - **D-2412 — `steered` was written before the fact.** The helper recorded `--steer` in the set before knowing whether it would exit 0, so an exit 3 under `--steer` would have read `steered: true` for a compaction that was never steered, corrupting Plan C's whole control variable. Fix: the helper always writes `steered: false`; the hook stamps `true` only after the print (Plan C); the flag is accepted and ignored here.
 - **D-2413 — nothing recorded whether the card reached the model.** A mined set with a card that was never served (crossed pair, aged card, failed emit, timed-out helper) read exactly like a served one, so `cited` was uninterpretable. Original fix: `_hook_emit_context` returns non-zero when it prints nothing and Task 7 stamped `served:true` into the set. **Superseded before Task 9 by D-2605:** the emitter return remains, but SessionStart creates a nonce-keyed marker only after successful emit, never rewrites canonical set; PostCompact derives final `served` from its claimed nonce's exact marker.
 - **D-2414 — the 5 s timeout was argued from parse time alone.** The review measured the first draft's naive suffix resolution (a scan of every file per token) at 2–12 s on a 64 MiB window against a 5,000-file graph, and `loadGraph` at ~1.5 s and ~250 MB RSS on a 51 MB graph. Fix: a basename index makes resolution O(tokens); `WINDOW_CAP` is 16 MiB (a never-compacted transcript is far smaller); `GRAPH_MAX_BYTES` (96 MiB) refuses a graph before parsing it; the timeout is 8 s and Task 6 re-measures p95 and RSS on this box's real graphs before it ships, with an acceptance bound.
-- **D-2415 — a helper killed by `timeout` between its write and its rename leaked a dot-leading temp that `_reg_purge` never sees.** Fix: PreCompact sweeps this id's `.compact*.tmp` temps older than the in-flight window; the hook's own temps follow the hookstate idiom `.<id>.<pid>.<suffix>.tmp`.
-- **D-2416 — a PostCompact whose helper failed, or a box without `node`/`timeout`/the helper, left the set standing, and the next compaction inside the window read `ambiguous` for no reason.** Original fix said age/provenance would be read before consumption. **Strengthened before Task 9 by D-2605:** after the three fixed early guards, PostCompact safely acquires the shared stable mutex, saves canonical age, atomically hard-links canonical set to an independently named never-precreated private claim, touches that active claim, and unlinks only canonical alias before parsing/provenance or later dependency; every path consumes only that claim and preserves a successor canonical set byte-for-byte.
+- **D-2415 — a helper killed by `timeout` between its write and its rename leaked a dot-leading temp that the old generic `_reg_purge` never sees.** The final Task 9 contract supersedes the loose remedy: under the validated stable lock, PreCompact and purge age or delete only exact §3.4 family suffixes for this literal ID; no `.compact*.tmp` glob or generic pid/suffix grammar remains.
+- **D-2416 — a PostCompact whose helper failed, or a box without `node`/`timeout`/the helper, left the set standing, and the next compaction inside the window read `ambiguous` for no reason.** Original fix said age/provenance would be read before consumption. **Strengthened before Task 9 by D-2605:** after the three fixed early guards, PostCompact safely acquires the shared stable mutex, saves canonical age, atomically hard-links canonical set to an independently named never-precreated private claim, unlinks only canonical alias, then touches that active claim before parsing/provenance or later dependency; every path consumes only that claim and preserves a successor canonical set byte-for-byte.
 - **D-2417 — the `command -v node`/`command -v timeout` guards changed nothing observable in the original direct-append design.** The call site swallowed exec failure like helper failure, so those first mutation rows were green. **Superseded for Task 9 by D-2605's post-settlement dependency matrix:** `node`, resolved deadline, helper, and `flock` each have a one-at-a-time diagnostic failure case proving claim/marker cleanup, old-journal preservation, successor survival, and silence. PreCompact keeps its earlier behavior.
 - **D-2418 — the approved spec block fed `measure` through a process substitution while claiming `pipefail` semantics.** A redirection is not a pipeline: a jq that died mid-write would have handed the helper a truncated summary and recorded a short `chars`. Fix: the plan's pipe form is now the spec's.
 - **D-2419 — the rule recorded only its verdict, so its misfire rate could not be measured.** Fix: `parentLive` and `liveAgents` ride the set and the journal; the corpus measurement that closed the review's question — at an auto-compaction the parent's last row is 0.8 s old at p50, 3.7 s at p95, never 120 s (n=216) — is in spec §0.2.
@@ -3050,11 +3009,11 @@ The execution pass found the following corrections; D-2446–D-2455 were allocat
 - **D-2454 — the renderer stopped truncating at one file, allowing a long valid path to breach `maxChars` and clip mid-line without disclosure.** Fix: permit zero rows with `(+k files not shown)`.
 - **D-2455 — the graph cap used `stat(path)` then `read(path)`, permitting replacement or growth above cap.** Fix: open once, bounded-read `maxBytes + 1` from that descriptor, and close in `finally`.
 - **D-2460 — a helper error after the set rewrite falsely left `files` mined.** A card write can fail after the helper replaced the hook's `files:null` document, making PostCompact record a mining fact that never completed. Fix: render before the first target write; retain the exact initial bytes; after a post-set failure atomically claim **both set and card** with regular nonce/PID-qualified dot files before inspecting either canonical entry. The set stages a second exact-byte original source: a claimed A set returns only through no-clobber `link source target`; a claimed B/C set returns only through a no-clobber link from its retained claim. The card removes only a claimed A partial and restores a displaced B/C card through its retained claim. Direct regular placeholders prevent directory relocation, and exact-target `link` prevents a newer directory from receiving a contaminating child. Claims remain when C wins before or after restoration; failed-A restore artifacts stay sweepable with their A claim rather than risking deletion of a concurrent owner. The hook applies the same protocol for every helper result other than 0 or 3.
-- **D-2461 — epoch-millisecond `at` collisions make it an unsafe owner.** Two PreCompact hooks can share a millisecond; treating `at` as identity lets an older helper or rollback overwrite a later owner. Fix: generate one `compact-<at>-<pid>-<random>-<random>` nonce in PreCompact, pass `--nonce`, store it immediately after numeric `at`, put it on card line 1, and use it at every ownership, pair, serve and rollback seam. Future Task 7 pairs by `.nonce`; Task 9 retains numeric `at` only as measurement.
+- **D-2461 — epoch-millisecond `at` collisions make it an unsafe owner.** Two PreCompact hooks can share a millisecond; treating `at` as identity lets an older helper or rollback overwrite a later owner. Fix: generate one `compact-<at>-<pid>-<RANDOM>-<RANDOM>` nonce in PreCompact, pass `--nonce`, store it immediately after numeric `at`, put it on card line 1, and use it at every ownership, pair, serve and rollback seam. Future Task 7 pairs by `.nonce`; Task 9 retains numeric `at` only as measurement.
 - **D-2462 — the declared hookstate-first ordering lacked behavior evidence.** A source comment cannot prove the helper did not start before the `working` stamp became durable. Fix: the deadline-stub test reads persisted hookstate before it starts the helper, requires `state:"working"`, then drives a failing helper path whose rollback proves the initial document remains safe.
 - **D-2463 — the graph cap had fixture-only refusal evidence.** The real megamek graph is 111,097,911 bytes, above the 96 MiB cap, so the production helper must refuse it before parse without changing a fresh set or producing a card. The Task 6 scratch measurement records that exit 1, unchanged bytes, absent card, duration and peak RSS.
 
-- **D-2605 — Plan A's measurement authority and ownership transaction were raced.** The approved Task 9 draft kept a second `hookstate.compaction` cache, persisted `n`, appended with `printf >>`, read/aged the canonical set before ownership, deleted that pathname after helper execution, and let SessionStart rewrite `set.served`. Concurrent PostCompact and successor/SessionStart writers could disagree, lose a journal record, delete a successor, or mark the wrong set served. Amendment before Task 9: the journal is the sole authority and physical line position supplies ordinal; one never-unlinked `.<id>.compactions.lock`, safely opened read/write and inode-verified before **and after** `flock -w 2`, is the shared ownership-and-journal mutex. PreCompact holds it through overlap/young-claim inspection and canonical publication. After operator-off, string-summary and `find` guards, PostCompact acquires it, first recovers a canonical alias of an exact same-inode predecessor claim by final-rechecking and unlinking only canonical before summary-only processing, or saves canonical age and atomically hard-links canonical to an independently named never-precreated exact private `.<id>.compactpost.<pid>.<random>.<random>.claim`. It requires `touch` before link and requires both post-link touch and canonical-alias unlink to succeed before any processing; either failure preserves canonical and performs no marker/journal work, while residual aliases recover through the same-inode rule. It safely reacquires the same stable mutex for the FD-validated old-bytes-plus-one-line transaction and rechecks journal identity before replacement. Every old and staged physical JSONL line passes one truth-valued raw-string `jq -Rse ... fromjson` record predicate for helper measurement plus exactly six provenance fields, integer/relationship domains, no `n`, terminal-LF physical-line grammar, and exact `\\z` identifier anchors. SessionStart exports a safe nonce and atomically creates exact `.<id>.compactserved.<nonce>` only after emit. Young claims are immutable overlap evidence and later PreCompact degrades/stamps only its own set; it removes only a redundant same-inode canonical alias before successor publication. All post-settlement failures clean only own claim/stage/exact marker and preserve old journal plus any canonical successor byte-for-byte; unified cleanup closes read/lock FDs, and unsafe/missing/contended pre-settlement lock leaves canonical untouched and writes no record. The cooperative hook lock and pathname checks do not claim protection from hostile same-UID mutation after their final portable-Bash check. Task 10 is unchanged. **D-2605 round 4 supersedes the remaining pre-implementation details here:** permanent lock publication is private `mktemp` source plus `link`, not a shared-path noclobber redirection; compact SessionStart holds that same lock through emit and marker publication; PostCompact retains a verified claim FD; ccrc row generation/purge/spawn work belongs to Task 9; and journal delivery is at-most-one attempt per actual process, not replay exactly-once.
+- **D-2605 — Plan A's measurement authority and ownership transaction were raced.** The approved Task 9 draft kept a second `hookstate.compaction` cache, persisted `n`, appended with `printf >>`, read/aged the canonical set before ownership, deleted that pathname after helper execution, and let SessionStart rewrite `set.served`. Concurrent PostCompact and successor/SessionStart writers could disagree, lose a journal record, delete a successor, or mark the wrong set served. The final approved pre-Task-9 contract is the one in §§3.3–3.4 and Task 9: the journal is sole authority and physical position supplies ordinal; the permanent canonical lock is published from a private `mktemp` source via `link` and is never opened canonically; every holder opens an owned hard-link alias and validates FD/current-canonical identity before and after `flock` and before mutation. Compact SessionStart performs its operator-off guard, generation validation, lock acquisition, and under-lock revalidation before any lifecycle observation or mutation; it emits before publishing a same-nonce marker from a disjoint private source. PostCompact records canonical age, links a never-precreated private claim, proves identity, **unlinks canonical before touching claim**, then reads only retained claim-FD data. It safely reacquires the lock for exact raw-JSONL FD CAS/rename and every claim/marker cleanup; failure without that final lock leaves exact recovery residue. Generation is immutable exact no-LF UUID authorization read through owned aliases/FDs; no invalid present object is repaired. Task 9 alone owns ccd row creation, generation, spawn/retry export, purge, `_ws_slug_free`, and its provenance re-stamp; Task 11 is documentation and committed-byte audit only. The predicate retains all sixteen exact keys, `floor == .` integer/relational rules, raw physical-line terminal-LF semantics, and exact `\\z` anchors. Delivery is at-most-one attempt per actual process, not external replay exactly-once; the cooperative checks do not claim to defeat hostile same-UID mutation after their final portable-Bash check. Task 10 is unchanged.
 
 Task 7's fix round (2026-09-11, one review — 0 Critical, 4 Important, 3 Minor, one Minor elevated by the coordinator) found the following; D-2547–D-2552 were allocated together before these definitions were written:
 
@@ -3077,7 +3036,7 @@ The other three Minors this round fixed are conformance/test-quality corrections
 
 ## Self-review (writing-plans checklist, corrected after Task 6 execution and fix-round review)
 
-- **Spec coverage.** §3.0 → Task 2 (rule/canonical overlap) plus Task 9 (young-claim overlap and normalization); §3.1 → Tasks 2, 6 and 9; §3.2 → Tasks 3, 4, 5; §3.3 → Task 7 plus Task 9's marker-only amendment; §3.4 → Tasks 8 and 9 (sole sink, claim-first ownership, exact-one gate, stable-lock transaction); §5 Hook rows → Tasks 2, 6, 7, 9; §5 Helper → Tasks 3, 4, 5, 8; §5 Installer → Task 10 unchanged; §6 R2 → Tasks 6 and 9 (8-second helper plus 2-second stable lock); §6 registry/lifecycle coupling → Tasks 2, 9 and 11; §7 deploy → the Deploy section. Not in this plan, by the spec's own split: §3.5 (Plan C), §3.6 and the Wire rows (Plan B). **Correction (Task 7 fix round, I2):** §5's `ceilings drift` row (`HARNESS_CONTEXT_SPILL_CHARS`, spec §2 constants table) named no owning task anywhere in this plan before the fix round — confirmed absent by scanning every task and this file. Task 7 owns it now, since Task 7 introduced the second ceiling (`COMPACT_CARD_MAX_CHARS`) the row compares against the first; the pin reads both ceilings from the hook's own source rather than hand-copying their values. The neighbouring `total clip raised` row is also corrected there: its promised runtime red cannot occur (the value is provably unreachable, see the deviation below), restated as a source-level pin on the derivation.
+- **Spec coverage.** §3.0 → Task 2 (rule/canonical overlap) plus Task 9 (young-claim overlap and normalization); §3.1 → Tasks 2, 6 and 9; §3.2 → Tasks 3, 4, 5; §3.3 → Task 7 plus Task 9's marker-only amendment; §3.4 → Tasks 8 and 9 (sole sink, claim-first ownership, exact-one gate, stable-lock transaction); §5 Hook rows → Tasks 2, 6, 7, 9; §5 Helper → Tasks 3, 4, 5, 8; §5 Installer → Task 10 unchanged; §6 R2 → Tasks 6 and 9 (8-second helper plus 2-second stable lock); §6 registry/lifecycle runtime coupling → Task 9 only; Task 11 audits the final documentation and committed bytes without runtime work; §7 deploy → the Deploy section. Not in this plan, by the spec's own split: §3.5 (Plan C), §3.6 and the Wire rows (Plan B). **Correction (Task 7 fix round, I2):** §5's `ceilings drift` row (`HARNESS_CONTEXT_SPILL_CHARS`, spec §2 constants table) named no owning task anywhere in this plan before the fix round — confirmed absent by scanning every task and this file. Task 7 owns it now, since Task 7 introduced the second ceiling (`COMPACT_CARD_MAX_CHARS`) the row compares against the first; the pin reads both ceilings from the hook's own source rather than hand-copying their values. The neighbouring `total clip raised` row is also corrected there: its promised runtime red cannot occur (the value is provably unreachable, see the deviation below), restated as a source-level pin on the derivation.
 - **Execution state.** Tasks 1–8 code and their scoped fix rounds are complete at the amendment base; Task 9 runtime is deliberately not implemented by this document-only D-2605 change. Task 6's focused tests, five-run real-graph and over-cap measurements, diagnostic mutations, and full validation are complete. The measured helper p95/RSS is recorded in the timeout comment: ccrc 0.36 s / 104,384 KiB and the largest admissible MekWarLive graph 1.05 s / 332,184 KiB; MegaMek was refused before parse with unchanged scratch bytes. The later claim-seam correction applies atomic claims to both set and card, adds deterministic set/card directory protection plus post-claim and post-successful-restore B/C interleavings, and verifies red helper and shell mutations back to nonce-read then atomic-original-write. Later plan tasks remain pending, including Task 7's compact-arm ratio band (R=4 provisional). The `[ -f "$COMPACT_HELPER" ]` shortcut is intentionally unpinned because deleting it leaves the same silent failure; nonce ownership, post-set rollback, later-owner protection and hookstate-first ordering require diagnostic red mutations.
 - **Type consistency.** `CS_SCOPE`/`CS_TRANSCRIPT`/`CS_AGENT`/`CS_LIVE_N`/`CS_PARENT_LIVE` feed Task 6; Task 9 adds the explicit `overlap` fact without changing helper card ownership. Task 7 pairs card and set by collision-resistant nonce; Task 9's claim name is deliberately independent of that nonce so settlement precedes parsing. `measureCommand` retains numeric `at` only as measurement. Its legacy `served` field is overridden in the final record by exact-marker existence. `COMPACT_SHAPE_PRED` gates one helper object; no hookstate or persisted ordinal type exists. Task 9 merges `cwd`, `built`, `agent`, `transcript`, `parentLive`, and `liveAgents` on every record, using nulls when attribution is unsafe and retaining `scope:"ambiguous"` for an explicit overlap claim.
 - **Counts.** Test counts are not quoted per step ("every test in the file"): they drift with every added case and a wrong count makes a correct run look wrong. The `case "$event"` block parses to TEN events (`install-session-hooks.test.ts` floors at 10).
