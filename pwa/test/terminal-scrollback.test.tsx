@@ -157,6 +157,10 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   const scrolled: number[] = [];
+  /** Every sub-row shift the drawer asked to be RENDERED, in order. The whole
+   *  point of the remainder is that it is shown, so a stub that only recorded
+   *  `scrollLines` could not tell a pixel-smooth glide from a stepped one. */
+  const offsets: number[] = [];
   const madeWith: number[] = [];
   /** Every call this terminal received, in order — the latch has to be armed
    *  before the scroll that takes the reader away from the bottom. */
@@ -167,6 +171,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
     write,
     dispose,
     scrolled,
+    offsets,
     madeWith,
     order,
     /** Run the parse callbacks a deferred stub is holding. */
@@ -185,6 +190,9 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
         },
         fit: () => ({ cols: 48, rows: 20 }),
         rowHeight: () => ROW_PX,
+        offset: (px: number) => {
+          offsets.push(px);
+        },
         scrollLines: (n: number) => {
           order.push('scroll');
           scrolled.push(n);
@@ -1186,6 +1194,48 @@ describe('the history keeps moving after the finger leaves', () => {
     fireEvent.touchEnd(el, at(4 * ROW_PX + 2));
 
     expect(r.pending(), 'the view was thrown by a finger that had stopped').toBe(0);
+  });
+
+  // — the reason the tail looked wrong —
+  //
+  // A terminal scrolls in whole rows. At speed that is invisible; at the end
+  // of a throw it is the whole problem, because the time between row steps is
+  // the row height over the speed, so as the glide decays the steps spread out
+  // and the last one is the longest of all: "останній крок найсильніше, що не
+  // приємно виглядає". Tuning the curve cannot fix that — it is the quantum,
+  // not the speed. Rendering the remainder can, and these two cases are what
+  // say it is rendered.
+  it('a drag shorter than one row still moves the view, by the fraction it covered', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    h.offsets.length = 0;
+    const el = histHost(view);
+    const third = ROW_PX / 3;
+
+    fireEvent.touchStart(el, at(0));
+    fireEvent.touchMove(el, at(third));
+    fireEvent.touchMove(el, at(2 * third));
+    fireEvent.touchEnd(el, at(2 * third));
+
+    expect(h.scrolled, 'two thirds of a row dropped a whole row').toEqual([]);
+    expect(h.offsets.map((px) => Math.round(px)), 'the view did not follow the finger between rows')
+      .toEqual([Math.round(third), Math.round(2 * third)]);
+  });
+
+  it('a throw moves the view on every frame, not only on the frames that drop a row', async () => {
+    const { h, view } = await open();
+    const r = rig();
+    h.scrolled.length = 0;
+    h.offsets.length = 0;
+
+    flick(histHost(view), r, [0, 2 * ROW_PX, 4 * ROW_PX], 8);
+    const afterDrag = h.offsets.length;
+    const ran = r.frames(40);
+
+    expect(ran, 'the throw was over before the tail').toBeGreaterThan(10);
+    expect(h.offsets.length - afterDrag, 'a frame of the throw rendered nothing at all').toBe(ran);
+    expect(h.scrolled.length, 'every frame dropped a whole row — there is no tail here to smooth')
+      .toBeLessThan(ran);
   });
 
   it('a touch during the throw stops it where it is', async () => {
