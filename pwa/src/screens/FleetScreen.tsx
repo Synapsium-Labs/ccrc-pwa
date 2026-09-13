@@ -41,6 +41,36 @@ const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
   },
 );
 
+type PoolSelection = {
+  project: string;
+  pool?: NonNullable<ProjectRow['pool']>;
+};
+
+type PoolWrite = {
+  project: string;
+  pool: NonNullable<ProjectRow['pool']>;
+};
+
+/** The pool the sheet is opened on, and the one it keeps while it stays open —
+ *  ONE reading used by both the card tap and the open-sheet remeasurement, so
+ *  the two can never drift (D-2721). A live write for THIS project precedes the
+ *  route read (D-2704/D-2707; D-2714 pins when the bridge clears), and a
+ *  non-measured read yields no pool at all rather than inventing one: an old
+ *  server that omitted the field must still reach PoolSheet's frame fallback. */
+const poolSelectionFor = (
+  project: string,
+  read: ProjectPlacementRead,
+  write: PoolWrite | null,
+): PoolSelection => {
+  const written = write?.project === project ? write.pool : undefined;
+  return {
+    project,
+    ...(written !== undefined
+      ? { pool: written }
+      : read.kind === 'measured' ? { pool: read.pool } : {}),
+  };
+};
+
 /** Section-header noun for each bucket — a heading register, not the row's
  *  own state-word adjective (SessionLine.tsx's private `WORD`, which says
  *  `waiting`/`merged`/`exited` where these say `Attention`/`Cleanup`/`Dead`).
@@ -214,7 +244,10 @@ export function FleetScreen({
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [refreshProjects]);
 
-  const placementFor = (project: string): ProjectPlacementRead => {
+  // Memoised on the rows it reads, so the remeasurement below can depend on it
+  // honestly: a reader rebuilt every render would make that effect re-run on
+  // every render it caused.
+  const placementFor = useCallback((project: string): ProjectPlacementRead => {
     if (projectRows.kind !== 'ready') return projectRows;
     const row = projectRows.rows.find((candidate) => candidate.name === project);
     if (row === undefined) return { kind: 'missing' };
@@ -222,7 +255,26 @@ export function FleetScreen({
       && Object.hasOwn(row, 'placement') && row.placement !== undefined
       ? { kind: 'measured', pool: row.pool, placement: row.placement }
       : { kind: 'legacy' };
-  };
+  }, [projectRows]);
+
+  // D-2721: the selection is a snapshot taken when the card was tapped, and the
+  // route remeasures underneath an open sheet — a pools frame, a visible-page
+  // return and the write's own refresh each land a fresher `ProjectRow.pool` in
+  // `projectRows` that the tapped value would otherwise outlive, leaving the
+  // card and the sheet above it stating different pools for one project at one
+  // instant. Nothing new is fetched here: the answer is already in this
+  // component, only the wiring was missing.
+  //
+  // ONLY while open. The snapshot's other job (:129) is to survive vaul's exit
+  // animation, so remeasuring through the close would flip the copy mid-flight
+  // — and flip it to "this box has not said" for a row that has since gone.
+  // Frozen on close stays frozen.
+  useEffect(() => {
+    if (!poolOpen) return;
+    setPoolSelection((selected) => selected === null
+      ? selected
+      : poolSelectionFor(selected.project, placementFor(selected.project), poolWrite.current));
+  }, [poolOpen, placementFor]);
 
   const addWorkspace = async (project: string): Promise<void> => {
     if (adding.has(project)) return;
@@ -572,14 +624,7 @@ export function FleetScreen({
                 roster={roster}
                 pools={pools}
                 onPool={(p) => {
-                  const read = placementFor(p);
-                  const written = poolWrite.current?.project === p ? poolWrite.current.pool : undefined;
-                  setPoolSelection({
-                    project: p,
-                    ...(written !== undefined
-                      ? { pool: written }
-                      : read.kind === 'measured' ? { pool: read.pool } : {}),
-                  });
+                  setPoolSelection(poolSelectionFor(p, placementFor(p), poolWrite.current));
                   setPoolOpen(true);
                 }}
                 /* Task 4: THIS card's own runs. Scoped here rather than inside
