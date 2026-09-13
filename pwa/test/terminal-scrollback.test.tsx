@@ -1062,6 +1062,152 @@ describe('the finger scrolls the history', () => {
 // screen, where xterm keeps no scrollback at all — but the gesture still has an
 // obvious meaning, and it is the same one the wheel has: reach for what is
 // above the screen.
+// — the throw —
+//
+// Every list on the device keeps moving when the finger leaves and slows to a
+// stop; a view that halts dead does not read as scrolling at all, which is
+// what the operator met: it worked only while the finger was down. The history
+// cannot borrow the platform's deceleration — it is not a native scroller,
+// xterm's viewport is an empty leftover and the scroll is a virtual re-render
+// — so the curve is the drawer's own, and these cases hold its shape.
+describe('the history keeps moving after the finger leaves', () => {
+  const open = async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const m = mountDrawer();
+    act(() => {
+      m.t.wheel(-120);
+    });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+    return m;
+  };
+
+  /** A clock and a frame pump the test drives by hand, so a throw is measured
+   *  in frames rather than waited out in real time. `performance.now` is what
+   *  the drag reads for its speed, so the two have to be the same clock. */
+  const rig = () => {
+    let t = 1000;
+    const queue: ((now: number) => void)[] = [];
+    vi.spyOn(performance, 'now').mockImplementation(() => t);
+    vi.stubGlobal('requestAnimationFrame', (cb: (now: number) => void) => {
+      queue.push(cb);
+      return queue.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', () => { queue.length = 0; });
+    return {
+      wait: (ms: number) => { t += ms; },
+      pending: () => queue.length,
+      /** Run up to `n` frames of `dt` each; stops early if the throw ended. */
+      frames: (n: number, dt = 1000 / 60) => {
+        for (let i = 0; i < n; i += 1) {
+          const cb = queue.shift();
+          if (cb === undefined) return i;
+          t += dt;
+          act(() => cb(t));
+        }
+        return n;
+      },
+    };
+  };
+
+  const at = (y: number) => ({ touches: [{ clientX: 0, clientY: y, identifier: 1 }],
+                               changedTouches: [{ clientX: 0, clientY: y, identifier: 1 }] });
+
+  /** One finger, moved through `ys` with `dt` between each, then lifted. */
+  const flick = (el: HTMLElement, r: ReturnType<typeof rig>, ys: number[], dt: number): void => {
+    fireEvent.touchStart(el, at(ys[0]!));
+    for (const y of ys.slice(1)) { r.wait(dt); fireEvent.touchMove(el, at(y)); }
+    fireEvent.touchEnd(el, at(ys[ys.length - 1]!));
+  };
+
+  const total = (xs: number[]): number => xs.reduce((a, b) => a + b, 0);
+
+  it('a flick keeps reaching for older output after the finger has gone', async () => {
+    const { h, view } = await open();
+    const r = rig();
+    h.scrolled.length = 0;
+
+    // Two rows every 8 ms is a throw, not a placement: about 4.5 px/ms.
+    flick(histHost(view), r, [0, 2 * ROW_PX, 4 * ROW_PX], 8);
+    const byHand = total(h.scrolled);
+    expect(byHand, 'the drag itself moved nothing').toBeLessThan(0);
+
+    expect(r.pending(), 'the finger left and nothing was thrown').toBeGreaterThan(0);
+    r.frames(20);
+
+    expect(total(h.scrolled), 'the history stopped dead with the finger')
+      .toBeLessThan(byHand);
+  });
+
+  it('the throw slows to a stop on its own rather than running forever', async () => {
+    const { view } = await open();
+    const r = rig();
+
+    flick(histHost(view), r, [0, 2 * ROW_PX, 4 * ROW_PX], 8);
+    // Far more frames than the curve can need; `frames` returns early when the
+    // throw has stopped asking for another.
+    const ran = r.frames(600);
+
+    // BOTH ENDS, because either alone is vacuous: a drawer that throws nothing
+    // also "stops", and one that never stops would have been caught only by
+    // the ceiling. A flick this fast is worth tens of frames before it decays
+    // below the threshold.
+    expect(ran, 'nothing was thrown at all').toBeGreaterThan(10);
+    expect(ran, 'the throw never ended').toBeLessThan(600);
+    expect(r.pending()).toBe(0);
+  });
+
+  it('a placement is not a throw — a slow drag ends where the finger did', async () => {
+    const { h, view } = await open();
+    const r = rig();
+    h.scrolled.length = 0;
+
+    // The same three rows, taken 150 ms at a time: 0.06 px/ms, well under the
+    // flick threshold. This is a reader positioning the view.
+    flick(histHost(view), r, [0, 1.5 * ROW_PX, 3 * ROW_PX], 150);
+    const byHand = total(h.scrolled);
+
+    expect(r.pending(), 'a slow drag was thrown').toBe(0);
+    r.frames(20);
+    expect(total(h.scrolled)).toBe(byHand);
+  });
+
+  it('a finger that rested before lifting is placing the view, not throwing it', async () => {
+    const { view } = await open();
+    const r = rig();
+
+    // Fast, fast, then a pause longer than the idle window and one small move
+    // — a reader who flicked, changed their mind, and set the view down.
+    // Averaging the samples would have carried the flick's speed into the lift.
+    const el = histHost(view);
+    fireEvent.touchStart(el, at(0));
+    r.wait(8); fireEvent.touchMove(el, at(2 * ROW_PX));
+    r.wait(8); fireEvent.touchMove(el, at(4 * ROW_PX));
+    r.wait(300); fireEvent.touchMove(el, at(4 * ROW_PX + 2));
+    fireEvent.touchEnd(el, at(4 * ROW_PX + 2));
+
+    expect(r.pending(), 'the view was thrown by a finger that had stopped').toBe(0);
+  });
+
+  it('a touch during the throw stops it where it is', async () => {
+    const { h, view } = await open();
+    const r = rig();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    flick(el, r, [0, 2 * ROW_PX, 4 * ROW_PX], 8);
+    r.frames(3);
+    const caught = total(h.scrolled);
+
+    // The catch: a finger down, and nothing else. Every scroller on the device
+    // does this, and it is the only way to stop a line going past.
+    fireEvent.touchStart(el, at(500));
+
+    expect(r.pending(), 'the throw survived the catch').toBe(0);
+    r.frames(20);
+    expect(total(h.scrolled), 'the history kept moving under a held finger').toBe(caught);
+  });
+});
+
 describe('a finger opens the history from the live glass', () => {
   const liveGlass = (view: ReturnType<typeof mountDrawer>['view']): HTMLElement => {
     const el = view.baseElement.querySelector('.term-screen > .term-host');

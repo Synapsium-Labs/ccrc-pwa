@@ -205,6 +205,37 @@ const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
 const TOUCH_OPEN_PX = 24;
 const WHEEL_LINES = 3;
 
+/* — the throw, which a console on a phone is expected to have —
+ *
+ * A drag that stops dead the instant the finger lifts does not read as
+ * scrolling; every list on the device keeps moving and slows down. The history
+ * is not a native scroller (xterm's viewport is an empty leftover and the real
+ * scroll is a virtual re-render), so the deceleration has to be written here
+ * too. These are the four numbers it takes, in CSS pixels and milliseconds.
+ */
+/** A flick, not a placement: the least speed that keeps the history moving
+ *  after the finger has gone. Below it the reader was positioning the view. */
+const FLING_MIN_PX_MS = 0.25;
+/** A finger that rested this long before lifting is placing the view, not
+ *  throwing it — so the speed it had before the pause is not its speed now. */
+const FLING_IDLE_MS = 80;
+/** How much of the newest sample the smoothed speed takes. Raw per-move speed
+ *  is far too noisy on a phone: one 2 ms gap between moves turns an ordinary
+ *  drag into a fling. */
+const FLING_SMOOTH = 0.35;
+/** What is left of the speed one 60 Hz frame later — the decay, expressed per
+ *  frame and applied per elapsed millisecond so a slow frame does not slow the
+ *  glide down with it. */
+const GLIDE_DECAY = 0.95;
+/** Below this there is nothing left to show; stop rather than animate a
+ *  fraction of a row forever. */
+const GLIDE_STOP_PX_MS = 0.02;
+const FRAME_MS = 1000 / 60;
+/** The longest gap a single glide frame may account for. A drawer that was
+ *  backgrounded mid-throw comes back with a gap of seconds, and without this
+ *  the history would jump the whole distance in one frame. */
+const GLIDE_MAX_STEP_MS = 50;
+
 type Conn = 'connecting' | 'open' | 'down';
 
 /** Where the reader is. `live` is the attached pane; the other three are the
@@ -601,9 +632,72 @@ export function TerminalDrawer({
      *  fills it in rather than dividing by a number nobody gave us. */
     let rowPx = 0;
 
+    /** When the last move was seen, and how fast the finger was going then —
+     *  smoothed, because raw per-move speed on a phone is noise. */
+    let lastT = 0;
+    let vel = 0;
+    /** The running throw, if there is one. */
+    let raf = 0;
+    const stopGlide = (): void => {
+      if (raf !== 0) { cancelAnimationFrame(raf); raf = 0; }
+    };
+
+    /** Turn travel into rows and scroll by them, keeping the sub-row
+     *  remainder. Shared by the finger and by the throw that follows it, so
+     *  the two cannot disagree about which way is older or about what happens
+     *  to the fraction of a row between them. */
+    const advance = (travel: number): number => {
+      const rows = Math.trunc(travel / rowPx);
+      // The content follows the finger: dragging DOWN reaches older output,
+      // which is a scroll UP.
+      if (rows !== 0) term.scrollLines(-rows);
+      return travel - rows * rowPx;
+    };
+
+    /**
+     * THE THROW. Everything on a phone keeps moving when the finger leaves and
+     * slows to a stop; a view that halts dead does not read as a scroll at all,
+     * which is what the operator met — "працює виключно поки ведеш пальцем".
+     * The history cannot borrow the platform's deceleration because it is not a
+     * native scroller: xterm's `.xterm-viewport` is an empty leftover and the
+     * real scroll is a virtual re-render. So the curve is written here.
+     *
+     * It carries the finger's own remainder in rather than starting from zero,
+     * so the hand-off is continuous — the throw picks up mid-row exactly where
+     * the drag left off.
+     *
+     * IT DOES NOT KNOW WHERE THE EDGES ARE, deliberately: a throw that runs
+     * past the oldest line simply scrolls nothing for the rest of its curve,
+     * which is invisible and costs one short animation. Asking the terminal for
+     * its viewport position every frame to stop a few hundred milliseconds
+     * earlier would buy a new method on the seam for nothing anyone can see.
+     * The other end needs no such care — arriving at the newest line is what
+     * `onBottom` latches, and it takes the whole layer down with it.
+     */
+    const glide = (v0: number): void => {
+      let v = v0;
+      let prev = 0;
+      const frame = (now: number): void => {
+        if (prev === 0) { prev = now; raf = requestAnimationFrame(frame); return; }
+        const dt = Math.min(now - prev, GLIDE_MAX_STEP_MS);
+        prev = now;
+        carry = advance(v * dt + carry);
+        v *= GLIDE_DECAY ** (dt / FRAME_MS);
+        if (Math.abs(v) < GLIDE_STOP_PX_MS) { raf = 0; return; }
+        raf = requestAnimationFrame(frame);
+      };
+      raf = requestAnimationFrame(frame);
+    };
+
     const begin = (y: number): void => {
+      // A touch during a throw stops it where it is — the one thing every
+      // scroller on the device does, and the only way to catch a line going
+      // past.
+      stopGlide();
       dragging = true;
       lastY = y;
+      lastT = performance.now();
+      vel = 0;
       carry = 0;
       rowPx = term.rowHeight();
     };
@@ -611,17 +705,26 @@ export function TerminalDrawer({
       if (!dragging) return;
       if (rowPx <= 0) {
         rowPx = term.rowHeight();
-        if (rowPx <= 0) { lastY = y; return; }
+        if (rowPx <= 0) { lastY = y; lastT = performance.now(); return; }
       }
-      const travel = y - lastY + carry;
+      const now = performance.now();
+      const dy = y - lastY;
+      const dt = now - lastT;
       lastY = y;
-      const rows = Math.trunc(travel / rowPx);
-      carry = travel - rows * rowPx;
-      // The content follows the finger: dragging DOWN reaches older output,
-      // which is a scroll UP.
-      if (rows !== 0) term.scrollLines(-rows);
+      lastT = now;
+      // A pause discards the speed rather than averaging it away: a finger that
+      // rested and then lifted is placing the view, and the flick it made on
+      // the way in is not what it is asking for now.
+      if (dt > 0) vel = dt > FLING_IDLE_MS ? 0 : vel * (1 - FLING_SMOOTH) + (dy / dt) * FLING_SMOOTH;
+      carry = advance(dy + carry);
     };
-    const finish = (): void => { dragging = false; };
+    const finish = (): void => {
+      dragging = false;
+      if (rowPx > 0 && Math.abs(vel) >= FLING_MIN_PX_MS) glide(vel);
+      // Spent either way: a second `finish` for the same gesture — the pointer
+      // echo of a touch that already ended — must not throw the view twice.
+      vel = 0;
+    };
 
     /**
      * TWO INPUT PATHS, AND THE TOUCH ONE IS NOT A LUXURY. The ask picker and
@@ -705,6 +808,7 @@ export function TerminalDrawer({
       histHost.removeEventListener('touchmove', touchMove, true);
       histHost.removeEventListener('touchend', touchEnd, true);
       histHost.removeEventListener('touchcancel', touchEnd, true);
+      stopGlide();
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
