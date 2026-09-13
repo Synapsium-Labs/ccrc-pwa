@@ -4049,3 +4049,61 @@ deviation found while executing this plan is allocated in its own call at the mo
   account label, away arrow, or pool decision. Add conditional render, CSS, and
   ordinary/selected contrast assertions; mutation-pin the sibling, both known-
   pool guards, and selected override, restoring each exactly.
+
+- **D-2699 — The selected project-row pool chip's rendered ground is absent
+  from the contrast audit.** `.acct-pool` is registered only against the sheet
+  ground, but a crossing project selected in NewSessionSheet renders that chip
+  on `--accent-tint`. Current ratios pass; nevertheless, changing only the
+  selected ground to `--acct-amber-tint` leaves the existing audit green while
+  the rendered dark-theme ratio falls below 4.5. Coordinator mail 971 ruled
+  retaining the ordinary `.acct-pool` registration, adding the concrete rule
+  `.proj-row--selected .acct-pool { color: var(--ink-tertiary); }`, and
+  registering that exact identity separately against `--accent-tint`. Add a
+  focused two-theme floor assertion; mutation-pin a failing selected-ground
+  token while the ordinary row and cardinality/identity census remain green,
+  then restore source and tests exactly.
+
+- **D-2700 — NewSessionSheet does not disclose when visible project-pool
+  measurements are undecidable.** Unreadable and malformed route pool results
+  correctly remain fail-open and non-crossing, but their ordinary visible rows
+  carry no honest note that pool matching could not decide them. Coordinator
+  mail 974 ruled classifying each route result once as eligible, crossing, or
+  unknown while preserving the current `poolSide` policy. If any visible result
+  is unknown, render exactly one `.pool-note`: `One or more project pools are
+  not known from here, so pool matching does not hide those projects.` Unknown
+  rows remain visible with Start enabled and a plain request; known crossings
+  remain behind disclosure. Do not hide, disable, or classify an unknown row as
+  crossing, substitute placement for route pool, or add `crossPool`. Pin
+  unreadable, malformed, and mixed results; mutation-pin the note, unknown
+  predicate, and plain request independently, restoring each exactly.
+
+- **D-2701 — PoolSheet recomputes a selected card's pool from a potentially
+  divergent websocket frame.** FleetScreen's card can display route-coherent
+  `ProjectRow.pool` pool B, then store only the project name when opening the
+  sheet; PoolSheet independently reads pool A from the websocket frame and
+  claims the project is in pool A. Coordinator mail 977 ruled carrying the
+  card's optional route-owned pool snapshot with the selected project. Display
+  precedence is successful-write route read-back, then that selected snapshot,
+  then the existing websocket fallback for old-server absence. On successful
+  mutation, retain the response as the immediate snapshot and invoke the
+  existing `refreshProjects()` so pool and placement are remeasured together.
+  The action remains `setProjectPool(project, selectedName)` and no second policy
+  implementation is introduced. Pin divergent route/frame opening and the old-
+  server fallback; mutation-pin removal of the selected snapshot precedence and
+  restore exactly. Correct ProjectCard's misleading legacy-frame comment in the
+  same source fix without changing behavior.
+
+- **D-2702 — An unchanged reconnect frame can duplicate an in-flight visible
+  project refresh.** After an initial projects request, returning while the
+  socket is down starts a visibility-triggered request; an equal cold pools
+  frame on reconnect starts another before the visible request resolves. The
+  generation counter suppresses stale writes but does not suppress duplicate
+  work. Coordinator mail 978 ruled tracking the active visibility-triggered
+  request with a token and the stable pools fingerprint. When the pools effect
+  receives an equal cold-frame fingerprint while that visibility request is
+  unresolved, skip only that duplicate. Preserve direct visible refresh, stale-
+  write generation, overlapping completion, and an immediate refresh for a
+  genuinely changed fingerprint; do not serialize all requests. Pin a deferred
+  real-store reconnect at two total calls with one post-initial request still
+  outstanding, plus a changed-payload sibling that requires the third call.
+  Mutation-pin deletion of the equality/in-flight guard and restore exactly.
