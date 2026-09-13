@@ -429,16 +429,29 @@ export function TerminalDrawer({
      * NOTHING IS PREVENTED HERE. A tap must still reach xterm's textarea, so
      * the press is only watched, never claimed; the history opens on the move
      * that crosses the threshold and the pointer is left to xterm either way.
+     *
+     * AND IT IS WATCHED TWICE, because on the phone the pointer half cannot
+     * work alone. vaul installs `preventScrollMobileSafari` while a drawer is
+     * open — `document`, capture phase, `passive: false` — and it calls
+     * `preventDefault()` on touchmove for any touch whose scroll parent is the
+     * document, which on this glass is every touch (`.term-host` and every
+     * xterm element inside it are `overflow: hidden`). Safari answers a
+     * prevented touchmove by tearing down the POINTER stream for that gesture,
+     * so `pointermove` never arrives and the drag that opens the history could
+     * never have fired on an iPhone. It never did: measured on the operator's
+     * own phone across four builds, "не реагує зовсім".
+     *
+     * The touch listeners are not affected by that — `preventDefault` stops
+     * the default action, not the other listeners, and vaul never calls
+     * `stopPropagation`. One finger is still counted once: a touch gesture
+     * takes ownership for its duration and the pointer echo stands down.
      */
     let from: { x: number; y: number } | null = null;
-    const openDown = (ev: PointerEvent): void => {
-      if (ev.defaultPrevented) { from = null; return; }   // xterm's own scrollbar
-      from = { x: ev.clientX, y: ev.clientY };
-    };
-    const openMove = (ev: PointerEvent): void => {
+    let openViaTouch = false;
+    const reach = (x: number, y: number): void => {
       if (from === null) return;
-      const dy = ev.clientY - from.y;
-      const dx = ev.clientX - from.x;
+      const dy = y - from.y;
+      const dx = x - from.x;
       // DOWN, and more down than sideways: a swipe across the glass is not a
       // reach for older output, and a wobble is not a swipe. The threshold is
       // about a row and a half, which is the smallest travel that reads as
@@ -447,11 +460,40 @@ export function TerminalDrawer({
       from = null;
       openHistory();
     };
-    const openEnd = (): void => { from = null; };
+    const openDown = (ev: PointerEvent): void => {
+      if (openViaTouch) return;                           // the finger owns this
+      if (ev.defaultPrevented) { from = null; return; }   // xterm's own scrollbar
+      from = { x: ev.clientX, y: ev.clientY };
+    };
+    const openMove = (ev: PointerEvent): void => {
+      if (openViaTouch) return;
+      reach(ev.clientX, ev.clientY);
+    };
+    const openEnd = (): void => { if (!openViaTouch) from = null; };
+    const openTouchStart = (ev: TouchEvent): void => {
+      openViaTouch = true;
+      if (ev.touches.length !== 1) { from = null; return; }  // a pinch, not a reach
+      from = { x: ev.touches[0]!.clientX, y: ev.touches[0]!.clientY };
+    };
+    const openTouchMove = (ev: TouchEvent): void => {
+      if (ev.touches.length !== 1) { from = null; return; }
+      reach(ev.touches[0]!.clientX, ev.touches[0]!.clientY);
+    };
+    const openTouchEnd = (): void => { from = null; openViaTouch = false; };
     host.addEventListener('pointerdown', openDown);
     host.addEventListener('pointermove', openMove);
     host.addEventListener('pointerup', openEnd);
     host.addEventListener('pointercancel', openEnd);
+    // CAPTURE for the touch pair, and it is insurance rather than a measured
+    // need: xterm 6.0.0 binds no touch listener at all (measured — nothing in
+    // `browser/` listens for one), but it DOES call `stopPropagation()`
+    // unconditionally in its paste handler one level below this host, which is
+    // how the clipboard fix was lost for a day. A listener that must not be
+    // taken away belongs above the elements that could take it.
+    host.addEventListener('touchstart', openTouchStart, { passive: true, capture: true });
+    host.addEventListener('touchmove', openTouchMove, { passive: true, capture: true });
+    host.addEventListener('touchend', openTouchEnd, { passive: true, capture: true });
+    host.addEventListener('touchcancel', openTouchEnd, { passive: true, capture: true });
 
     // Later size changes (rotation, keyboard, desktop resize) → refit; only a
     // changed grid is worth a resize frame.
@@ -470,6 +512,14 @@ export function TerminalDrawer({
     return () => {
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
+      host.removeEventListener('pointerdown', openDown);
+      host.removeEventListener('pointermove', openMove);
+      host.removeEventListener('pointerup', openEnd);
+      host.removeEventListener('pointercancel', openEnd);
+      host.removeEventListener('touchstart', openTouchStart, true);
+      host.removeEventListener('touchmove', openTouchMove, true);
+      host.removeEventListener('touchend', openTouchEnd, true);
+      host.removeEventListener('touchcancel', openTouchEnd, true);
       unsubAuth();
       refitRef.current = null;
       // Detach handlers first so our own close() can't echo a 'down' overlay.
@@ -638,19 +688,23 @@ export function TerminalDrawer({
     histHost.addEventListener('pointermove', move);
     histHost.addEventListener('pointerup', end);
     histHost.addEventListener('pointercancel', end);
-    histHost.addEventListener('touchstart', touchStart, { passive: true });
-    histHost.addEventListener('touchmove', touchMove, { passive: true });
-    histHost.addEventListener('touchend', touchEnd, { passive: true });
-    histHost.addEventListener('touchcancel', touchEnd, { passive: true });
+    // The pointer pair stays in the BUBBLE phase on purpose: `down` reads
+    // `defaultPrevented`, which only carries xterm's scrollbar claim once
+    // xterm's own handler has run. The touch pair goes in the CAPTURE phase,
+    // where nothing below can take it away.
+    histHost.addEventListener('touchstart', touchStart, { passive: true, capture: true });
+    histHost.addEventListener('touchmove', touchMove, { passive: true, capture: true });
+    histHost.addEventListener('touchend', touchEnd, { passive: true, capture: true });
+    histHost.addEventListener('touchcancel', touchEnd, { passive: true, capture: true });
     return () => {
       histHost.removeEventListener('pointerdown', down);
       histHost.removeEventListener('pointermove', move);
       histHost.removeEventListener('pointerup', end);
       histHost.removeEventListener('pointercancel', end);
-      histHost.removeEventListener('touchstart', touchStart);
-      histHost.removeEventListener('touchmove', touchMove);
-      histHost.removeEventListener('touchend', touchEnd);
-      histHost.removeEventListener('touchcancel', touchEnd);
+      histHost.removeEventListener('touchstart', touchStart, true);
+      histHost.removeEventListener('touchmove', touchMove, true);
+      histHost.removeEventListener('touchend', touchEnd, true);
+      histHost.removeEventListener('touchcancel', touchEnd, true);
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
