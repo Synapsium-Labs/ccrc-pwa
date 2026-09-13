@@ -5293,3 +5293,129 @@ whether this programme has already measured and ruled on that anomaly's class.* 
 staying stopped after my own ledger had answered it was not.
 
 **D-2688..D-2702 are now recorded here.** This entry is committed with an explicit path.
+
+## 2026-09-13 03:05Z — D-2703..D-2711: the fix round reproduced its own class, and a panel had to find it
+
+Ran the pass this wave was owed and had not had: an adversarial review of the CORRECTIONS, not
+the features. Four Opus lenses over `42e426f1..7551c395` — regression, adjacent-seam, test-adequacy,
+whole-wave contract — each in its own disposable worktree, each candidate then routed to its own
+Sonnet refuter told to default to REFUTED. 21 agents, 17 candidates, 15 confirmed, 2 refuted.
+
+**The reason to run it is the thing it found.** This repo's recorded lesson is that a fix round
+reproduces the very class it fixes, at a seam next to the one it repairs. **D-2704 is that, exactly.**
+
+**D-2704 (HIGH) — `poolWrite` never expires.** Four independent lenses converged on one line, which
+is the strongest signal this panel produced. I read all three references myself rather than take it:
+declared `FleetScreen:128`, written `:608`, read `:543`, **cleared nowhere**, and at `:543`
+`written !== undefined` beats `read.kind === 'measured' ? read.pool : {}` unconditionally. So after
+any successful write that project's sheet opens on the remembered value forever — past the
+`refreshProjects()` the same handler fired, and past a tag changed outside the tab. And the branch is
+never a gap-filler: `PoolChip` is tappable only when `pool !== null`, i.e. only when a measurement
+exists, so `written` can ONLY displace a live measurement. A refuter reproduced it — card chip
+`project pool pool-b`, its own chip opening `alpha is in pool pool-a.` — and the control is the
+telling half: replacing `written` with `undefined` turned the probe green **and left the shipped
+suite at 95/95**. D-2701 was ruled to end card-vs-sheet divergence and shipped a cache with no
+invalidation that recreates it one seam over.
+
+**Two of these are MY rulings coming back, and both are recorded as mine.**
+
+- **D-2705** — D-2700's note fires on an ABSENT pool. `poolClass = poolSide(wrapperPool, c.pool ?? null)`
+  and `poolSide(_, null) => 'unknown'`, so a pre-pools server gets the note on every project forever.
+  I searched: there is **no fixture anywhere with an absent `pool`**. D-2700's verification, which I
+  accepted at 12/12 with three mutants, could not have caught it — because **my ruling named
+  unreadable and malformed and never named absence.** The verifier tested exactly what I told it to.
+  This is the same absence-permits seam I myself ruled in D-2691, missed one surface over.
+- **D-2708** — the archived route-pool fixture I ORDERED in D-2693 asserts a state the wire cannot
+  carry. An archived member is archived only on `archivedAt !== null && status === 'dead'`, and a dead
+  row suppresses the off-pool cue; the fixture passes only because it omits `status:'dead'`. Adding it
+  flips the test from pass to fail. The verification I accepted showed each deletion redding its own
+  test — but **the archived red came off an impossible session. A red from fiction is not evidence**,
+  and I asked for that fixture.
+
+**D-2706** — D-2699's registered ground is hand-written and never compared to the CSS that paints it.
+Retint `.proj-row--selected` and the audit goes on measuring `--accent-tint`, green, while the
+rendered state fails: **the D-2678 trap, reproduced by the fix that closed its sibling.** The earlier
+D-2699 mutation moved the REGISTRY token and saw red, which proves the entry is wired and does not
+prove it tracks the stylesheet. The realistic bypass is a CSS edit and it is still open. Ruled a check
+only for grounds that ARE checkable — a token set as `background` by one named selector — because
+`INHERITED_GROUNDS` is hand-written by design (D-2640) and a generic scan would be fragile.
+
+**D-2707** — every refresh resets the screen to `pending`, so the chip, the forecast and the off-pool
+cue blank and return on visibility resume, on every pools frame, and after every write. Measured:
+chip absent during pending, present after resolve. `pending` is right for a cold load and wrong for a
+re-measure with a good row already on screen.
+
+**D-2710 — a FIX commit carried an unruled product change.** `06aa3a54` also put a pool chip on
+NewSessionSheet's step-1 account rows. D-2688 authorised a truncation, not a new display on another
+surface, and the same commit falsified the shared prop's own docstring ("Only crossing rows pass it").
+**I did not order a revert** — it fits the wave's purpose, SwapSheet already shows it, it is green, and
+reverting a shipped tested improvement at close is churn. Kept, docstring corrected, recorded as
+approved after the fact. The durable half is the process finding: nothing in the gates would have
+caught scope arriving inside a fix.
+
+**Two remedies rejected, one refutation overruled, one finding parked — because a panel's output is a
+claim too.**
+
+- **Overruled.** A refuter called D-2705 spec-blessed, reasoning that D-2700 said to reuse `poolSide`.
+  That conflates reusing `poolSide` for CLASSIFICATION with using its output as the NOTE's predicate.
+  The fix changes one local predicate and touches no policy. Confirmed over its refuter.
+- **Rejected remedy (D-2709).** StartProgramSheet's placement is a once-per-open snapshot, so a
+  refusal cannot self-clear while the sheet is open. True. The proposed fix — re-fetch on
+  `useProjectedHome`'s 20s cadence — would have contradicted the plan, my own no-timer ruling
+  (D-2663..D-2670) and the then-open D-2702 **simultaneously**, by adding an O(N) `/api/projects`
+  poll to the very wave that was removing one. Ruled onto the existing non-timer invalidation, or
+  parked with reasoning; a stale refusal that clears on reopen beats another sweep. Also: the probe
+  demonstrated it by turning the GLOBAL eligible and watching the refusal persist — **that behaviour
+  is correct and is D-2694's matrix working**, and I told the worker not to "fix" it.
+- **Parked unmeasured.** A lens claimed D-2688's shrink is inert inside `.proj-row` because that is a
+  grid. Its own refuter states it was READ, NOT EXECUTED — "jsdom does no layout and no browser engine
+  was available". And the claim is overstated: `flex` is inert on a grid item, but `min-width: 0` and
+  the overflow trio are not, and those four are what make a `1fr` track ellipsize. **I will not ship a
+  CSS change on an unmeasured layout claim** — which is precisely how D-2688 would have gone wrong had
+  I ruled it on the first report instead of measuring it. Parked for the next wave.
+
+**D-2711 — a green mutant that was disambiguated instead of waved through.** D-2702's fingerprint
+sorts object keys at every depth; replacing that replacer with a plain `JSON.stringify` left **all 71
+shipped tests green**. On its own that is AMBIGUOUS — this programme's own rule is that a green
+mutation never means untested. The control settles it: an independently written reordered-key probe
+**did** red on that same mutant. So the mechanism is real and nothing shipped exercises it, because
+the two "equal" tests reuse the same object REFERENCE. Ruled tests-only, with the honest alternative
+offered — argue the replacer is defensive beyond anything the server emits and I will consider ruling
+it removed. One or the other, never a mechanism shipped with no red behind it.
+
+**Accepted this round.** D-2702 `3549f879`: equal-and-reordered frame coalesces to 2 post-initial
+calls, a genuinely changed frame still fires the third, the generation guard is untouched, and a
+REJECTED visibility request clears its marker in `finally` while the token matches — no leak, no
+wedge. D-2701's mechanism `7551c395`: precedence exactly write-readback → selected route snapshot →
+frame, all four mutants redding only their own assertions with 95 registered every run.
+
+**D-2703 came out of D-2701's own comment clause.** I had ruled "correct ProjectCard's misleading
+legacy-frame comment." The worker corrected the instance it was handed — and **the sentence it
+replaced was TRUE** (`Absence is handled by the caller: no frame means no claim` accurately describes
+`null` → no chip), while the actually-false comment at `:217` still stands directly above the line
+that disproves it. I measured it before ruling: `pools` is referenced once for a value, `poolDim`, and
+is never a pool source. Correcting the instance is not correcting the claim. Three more instances of
+that same class fell out of the panel (FleetHostBanner's header census still carrying the clause
+D-2696 removed from the rendered copy; `AccountRow.poolChip`'s falsified contract; StartProgramSheet's
+recovery docstring saying "two" arms where D-2694 made three) and were **folded into D-2703 rather
+than minted separately** — one claim, one commit, and the grep D-2703 already demanded.
+
+**`ceef7bc6` accepted, no number.** Docs-only, defines nothing, and correct: leaving "No production or
+test fix may begin until the coordinator issues a number" standing beside a shipped fix is itself a
+false claim in a document. Two side effects sent back into D-2703's commit rather than minted:
+relabelling `Proposed ruling:` to `Coordinator ruling:` puts the WORKER's proposal text under MY name
+where several of my rulings were narrower; and the commit is net −1 line with every hunk at/below
+~3904, so any citation into the Deviations section is now off by one and must be re-proved by
+byte-equality.
+
+**Definitions committed** at `b86c31f14577e9159004388c79a46eeef00d580d` — one path, +95/−0, all nine
+of D-2703..D-2711 defined exactly once, no source or test edits. (Its mail's body named 2704–2710 and
+omitted 2703; the commit is right and the sentence was not.)
+
+**Sequencing issued, because this is where it will bite next.** D-2702 (landed), D-2704 and D-2707 all
+touch one refresh path: D-2704 must clear the bridge when the refresh it triggered SETTLES, and
+D-2702 now sometimes SKIPS that refresh — a skipped duplicate must not leave the bridge uncleared
+forever — while D-2707 changes the `pending` semantics both of their fixtures read. Ordered as one
+coherent pass with D-2701's and D-2702's mutants RE-RUN afterwards rather than trusted.
+
+**D-2703..D-2711 issued** (floor 2712), mails 996, 998 (with the full rulings artifact), 999, 1000.
