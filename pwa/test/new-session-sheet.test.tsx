@@ -22,13 +22,20 @@ const storeWith = (roster: RosterWire[]): FleetStore => {
   return store;
 };
 
-const proj = (name: string, pool?: ProjectRow['pool']): ProjectRow => ({
+const proj = (
+  name: string,
+  pool?: ProjectRow['pool'],
+  placement?: ProjectRow['placement'],
+): ProjectRow => ({
   name,
   workdir: `/w/${name}`,
   ...(pool === undefined ? {} : { pool }),
+  ...(placement === undefined ? {} : { placement }),
 });
 
 const POOLS = { claude: 'pool-a', claude2: 'pool-b' };
+const UNKNOWN_POOL_NOTE =
+  'One or more project pools are not known from here, so pool matching does not hide those projects.';
 
 /** Open the sheet, land the project list, and pick claude (pool-a) at step 1. */
 const openAtStepTwo = async (projects: ProjectRow[]): Promise<void> => {
@@ -112,10 +119,40 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
   });
 
-  it('offers an undecidable project plainly', async () => {
-    await openAtStepTwo([proj('demo', { state: 'unreadable' })]);
-    expect(await screen.findByText('demo')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+  it.each(['unreadable', 'malformed'] as const)(
+    'offers an %s project plainly with one honest note and a plain request',
+    async (state) => {
+      const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+      await openAtStepTwo([
+        proj('demo', { state }, { kind: 'unmeasurable' }),
+      ]);
+
+      fireEvent.click(await screen.findByText('demo'));
+      expect(screen.getAllByText(UNKNOWN_POOL_NOTE)).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+      const start = screen.getByRole('button', { name: /^Start demo/ });
+      expect(start).toBeEnabled();
+      fireEvent.click(start);
+      await waitFor(() => expect(create).toHaveBeenCalledWith({
+        wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      }));
+    },
+  );
+
+  it('keeps a known mismatch disclosed while showing one note for visible unknown rows', async () => {
+    await openAtStepTwo([
+      proj('unknown-a', { state: 'unreadable' }, { kind: 'unmeasurable' }),
+      proj('known-b', { state: 'tagged', name: 'pool-b' }),
+      proj('unknown-b', { state: 'malformed' }, { kind: 'unmeasurable' }),
+    ]);
+
+    expect(await screen.findByText('unknown-a')).toBeInTheDocument();
+    expect(screen.getByText('unknown-b')).toBeInTheDocument();
+    expect(screen.queryByText('known-b')).not.toBeInTheDocument();
+    expect(screen.getAllByText(UNKNOWN_POOL_NOTE)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
+    expect(screen.getByText('known-b')).toBeInTheDocument();
+    expect(screen.getAllByText(UNKNOWN_POOL_NOTE)).toHaveLength(1);
   });
 
   it('clears a plain selection that becomes crossing after the roster changes', async () => {

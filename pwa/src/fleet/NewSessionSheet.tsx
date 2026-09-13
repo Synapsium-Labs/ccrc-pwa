@@ -156,10 +156,11 @@ export function NewSessionSheet({
   // An absent or undecidable project pool is offered plainly; only a measured
   // mismatch requires disclosure and an explicit crossing override.
   const wrapperPool = wrapper === null ? null : accountPool(roster, wrapper);
-  const isCrossing = (candidate: ProjectRow): boolean =>
-    poolSide(wrapperPool, candidate.pool ?? null) === 'crossing';
-  const inPool = matching.filter((candidate) => !isCrossing(candidate));
-  const otherPool = matching.filter(isCrossing);
+  const poolClass = (candidate: ProjectRow) => poolSide(wrapperPool, candidate.pool ?? null);
+  const isCrossing = (candidate: ProjectRow): boolean => poolClass(candidate) === 'crossing';
+  const inPool = matching.filter((candidate) => poolClass(candidate) !== 'crossing');
+  const otherPool = matching.filter((candidate) => poolClass(candidate) === 'crossing');
+  const hasUnknownPool = inPool.some((candidate) => poolClass(candidate) === 'unknown');
 
   useEffect(() => {
     if (project !== null && selectedCrossingRef.current === false && isCrossing(project)) {
@@ -282,6 +283,11 @@ export function NewSessionSheet({
                   onPick={pickProject}
                 />
               ))}
+              {hasUnknownPool && (
+                <p className="pool-note">
+                  One or more project pools are not known from here, so pool matching does not hide those projects.
+                </p>
+              )}
               {otherPool.length > 0 && (
                 <>
                   <button
