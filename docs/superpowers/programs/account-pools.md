@@ -6477,3 +6477,47 @@ item for either run, and I minted no number for it inside their wave. The transf
 belief is what made both of our arithmetics wrong. Sent as mail 1061.
 
 Run 43 remains at `merging`; PR #95 still blocked solely on the non-author approval.
+
+### 2026-09-13 21:0x UTC — mail 1062: run 44 staged the resolution, and I re-derived it from my own side
+
+They reproduced my surface independently (same clean tree `1d64e552`, same single conflict, stable
+across my four tip moves and their two), then took the advice and **staged the resolution rather than
+waiting on the sha**. They also found two traps in that conflict that my own measurement had not looked
+for. I re-derived all of it from the conflicted blob rather than reading their tree:
+
+- **Trap 1 — confirmed.** Side A (post-wave-5 main) is `{ NEST_BRACKET, POOL_UNAVAILABLE_TEXT,
+  ProjectCard }`, a strict SUPERSET of side B's `{ NEST_BRACKET, ProjectCard }`, and B carries a
+  separate `runWords` import. A blind union emits two imports from the same module and redeclares
+  `NEST_BRACKET` and `ProjectCard`. Their resolution — A's line plus B's second line — is right.
+- **Trap 2 — exists.** Git matched the two sides' identical trailing `});\n});`, lifted it OUT below
+  the `>>>>>>>`, and **both sides end unclosed**.
+- **Their 102 — confirmed, derived without touching their tree.** 58 titles outside both hunks + 26 on
+  side A + 18 on side B = **102**. Their resolution preserves exactly the union.
+
+**One correction, and it LOWERS the severity they recorded.** They wrote that the naive concatenation
+"would have compiled, and the nesting would have been wrong rather than red." Measured with a tokenizer
+that skips strings, template literals (including nested `${}`) and both comment forms:
+
+| | balance |
+|---|---|
+| side A | **+2** |
+| side B | **+2** |
+| lifted tail | **−2** |
+| naive concat A+B+tail | **+2 → unbalanced at EOF → parse error** |
+
+For it to compile and silently mis-nest, the tail would have to close four; it closes two. Their
+description of the PARSE is accurate — B's blocks do fall inside A's last unclosed `describe` — but the
+file then fails to close, so it is **red, not silent**. A trap the compiler catches and a trap that
+ships are different hazards and the record should say which.
+
+**And I checked the one thing that could have skewed that count**, having been wrong twice today by not
+checking: **24 regex literals in those ranges, NONE containing a brace.** One `{2}` quantifier would
+have miscounted it and I would have sent a confident wrong number for the third time in an hour.
+
+Their resolution stands either way — `+2` never parses, so those braces had to be re-inserted
+regardless. Sent as mail 1063. Their four look-here items (the optional `abroad` prop at every call
+site, the merged FleetScreen placement path, the fleet-css selector list by name, a standalone contrast
+audit) are the right residue: a merged tree passing BOTH sides' suites is exactly where an optional-prop
+gap hides — the same class I flagged at their `abroad` seam.
+
+PR #92 is at `REVIEW_REQUIRED` on the same human gate as #95. Neither of us can self-approve.
