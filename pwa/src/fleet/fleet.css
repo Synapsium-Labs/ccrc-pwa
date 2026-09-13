@@ -859,6 +859,7 @@
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
 .sess-line--active .sess-stranded,
+.sess-line--active .sess-offpool,
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
@@ -1333,6 +1334,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--status-attention-text);
+}
+
+.sess-offpool {
+  flex: none;
+  font-family: var(--font-mono);
   color: var(--status-attention-text);
 }
 

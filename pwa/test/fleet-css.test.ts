@@ -363,10 +363,10 @@ describe('selection is polarity, status is hue', () => {
                         // serves selects the dead row precisely to read
                         // "stopped by agent, 2d ago".
                         '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        // `.sess-stranded` takes attention ink of its own, so
-                        // it would strand on the selected slab without this
-                        // achromatic membership.
-                        '.sess-stranded', '.sess-unmeasured',
+                        // `.sess-stranded` and `.sess-offpool` take attention
+                        // ink of their own, so each would strand on the selected
+                        // slab without this achromatic membership.
+                        '.sess-stranded', '.sess-offpool', '.sess-unmeasured',
                         // The substrate chip (spec §4) joined the same way:
                         // its own `color: var(--ink-tertiary)` beats the
                         // slab's inherited ink exactly like .sess-unmeasured

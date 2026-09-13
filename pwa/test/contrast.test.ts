@@ -1639,10 +1639,10 @@ describe('the account-pool picker colours are measured, not left in the blind sp
   });
 });
 
-// ── account-pool stranded session-row cell ──────────────────────────────────
-describe('the stranded session cell is measured, not left in the blind spot', () => {
-  it('measures both themes on the project card and leaves no uncovered entry', () => {
-    const key = 'fleet.css .sess-stranded';
+// ── account-pool session-row cells ──────────────────────────────────────────
+describe('the pool session cells are measured, not left in the blind spot', () => {
+  it.each(['.sess-stranded', '.sess-offpool'])('%s clears both themes on the ordinary row', (selector) => {
+    const key = `fleet.css ${selector}`;
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
     expect(rows, key).toHaveLength(2);
@@ -1650,6 +1650,13 @@ describe('the stranded session cell is measured, not left in the blind spot', ()
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--status-attention-text)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('pins the selected off-pool cue to the active row achromatic pair', () => {
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio('var(--edge-strong)', ['var(--ink-primary)'], theme))
+        .toBeGreaterThanOrEqual(4.5);
     }
   });
 });

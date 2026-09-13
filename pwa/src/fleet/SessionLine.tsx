@@ -731,6 +731,7 @@ export function SessionLine({
               </span>
             )}
           </span>
+          {offPoolLabel !== null && <span className="sess-offpool">off-pool</span>}
         </span>
 
         {/* A third line, only while the hook is actually waiting on an answer

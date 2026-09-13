@@ -1396,13 +1396,14 @@ describe('the off-pool marker', () => {
   const pooled = (byId: Record<string, string>) =>
     TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
 
-  it('marks the account cell when both pools are known and differ', () => {
+  it('marks the account cell and shows one visible cue when both pools are known and differ', () => {
     render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                         roster={pooled({ claude2: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
     expect(acct).toHaveAttribute('data-offpool', 'true');
+    expect(screen.getAllByText('off-pool')).toHaveLength(1);
   });
 
   it('says nothing when only one side is known — an untagged account is not off-pool', () => {
@@ -1411,12 +1412,14 @@ describe('the off-pool marker', () => {
                    roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
 
     // …and the mirror: the account is tagged, the project is not.
     rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                           roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('says nothing when the names agree, and nothing at all with no projectPool', () => {
@@ -1425,11 +1428,13 @@ describe('the off-pool marker', () => {
                    roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
 
     rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
                           roster={pooled({ claude2: 'pool-b' })}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('is silent on a dead row', () => {
@@ -1438,6 +1443,7 @@ describe('the off-pool marker', () => {
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('outranks the away arrow\'s aria sentence, and leaves the arrow itself alone', () => {
