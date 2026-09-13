@@ -533,6 +533,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  'fleet.css .proj-row--selected .acct-pool': {
+    under: ['var(--accent-tint)'],
+    why: 'a selected crossing project paints --accent-tint behind its pool chip. The explicit descendant rule gives this rendered state its own audit identity instead of letting the ordinary --bg-sheet registration stand in for a different ground',
+  },
   'fleet.css .acct-disclosure': {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',

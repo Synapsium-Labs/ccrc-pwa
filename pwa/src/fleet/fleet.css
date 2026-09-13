@@ -1700,6 +1700,10 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
 }
 
+.proj-row--selected .acct-pool {
+  color: var(--ink-tertiary);
+}
+
 /* Revealing crossings is a separate, full-size choice from making a move. */
 .acct-disclosure {
   min-height: var(--tap-min);

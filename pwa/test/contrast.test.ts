@@ -1637,6 +1637,18 @@ describe('the account-pool picker colours are measured, not left in the blind sp
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  it('measures the selected project pool chip against its tinted row', () => {
+    const key = 'fleet.css .proj-row--selected .acct-pool';
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--accent-tint)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('var(--ink-tertiary)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 });
 
 // ── account-pool session-row cells ──────────────────────────────────────────

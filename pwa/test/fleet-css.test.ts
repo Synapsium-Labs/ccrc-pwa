@@ -934,6 +934,11 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
   it('keeps the unknown-pool note quiet — it explains a longer list, it does not warn', () => {
     expect(declValue(ruleFor('.pool-note'), 'color')).toBe('var(--ink-tertiary)');
   });
+
+  it('gives the selected project pool chip its own audited ink rule', () => {
+    expect(declValue(ruleFor('.proj-row--selected .acct-pool'), 'color'))
+      .toBe('var(--ink-tertiary)');
+  });
 });
 
 describe('maximum pool name account-row fit (D-2688)', () => {
