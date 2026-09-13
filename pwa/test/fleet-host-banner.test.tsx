@@ -22,6 +22,9 @@ const health = (over: Partial<FleetHealth> = {}): FleetHealth => ({
   ...over,
 });
 
+const POOLS_UNAVAILABLE_COPY =
+  "The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.";
+
 describe('FleetHostBanner', () => {
   it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
     vi.useFakeTimers();
@@ -94,12 +97,17 @@ describe('FleetHostBanner', () => {
     expect(screen.queryByText(/different account rosters/i)).not.toBeInTheDocument();
   });
 
-  it('warns when the host is UP but its ccd cannot honour a project pool at all', async () => {
+  it('warns truthfully when no visible project tag was measured', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(
       health({ connected: true, downSince: null, projectPools: 'unavailable' }));
     render(<FleetHostBanner />);
-    expect(await screen.findByText(/does not honour project pools/i)).toBeInTheDocument();
-    expect(screen.getByText(/redeploy the agent lane/i)).toBeInTheDocument();
+
+    const banner = await screen.findByRole('status');
+    expect(banner).toHaveTextContent(POOLS_UNAVAILABLE_COPY);
+    expect(banner).not.toHaveTextContent(/tag shown here/i);
+    // The banner is the whole reachable screen state in this component test:
+    // no project row or pool tag exists for the copy to point at.
+    expect(screen.queryByText(/pool ·/i)).not.toBeInTheDocument();
     // The remedy is a deploy on the other box, not a PWA action.
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });

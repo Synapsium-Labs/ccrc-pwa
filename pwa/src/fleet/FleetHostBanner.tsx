@@ -76,8 +76,7 @@ export function FleetHostBanner(): ReactNode {
     return (
       <div className="fleet-host-banner fleet-host-banner--warn" role="status">
         <span className="fleet-host-banner-msg">
-          The fleet host's ccd does not honour project pools yet, so a tag shown here is not being
-          enforced. Redeploy the agent lane.
+          The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.
         </span>
       </div>
     );
