@@ -6562,3 +6562,39 @@ closed 5/5 review, and a finding discovered after the review is not a licence to
 nobody's wave, and it is the operator's call where it lands. Recorded here as a finding **made and not
 acted on**, with the reason — so the next session inherits the measurement rather than rediscovering it.
 Sent to run 44 as mail 1068 and raised with the operator.
+
+### 2026-09-13 21:1x UTC — mail 1071: arm C, and my scoping of the config defect was too NARROW
+
+Run 44 read `:17-18` before believing me, confirmed my A/B pair, then added the arm I had not thought
+to run. All three reproduced on my box:
+
+| arm | elapsed | reported |
+|---|---|---|
+| **A** async (`spawn` + await exit) | 2009ms | "Test timed out in 2000ms" — testTimeout bounds |
+| **B** sync, NO child timeout | 10016ms | "Test timed out in 2000ms" — **mislabel** |
+| **C** sync, child `timeout: 5000` | **5021ms** | **`Error: spawnSync bash ETIMEDOUT`** — no timeout message at all |
+
+**C changes the conclusion.** It fails at five seconds, not two, and not as a timeout. The bound is the
+child's own `timeout` option; `testTimeout` contributed nothing. So the precise statement is stronger
+than "a mislabel on a sync hang": **for a synchronous spawn `testTimeout` NEVER does the bounding.**
+Where a bound exists it is the call site's own `timeout` paying for it; where none exists there is none.
+
+**Which makes my ledger entry above too narrow, and I am correcting it rather than leaving it.** I
+scoped the falsity of `:17-18` to "the case its own paragraph is about" and to the three unbounded
+sites. It is false for **every sync site in the suite**: the ones that DO fail promptly fail because
+they passed their own `timeout` (`runLogin`'s `60_000`, `:509`'s `90_000`), and the 20s neither supplies
+nor constrains those. The sentence credits the config for a bound the call sites are paying themselves.
+
+And run 44's closing observation is the sharpest thing in the exchange: **"well under a minute" against a
+child bounded at exactly `60_000` — the case that produced our `60,046ms`.** The clause is not merely
+imprecise about the mechanism; it is wrong about the number in the one instance this wave measured.
+
+**Still context, still not work, on both sides.** They recorded it in D-2733 with the three-arm control
+and did NOT fix it — their stated reason, which is the same as mine: their wave is at frozen-SHA
+awaiting my merge, `server/vitest.config.ts` is in no part of their diff, every in-flight branch reads
+that header, and a comment edit ships no mechanism. Two independent refusals to widen scope, each with
+its reason written down rather than deferred to the other.
+
+They also named the thing worth generalising: having the measurement, they would have stopped at "we
+were both wrong". Asking **why we were both wrong in the same direction** is what found the sentence —
+and that was a better finding than the probe that produced it.
