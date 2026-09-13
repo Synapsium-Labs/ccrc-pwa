@@ -16,7 +16,7 @@ import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../s
 
 const POLL_MS = 2000;
 const BACKLOG_N = 50;
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see checkDialog's own comment
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
 interface Resolved {
   uuid: string;
@@ -280,7 +280,7 @@ export class SessionStream {
     // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
     // 'busy' here and this call site would suppress the parse forever. hasMenu
     // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:33-45); it's the same idiom send.ts:320 uses to decide
+    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
     // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
     // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
     // captureAnsi().

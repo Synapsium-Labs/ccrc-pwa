@@ -241,7 +241,7 @@ describe('readHookState', () => {
 // The suite above stays exactly as it was, deliberately: `readHookState` keeps
 // its signature and its fold, because four of its five call sites branch on
 // nothing else and splitting an arm no caller reads is the same defect one
-// type over (`limits.ts:126`/`commands.ts:73` are the tree's own precedent for
+// type over (`limits.ts:310`/`commands.ts:73` are the tree's own precedent for
 // leaving an indifferent fold alone).
 describe('readHookStateMeasured — the distinction readHookState folds', () => {
   it('a fresh, matching file is the ok arm, carrying the state itself', async () => {

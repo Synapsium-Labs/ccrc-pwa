@@ -1,6 +1,6 @@
 // BYPASS FIXTURE — MUST NOT COMPILE.
 //
-// VERIFY ROUND 2, P3 — the reported defect verbatim, as `registry.ts:85` used
+// VERIFY ROUND 2, P3 — the reported defect verbatim, as `registry.ts:87` used
 // to read it:
 //
 //     PR_PHASES.includes(prPhaseRaw as PrPhase) ? (prPhaseRaw as PrPhase) : null

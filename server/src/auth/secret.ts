@@ -372,7 +372,7 @@ export function readAuthSecret(path: string): AuthSecret | null {
  *
  * NEVER logs `presented`: putting the presented value (or a caller's guess at it)
  * in a log would leak the secret to anyone who can read the log — the same rule
- * `server.ts:443-446` states for the box token.
+ * `server.ts:452-455` states for the box token.
  *
  * keylen is the scheme's fixed {@link KEYLEN}, which — for every secret
  * `readAuthSecret` produces — IS the stored hash's own byte length (the parser

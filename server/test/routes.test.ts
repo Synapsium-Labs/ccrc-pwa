@@ -706,7 +706,7 @@ describe('clip route', () => {
 
   it('413s an over-cap clip with its size — a real file this transport cannot carry is not a missing one', async () => {
     // The measured local/remote divergence, at the only surface that shows
-    // it: `ccd clip` (ccd/ccd:13416) files an image of any size, the agent
+    // it: `ccd clip` (ccd/ccd:13766) files an image of any size, the agent
     // refuses >12 MB, and this route used to call that "not-found".
     const io: FleetIO = {
       ...localIO,
@@ -789,7 +789,7 @@ describe('notify ingestion', () => {
 // degrade — `stopPair` below RECOMPUTES a wrapper/project pair from these
 // very fields to kill a tmux session BY NAME, so an unmeasured field must
 // never silently fall through to a guessed value. Had NO pin before this
-// (`registry.ts:123`'s old drop behaviour had never been exercised through
+// (`registry.ts:125`'s old drop behaviour had never been exercised through
 // this route at all — no test here even named `/stop` until now). Written
 // FIRST and confirmed red against the pre-gate code, which would have
 // answered 404 unknown-session (a LIE: the row is right there, just

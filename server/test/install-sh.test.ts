@@ -185,7 +185,7 @@ describe('install.sh: the node floor, before anything is built', () => {
   // D-98 (fix round 1, Important 1). The brief's own pinned snippet only
   // recognised `-h`/`--help`; anything else fell straight through to the
   // build and a full `ccrc install` ran — the exact defect `cmd_install`'s
-  // own comment names one layer down (`ccd/ccrc:1613-1618`): "an install
+  // own comment names one layer down (`ccd/ccrc:1724-1729`): "an install
   // that half-ran because argument 2 was a typo is worse than one that did
   // not start". `install.sh` is now the OUTERMOST entry point.
   it('refuses an argument it does not recognise, before anything runs', () => {

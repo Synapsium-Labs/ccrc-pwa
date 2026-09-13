@@ -18,7 +18,7 @@ const SHA = /^[0-9a-f]{40}$/;
  *  older/newer build used, arrives here as `undefined` or a bare string
  *  wearing this annotation. `verifyDone` validates both `prPhase` and
  *  `prNumber` itself, the same way it already validates `branchTip` and
- *  `handoffCommit` — `isPrPhase` is the only door (`shared/api.ts:263`). */
+ *  `handoffCommit` — `isPrPhase` is the only door (`shared/api.ts:396`). */
 export interface DoneClaim {
   branchTip: string;
   prNumber: number | null;
@@ -91,7 +91,7 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
  *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
  *    same verb and the same parser the PR lane already uses. Never `gh`: there
  *    is no `gh` key in the agent's whitelist and there must not be one
- *    (`agent/src/whitelist.ts:296-303`).
+ *    (`agent/src/whitelist.ts:309-316`).
  *  - `handoffCommit` — CORRESPONDENCE ONLY. The server cannot read a commit
  *    object (no git, and `FleetIO` reads bytes), so it cannot tell whether the
  *    commit edits `docs/superpowers/programs/<slug>.md`. What it CAN prove is

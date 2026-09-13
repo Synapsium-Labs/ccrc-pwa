@@ -31,7 +31,7 @@ const ALIVE: SessionVerdict = { verdict: 'live' };
 
 /** The registry row ccd writes, minus whatever a fixture wants absent. `stopped`
  *  and `supervised` are epoch SECONDS here because that is what is on disk —
- *  `lifecycleInputFor` owns the one x1000 (fleet.ts:186-198). */
+ *  `lifecycleInputFor` owns the one x1000 (fleet.ts:299-311). */
 const seedRow = (home: string, id: string, extra: Record<string, string> = {}): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -417,7 +417,7 @@ describe('the ring pin — reclaim.ts reaches for the measuring reads, never the
     expect(src.length).toBeGreaterThan(600);        // anti-vacuity: we read a real file
     expect(src).toContain('readSessionRecord(');     // …and it calls the right reads
     expect(src).toContain('sessionVerdict(');
-    // A CALL, not a mention — `single-definition.test.ts:431`'s own anchoring
+    // A CALL, not a mention — `single-definition.test.ts:432`'s own anchoring
     // rule. Both names appear in prose above, deliberately: a forbid-mention pin
     // would forbid the argument for the ban along with the ban.
     expect(src).not.toMatch(/\bhasSession\s*\(/);

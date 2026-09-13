@@ -656,6 +656,19 @@ if [ "$TARGET" = "agent" ]; then
   # (D-1945).
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
   install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
+  # The account-connection helper `ccd account-pane` execs. Unconditional, on
+  # the same terms as its siblings above, and BEFORE the agent restart below,
+  # because the agent caches `ccd caps` at boot and this deploy is what makes
+  # `account-v1` true.
+  #
+  # PLACED BELOW THE NOISE LIST, NOT BESIDE THE OTHER EXECUTABLES (D-2600), and
+  # that is a
+  # constraint rather than a preference: `graph-noise-ship.test.ts` pins the
+  # sweep and the list it feeds as NEIGHBOURS — "if the sweep moves, this
+  # follows it" — with three code lines of slack, and `ccrc-models-probe` had
+  # already spent one of them. Inserting here instead of there costs nothing:
+  # both sites are inside the agent block and both precede the restart.
+  install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755
   # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
   # the same terms — a sibling executable, so `ccd` itself stays network-free.
   install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755

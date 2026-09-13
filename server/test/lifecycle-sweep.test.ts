@@ -21,7 +21,7 @@ const AN_ACT = LIFECYCLE_ACTS.find((a) => a !== LC_ACT_UNKNOWN)!;
 const G1 = '1755780000000000000';
 const NOW = 1_785_300_000_000;
 
-// `mail-sweep.test.ts:239-245`'s shipped idiom, verbatim: only `Date` is faked,
+// `mail-sweep.test.ts:240-246`'s shipped idiom, verbatim: only `Date` is faked,
 // so `fs` and the microtask queue behave. A `vi.setSystemTime` with no
 // `useFakeTimers` throws `Timers are not mocked`.
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });

@@ -2013,7 +2013,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * tags, `{ pool: null }` clears.
    *
    * THE TERNARY PICKS THE ENTRY, not a verb interpolated into an array —
-   * `start`/`enable`'s rule (`ccdargv.ts:180`), so both spellings are
+   * `start`/`enable`'s rule (`ccdargv.ts:181`), so both spellings are
    * enumerated by `whitelist-subset.test.ts`.
    *
    * `:project` GOES THROUGH UNVALIDATED, exactly as `/workspaces` above sends
@@ -2177,7 +2177,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // THREE facts, three answers. 404 asserts the clip does not exist and is
       // now said only when the read PROVED it. An over-cap clip is a real file
       // this transport cannot carry — 413, the same status the upload route
-      // gives the same ceiling (`MAX_UPLOAD_BYTES`, server.ts:1803-1804), with
+      // gives the same ceiling (`MAX_UPLOAD_BYTES`, server.ts:2152-2153), with
       // the measured size when the agent sent one. Everything else — a dropped
       // agent round trip, a whitelist refusal, an EACCES — is 502, matching
       // `GET /api/peers?of=`'s `registry-unmeasurable` rather than

@@ -23,7 +23,7 @@ const WORKDIR = '/w/demo/quiet-mesa';
 const MUNGED = '-w-demo-quiet-mesa';      // mungePath: /._ -> - (munge.ts:1)
 
 /** Registry row for a workspace still on its born branch. `readRegistry` needs
- *  wrapper+workdir+uuid or it skips the row entirely (registry.ts:122). */
+ *  wrapper+workdir+uuid or it skips the row entirely (registry.ts:124). */
 const seed = (home: string, over: Record<string, string | null> = {}): void => {
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -211,7 +211,7 @@ describe('the naming sweep', () => {
   });
 
   // THE ONE THAT IS EASY TO GET WRONG. `FleetSession.branch` is
-  // `sl?.branch ?? r.branch` (fleet.ts:155) — the statusline WINS, deliberately
+  // `sl?.branch ?? r.branch` (fleet.ts:268) — the statusline WINS, deliberately
   // — and it only moves when Claude Code re-renders, so it still reports the
   // born branch for some number of ticks after a successful rename. A sweep
   // reading the assembled value would rename the workspace a second time, to a
@@ -286,7 +286,7 @@ describe('the naming sweep', () => {
     expect(h.calls).toEqual([]);
   });
 
-  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:3833) — an
+  // Review finding 2: `ccd ws-archive` "DESTROYS NOTHING" (ccd:5039) — an
   // archived row keeps `workspace`, keeps `branch = ws/<slug>`, keeps its
   // worktree and keeps its transcript, so without this guard the row is fully
   // in scope for conditions 2-4 and a server restart (`attemptedRenames` is
@@ -365,7 +365,7 @@ describe('the naming sweep', () => {
     expect(stats, 'nor even the cheaper stat the tail read is gated behind').toBe(statsAfterFirst);
   });
 
-  // `<project>-<slug>` is a SLUG, recycled by `ws-reap` (`ccd:2409`), and
+  // `<project>-<slug>` is a SLUG, recycled by `ws-reap` (`ccd:3313`), and
   // neither `nameSweepRetired` nor `attemptedRenames` is ever pruned when a
   // row disappears — so a bare `<id>` key would let a REAPED workspace's
   // retirement silently shadow an unrelated later workspace that draws the
@@ -532,7 +532,7 @@ describe('the naming sweep', () => {
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const deps = testDeps(h.home, h.run);
     let release!: () => void;
-    // Stands in for POST /workspace/reap (server.ts:718), which holds the same key.
+    // Stands in for POST /workspace/reap (server.ts:727), which holds the same key.
     void deps.queue.run(ID, () => new Promise<void>((r) => { release = r; }));
     const w = new FleetWatcher(deps, new Bus(), 2000);
 

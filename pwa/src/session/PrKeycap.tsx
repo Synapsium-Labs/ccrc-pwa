@@ -16,7 +16,7 @@ import './chat.css';
 
 /** Integration finding 6: "we have not looked yet" is defined ONCE, in
  *  `shared/api.ts`, and imported here. This file used to own the definition
- *  under a docstring saying a second copy would drift — and then `watch.ts:38`
+ *  under a docstring saying a second copy would drift — and then `watch.ts:48`
  *  and `prstate.ts:190` grew one each, because they are in a package that
  *  could not import from a pwa component. Re-exported so `PrSheet`'s existing
  *  import keeps working and so the cap and the sheet still demonstrably share

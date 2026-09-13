@@ -22,6 +22,7 @@ import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
 } from '../../shared/api.js';
+import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -327,12 +328,12 @@ describe('extraction finding — one path to the ccd script', () => {
 
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
-  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:61` vs
-  // `:63` on that same tree; `:68` vs `:70` on this one, now that the queue
+  // KeyedQueue inline (`server.ts:330` on origin/main, the tree this diverged
+  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:62` vs
+  // `:64` on that same tree; `:69` vs `:71` on this one, now that the queue
   // itself hoisted one level further to `index.ts:37`) — had no way to reach.
   // A watcher that built its own would serialise its rename against nothing,
-  // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
+  // and `POST /workspace/reap` (`server.ts:727`) is exactly the write it must
   // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
   // the same bug with a green suite, which is why this scans for the
   // CONSTRUCTOR rather than for the field.
@@ -457,7 +458,7 @@ describe('Build 7 nouns', () => {
   //
   // NO SELF-MATCH RISK, stated so the next author does not "fix" a hazard that
   // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
-  // and never itself, and `ROOTS` (:32-37) does not include `server/test`. The
+  // and never itself, and `ROOTS` (:33-38) does not include `server/test`. The
   // needles below can therefore be written whole.
   it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
@@ -698,7 +699,7 @@ describe('Build 7 nouns', () => {
 // Same corpus, same argument as the header above — "a comment is a request; a
 // red suite is a mechanism" — one level up from a duplicated VALUE to a
 // duplicated CLAIM. Both cases derive the fact from `server/src` and check the
-// prose against it; neither reads itself, and `ROOTS` (:32-37) contains no test
+// prose against it; neither reads itself, and `ROOTS` (:33-38) contains no test
 // directory, so no needle here can match its own source line.
 describe('store.ts docstrings that describe their own callers', () => {
   const STORE = path.join(ccrcRoot, 'server/src/coord/store.ts');
@@ -931,6 +932,105 @@ describe('the account roster — runtime data, no compile-time copies', () => {
     // `order.length`, not a magic 99 — a bound that was safe only while the
     // roster was a five-member union (see the handler's own comment).
     expect(srcOf('server/src/server.ts')).toMatch(/i < 0 \? order\.length/);
+  });
+});
+
+// The provider table, §4.2. This describe is the `.tsx?` half; the other half —
+// the one that can see a copy in a `.mjs` — is `server/test/providers.test.ts`,
+// because `sources()` above (:40-57) filters `/\.tsx?$/` at :54 and has never
+// seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts:30-36`
+// records the incident that fact caused). Both halves ship in the same commit
+// as the promise: a single-definition claim whose scanner cannot reach the file
+// a copy would land in is a comment, not a mechanism (D-1860).
+describe('the provider table — one table, one home', () => {
+  // The positive control, the shape this file already uses for its own hunt
+  // lists (`the name list this scans is real, and is the roster`, :846-853): a
+  // scan for a name nothing spells passes everything.
+  const IDS = PROVIDER_IDS;
+  it('the id list this scans is real, and is the table', () => {
+    expect(IDS.length).toBeGreaterThanOrEqual(2);
+    expect(IDS).toContain('anthropic');
+  });
+
+  it('PROVIDERS is declared in exactly one file under the four roots', () => {
+    const RE = /^\s*(?:export\s+)?const\s+PROVIDERS\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/providers.ts']);
+  });
+
+  it('the derived lists are derived, not restated', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/providers.ts'), 'utf8');
+    expect(src).toMatch(/PROVIDER_IDS: readonly ProviderId\[\] = Object\.keys\(PROVIDERS\)/);
+    expect(src).toMatch(/GENERATABLE: readonly ProviderId\[\] =\s*\n?\s*PROVIDER_IDS\.filter/);
+    // …and the union is the table's keys, so the type cannot name a fifth
+    // provider the table does not describe.
+    expect(src).toMatch(/export type ProviderId = keyof typeof PROVIDERS;/);
+  });
+
+  it('no source file under the four roots restates the provider ids as an array literal', () => {
+    // `enumeratesAsArray`'s rule (:859-865), over the provider ids: two or more
+    // of them quoted inside one `[...]`. `providers.ts` itself is exempt only
+    // in the sense that it holds no such literal — the ids appear as KEYS, and
+    // that is the point of the table shape.
+    //
+    // ONE EXEMPTION, BY NAME, AND IT IS A DIFFERENT VOCABULARY (D-2603).
+    // `shared/models.ts`
+    // declares `PROBE_KINDS = ['codex', 'openrouter', 'compatible']`, two of whose
+    // three words are also provider ids. It is not a restatement of this table:
+    // that constant names which CATALOGUE PROBE a lane runs, and its own comment
+    // draws the line — "It names the DISCOVERY mechanism, not the
+    // account-connections `provider` (auth and connection): round-2 ruling 10 keys
+    // probes here and nowhere else." The two lists overlap by two tokens and
+    // neither derives from the other; `codex` is a probe and not a provider, and
+    // `anthropic` is a provider with no probe. Collapsing them would be the real
+    // defect, so the exemption is the declaration LINE, not the file.
+    const EXEMPT = /^export const PROBE_KINDS = /;
+    const scannable = (src: string): string =>
+      src.split('\n').filter((l) => !EXEMPT.test(l)).join('\n');
+    const enumerates = (src: string): boolean => {
+      for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
+        const hits = IDS.filter((p) => new RegExp(`['"]${p}['"]`).test(m[0]));
+        if (hits.length >= 2) return true;
+      }
+      return false;
+    };
+    // THE EXEMPTION IS LIVE, checked rather than assumed: if `PROBE_KINDS` is
+    // renamed, moved or loses its overlap, this filter starts exempting nothing
+    // and would go on passing while protecting a line that no longer exists.
+    const models = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
+    expect(enumerates(models),
+      'PROBE_KINDS no longer trips this scan — delete the exemption below it')
+      .toBe(true);
+    expect(enumerates(scannable(models)),
+      'shared/models.ts enumerates provider ids somewhere OTHER than PROBE_KINDS')
+      .toBe(false);
+    const holders = ALL.filter((f) => enumerates(scannable(readFileSync(f, 'utf8')))).map(rel);
+    expect(holders).toEqual([]);
+  });
+
+  it('BASE_URL_OK is declared in exactly one file, and it is not the table', () => {
+    const RE = /^\s*(?:export\s+)?const\s+BASE_URL_OK\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/base-url.ts']);
+    // The loopback SET — the three hosts written as one closed list — is the
+    // other value a second copy would be spelled from, and a caller that
+    // re-spells it has re-decided the exception rather than reused it.
+    //
+    // WHY THE SET SPELLING AND NOT THE BARE LITERAL. A scan for
+    // /['"]127\.0\.0\.1['"]/ is RED on this tree, and not because anything is
+    // wrong: four shipped files legitimately quote that host as a BIND ADDRESS
+    // or a loopback test, and none of them is a copy of this decision —
+    // measured 2026-09-07 over the four ROOTS: `server/src/config.ts:310`
+    // (`host: env.CCRC_HOST || '127.0.0.1'`), `server/src/auth/webauthn.ts:342`
+    // (`url.hostname === '127.0.0.1'`), `agent/src/index.ts:25` and
+    // `agent/src/server.ts:712` (`rawOpts.host ?? '127.0.0.1'`). Pinning the
+    // ordered three-element spelling catches the copy this task is about and
+    // leaves those four alone. Measured before writing it: the set spelling has
+    // ZERO holders under the four roots today, so this goes from `[]` to
+    // `['shared/base-url.ts']` and never through a red.
+    const LOOP_SET = /\['127\.0\.0\.1', '\[::1\]', 'localhost'\]/;
+    const loopHolders = ALL.filter((f) => LOOP_SET.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(loopHolders).toEqual(['shared/base-url.ts']);
   });
 });
 
@@ -1727,7 +1827,7 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
 });
 
 // — the account-health probe's token convention —
-describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files', () => {
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files', () => {
   // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
   // so the mandatory upstream account cannot declare where its credential
   // lives — and a roster-driven probe would silently skip the primary account.
@@ -1746,17 +1846,31 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
   // that lives for the upstream account. It is therefore the same convention,
   // used by a third consumer, and the value comparison below covers it exactly
   // as it covers the other two. A FOURTH holder should have to argue again.
+  //
+  // THE FOURTH ARGUES, AND IT IS THE WRITER (D-2602). `ccd-account-auth` does
+  // not read
+  // this path — it CREATES it: `_auth_write_secret` writes a 0600 temp file
+  // beside the target and renames it into place, which is the act that makes
+  // the other three holders' reads mean anything. Every earlier holder was a
+  // consumer of a convention nobody in this tree established; the account wave
+  // added the producer, so the convention now has one writer and three readers
+  // rather than three readers and an absent author. It cannot share a constant
+  // with them for the reason already stated above — it too is installed alone
+  // into $HOME/.local/bin with no library beside it — so it is measured here
+  // on exactly the same terms, and the value comparison below covers it.
+  // A FIFTH holder should still have to argue.
   const NEEDLE = '-oauth.env';
 
   it('is spelled by exactly those three files, each named here BY NAME', () => {
     expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other three read what it renames into place
       'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
       'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
       'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
     ]);
   });
 
-  it('and all three build the same path from an id', () => {
+  it('and all four build the same path from an id', () => {
     // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
     // lines whose trimmed start is `#`, and each file names the file TWICE in
     // shell — once building the path and once in an operator-facing message
@@ -1776,9 +1890,16 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
     // quoted path on the line, which is the one the guard tests.
     const keepalive = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-telemetry-keepalive'))
       .filter((l) => l.includes(NEEDLE) && l.includes('[ -r '));
+    // The WRITER's constructing line is the RENAME, not the temp path beside it:
+    // `_auth_write_secret` writes `.<id>-oauth.env.$$.tmp` first, so the file is
+    // never half-written at the name the readers watch. Both lines carry the
+    // needle; only the `mv` names the path this convention is about.
+    const writer = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-auth'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('mv -f --'));
     expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
     expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
     expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
+    expect(writer.length, `the writer renames onto it on ${writer.length} lines`).toBe(1);
     // A REAL comparison, not a tautology. Each line is reduced to the path it
     // BUILDS, with the two files' different spellings of "the secrets dir" and
     // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
@@ -1790,11 +1911,14 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
       const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
       expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
       return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
-        .replace('$SECRETS_DIR/$acct', '<dir>/<id>');
+        .replace('$SECRETS_DIR/$acct', '<dir>/<id>')
+        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>');
     };
     expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
+      .toBe('<dir>/<id>-oauth.env');
+    expect(shape(writer[0]!), 'the writer creates a path its three readers do not watch')
       .toBe('<dir>/<id>-oauth.env');
   });
 });
@@ -1821,7 +1945,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
     // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
-    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:184` holds
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:194` holds
     // a second literal ON PURPOSE (`sweepMail` uses it; importing the
     // `rundefs.ts` copy into that scope as well would be a redeclaration,
     // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
@@ -2215,7 +2339,7 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 // `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
-// `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
+// `registry.ts:21`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
 // symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.
@@ -2526,7 +2650,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
   });
 
   it('keeps the NARROWING maps module-private, and the RENDERING map exported', () => {
-    // `STOP_SURFACES`' argument (:1140-1148), one level in: with the map
+    // `STOP_SURFACES`' argument (:1215-1223), one level in: with the map
     // unexported, `LIFECYCLE_ACT_MAP[raw]` cannot be written in another file
     // at all, so `isLifecycleAct` is the only narrowing route.
     //
