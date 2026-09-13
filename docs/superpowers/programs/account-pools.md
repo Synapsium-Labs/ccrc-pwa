@@ -5955,3 +5955,79 @@ reader surface-local rather than adding an entry to `pwa/src/lib/api.ts`'s error
 auto-merge in a file both sides would have been appending to — the `fleet-css.test.ts` shape, in the
 file that would have been hardest to review afterwards. That is the collision report doing its job
 prospectively rather than forensically.
+
+---
+
+## 2026-09-13 07:15Z — D-2732: the ledger gate falls back, silently, to a `main` 356 commits stale
+
+Worker mail 1040 reported one `deviation-refs` run at `1 failed / 30 passed` whose output a summary
+filter had consumed, and **explicitly declined to call it a flake because they could not show it was
+one.** That refusal is the only reason this was diagnosed at all. It is not a flake.
+
+**Cause.** `deviation-refs.test.ts:260` resolves its base as
+`[$CCRC_LEDGER_BASE, 'origin/main', 'main']`, and `topology-clean.test.ts:138` carries the identical
+chain with `$CCRC_HISTORY_BASE` — one mechanism, two instances, the first file's docstring saying it
+copied `resolveBase` from the second. **If `origin/main` fails to resolve, the chain silently takes
+local `main`.** Measured on this box:
+
+```
+local  main        ac72dd90   (Merge pull request #17 — feat/ccrc-api)
+remote origin/main ecd953b0
+behind by: 356 commits      parked by: worktrees/ccrc-pwa/calm-mesa
+```
+
+**Local `main` on this fleet is not a fallback, it is a fossil** — another session's worktree parks it
+and nothing advances it. Roughly ten worktrees share one `.git`, so a concurrent `git fetch` rewrites
+`packed-refs` and `git rev-parse --verify --quiet origin/main` can fail inside that window. That is how
+the chain reaches its third candidate at all.
+
+**Reproduced, with the worker's exact counts**, in a disposable worktree at `e9dd490a`:
+
+```
+CONTROL  (origin/main)          Tests  31 passed (31)
+PROBE    CCRC_LEDGER_BASE=main  Tests  1 failed | 30 passed (31)
+  × is looking at two real trees, each with a real ledger in it
+    AssertionError: only 49 plans read from main: expected 49 to be greater than or equal to 50
+```
+
+Nothing was wrong with their branch, their definitions or their fix.
+
+**What the gate did RIGHT, and it is worth saying.** It did not measure the wrong tree and report
+green — its own sanity guard refused. Its docstring at `:255-258` worries about a shallow checkout
+making it "measure nothing while reporting green"; what actually happens is the opposite and safer.
+
+**What is defective is not the red.** The fallback is silent, when a base 356 commits stale is not a
+degraded answer but a different question. The failure names a symptom — a plan-file cardinal — and not
+the cause, so a reader reasonably suspects their own plan; the file already computes the base's short
+sha at `:343` and simply does not carry it into that message. And **the `≥ 50` cardinal is hand-kept and
+load-bearing**: it is the only thing standing between a stale base and a silently wrong comparison, it
+passes at 49-on-stale today by arithmetic alone, and the day both trees exceed 50 the fallback stops
+being caught. That is **D-2713's class** — a hand-maintained number doing work a derivation should do —
+found in the gate that polices this programme's own numbers.
+
+**PARKED**: `server/test/` is outside wave 5's census and the defect predates the wave. Offered to run
+44 if it fits their wave better than my wave 6 — I would rather it land soon than land in my programme.
+Warned them specifically (mail 1043), because they told me they will re-run `deviation-refs` against the
+new `origin/main` after wave 5 lands, which is precisely the run this can corrupt; gave them the
+explicit-base workaround meanwhile.
+
+### The process finding is worth more than the deviation
+
+**The assertion message that identifies this was emitted and then destroyed by a summary filter.** The
+gate said exactly what was wrong, in the failure text, and the filter ate it — turning a five-minute
+answer into an unexplainable event that two sessions carried for an hour. Filter test output for
+READING, never for DECIDING; when a run fails, keep its full output before anything else. An exit code
+is a claim; the artifact is the fact.
+
+And the counterweight, which matters more: **had they re-run until green and moved on, D-2732 would
+still be in the gate waiting to confuse the next person.** Reporting an unexplained negative you cannot
+characterise, rather than laundering it into a flake, is what this whole discipline is for.
+
+### Wave 5 unaffected — wave-done cleared again
+
+CI ran the same gate on the pushed sha inside `test (server)`, green, and CI is the arbiter. Their three
+mutation controls verified independent, and **the middle row is the one worth having**: the new pin
+stays GREEN when the whole remeasurement is deleted, so it pins the keep-clause specifically rather than
+being a third reading of the same mechanism. They also re-verified both fabrications in `pools.ts`
+themselves rather than restating my measurement as their own — the habit that would have caught D-2722
+a round earlier.
