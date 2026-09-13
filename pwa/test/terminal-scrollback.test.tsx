@@ -1025,6 +1025,25 @@ describe('the finger scrolls the history', () => {
     expect(h.scrolled.reduce((a, b) => a + b, 0), 'the cancel killed a live finger').toBe(-4);
   });
 
+  it('a MOUSE drag selects text — it does not scroll the view', async () => {
+    // THE COST OF NOT DOING THIS is the one way to copy a line out of the
+    // console. xterm starts a selection on `mousedown` and follows it with a
+    // document-level `mousemove`; this drag captures the pointer and
+    // `preventDefault()`s every move, which suppresses precisely those
+    // compatibility events. The mouse loses nothing by standing down: the
+    // history terminal is in the normal buffer with no custom wheel handler,
+    // so xterm's own wheel scrolls it.
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 4 * ROW_PX, isPrimary: true, pointerType: 'mouse' });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 4 * ROW_PX, isPrimary: true, pointerType: 'mouse' });
+
+    expect(h.scrolled, 'a mouse drag scrolled the history instead of selecting it').toEqual([]);
+  });
+
   it("a press xterm's own scrollbar has already taken is left alone", async () => {
     const { h, view } = await open();
     h.scrolled.length = 0;

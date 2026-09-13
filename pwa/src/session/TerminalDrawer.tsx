@@ -863,6 +863,19 @@ export function TerminalDrawer({
     const down = (ev: PointerEvent): void => {
       pointers.add(ev.pointerId);
       if (viaTouch) return;                       // the finger already owns this
+      // THE MOUSE IS NOT DRAGGING THE VIEW, IT IS SELECTING TEXT. xterm starts
+      // a selection on `mousedown` and follows it with a document-level
+      // `mousemove`; this handler captures the pointer and calls
+      // `preventDefault()` on every move, which suppresses exactly those
+      // compatibility mouse events. Left in, a mouse drag across the history
+      // scrolls it and selects nothing — so the one way to copy a line out of
+      // the console stops working, on the layer that exists for reading.
+      //
+      // The mouse loses nothing by standing down: the history terminal is in
+      // the NORMAL buffer with a real scrollback and no custom wheel handler,
+      // so xterm's own wheel scrolls it. The wheel is the mouse's gesture and
+      // the drag is the finger's.
+      if (ev.pointerType === 'mouse') return;
       if (ev.defaultPrevented) return;            // xterm's own scrollbar took it
       // A pinch is not a scroll. Abandon rather than follow one of the two.
       if (pointers.size > 1) { active = null; finish(); return; }
