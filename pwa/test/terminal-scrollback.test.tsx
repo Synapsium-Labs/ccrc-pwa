@@ -341,14 +341,14 @@ const ARROWS: [string, string][] = [
 /** An opened drawer on scripted doubles, with the socket's frames already
  *  cleared: every assertion below is about what the GESTURE put there, never
  *  about the attach that preceded it. */
-const mountDrawer = (histOpts?: { defer?: boolean }) => {
+const mountDrawer = (histOpts?: { defer?: boolean; onClose?: () => void }) => {
   const t = fakeTermFactory();
   const h = fakeHistoryFactory(histOpts);
   const view = render(
     <TerminalDrawer
       id={ID}
       open
-      onClose={() => {}}
+      onClose={histOpts?.onClose ?? (() => {})}
       makeSocket={makeSocket}
       makeTerm={t.makeTerm}
       makeHistoryTerm={h.makeHistoryTerm}
@@ -827,5 +827,53 @@ describe('a pane with no scrollback says so', () => {
     await waitFor(() => expect(h.write).toHaveBeenCalled());
     expect(screen.queryByText(/no history/i)).toBeNull();
     expect(historyDoor()).toBeTruthy();
+  });
+
+  it('a refused history is not a mode the reader is in', async () => {
+    // THE OPERATOR'S OWN RULE for this cap: it must be visible when it is
+    // engaged. `aria-pressed` is what carries that — to AT and, through the
+    // attribute selector, to the inverted fill. `empty` engages NOTHING: the
+    // read came back and the drawer declined to put a layer up, so the reader
+    // is looking at the live pane with a notice over it. A pressed cap there
+    // says they are somewhere they are not, and it is the state a swap drops
+    // every reader into — measured on this fleet, a re-created pane answers a
+    // scrollback of zero.
+    //
+    // The LEGEND still reads `live`, because the cap's other job in this state
+    // is to dismiss the notice. Engaged and useful are different claims.
+    vi.stubGlobal('fetch', jsonFetch(200, { ...OK_HISTORY, scrollback: 0, alternate: false }));
+    const { t } = mountDrawer();
+    act(() => {
+      t.wheel(-120);
+    });
+
+    const cap = await screen.findByRole('button', { name: 'Back to live' });
+    expect(cap.getAttribute('aria-pressed'), 'the cap claims a history that never opened').toBe('false');
+    expect(cap.textContent, 'the way out of the notice lost its legend').toBe('live');
+  });
+});
+
+// — the sheet is dragged by its handle, not by the console —
+//
+// The operator, on a phone: "неможливо там скролити, бо свайп по робочій
+// області згортає консоль". Until the wheel read a history there was nothing
+// under the finger to scroll, so the panel could own every downward drag; now
+// the glass owns the gesture and the panel may only have the grabber. vaul
+// spells that `handleOnly`, and the grabber has to be its own `Drawer.Handle`
+// for the hit area to exist.
+//
+// THE GESTURE ITSELF IS NOT MEASURABLE HERE, and saying so is part of the
+// guard: vaul's drag needs real layout, so a simulated pointer drag across the
+// glass passes in jsdom whether or not the panel owns it — a test that cannot
+// go red measures nothing. What CAN go red is the handle: without
+// `Drawer.Handle` the grabber is a decorative div, `handleOnly` has nothing to
+// grant the drag to, and the panel is undismissable by touch. Measured: red
+// before this change, green after.
+describe('the console keeps its own drag', () => {
+  it('the drawer offers a real handle to drag by', () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { view } = mountDrawer();
+    const handle = view.baseElement.querySelector('[data-vaul-handle]');
+    expect(handle, 'the grabber is decoration, not a drag target').toBeTruthy();
   });
 });
