@@ -31,7 +31,26 @@ critical section across two inodes), and accepting the race outright is forbidde
 ownership paragraph, §3.1's protocol, §3.2's helper contract, §3.4's artifact table and wait constants, and
 §10's residual are rewritten to this ruling. Tasks 5 and 6's already-shipped `slotIsMine`/rollback code is
 superseded, not rewritten, by Task 9 — recorded there and in the D-2605 ledger entry, not pretended away. Plan A is written and Tasks 1–8
-are implemented; Task 9 is not.
+are implemented; Task 9 is not. **Round 8 (2026-09-13) closes the provenance channel round 7's argv change
+severed, and ten further Important findings from the same two-review round, entirely within this
+already-allocated D-2605 scope — no new deviation number.** Option A's helper lost its only source for
+`parentLive`/`liveAgents` when `--set` left its argv — it used to re-read them off the canonical set — and
+nothing replaced that read, so every carded compaction would have published an impossible provenance tuple.
+Fix: `--parent-live`/`--live-agents` join the `card` argv, copied verbatim into the staged set exactly as
+`--scope`/`--agent`/`--at`/`--nonce` already are, since PreCompact has already computed their final values
+(§3.0) before the helper ever runs; `--trigger` is deliberately NOT added, because these two explicit values
+already pin the exact §3.0 matrix row without the helper deriving anything. Also in round 8: `steered` is
+stamped by a private `jq` rewrite of the still-unrenamed set-stage (never a rename that somehow "carries" a
+value, and never a rewrite of canonical); `COMPACT_LOCK_WAIT_SERVE` is named explicitly at compact
+SessionStart's one acquisition; the helper's `.part` residue is named `<stage>.part`, with no second,
+hook-unlearnable helper pid appended to a stage name that already carries the hook's; `_ws_slug_free` (Task 9)
+is widened to an exact-family dot-leading scan so residue actually blocks slug reuse, the permanent lock its
+sole named exclusion; `_hook_compact_served` and its canonical `set.served` rewrite
+(`ccd/session-hook.sh:985-992`, called at `:1375`) join Task 9's deletion scope, superseded by the
+nonce-marker publication §3.3 already specifies; the §2 diagram's ordering is corrected to match §3.1
+(scope/graph-measure run lock-free, before acquisition); and the rollback-function deletion range is
+corrected to `:792-842` (`:843` is blank, `:844` starts the next section banner) everywhere it previously
+read `:792-847`.
 **Branch:** `ws/graphify-compaction-card`
 **Predecessors:** `2026-08-27-graphify-fleet-integration-design.md` (App. B),
 `2026-09-02-graphify-read-side-ccrc-level-design.md` (R1, R4, R5), and the gpt-lane wedge plan
@@ -184,7 +203,7 @@ events; `install-session-hooks.sh`'s event list is unchanged.
  preserve that answer from the same nonce and never resolve)
 private mktemp source --link--> $REG/.<id>.compactions.lock (permanent regular inode; never replaced/unlinked)
    │                         └─► ccrc row creation and _reg_purge use this same mutex
-PreCompact ──► lock, generation validate, scope + overlap/young-claim check
+PreCompact ──► scope + graph-measure (no lock) ──► lock, generation validate, overlap/young-claim check
    │          └─► $REG/<id>.compactset   (JSON: at, nonce, scope, provenance; files null)
    │          └─► CLOSE lock (no descriptor open across the fork below) ─► helper `card`, never for ambiguous
    │                    ─► --set-stage, --card-stage  (two PRIVATE files; NO canonical pathname in argv at all —
@@ -398,14 +417,16 @@ section that decides them. The full protocol, in order:
  7. mint nonce; publish set{files:null} by hook temp + rename
  8. ambiguous / gate fails / helper absent ⇒ release, return 0
  9. RELEASE THE LOCK (close-before-fork)
-10. run helper with --set-stage and --card-stage private paths, the nonce and
-    the provenance values; NO --set, NO --out, no canonical path in argv
+10. run helper with --set-stage and --card-stage private paths, the nonce,
+    scope/agent/at, and (round 8) --parent-live/--live-agents — no --trigger;
+    NO --set, NO --out, no canonical path in argv
 11. REACQUIRE, wait = COMPACT_LOCK_WAIT; miss ⇒ leave staged files as
     age-eligible exact residue, publish nothing, return 0
 12. revalidate generation; re-read the canonical set head (bounded `read -N`
     plus the shipped nonce regex) and require the nonce is still ours
 13. rc 0 ⇒ rename card-stage → canonical card; (stage 2 only) print STEER_TEXT;
-       rename set-stage → canonical set carrying steered := (printf rc == 0)
+       stamp steered := (printf rc==0) into set-stage (jq, stage only, never
+       canonical); rename that set-stage → canonical set
     rc 3 ⇒ rename set-stage → canonical set; no card; no print
     any other rc ⇒ publish nothing; remove only our own stages
 14. release; return 0
@@ -480,8 +501,9 @@ fork it does not control.
    userland with no `timeout` the helper never runs, the set is consumed by PostCompact, and the journal
    stays empty (§4).
 8. **Release the lock** (protocol step 9, close-before-fork) and, with `--transcript` the resolved file of
-   step 3 — never the payload's — and numeric `--at` plus the separately generated ownership `--nonce`, run
-   the bounded helper:
+   step 3 — never the payload's — numeric `--at`, the separately generated ownership `--nonce`, and (round 8)
+   this PreCompact's own already-computed `--parent-live`/`--live-agents` — the helper's only remaining source
+   for these two fields now that `--set` left its argv (§3.2) — run the bounded helper:
 
 ```
 _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
@@ -489,27 +511,34 @@ _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
   --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
   --set-stage "$REG/.$id.compactset.$$.$nonce.stage" --card-stage "$REG/.$id.compactcard.$$.$nonce.stage" \
   --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
-  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" --at "$at" --nonce "$nonce" [--agent "$agent"] [--steer]
+  --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$scope" --at "$at" --nonce "$nonce" \
+  --parent-live "$parentLive" --live-agents "$liveAgents" [--agent "$agent"] [--steer]
 ```
 
    No `--out`, no `--set`: **no canonical pathname may appear in this argv at all**, the load-bearing
-   property option A trades for the lock it no longer holds across the fork. `--steer` is passed when stage
+   property option A trades for the lock it no longer holds across the fork. `--parent-live`/`--live-agents`
+   (round 8) are copied verbatim into the staged set exactly as `--scope`/`--agent` already are — PreCompact
+   computed their final values at step 2 (§3.0) before the helper ever runs, so the helper never derives
+   them. No `--trigger` reaches `card`: the two explicit values already pin the exact §3.0 matrix row a
+   trigger would otherwise be needed to distinguish. `--steer` is passed when stage
    2 is built and `~/.ccrc/compact-steer-off` is absent, and it changes nothing the helper writes — the
    print (§3.5) is the hook's own act, below, never the helper's.
 9. **Reacquire** the lock (protocol step 11, `COMPACT_LOCK_WAIT`); a miss leaves the two stage files exactly
    where the helper left them — they age out through the ordinary exact-family sweep of step 5/6 above,
    never a special-cased cleanup — and publishes nothing. On success, revalidate generation and re-read the
-   canonical set's head (the bounded, fork-free `read -N` idiom the hook already uses for the card claim,
-   `:958`) to confirm this nonce still owns the slot — bash has no `slotIsMine` counterpart to call; this
+   canonical set's head (the bounded, fork-free `read -N` idiom the hook already uses for the set's own head,
+   `:934-935`) to confirm this nonce still owns the slot — bash has no `slotIsMine` counterpart to call; this
    head-parse **is** the ownership check, run under the lock this time, which is what makes it a real
    compare-and-swap where the pre-round-7 helper-side version was check-then-act.
 10. Dispatch on the helper's exit code and this reacquired ownership, still under the lock (protocol steps
     12–14):
     - **rc 0 and ownership confirmed:** rename the card-stage file to the canonical card, then — in stage 2
-      only, after the steer switch is absent — print `STEER_TEXT` (§3.5), then rename the set-stage file to
-      the canonical set with `steered` set to whether the `printf` that emitted `STEER_TEXT` itself exited 0.
-      Card before set is deliberate: the steering bit is decided by the print's own exit status and written
-      by the very rename that publishes the working set, so there is no second acquisition and no gap in
+      only, after the steer switch is absent — print `STEER_TEXT` (§3.5), then stamp `steered` onto the
+      still-private set-stage file (one `jq` rewrite of that stage, never of canonical — the stage is not yet
+      canonical) to whether the `printf` that emitted `STEER_TEXT` itself exited 0, then rename that updated
+      set-stage file to the canonical set. Card before set is deliberate: the steering bit is decided by the
+      print's own exit status, stamped into the private stage, and only then published by the rename — one
+      uninterrupted section, no second lock acquisition, and no gap in
       which a lost lock could record `steered:false` for a compaction that was, in fact, steered.
     - **rc 3 and ownership confirmed:** rename only the set-stage file to canonical (`files: []`, mined,
       empty); no card exists, and stage 2 does not print, because a failed reacquire or a lost slot must
@@ -526,8 +555,10 @@ _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
 11. **Release; return 0** (protocol step 14). The existing `state="working"` write is unchanged and precedes
     all of this.
 
-The helper writes each stage through its own `<stage>.<pid>.part` temp plus rename, so **a stage file exists
-if and only if it is complete** — the hook never inspects a partial stage, only "exists" or "does not". The
+The helper writes each stage through its own `<stage>.part` temp plus rename — no helper pid in the name,
+since `<stage>` already carries the hook's own pid and nonce and the hook never learns the helper's own pid
+(round 8; a second pid component would make the residue unnameable by the exact-family inventory) — so
+**a stage file exists if and only if it is complete** — the hook never inspects a partial stage, only "exists" or "does not". The
 helper performs no slot check, no rollback, and no canonical read at all; its exit codes keep their existing
 meanings (§3.2).
 
@@ -550,14 +581,22 @@ assume they are cheap.
 ### 3.2 Helper subcommand `card`
 
 **Input.** `--transcript` is whichever file §3.0 resolved — the parent's or a subagent's. The helper
-copies `--scope`, `--agent`, `--transcript`, numeric `--at`, and ownership `--nonce` into the set, and
-writes `--nonce` as the **first line of the card-stage file** (the hook strips it before injecting, after
-it has renamed the stage into the canonical card).
-**No canonical pathname reaches the helper (round 7, option A).** Its argv carries only `--set-stage` and
-`--card-stage` — two private paths the hook names — and it performs **no slot check, no rollback, and no
-canonical read of any kind**: it is a pure function of transcript/graph/labels that writes exactly those two
-paths and nothing else, ever. Ownership, canonical publication and rollback are the hook's job alone (§3.1);
-the helper's own writer discipline is a `<stage>.<pid>.part` temp plus atomic rename to `<stage>` for each of
+copies `--scope`, `--agent`, `--transcript`, numeric `--at`, ownership `--nonce`, and (round 8)
+`--parent-live`/`--live-agents` into the set, and writes `--nonce` as the **first line of the card-stage
+file** (the hook strips it before injecting, after it has renamed the stage into the canonical card).
+`--parent-live`/`--live-agents` are copied verbatim, never derived: round 7 removed the helper's only prior
+source for them — a re-read of the canonical set via `--set` — with no replacement, which would have made
+every carded compaction publish an impossible provenance tuple; round 8 threads the hook's own
+already-computed values through as two more copied flags, exactly like `--scope`/`--agent`. No `--trigger`
+reaches `card`: the two explicit values already pin the exact §3.0 matrix row a trigger would otherwise be
+needed to distinguish (`auto`/`main`'s `liveAgents:0` from `manual`/`main`'s `liveAgents:null`, in
+particular), so the helper has nothing left to derive from it.
+**No canonical pathname reaches the helper (round 7, option A).** Its argv carries only `--set-stage`,
+`--card-stage`, `--parent-live`, and `--live-agents` — private paths and values the hook names/computes —
+and it performs **no slot check, no rollback, and no canonical read of any kind**: it is a pure function of
+transcript/graph/labels (plus these copied provenance values) that writes exactly those two stage paths and
+nothing else, ever. Ownership, canonical publication and rollback are the hook's job alone (§3.1);
+the helper's own writer discipline is a `<stage>.part` temp plus atomic rename to `<stage>` for each of
 the two stages, so **a stage file exists if and only if it is complete** — killing the helper mid-write
 leaves a `.part` behind and no stage, and the hook publishes nothing. This is what makes PreCompact's
 reacquire-and-rename (§3.1, protocol steps 11–13) a genuine compare-and-swap: the check (nonce still owns
@@ -647,9 +686,9 @@ graph)` sentinel meant both, and the repo calls that an overloaded null).
 
 **Files.** Task 9 first migrates every current helper/hook set/card temporary producer to §3.4's target
 families and deletes the pre-round-7 rollback machinery outright (§3.4 names every function and call site).
-The helper writes only its two hook-named stage paths, each through its own `<stage>.<pid>.part` temp plus
+The helper writes only its two hook-named stage paths, each through its own `<stage>.part` temp plus
 rename — no `--out`, no `--set`, and no rollback family at all, because there is nothing to roll back: the
-helper never touches a canonical pathname. The hook's own initial set write (protocol step 6, above) keeps
+helper never touches a canonical pathname. The hook's own initial set write (protocol step 7, above) keeps
 its existing `compactset.<pid>.<nonce>.hook-write.tmp` temp-then-rename family, unaffected by this change. No
 generic `.<name>.<pid>.tmp` rule exists. A timeout orphan (an unrenamed helper `.part`, or a stage the hook
 failed to reacquire for) is age-cleaned by the next validated PreCompact lock holder only when its full exact
@@ -678,7 +717,7 @@ above, not this target-shape prose, governs their transition to the two hook-nam
 Exit codes: 0 both stages written (set-stage and card-stage); 3 empty working set (set-stage written with
 `files: []`, no card-stage); 2 usage; 1 any failure (unreadable input, malformed or oversized graph, a stage
 write error — nothing written, since the helper never touched canonical to begin with). Reads only the
-three input files; writes only the two given stage paths, each through its own `<stage>.<pid>.part` temp
+three input files; writes only the two given stage paths, each through its own `<stage>.part` temp
 plus rename, and nothing else.
 
 ### 3.3 SessionStart(compact) arm (hook)
@@ -687,7 +726,9 @@ Inside the existing `SessionStart` arm, only when `src == compact`, after the st
 built and before the D-306 `exit 0`. It never resolves scope. The compact arm begins with its
 operator-off guard. **Immediately after that guard, before any lifecycle pathname is inspected,
 aged, read, matched, claimed, deleted, emitted, or published, it validates the environment generation,
-acquires the §3.4 stable lock, and validates the generation again under that lock.** **It retains that one
+acquires the §3.4 stable lock (wait = `COMPACT_LOCK_WAIT_SERVE`, 2 s — the one acquisition a human is
+waiting on; every other arm's acquisition in this design uses `COMPACT_LOCK_WAIT`, §2), and validates the
+generation again under that lock.** **It retains that one
 validated lock FD through every action below — match, claim, emit, and nonce-marker publication — and the
 final generation recheck, closing only on return: unlike PreCompact's helper call or `_spawn_start`'s tmux
 creation, this arm forks nothing, so there is no fork/exec boundary a held `flock` could straddle, and
@@ -787,7 +828,7 @@ and, because an invalid present generation is never repaired, replaced, or remov
 wedges that row: nothing may mint a fresh one over it, and no compliant cleanup unlinks it either.
 It removes source on success/failure; `EEXIST` reclassifies the incumbent rather than
 repairing it. Source/read-alias crashes are exact-family, age-gated cleanup under a later stable lock or exact
-purge. `.generation` and any private generation residue block slug reuse; permanent lock does not.
+purge. `.generation` and any private generation residue block slug reuse (Task 9's widened `_ws_slug_free` check, below, is what makes this true); permanent lock does not.
 
 #### Exact lifecycle family inventory
 
@@ -822,7 +863,7 @@ already does; never a partial or degraded mode.
 | family | creator / precreated | exact basename after prefix | success cleanup / crash cleanup | purge / slug residue |
 | --- | --- | --- | --- | --- |
 | canonical set/card/journal | hook/helper; final path only from its owner | `compactset`, `compactcard`, `compactions` | normal lifecycle; never broad cleanup | exact purge; yes |
-| helper stage set/card (round 7, option A) | path NAMED by the hook (never the helper); written by the helper through its own `<stage>.<pid>.part` temp plus rename, so the stage exists iff it is complete; renamed to canonical **only by the hook**, under its reacquired lock — the helper never opens, reads, or renames a canonical pathname | `compactset.<pid>.<nonce>.stage` / `compactcard.<pid>.<nonce>.stage`, with the helper's own mid-write residue at `compactset.<pid>.<nonce>.stage.part` / `compactcard.<pid>.<nonce>.stage.part` | after PreCompact's canonical rename, or removed by PreCompact itself on any non-publishing outcome (failed reacquire, lost ownership, non-0/3 exit, timeout); age under lock | exact purge; yes |
+| helper stage set/card (round 7, option A) | path NAMED by the hook (never the helper); written by the helper through its own `<stage>.part` temp plus rename (no helper pid in the name — `<stage>` already carries the hook's), so the stage exists iff it is complete; renamed to canonical **only by the hook**, under its reacquired lock — the helper never opens, reads, or renames a canonical pathname | `compactset.<pid>.<nonce>.stage` / `compactcard.<pid>.<nonce>.stage`, with the helper's own mid-write residue at `compactset.<pid>.<nonce>.stage.part` / `compactcard.<pid>.<nonce>.stage.part` | after PreCompact's canonical rename, or removed by PreCompact itself on any non-publishing outcome (failed reacquire, lost ownership, non-0/3 exit, timeout); age under lock | exact purge; yes |
 | hook atomic set temp | hook; private exclusive writer source | `compactset.<pid>.<nonce>.hook-write.tmp` | after rename/failure; age under lock | exact purge; yes |
 | SessionStart card claim | SessionStart; deliberately precreated noclobber placeholder, then claimed by rename (not a `link`-created row; see note below) | `compactcard.<pid>.<nonce>.session-claim.tmp` | restore/remove under retained stable lock; age under later lock | exact purge; yes |
 | PostCompact claim | PostCompact `link`; never precreated | `compactpost.<pid>.<RANDOM>.<RANDOM>.claim` | under validated final lock; age under later lock | exact purge; yes |
@@ -983,8 +1024,11 @@ final LF, blank line (including a second terminal LF), garbage, concatenated obj
 `n` key, fractional/negative number, bad relation, or escaped-newline-suffixed identifier fails. Completing
 the enumeration with what does NOT fail: a **CRLF-terminated line** — a trailing `\r` immediately before the
 split-off terminal LF — validates identically to a bare-LF line, because that `\r` is insignificant JSON
-whitespace and `fromjson` accepts it after the closing brace. This design's own writer never emits `\r`, so
-the case is unreached in practice, but the predicate does not reject it, and a validator that claims to
+whitespace and `fromjson` accepts it after the closing brace; a **duplicate key** — `fromjson` keeps only the
+last occurrence, so a line carrying the same key twice still parses to a sixteen-key object and passes; and
+**leading whitespace before the opening `{`** — `fromjson`'s own JSON parser skips it the same as any other
+insignificant whitespace. This design's own writer never emits any of the three, so all three are unreached
+in practice, but the predicate does not reject any of them, and a validator that claims to
 enumerate every failure should say so rather than imply there is no other case. `fromjson? //
 false` turns no parse result into a false predicate rather than a vacuous `all`, and `jq -e` must emit `true`,
 never `empty`:
@@ -1133,17 +1177,24 @@ from emitting both `_lc_fail` and `_lc_done purge` for the same `tx` today; Task
 `tx` has exactly one terminal fact, whichever fires first, and a caller path that could reach both is a
 defect this design does not want to inherit.**
 
-`_ws_slug_free` globs `"$REG/$id".*` (a literal id, THEN a dot) and skips any suffix containing a second dot
-— it is therefore structurally blind to every DOT-LEADING private family in this section (lock-open alias,
-generation-read alias, marker source, lock-init/generation-init source, journal stage/snapshot, and the
-permanent lock itself), because all of those start with a literal `.` **before** the id, not after it. The
-claim that it "sees ... private residue" overstates this: it sees only the one non-dot-leading canonical
-field, `.generation` (spelled `$REG/<id>.generation`), and nothing else in this section. A mutation-effective
-pin must not claim the function inspects families it structurally cannot reach; it should instead assert
-that a planted **lock-open-alias** residue (chosen because it is representative of the dot-leading, crash-only
-class, and is never itself a signal of anything durable) makes `_ws_slug_free` report **not-free**, while the
-permanent lock alone — deliberately excluded from slug residue — does not. Interrupted purge preserves
-generation until last; safe reuse mints a fresh generation.
+`_ws_slug_free` today globs `"$REG/$id".*` (a literal id, THEN a dot) and skips any suffix containing a
+second dot — it is therefore structurally blind to every DOT-LEADING private family in this section
+(lock-open alias, generation-read alias, marker source, lock-init/generation-init source, journal
+stage/snapshot, and the permanent lock itself), because all of those start with a literal `.` **before** the
+id, not after it. Before round 8 this paragraph both described that blindness AND asked a pin to observe the
+opposite (a planted dot-leading residue reading not-free) — a pin no unchanged function could ever pass.
+**Round 8 resolves this by widening the function itself, not by weakening the pin (Task 9):**
+`_ws_slug_free` gains an exact-family dot-leading scan — for this id, strip the literal `.<id>.` prefix (the
+same idiom PreCompact's own sweep already uses, §3.1 step 5) from every dotfile in `$REG`, and if what
+remains matches ANY §3.4 private-family suffix grammar, or the file is the non-dot-leading canonical
+`.generation` field, report **not-free**; the permanent lock's own suffix (`compactions.lock`) is the SOLE
+named exclusion, since it is deliberately excluded from slug residue and spans generations by design. Every
+OTHER private family — not merely one representative — is now visible to the check. The mutation-effective
+pin plants `.demo.compactions.lock-open.1.2.3` (representative of the widened dot-leading class) **alongside
+a second live id `demo.quiet`** and asserts each answers only for its own id — the widened prefix-strip must
+not let `demo`'s check see `demo.quiet`'s residue or vice versa, which is exactly the nested-id hazard a naive
+widening (a bare substring match instead of an exact `.<id>.` prefix) would reintroduce. Interrupted purge
+preserves generation until last; safe reuse mints a fresh generation.
 
 **Ordering, stated in full** — round 5 named only two locks, which understated it: the reap lock, reached
 when `_reg_purge` is called through `_ws_reap_locked`, is the OUTERMOST lock (`cmd_ws_reap` acquires it before
@@ -1181,11 +1232,18 @@ Printed as **one line** of plain text on PreCompact (the blockquote above wraps 
 constant has no newline), only after the helper's exit 0 AND a reconfirmed nonce ownership, only without the
 steer switch, and only after the card-stage rename has already landed the canonical card (§3.1 protocol step
 13). The print's own `printf` exit status is what `steered` records: the very next act, still under the same
-held lock, is the rename of the set-stage file into canonical carrying `steered := (that printf's exit code
-== 0)` — one uninterrupted section, no second lock acquisition, no later `jq` rewrite of canonical. A failed
-reacquire or a lost slot returns before the print ever runs, so no print is ever followed by a `steered:false`
-it did not, in fact, earn; the one residual named in §4 is the print succeeding and the immediately following
-set-rename itself failing — one syscall wide. It is consistent with the operator's own `## Compact Instructions` ("drop verbose tool output
+held lock, is a private `jq` rewrite of the still-unrenamed set-stage file's own `steered` field to
+`(that printf's exit code == 0)` — the stage is not yet canonical, so this touches no canonical byte — and
+only then is the updated set-stage renamed into canonical: one uninterrupted section, no second lock
+acquisition, **no later `jq` rewrite of canonical** (round 8 corrects an earlier draft that had the rename
+itself somehow "carrying" the value, which no rename can do — a rename moves bytes, it does not write them).
+A failed reacquire or a lost slot returns before the print ever runs, so no print is ever followed by a
+`steered:false` it did not, in fact, earn; the residual named in §4 is the print succeeding and everything
+after it — the private stage rewrite, then the rename — failing before it reaches canonical: not one syscall
+wide (round 8 corrects this too, now that a `jq` rewrite sits between the print and the rename), but still
+confined to this one process's own already-decided value, never re-derived, and surfacing only as the
+canonical set staying the hook's earlier `files:null` placeholder for a compaction that WAS carded. It is
+consistent with the operator's own `## Compact Instructions` ("drop verbose tool output
 and full file listings"); where the base prompt asks for "full code snippets", the model arbitrates —
 which is exactly why §3.4 exists.
 
@@ -1226,6 +1284,7 @@ Plan A.
 | canonical set present but claim link fails | canonical remains untouched; no processing or record |
 | canonical set genuinely absent (tested by pathname, never inferred from a `link` return) | no claim; `measure` runs without `--set`; one record committed with `scope:null` and all six provenance values null |
 | helper exited 0/3 but PreCompact's reconfirm of nonce ownership failed (round 7, newly reachable under option A) | publish nothing; no `STEER_TEXT`; no `steered` stamp on any set; remove only this process's own stages (age-eligible residue on a failed reacquire); the compaction is measured against whatever a sibling published |
+| (round 8, M1) `STEER_TEXT` printed and the card-stage already renamed, but the private `steered` stage-rewrite or the following set-stage rename fails | canonical card exists and was already read by the model; canonical set remains the hook's earlier `files:null` placeholder (or an un-renamed, updated stage only); PostCompact records that placeholder — `cited:null`, no working set — for a compaction that WAS carded |
 | a session's generation was reused in the close-to-fork gap between row/`_spawn_start` releasing the lock and the child process starting | every future compaction-lifecycle mutation for that session refuses silently for its entire life; no diagnostic distinguishes this from any other silent generation mismatch |
 | canonical unlink after same-inode claim fails | remove only verified claim; canonical bytes and original mtime remain unchanged |
 | claim touch fails after canonical unlink | no-clobber restore only; if restore cannot prove same inode or collides, retain claim as exact stale residue and never overwrite occupant |
@@ -1261,13 +1320,15 @@ adds the following real process and source pins, each through fixture HOME/PATH 
 | ignore `_reg_purge` result in any of four callers, or report a post-action lock-miss as decline/unchanged instead of `_lc_fail` | held-lock real fixture emits a named `_lc_fail` (not a suppressed success or a bare decline) for `cmd_ws_rm`, `_ws_reap_locked`, and `cmd_forget`, naming completed action and retained registry/generation; only the dead-reg pre-action caller may decline unchanged |
 | emit both `_lc_fail` and `_lc_done purge` for the same `tx` | a fixture forcing both paths to fire for one `tx` reds against a guard requiring exactly one terminal fact per `tx` |
 | **(round 7, option A) restore any canonical pathname to the helper's `card`-command argv** (`--set`/`--out`) | the argv-assertion fixture, extended to require `--set-stage`/`--card-stage` and to forbid `--set`/`--out` outright, reds the moment a canonical name reappears |
+| **(round 8) drop `--parent-live`/`--live-agents` from the helper's `card` argv, or have the helper derive them from `--scope`/`--trigger` instead of copying the hook's values** | run the full PreCompact arm at `auto`/`main` and `auto`/`subagent`; assert the canonical set after publication carries `liveAgents:0,parentLive:null` and `liveAgents:1,parentLive:false` respectively, and that `measure --set <it>` yields a record `JOURNAL_RECORD_PRED` accepts with non-null `scope` and `cited`; dropping either flag, or deriving instead of copying, reds |
 | **(round 7) the helper writes to a canonical set/card while both already exist** | run the card command against fixture canonical files present at both `.compactset` and `.compactcard`; assert both are byte-identical afterward — restoring either canonical write inside the helper reds this |
 | **(round 7) the CAS: a sibling publishes `{ambiguous}` and removes the card while the helper runs** | a barrier fixture flips the canonical set to `ambiguous`/removes the card mid-helper-run; assert the originating PreCompact publishes nothing, the sibling's set survives byte-for-byte, no card exists, and only this process's own stages are gone; publishing without re-reading the nonce under the reacquired lock reds |
 | **(round 7) stage completeness under a killed helper** | kill the helper mid-write (SIGKILL between its `.part` write and rename); assert no stage file exists, only a `.part`, and the hook publishes nothing |
 | **(round 7) publication order and the steering bit** | assert the card rename precedes the print, which precedes the set rename; a failed `printf` leaves `steered:false` on the set that same rename publishes; stamping `steered` before the print, or under a second lock acquisition, reds |
 | **(round 7) parameterized wait, not a same-named constant** | hold the lock 3 s while only the final transaction waits on it; exactly one journal line lands using `COMPACT_LOCK_WAIT`; passing `COMPACT_LOCK_WAIT_SERVE` at that call site instead reds (times out at 3 s under the 2 s bound) |
-| **(round 7) absent-canonical has exactly one meaning** | a source scan asserting no code path renames, unlinks, or replaces the canonical set outside a held stable-lock region; reintroducing the deleted unconditional PreCompact/helper rollback rename reds this scan even if every behavior test still passes |
-| delete generation-last, drop `generation` from the purge loop's `archived`/`reaping` skip condition, or make `_ws_slug_free`'s dot-leading-residue check ignore a planted lock-open-alias residue | interrupted purge permits reuse or safe reuse retains old generation; a fixture that leaves `generation` out of the skip list reds by deleting it out of order; a planted lock-open-alias residue must read as not-free; the permanent lock alone must NOT — a fixture that makes either read the wrong way reds |
+| **(round 8) wire `COMPACT_LOCK_WAIT_SERVE` at compact SessionStart's one acquisition, or leave it unwired** | hold the stable lock 3 s, then fire compact SessionStart; assert it returns having served nothing within ~2 s; passing `COMPACT_LOCK_WAIT` (5 s) at that call site instead serves at ~3 s and reds |
+| **(round 7) absent-canonical has exactly one meaning** | a source scan with a NAMED recognizer (round 8, M5): grep `ccd/session-hook.sh` and `ccd/ccd` for every literal occurrence of the canonical set's basename pattern (`.compactset`, `$id.compactset`, or the generic `"$REG/$id".*` glob that also enumerates it) adjacent to a deletion/rename/link primitive (`rm`, `mv -f`, `link`), checked against a NAMED per-file inventory of the sites this scan is allowed to find: `session-hook.sh`'s PreCompact stage-rename (under its own reacquired lock), PostCompact's unlink/link/touch settlement sequence (under its lock), and `ccd/ccd:1840-1848` — the ordinary `_reg_purge` unlink loop, which matches `.compactset` as an ordinary dot-free suffix and is lock-protected only because `_reg_purge` itself acquires and holds the stable lock for its whole body (this section, "Locked purge" discussion, above); any hit NOT on this inventory, or on it but reachable with the lock unheld, reds. Reintroducing the deleted unconditional PreCompact/helper rollback rename reds this scan even if every behavior test still passes |
+| delete generation-last, drop `generation` from the purge loop's `archived`/`reaping` skip condition, or make `_ws_slug_free`'s widened dot-leading-residue check (round 8, Task 9) ignore a planted lock-open-alias residue, or let it leak across ids | interrupted purge permits reuse or safe reuse retains old generation; a fixture that leaves `generation` out of the skip list reds by deleting it out of order; `.demo.compactions.lock-open.1.2.3` planted alongside live id `demo.quiet` must read as not-free for `demo` only — the permanent lock alone must NOT, and `demo.quiet` must answer free for itself — a fixture that makes any of these read the wrong way reds |
 
 ## 6. Rings, invariants, and the waiting amendment
 
