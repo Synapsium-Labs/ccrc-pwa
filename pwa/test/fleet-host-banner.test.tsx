@@ -23,6 +23,27 @@ const health = (over: Partial<FleetHealth> = {}): FleetHealth => ({
 });
 
 describe('FleetHostBanner', () => {
+  it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = Promise.withResolvers<FleetHealth>();
+      const latest = health({ connected: true, downSince: null, roster: 'divergent' });
+      vi.spyOn(api, 'fleetHealth')
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce(latest);
+
+      render(<FleetHostBanner />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+      expect(screen.getByText(/different account rosters/i)).toBeInTheDocument();
+
+      await act(async () => { first.resolve(health()); await first.promise; });
+      expect(screen.getByText(/different account rosters/i)).toBeInTheDocument();
+      expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders nothing while the fleet is local', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ mode: 'local', connected: true, downSince: null }));
     render(<FleetHostBanner />);

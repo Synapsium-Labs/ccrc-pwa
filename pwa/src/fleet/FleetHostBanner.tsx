@@ -43,8 +43,10 @@ export function FleetHostBanner(): ReactNode {
 
   useEffect(() => {
     let live = true;
+    let issued = 0;
     const load = (): void => {
-      void api.fleetHealth().then((h) => { if (live) setHealth(h); }).catch(() => {});
+      const mine = ++issued;
+      void api.fleetHealth().then((h) => { if (live && mine === issued) setHealth(h); }).catch(() => {});
     };
     load();
     const t = setInterval(load, POLL_MS);
