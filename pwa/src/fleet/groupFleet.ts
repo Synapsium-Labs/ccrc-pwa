@@ -130,7 +130,9 @@ export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGrou
       // STRANDED_UNREADABLE}` for a marker it could see and not read — a REAL
       // strand whose date is unknown, which `at`-truthiness would drop in
       // exactly the direction that hides a stuck session.
-      stranded: live.filter((m) => (m.stranded ?? null) !== null).length,
+      stranded: live.filter(
+        (m) => m.status !== 'dead' && (m.stranded ?? null) !== null,
+      ).length,
     });
   }
   return groups;

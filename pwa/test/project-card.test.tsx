@@ -746,6 +746,16 @@ describe('route-owned pool handoff to session rows', () => {
 });
 
 describe('the stranded cell', () => {
+  it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
+    const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
+    const [group] = groupFleet([
+      sess({ status: 'dead', bucket: 'dead', stranded: marker }),
+    ]);
+    render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
+
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+
   it('says how many members have nowhere in their pool to go, folded or not', () => {
     const { rerender } = render(
       <ProjectCard group={grp({ stranded: 2 })} onOpen={() => {}} onActions={() => {}} />);

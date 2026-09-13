@@ -153,13 +153,16 @@ describe('groupFleet', () => {
 
   // Account pools, wave 4, spec §5.8.3. Ruling 6 made the silent strand loud;
   // this is the number the folded card wears so a fold cannot hide it.
-  it('counts live members carrying a strand marker', () => {
+  it('counts idle, working, and away live members, but not dead or archived markers', () => {
+    const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const g = groupFleet([
-      s({ id: 'a', stranded: { at: 1, reason: 'no account in pool pool-a can take it' } }),
-      s({ id: 'b' }),
-      s({ id: 'c', stranded: { at: 2, reason: 'every candidate at ceiling' } }),
+      s({ id: 'idle', status: 'idle', bucket: 'idle', stranded: marker }),
+      s({ id: 'working', status: 'busy', bucket: 'working', stranded: marker }),
+      s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude2', home: 'claude', stranded: marker }),
+      s({ id: 'dead', status: 'dead', bucket: 'dead', stranded: marker }),
+      s({ id: 'archived', status: 'dead', bucket: 'archived', stranded: marker }),
     ])[0]!;
-    expect(g.stranded).toBe(2);
+    expect(g.stranded).toBe(3);
   });
 
   it('counts an UNREADABLE marker too — the fail-shut row is exactly the one to surface', () => {
