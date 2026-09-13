@@ -3904,10 +3904,14 @@ deviation found while executing this plan is allocated in its own call at the mo
   148px `.acct-gauges` column. The isolated Sonnet verifier measured a legal
   32-character label making the account row 513.27px wide inside 288px of
   available content at a 320px viewport. This is reachable in both SwapSheet and
-  NewSessionSheet because they share `.acct-pool`. Coordinator ruling: preserve the
-  pool identity but let its visual label shrink and ellipsize within the row;
-  add a max-grammar-name mobile-width assertion before changing CSS, then mutate
-  the shrink/ellipsis mechanism one declaration at a time and restore exactly.
+  NewSessionSheet because they share `.acct-pool`. The worker proposed preserving
+  the pool identity while letting the visual label shrink and ellipsize. After
+  independent verification, the coordinator's programme ledger at
+  `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` upheld that direction and sharpened
+  it to the exact shrink/ellipsis declarations plus retention of the full legal
+  identity in the accessible name and `title`. Add a max-grammar-name mobile-
+  width assertion before changing CSS, then mutate the mechanism one declaration
+  at a time and restore exactly.
   The coordinator issued this number and ruled the remedy before the fix began.
 
 - **D-2689 — D-2672's cardinality-only
@@ -3916,11 +3920,13 @@ deviation found while executing this plan is allocated in its own call at the mo
   grandfathered uncovered rule and introducing a different ungrounded
   color-bearing selector keeps the cardinal at 255 and the gate green, even
   though D-2672 says a new unmeasured rule must fail on arrival. The isolated
-  Sonnet verifier confirmed this exact replacement case. Coordinator ruling: pin
-  the grandfathered uncovered identities and require the current set to be a
-  subset, while still permitting identities to disappear; add a replacement
-  mutation that reaches the identity assertion, not merely a count assertion,
-  then restore it exactly. The coordinator issued this number and ruled the
+  Sonnet verifier confirmed this exact replacement case. The worker proposed
+  pinning the grandfathered identities as a shrinking-only set. After independent
+  verification, the coordinator's programme ledger at
+  `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` upheld that subset invariant and
+  required the one-for-one selector substitution control. Add that replacement
+  mutation so it reaches the identity assertion rather than merely a count
+  assertion, then restore it exactly. The coordinator issued this number and ruled the
   mechanism before the test fix began.
 
 - **D-2690 — SwapSheet's unknown-pool note can falsely
@@ -3930,10 +3936,11 @@ deviation found while executing this plan is allocated in its own call at the mo
   roster, or with every other lane disabled, `emptyNote` renders a truthful empty
   state while the unconditional `split.unknown` note simultaneously says
   `every account is offered`. The isolated Sonnet verifier confirmed both paths.
-  Coordinator ruling: describe unknown-pool handling without quantifying the final
-  rendered account list, preserving the distinct empty-state explanation; add
-  red-first one-account and all-disabled assertions and mutation-pin the false
-  universal wording. The coordinator issued this number and ruled the copy
+  The worker proposed copy that avoids quantifying the final rendered list while
+  preserving the distinct empty-state explanation; coordinator programme-ledger
+  commit `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` independently upheld that exact
+  copy-and-tests-only direction. Add red-first one-account and all-disabled
+  assertions and mutation-pin the false universal wording. The coordinator issued this number and ruled the copy
   before the fix began.
 
 - **D-2691 — Task 10's exact unavailable/remote
@@ -3946,10 +3953,12 @@ deviation found while executing this plan is allocated in its own call at the mo
   11 focused tests green and would prescribe redeploying a nonexistent agent
   lane. The isolated Sonnet verifier established both paths from shipped server
   readers, with registered tests and independent red controls for the existing
-  unknown, connected, and precedence guards. Coordinator ruling: add one omitted-
-  field remote/connected negative and one local/connected/unavailable negative;
-  mutate the absence default and remote guard separately and restore each
-  exactly. Production behavior remains unchanged. The coordinator issued this
+  unknown, connected, and precedence guards. The worker proposed exactly two
+  negative fixtures with no production change; coordinator programme-ledger
+  commit `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` independently upheld that
+  scope. Add one omitted-field remote/connected negative and one local/connected/
+  unavailable negative; mutate the absence default and remote guard separately
+  and restore each exactly. Production behavior remains unchanged. The coordinator issued this
   number and ruled the coverage seam before the test fix began.
 
 - **D-2692 — NewSessionSheet can authorize a
@@ -3961,10 +3970,13 @@ deviation found while executing this plan is allocated in its own call at the mo
   observe `demo` move behind disclosure while remaining selected and Start
   enabled, then observe `api.createSession` receive `crossPool:true`. That
   violates Task 8's requirement that only projects deliberately chosen from the
-  disclosed crossing side send the override. Coordinator ruling: clear a selected
-  project when a live update changes it from plainly offered to crossing, so
-  Start remains disabled until the operator reveals and selects it deliberately;
-  red-first the exact transition and mutation-pin the invalidation. The coordinator
+  disclosed crossing side send the override. The worker proposed clearing a
+  project selected while eligible when it later crosses. After independent
+  verification, coordinator programme-ledger commit
+  `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` upheld and narrowed that to the
+  non-crossing-to-crossing transition only: unrelated updates and a deliberately
+  selected already-crossing project remain selected. Red-first all three
+  directions and mutation-pin the transition guard. The coordinator
   issued this number and ruled the remedy before the source and test fix began.
 
 - **D-2693 — ProjectCard's two route-pool
@@ -3976,10 +3988,11 @@ deviation found while executing this plan is allocated in its own call at the mo
   archived prop; each mutant remained 262/262 green with no TypeScript errors.
   Source SHA-256 changed distinctly for each mutant and restored to
   `2da38ddc5d52406e82900e0321431c366c83907ac22a0fda3541136960c4ebc7`;
-  the test hash stayed unchanged. Coordinator ruling: add route-authoritative
-  ProjectCard integration assertions for one active and one expanded archived
-  row, with deliberately disagreeing route and frame pools, so each call-site
-  deletion independently reds. Production remains unchanged. The coordinator
+  the test hash stayed unchanged. The worker proposed route-authoritative active
+  and expanded-archived integration fixtures. Coordinator programme-ledger commit
+  `80c8b8904bbe04fb97b1211c1a363b8d933fbc96` independently upheld that tests-only
+  scope and required deliberately disagreeing route and frame pools so each call-
+  site deletion independently reds. Production remains unchanged. The coordinator
   issued this number and ruled the seam before the test fix began.
 
 - **D-2694 — The integrated branch computes
@@ -3992,11 +4005,14 @@ deviation found while executing this plan is allocated in its own call at the mo
   integration regression compile, and existing 87 registered StartProgramSheet
   tests plus strict PWA TypeScript remained green in isolated review. This is
   the concrete reachable case D-2642 forecast after refuting the earlier claim
-  that only an account chooser could repair the surface. Coordinator ruling: use a
-  measured `ProjectRow.placement.wrapper` for label, collision check, and create
-  request; render measured none/unmeasurable outcomes honestly; retain the global
-  projection only when placement is absent for old-server compatibility; never
-  silently add `crossPool:true`. Add a divergent global-versus-route-placement
+  that only an account chooser could repair the surface. The worker proposed
+  making measured `ProjectRow.placement.wrapper` authoritative. Coordinator
+  programme-ledger commit `80c8b8904bbe04fb97b1211c1a363b8d933fbc96`
+  independently upheld that remedy and supplied the complete absence matrix:
+  render measured none/unmeasurable honestly; use the global projection only for
+  omitted old-server placement when the pool is also absent or measured untagged;
+  refuse a present non-untagged pool without placement; never silently add
+  `crossPool:true`. Add a divergent global-versus-route-placement
   test before production changes. The coordinator issued this number and ruled
   the remedy before the source and test fix began.
 
