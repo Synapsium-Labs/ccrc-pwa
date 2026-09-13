@@ -184,6 +184,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
           else done?.();
         },
         fit: () => ({ cols: 48, rows: 20 }),
+        rowHeight: () => ROW_PX,
         scrollLines: (n: number) => {
           order.push('scroll');
           scrolled.push(n);
@@ -204,6 +205,11 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
 const historyDoor = () => screen.queryByRole('button', { name: 'Back to live' });
 
 const HISTORY = 'older output\nolder still\n';
+
+/** One row's height in CSS pixels, as the history terminal reports it. The real
+ *  one measures `.xterm-screen` and divides by its own rows; the stub just says
+ *  a number, because what is under test is the arithmetic on top of it. */
+const ROW_PX = 18;
 
 describe('the wheel scrolls the console history', () => {
   it('a wheel-up reads the pane history over capture-pane and renders it, touching the pty not at all', async () => {
@@ -875,5 +881,187 @@ describe('the console keeps its own drag', () => {
     const { view } = mountDrawer();
     const handle = view.baseElement.querySelector('[data-vaul-handle]');
     expect(handle, 'the grabber is decoration, not a drag target').toBeTruthy();
+  });
+});
+
+// — the finger scrolls the history —
+//
+// xterm 6.0.0 has NO native scroller to pan. `.xterm-viewport` survives with
+// `overflow-y: scroll` on it but is an EMPTY leftover (measured: zero children,
+// empty innerHTML); the real scroll is a virtual VS Code `Scrollable` that
+// re-renders rows, and its only input is a `wheel` listener. A finger has
+// nothing to drag. Measured on a real Terminal over a 500-line normal buffer: a
+// touchstart/touchmove/touchend across `.xterm-screen` left `viewportY` at 477
+// and put nothing on the pty — and the pointer-event twin did the same. On top
+// of that vaul computes `touch-action: none` on the panel, so even a real
+// scroller would not have been panned here.
+//
+// So the drag is ours to implement, and these pin it.
+const histHost = (view: ReturnType<typeof mountDrawer>['view']): HTMLElement => {
+  const el = view.baseElement.querySelector('.term-history > .term-host');
+  if (!el) throw new Error('the history layer rendered no host');
+  return el as HTMLElement;
+};
+
+/** One drag, in pointer events, at ROW_PX pixels to the row. */
+const drag = (el: HTMLElement, from: number, to: number, id = 1): void => {
+  fireEvent.pointerDown(el, { pointerId: id, clientY: from, isPrimary: true, button: 0 });
+  fireEvent.pointerMove(el, { pointerId: id, clientY: to, isPrimary: true });
+  fireEvent.pointerUp(el, { pointerId: id, clientY: to, isPrimary: true });
+};
+
+describe('the finger scrolls the history', () => {
+  const open = async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const m = mountDrawer();
+    act(() => {
+      m.t.wheel(-120);
+    });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+    return m;
+  };
+
+  it('a drag DOWN the glass pulls the history down — older lines, one row per row-height', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+
+    // ROW_PX is what the stub reports for one row. Dragging down by three of
+    // them asks for three rows of older output: the content follows the finger,
+    // which is the only direction a console can mean.
+    drag(histHost(view), 100, 100 + 3 * ROW_PX);
+
+    expect(h.scrolled, 'the drag moved the history the wrong way, or not at all').toEqual([-3]);
+  });
+
+  it('a drag UP returns toward the newest line', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+
+    drag(histHost(view), 300, 300 - 2 * ROW_PX);
+
+    expect(h.scrolled).toEqual([2]);
+  });
+
+  it('a tap scrolls nothing, and neither does a drag shorter than one row', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+
+    drag(histHost(view), 200, 200);                       // a tap
+    drag(histHost(view), 200, 200 + Math.floor(ROW_PX / 2)); // half a row
+
+    expect(h.scrolled, 'the glass moved under a finger that did not').toEqual([]);
+  });
+
+  it('the remainder is kept, so a slow drag is not swallowed a half-row at a time', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    // Three moves of two thirds of a row each: no single step is a whole row,
+    // but the drag has covered two. A handler that truncated per move would
+    // report nothing at all.
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    for (const y of [ROW_PX * (2 / 3), ROW_PX * (4 / 3), ROW_PX * 2]) {
+      fireEvent.pointerMove(el, { pointerId: 1, clientY: y, isPrimary: true });
+    }
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: ROW_PX * 2, isPrimary: true });
+
+    expect(h.scrolled.reduce((a, b) => a + b, 0), 'the drag lost its remainder').toBe(-2);
+  });
+
+  it("a press xterm's own scrollbar has already taken is left alone", async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+
+    // MEASURED, and the reason this guard exists: xterm binds `pointerdown` on
+    // its slider (`abstractScrollbar.ts:111`) and takes `setPointerCapture`
+    // through `GlobalPointerMoveMonitor`, but calls only `preventDefault()` —
+    // never `stopPropagation()`. So the press reaches this host too, and a
+    // handler that captured the pointer here would steal the capture xterm took
+    // an instant earlier and break dragging the scrollbar. `defaultPrevented`
+    // is the signal, and it does not depend on a class name.
+    document.addEventListener('pointerdown', (e) => e.preventDefault(), { capture: true, once: true });
+    drag(histHost(view), 100, 100 + 5 * ROW_PX);
+
+    expect(h.scrolled, "the drawer fought xterm's own scrollbar for the pointer").toEqual([]);
+  });
+
+  it('a second finger abandons the drag rather than scrolling with it', async () => {
+    const { h, view } = await open();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    // THE SECOND FINGER IS THE ONE THAT MOVES, and that is the whole test.
+    // Without the guard a second `pointerdown` simply re-aims the drag at the
+    // new pointer, so moving the FIRST finger proves nothing — it is ignored
+    // either way. Moving the second separates them: unguarded it scrolls by
+    // four rows, guarded the gesture has been abandoned and nothing moves.
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.pointerDown(el, { pointerId: 2, clientY: 0, isPrimary: false, button: 0 });
+    fireEvent.pointerMove(el, { pointerId: 2, clientY: 4 * ROW_PX, isPrimary: false });
+    fireEvent.pointerUp(el, { pointerId: 2, clientY: 4 * ROW_PX, isPrimary: false });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 0, isPrimary: true });
+
+    expect(h.scrolled, 'a pinch scrolled the history').toEqual([]);
+  });
+});
+
+// — the door a finger can open —
+//
+// A phone has no wheel, so on the LIVE glass the only way into the history was
+// the key bar. The operator's report: "на свайпи по тексту пальцями не реагує
+// зовсім". It cannot scroll there — tmux attaches the client on the alternate
+// screen, where xterm keeps no scrollback at all — but the gesture still has an
+// obvious meaning, and it is the same one the wheel has: reach for what is
+// above the screen.
+describe('a finger opens the history from the live glass', () => {
+  const liveGlass = (view: ReturnType<typeof mountDrawer>['view']): HTMLElement => {
+    const el = view.baseElement.querySelector('.term-screen > .term-host');
+    if (!el) throw new Error('the drawer rendered no terminal host');
+    return el as HTMLElement;
+  };
+
+  const swipe = (el: HTMLElement, dx: number, dy: number): void => {
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 100, clientY: 100, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 100 + dx, clientY: 100 + dy, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 100 + dx, clientY: 100 + dy, isPrimary: true });
+  };
+
+  it('a deliberate drag DOWN reads the pane history, exactly as a wheel-up does', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { h, view } = mountDrawer();
+
+    swipe(liveGlass(view), 0, 3 * ROW_PX);
+
+    await waitFor(() => expect(h.write, 'the swipe opened no history').toHaveBeenCalled());
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('/pane/history');
+  });
+
+  it('a tap and a short wobble are not a gesture', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+
+    swipe(liveGlass(view), 0, 0);
+    swipe(liveGlass(view), 0, 6);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl, 'a tap on the glass read the pane').not.toHaveBeenCalled();
+  });
+
+  it('a sideways swipe is left alone, and so is a drag UP', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+
+    // Sideways: the reader is not asking for what is above the screen. Up: on
+    // the live glass there is nothing below it either — the newest line is
+    // already on the screen.
+    swipe(liveGlass(view), 120, 30);
+    swipe(liveGlass(view), 0, -4 * ROW_PX);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

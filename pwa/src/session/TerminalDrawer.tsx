@@ -49,6 +49,10 @@ export interface HistoryTerm {
    *  the reader is then sitting at the bottom with the bottom latch unarmed. */
   write(data: string, done?: () => void): void;
   fit(): { cols: number; rows: number };
+  /** One row's height in CSS pixels, or 0 when it cannot be measured yet — the
+   *  drag needs it to turn a finger's travel into lines, and 0 means "do not
+   *  guess", not "zero". */
+  rowHeight(): number;
   /** Scroll the view; negative is up, in lines. */
   scrollLines(amount: number): void;
   /** Called when the reader, having scrolled up, comes back down to the newest
@@ -150,6 +154,19 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
   return {
     write: (d, done) => term.write(d, done),
     fit: fitter(term, fit),
+    // THE ROW HEIGHT, BY IDENTITY RATHER THAN BY ESTIMATE. The DOM renderer
+    // sets `.xterm-screen`'s height to `css.cell.height * rows` exactly, so
+    // dividing it back out IS xterm's own cell height — no private API, and no
+    // reliance on the HOST's height, which `rows` was floored from and which
+    // therefore over-states a row by up to a whole cell. `getBoundingClientRect`
+    // rather than `clientHeight` so the answer is in the same visual pixels a
+    // PointerEvent's `clientY` speaks, under whatever transform the sheet has
+    // the panel in mid-animation.
+    rowHeight: () => {
+      const screen = host.querySelector('.xterm-screen');
+      const px = screen === null ? 0 : screen.getBoundingClientRect().height;
+      return px > 0 && term.rows > 0 ? px / term.rows : 0;
+    },
     scrollLines: (n) => term.scrollLines(n),
     onBottom: (cb) => {
       // LATCHED, and that is the whole of it: writing the history scrolls the
@@ -182,6 +199,10 @@ const QUICK_KEYS: { legend: string; label: string; seq: string }[] = [
 
 /** Lines one wheel notch moves — xterm's own default step, and the amount the
  *  history view opens by so the gesture reads as a scroll rather than a jump. */
+/** How far a finger must travel DOWN the live glass before it counts as a
+ *  reach for the history, in CSS pixels. About a row and a half: smaller reads
+ *  as a tap that moved, and the reader gets a history they did not ask for. */
+const TOUCH_OPEN_PX = 24;
 const WHEEL_LINES = 3;
 
 type Conn = 'connecting' | 'open' | 'down';
@@ -398,6 +419,40 @@ export function TerminalDrawer({
       return false;
     });
 
+    /**
+     * THE DOOR A FINGER CAN OPEN. A phone has no wheel, and on this glass there
+     * is nothing to scroll anyway — tmux attaches the client on the alternate
+     * screen, where xterm keeps no scrollback — so the key bar was the only way
+     * in. The gesture still has one obvious meaning, and it is the wheel's:
+     * reach for what is above the screen.
+     *
+     * NOTHING IS PREVENTED HERE. A tap must still reach xterm's textarea, so
+     * the press is only watched, never claimed; the history opens on the move
+     * that crosses the threshold and the pointer is left to xterm either way.
+     */
+    let from: { x: number; y: number } | null = null;
+    const openDown = (ev: PointerEvent): void => {
+      if (ev.defaultPrevented) { from = null; return; }   // xterm's own scrollbar
+      from = { x: ev.clientX, y: ev.clientY };
+    };
+    const openMove = (ev: PointerEvent): void => {
+      if (from === null) return;
+      const dy = ev.clientY - from.y;
+      const dx = ev.clientX - from.x;
+      // DOWN, and more down than sideways: a swipe across the glass is not a
+      // reach for older output, and a wobble is not a swipe. The threshold is
+      // about a row and a half, which is the smallest travel that reads as
+      // deliberate on a phone rather than as a tap that moved.
+      if (dy < TOUCH_OPEN_PX || Math.abs(dx) > Math.abs(dy)) return;
+      from = null;
+      openHistory();
+    };
+    const openEnd = (): void => { from = null; };
+    host.addEventListener('pointerdown', openDown);
+    host.addEventListener('pointermove', openMove);
+    host.addEventListener('pointerup', openEnd);
+    host.addEventListener('pointercancel', openEnd);
+
     // Later size changes (rotation, keyboard, desktop resize) → refit; only a
     // changed grid is worth a resize frame.
     const refit = (): void => {
@@ -463,7 +518,77 @@ export function TerminalDrawer({
       // BEFORE the history landed, which moves nothing and arms nothing.
       term.scrollLines(-WHEEL_LINES);
     });
-    return () => term.dispose();
+
+    /**
+     * THE FINGER, because xterm has nothing for it to pan.
+     *
+     * `.xterm-viewport` still carries `overflow-y: scroll`, but it is an empty
+     * leftover — measured on a real Terminal: zero children, empty innerHTML —
+     * and the actual scroll is a virtual VS Code `Scrollable` that re-renders
+     * rows, whose only input is a `wheel` listener. A touch drag across the
+     * glass left `viewportY` exactly where it was and put nothing on the pty,
+     * and so did its pointer-event twin. On top of that the sheet computes
+     * `touch-action: none` over the whole panel, so even a real scroller would
+     * not have been panned. The drag is ours to write or the phone has none.
+     *
+     * `defaultPrevented` IS THE GUARD, and it is not decoration: xterm binds
+     * `pointerdown` on its own scrollbar slider and takes the pointer capture
+     * through `GlobalPointerMoveMonitor`, but calls only `preventDefault()` —
+     * never `stopPropagation()`. The press therefore reaches this element too,
+     * and capturing it here would steal the capture xterm took an instant
+     * earlier and break dragging the scrollbar. Reading the flag rather than
+     * the target's class survives xterm renaming its internals.
+     */
+    const pointers = new Set<number>();
+    let active: number | null = null;
+    let lastY = 0;
+    /** Sub-row travel, kept across moves: a slow drag is many fractions of a
+     *  row, and truncating each one on its own swallows the whole gesture. */
+    let carry = 0;
+
+    const down = (ev: PointerEvent): void => {
+      pointers.add(ev.pointerId);
+      if (ev.defaultPrevented) return;
+      // A pinch is not a scroll. Abandon rather than follow one of the two.
+      if (pointers.size > 1) { active = null; return; }
+      active = ev.pointerId;
+      lastY = ev.clientY;
+      carry = 0;
+      try {
+        histHost.setPointerCapture(ev.pointerId);
+      } catch { /* jsdom, or a pointer someone else already holds */ }
+    };
+    const move = (ev: PointerEvent): void => {
+      if (active !== ev.pointerId) return;
+      const travel = ev.clientY - lastY + carry;
+      lastY = ev.clientY;
+      const px = term.rowHeight();
+      // UNMEASURABLE IS NOT ZERO: keep the travel and try again on the next
+      // move rather than dividing by a number the terminal could not give.
+      if (px <= 0) return;
+      const rows = Math.trunc(travel / px);
+      carry = travel - rows * px;
+      // The content follows the finger: dragging DOWN reaches older output,
+      // which is a scroll UP.
+      if (rows !== 0) term.scrollLines(-rows);
+      ev.preventDefault();
+    };
+    const end = (ev: PointerEvent): void => {
+      pointers.delete(ev.pointerId);
+      if (active === ev.pointerId || pointers.size === 0) active = null;
+    };
+
+    histHost.addEventListener('pointerdown', down);
+    histHost.addEventListener('pointermove', move);
+    histHost.addEventListener('pointerup', end);
+    histHost.addEventListener('pointercancel', end);
+    return () => {
+      histHost.removeEventListener('pointerdown', down);
+      histHost.removeEventListener('pointermove', move);
+      histHost.removeEventListener('pointerup', end);
+      histHost.removeEventListener('pointercancel', end);
+      term.dispose();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
   }, [hist, histHost, makeHistoryTerm]);
 
