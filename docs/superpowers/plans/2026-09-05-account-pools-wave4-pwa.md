@@ -4180,6 +4180,16 @@ deviation found while executing this plan is allocated in its own call at the mo
   archived state, then pinning only the behavior `projectPool` can actually
   affect there or recording that the prop is inert for the dead row and why it
   remains passed. An accurate smaller assertion replaces the fictional cue.
+  Coordinator mail 1009 measured that `sessionBucket` admits an archived row
+  only when `archivedAt !== null && status === 'dead'`
+  (`shared/api.ts:1275`), while SessionLine gates its sole `projectPool` effect,
+  the off-pool label, on `!dead`. The earlier D-2693 archived handoff pin is
+  therefore retired rather than repaired: its red depended on an unreachable
+  session shape. Keep the route-pool prop at both call sites for signature
+  symmetry, and pin the reachable policy instead — a dead archived row with
+  genuinely disagreeing account and project pools has no off-pool cue,
+  `data-offpool`, or off-pool accessible text. Removing only the `!dead` guard
+  must red that assertion.
 
 - **D-2709 — StartProgramSheet keeps project placement as a once-per-open
   snapshot.** A measured refusal or target cannot update while the sheet stays
