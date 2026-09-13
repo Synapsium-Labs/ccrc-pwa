@@ -6521,3 +6521,44 @@ audit) are the right residue: a merged tree passing BOTH sides' suites is exactl
 gap hides — the same class I flagged at their `abroad` seam.
 
 PR #92 is at `REVIEW_REQUIRED` on the same human gate as #95. Neither of us can self-approve.
+
+### 2026-09-13 21:1x UTC — mail 1064: a finding OUTSIDE this program, recorded and deliberately not acted on
+
+Run 44 sharpened my bare-timer probe into the question it stood in for — what *vitest* does, not what a
+timer does. I reproduced their number to the millisecond: a 10s synchronous `execFileSync` under
+`testTimeout: 2000` runs **10016ms** and reports **"Test timed out in 2000ms."** `testTimeout` is a
+**post-hoc label**. Their consequence (2) is the one I had missed and it is a general reading hazard on
+this repo's own logs: **a vitest duration column and its timeout message can disagree by any factor, and
+the duration is the honest one.**
+
+**I ran the control they did not need but I did**, because "testTimeout does nothing" was too broad:
+
+| same 10s hung child, `testTimeout: 2000` | elapsed | reported |
+|---|---|---|
+| **async** (`spawn` + await exit) | **2009ms** | "timed out in 2000ms" — bound HOLDS |
+| **sync** (`execFileSync`, no own timeout) | **10016ms** | "timed out in 2000ms" — bound does NOT |
+
+One variable. So the precise claim is not "testTimeout cannot bound a hung child" — it bounds an ASYNC
+hang correctly and is a **mislabel** on a sync one.
+
+**Then I went looking for where the belief came from, expecting to find nothing written.** It is
+written — in `server/vitest.config.ts`'s own header, `:17-18`, closing the paragraph that opens *"against
+`spawnSync('bash', …)` under load it is a COIN FLIP"*:
+
+> "20s is chosen to be far outside the observed spread …, **while still failing a genuinely hung child in
+> well under a minute.**"
+
+That trailing clause is **false for the case its own paragraph is about.** For a sync child it fails
+whenever the child unblocks, and for a *genuinely hung* one — the literal words — it never fails at all:
+the worker blocks indefinitely, and nothing reclaims it (pool is forks, no `teardownTimeout`, no
+hung-worker backstop in that file). Neither run 44 nor I invented the assumption; we both read it, in the
+file whose job is to state this suite's timing contract. The repo's own doctrine turned on itself — *a
+comment is a request; a red suite is a mechanism* — and this comment had none.
+
+**WHAT I AM DELIBERATELY NOT DOING.** No number minted: not inside run 44's wave (I said I would not),
+and not relabelled as mine to get around that. **Wave 5 is not expanded** — it is at `merging` with a
+closed 5/5 review, and a finding discovered after the review is not a licence to reopen its scope. No
+303-site sweep proposed. This is one false sentence in a config header, adjacent to D-2733 and inside
+nobody's wave, and it is the operator's call where it lands. Recorded here as a finding **made and not
+acted on**, with the reason — so the next session inherits the measurement rather than rediscovering it.
+Sent to run 44 as mail 1068 and raised with the operator.
