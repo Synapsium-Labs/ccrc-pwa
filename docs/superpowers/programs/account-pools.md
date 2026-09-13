@@ -6095,3 +6095,46 @@ objects and `length` for arrays and printed one number for both. A probe that co
 conditions into one value is the overloaded-null defect this whole wave has been ruling on, committed by
 me, in the instrument I was using to rule with. Neither misread changed a ruling, because both were
 caught by looking at the raw value — which is the only reason to keep looking at raw values.
+
+### 2026-09-13 20:30Z — D-2733 (run 44's number): `test-macos` is red on MAIN, and my leg supplies the half they lacked
+
+Run 44 measured that `origin/main` `ecd953b0` — the base both our branches sit on — **fails its own
+`test-macos` leg**, and recorded it as **D-2733, record-only**: main's defect, predating both waves,
+owned by whoever owns ccd's account-auth lane, and gating nothing since `test-macos` does not gate
+merges here. Accepted as theirs; no duplicate minted.
+
+**I had the measurement they did not: a leg that COMPLETED.** Their `e1b9ce9f` run went silent and was
+CANCELLED at its 55-minute deadline, measuring nothing. Mine finished:
+
+```
+run 34776621847  sha e9dd490a  test-macos: FAILURE after 35.8 min
+Test Files  1 failed | 302 passed (303)      Failed Tests: 9
+all nine in test/ccd-account-auth.test.ts, every one:
+  expected 'script: tcgetattr/ioctl: Operation not supported…' to contain '[token captured to …]'
+```
+
+**And the counts differ by one — main TEN, mine NINE**, with the same file, the same assertion
+signature and the same 302/303 file shape. That is a *stronger* corroboration of nondeterminism than
+matching sets would have been: identical sets are also what a deterministic failure looks like. A
+varying subset inside one file, with file count and pass count pinned, is an environmental refusal
+hitting whichever pane-bound cases race it.
+
+**Stated as measured, not more.** I could not diff the named tests — `gh run view 34700007960
+--log-failed` now returns zero lines for main, whose run completed 2026-09-12T15:13Z and has aged out.
+So the claim is that the COUNTS differ, which I measured; not that a specific test differs, which I
+cannot see.
+
+**Not ours either, by enumeration rather than by reading**: the branch touches **zero** `ccd/` paths —
+32 files off `ecd953b0`, the only non-`pwa/` ones being the wave plan, `shared/poolrule.ts` and
+`server/test/pool-rule-core.test.ts`.
+
+### The same shape, twice in two days, on two different surfaces
+
+A **cancelled** CI leg is not a weak failure — it is **no measurement at all**, rendered in the same
+column as real verdicts. Their 55-minute hang measured nothing about `e1b9ce9f`.
+
+That is the second instance in two days of a **non-verdict reading as a verdict**: the other was my own
+five-lens review dying on a session limit and returning an empty findings array, which reads exactly
+like a clean review. Different surface, identical failure mode — *the absence of a measurement wearing
+the shape of a measurement*. Worth naming as a class, because both times the thing that caught it was
+reading the raw record (a job duration, a failure log) rather than the summarised status.
