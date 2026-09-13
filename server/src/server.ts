@@ -1469,29 +1469,107 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // Terminal drawer: attach a pty to the session's tmux window. Lazy-import the
   // native node-pty binding only when no stub is injected (keeps tests hermetic).
   const spawnPty: SpawnPty = deps.spawnPty ?? (await import('./pty.js')).attachPty;
-  const dim = (v: string | undefined, dflt: number): number => {
+  /**
+   * A dimension the client MEASURED, or `null` when it said nothing usable.
+   *
+   * ABSENT AND MEASURED ARE NOT THE SAME VALUE HERE, and they used to be. The
+   * pty has to be some size, so a missing `?cols=` rightly falls back to a
+   * default — but since the window now follows the client, that same fold
+   * would reshape a LIVE agent's pane to a number the client never said. Two
+   * conditions the caller handles differently, so they get two values; the
+   * default is applied at the pty, and only here, not before.
+   */
+  const measured = (v: string | undefined): number | null => {
     const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
   };
+  /**
+   * The window follows the client only down to a real terminal, and the number
+   * is MEASURED IN THIS TREE rather than chosen. `inject/send.ts`'s
+   * `paneWidth` clamps the width it reads off a capture with `Math.max(80, …)`
+   * — "the floor (80, the narrowest real terminal)" — and `visualRows` spends
+   * the blind draft clear 2 presses per visual row computed from it. On a pane
+   * genuinely narrower than that floor it UNDER-counts the rows, the clear
+   * presses too few times, and the next send comes back `draft-present`
+   * carrying exactly what that feature exists to keep out of the box.
+   *
+   * Until this route sized the window, no pane could be that narrow — a small
+   * client only clipped its own view. It can be now, from a query string, so
+   * the floor has to be said here too. Below it the drawer clips, which is
+   * precisely the behaviour it had before the window followed anything; a
+   * phone may not reshape a working agent's pane into something no terminal
+   * ever is. The rows floor is its companion: a window shorter than 24 hides
+   * the status row every pane reader in this tree expects to find.
+   *
+   * These are the same digits as the pty defaults below by coincidence of
+   * history, not by shared meaning — 80x24 is both "the classic terminal" and
+   * "the narrowest real one". Changing what an unmeasured client gets must not
+   * move the floor, so they are spelled apart on purpose.
+   */
+  const FLOOR_COLS = 80;
+  const FLOOR_ROWS = 24;
+  const mayFollow = (cols: number | null, rows: number | null): boolean =>
+    cols !== null && rows !== null && cols >= FLOOR_COLS && rows >= FLOOR_ROWS;
+  /**
+   * Every drawer attached to a session right now, with the grid it last
+   * reported and a stamp of when it last moved.
+   *
+   * WHY THE SERVER HAS TO REMEMBER. The close handler below has always
+   * restored a hard-coded 220x50, which cost nothing while the window was
+   * never anything else. It costs the reader everything now that the window
+   * follows a client: measured live, a phone drawer closing left the window at
+   * 220x50 under a desktop client of 171x58, and that reader watched every
+   * line run off the right edge — the exact defect the sizing was added to
+   * cure, handed back to them by someone else's exit.
+   *
+   * tmux answers this itself with `window-size latest`, which snaps the window
+   * to whichever client remains (measured on a private socket: a 60x20 client
+   * leaving restored the window to the 120x40 one that stayed, unaided). That
+   * option is not reachable: `set-window-option` has no whitelist entry, and
+   * earning one would grant the verb in full — the grant is prefix-matched and
+   * tmux takes the target before the option name, so no narrower prefix
+   * exists. The server needs no grant for this. It is already told every
+   * drawer's grid, on the attach and on every refit; it simply threw the
+   * knowledge away the moment the socket closed.
+   */
+  interface Drawer {
+    cols: number;
+    rows: number;
+    /** Whether this grid is allowed to size the window — a measured pair at or
+     *  above the floor. Kept beside the numbers because the answer is made
+     *  once, where the query string is still in hand. */
+    follows: boolean;
+    /** Monotonic: which drawer moved most recently, the question `latest` asks. */
+    moved: number;
+  }
+  const attached = new Map<string, Set<Drawer>>();
+  let lastMoved = 0;
 
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
-    const cols = dim(q.cols, 80);
-    const rows = dim(q.rows, 24);
+    const mCols = measured(q.cols);
+    const mRows = measured(q.rows);
+    const cols = mCols ?? 80;
+    const rows = mRows ?? 24;
     const p = spawnPty(id, cols, rows);
     // THE WINDOW FOLLOWS THE CLIENT, and it has to be said out loud because
     // tmux would otherwise do it by itself: the close handler below has always
     // run `resize-window`, and that verb sets `window-size manual` — measured
-    // on this fleet, every live window now reads `manual`, a value nothing in
-    // this tree writes on purpose. A pinned window stops sizing itself to
+    // on a private socket, both `-x/-y` and `-A` latch it, and on the live
+    // fleet the windows that read `manual` are exactly the ones a drawer has
+    // closed on. A pinned window stops sizing itself to
     // whoever attaches, so a drawer whose grid is not the spawn's 220x50 gets
     // a CLIPPED viewport: the right of every line cut, the status row hidden
     // under the key bar, and tmux's dotted filler wherever the client is the
     // larger of the two. The history read renders that same pane at the
     // DRAWER's width, so the two views also wrapped differently — one defect
     // wearing a second face.
-    void deps.tmux.resizeWindow(id, cols, rows);
+    if (mayFollow(mCols, mRows)) void deps.tmux.resizeWindow(id, cols, rows);
+    const me: Drawer = { cols, rows, follows: mayFollow(mCols, mRows), moved: ++lastMoved };
+    const peers = attached.get(id) ?? new Set<Drawer>();
+    peers.add(me);
+    attached.set(id, peers);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
@@ -1501,15 +1579,34 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           p.resize(m.cols, m.rows);
           // Same reason as the attach above: a rotation or a keyboard opening
           // moves the client, and a pinned window would not follow it.
-          void deps.tmux.resizeWindow(id, m.cols, m.rows);
+          me.cols = m.cols;
+          me.rows = m.rows;
+          me.follows = mayFollow(m.cols, m.rows);
+          me.moved = ++lastMoved;
+          if (me.follows) void deps.tmux.resizeWindow(id, m.cols, m.rows);
         }
       } catch { /* ignore malformed frames */ }
     });
     socket.on('close', () => {
       sub.dispose();
       p.kill();
-      // Restore the canonical size ccd spawned with — a phone-sized drawer must
-      // not leave the session shrunken (wrapped panes break capture parsing).
+      peers.delete(me);
+      if (peers.size > 0) {
+        // SOMEONE IS STILL WATCHING, and the window is theirs now. Handing it
+        // the canonical size here is what left a desktop reader staring at a
+        // 220-column window through a 171-column client the moment a phone
+        // closed. `latest` is the question tmux would ask, so the server asks
+        // it: the drawer that moved most recently, not the one that arrived
+        // most recently, and only if its grid may size a window at all.
+        const latest = [...peers].reduce((a, b) => (b.moved > a.moved ? b : a));
+        if (latest.follows) void deps.tmux.resizeWindow(id, latest.cols, latest.rows);
+        return;
+      }
+      attached.delete(id);
+      // The last one out restores the canonical size ccd spawned with — a
+      // phone-sized drawer must not leave the session shrunken (wrapped panes
+      // break capture parsing), and with nobody attached there is no client
+      // whose size would be a better answer.
       void deps.tmux.resizeWindow(id, 220, 50);
     });
   });
