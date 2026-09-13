@@ -1484,22 +1484,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
   };
   /**
-   * The window follows the client only down to a real terminal, and the number
-   * is MEASURED IN THIS TREE rather than chosen. `inject/send.ts`'s
-   * `paneWidth` clamps the width it reads off a capture with `Math.max(80, …)`
-   * — "the floor (80, the narrowest real terminal)" — and `visualRows` spends
-   * the blind draft clear 2 presses per visual row computed from it. On a pane
-   * genuinely narrower than that floor it UNDER-counts the rows, the clear
-   * presses too few times, and the next send comes back `draft-present`
-   * carrying exactly what that feature exists to keep out of the box.
+   * The window follows the client only down to a real terminal, and what the
+   * floor protects is the READING OF THE PANE, not the writing to it.
    *
-   * Until this route sized the window, no pane could be that narrow — a small
-   * client only clipped its own view. It can be now, from a query string, so
-   * the floor has to be said here too. Below it the drawer clips, which is
-   * precisely the behaviour it had before the window followed anything; a
-   * phone may not reshape a working agent's pane into something no terminal
-   * ever is. The rows floor is its companion: a window shorter than 24 hides
-   * the status row every pane reader in this tree expects to find.
+   * The obvious argument is the wrong one, and it was measured wrong before it
+   * was believed: `inject/send.ts`'s `paneWidth` clamps with `Math.max(80, …)`
+   * — "the floor (80, the narrowest real terminal)" — but it measures UTF-16
+   * code units, not columns, so it already over-reports (a row of 100
+   * skin-tone emoji on a real 220-column pane captures as 400) and its ceiling
+   * is the only bound on that. A narrow pane is not what breaks the draft
+   * clear; `clearBox`'s terminator accepting the same stale frame that failed
+   * the echo is, at any width.
+   *
+   * WHAT A NARROW PANE REALLY BREAKS is every reader that matches a SENTENCE
+   * against a capture, because tmux hard-wraps the stored line and nothing
+   * reflows it. Measured against the shipped module on a real 43-column pane:
+   * "Usage limit reached · continuing automatically at 14:00" arrives as
+   * "continuing automatica" / "lly at 14:00", and `autoContinueArmed`
+   * (`pane/dialog.ts`) answers FALSE where the same text at 220 answers true;
+   * `hasMenu`'s "Enter to confirm" straddles the wrap the same way. Those
+   * readers are the limit and dialog detection the fleet's own recovery leans
+   * on. A phone drawer may cost its reader a clipped view; it may not blind
+   * the machinery watching the session.
+   *
+   * Until this route sized the window a drawer could not do that — a small
+   * client only clipped itself. It can now, from a query string, so the floor
+   * is said here. Below it the drawer clips, exactly as it did before the
+   * window followed anything. The rows floor is its companion: a window
+   * shorter than 24 hides the status row those same readers expect to find.
+   *
+   * IT CLOSES ONE DOOR, NOT THE CLASS. `ccd` sets `window-size latest` on every
+   * session it spawns and tmux's own default is `latest`, so a narrow tmux
+   * client attaching directly still shrinks the window — that is a defect
+   * about the detectors' own robustness, and it is not this route's to fix.
    *
    * These are the same digits as the pty defaults below by coincidence of
    * history, not by shared meaning — 80x24 is both "the classic terminal" and
