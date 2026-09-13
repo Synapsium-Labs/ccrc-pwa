@@ -5630,3 +5630,71 @@ will hold wave 5 behind it and pay the integration myself**, because my branch i
 still absorb a rebase cheaply — unpushed, and reviewed by nobody outside this programme. Wave 5 is not
 racing it. Awaiting their merge-order answer; the push and the PR proceed regardless, since neither is
 a merge.
+
+---
+
+## 2026-09-13 05:56Z — D-2721: the open sheet and the card behind it disagree, and the sheet is the stale one
+
+Worker mail 1021 reported one Medium candidate from its final isolated Opus review of `030f4ce9`:
+after a successful write, a later divergent pools frame may fail to supersede `selectedPool` while the
+same sheet stays open, located at `PoolSheet.tsx:115`.
+
+**The candidate is REAL. Its location is wrong, and the fix it implies would REVERSE D-2701.** Issued
+**D-2721** from the allocator (floor 2721 → 2722) and accepted — fixed in wave 5, before the push.
+
+**Proven with a probe, not with a reading.** Inserted into a disposable worktree at the exact
+integrated head, beside `carries the row pool into the opened sheet when the pools frame disagrees`:
+open the sheet on a project at `pool-a`, push a divergent frame while it stays open, let the route
+refresh that frame triggers answer `pool-b`.
+
+```
+PROBE sheet copy >>> ...alpha is in pool pool-a...
+PROBE card chip  >>> project pool pool-b
+```
+
+**Same screen, same instant, two answers about the same project, and the open sheet holds the stale
+one.** No write is needed to reach that state; no timer is needed to leave it; and the fresher route
+answer was already inside the component.
+
+**Why `:115` is not the place.** `visibleMeasured ?? selectedPool ?? projectPoolOf(pools, …)` is
+CORRECT: that precedence is D-2701's ruling, pinned by `pool-sheet.test.tsx:241`, and it follows the
+policy that route-owned `ProjectRow.pool` is authoritative while the frame is invalidation/enforcement
+capability only. The frame's legitimate effect is invalidation, which it already performs at `:112`.
+Letting a frame beat a route answer would make the frame a pool-value source. And note what that
+fixture does: it passes `selectedPool` as a FIXED prop, so it pins the sheet's precedence and says
+nothing about whether the parent keeps that prop fresh. **It does not.**
+
+**Where it actually is.** `setPoolSelection` has exactly three sites — `useState` at `:131`, the card
+tap at `:577`, the write handler at `:643`. `refreshProjects` updates `projectRows` and clears the
+`poolWrite` bridge and **never reconciles `poolSelection`** — though the refresh it just ran was
+triggered by that very frame (`:205`) and landed the fresher answer at `:187`. `poolSelection` is a
+tap-time snapshot that beats every later measurement for as long as the sheet is open.
+
+**This is the D-2704 class, in the same file, shipped by the same wave.** D-2704 was `poolWrite` never
+expiring; D-2721 is its sibling. `poolSelection` is NEW in wave 5 — zero occurrences at `ecd953b0`,
+three at `030f4ce9` — so this wave built both the mechanism and the defect. Sixth round in a row that
+the fix round reproduced its own class at the seam next to the one it repaired, and the first time it
+was caught before a push rather than after.
+
+**D-2709's park does not cover it, and I checked rather than assumed.** That park rested on *no
+non-timer invalidation reaches the sheet, and re-measuring would need a fresh `/api/projects` call*.
+Here that premise is FALSE: the call already happens on every pools frame and its answer is already
+held. Only the wiring is missing. **The remedy was already shipped** — `onPool` at `:576`–`:582`
+already computes written-bridge-first-then-measured-route; it simply is not applied while open.
+
+**Ruled remedy, three load-bearing constraints:** re-measure ONLY while `poolOpen` (the snapshot exists
+to survive vaul's exit animation, and re-measuring on close would flip the copy mid-animation or to
+"missing"); the `poolWrite` bridge still wins while live (D-2704/D-2707, cleared per D-2714);
+`PoolSheet` is not edited. Extract the expression into one named function used by both sites so the two
+cannot drift.
+
+**Ordered a CONTROL, not just a red.** Deleting the re-measure must red the new pin; dropping the
+`poolOpen` guard must red the exit-animation property — and if it does not, say so plainly, because a
+green mutation means AMBIGUOUS and that property is then unpinned. `pool-sheet.test.tsx:241` must stay
+green: if it reds, D-2701 has been reversed and the fix is wrong. And run the suite that OWNS the
+mechanism rather than the files you expect — this wave has already shipped one true conclusion with a
+false count, off my own dispatch.
+
+**Credit where it is due.** The worker's final review found this with the sheet open and the frame
+divergent, which is the hard part. It named the wrong line and the wrong layer, but nothing in six
+rounds of review had reached that transition. Mail 1023 carries the ruling and the probe source.
