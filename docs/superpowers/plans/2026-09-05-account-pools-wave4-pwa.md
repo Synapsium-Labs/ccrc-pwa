@@ -4106,3 +4106,98 @@ deviation found while executing this plan is allocated in its own call at the mo
   real-store reconnect at two total calls with one post-initial request still
   outstanding, plus a changed-payload sibling that requires the third call.
   Mutation-pin deletion of the equality/in-flight guard and restore exactly.
+
+- **D-2703 — D-2701's comment correction fixed the named instance while leaving
+  the false claim in place and adding a second false claim.** `ProjectCard`
+  never reads a project-pool value from the websocket frame: a non-measured
+  route row yields no pool and no chip, while only the placement forecast falls
+  back to the global projection for a legacy row. The post-D-2701 comments say
+  both that the caller falls back to the frame and that a legacy row does so.
+  The review found the same documentation-drift class in `FleetHostBanner`'s
+  enforcement census, `AccountRow.poolChip`'s two-caller contract, and
+  `StartProgramSheet`'s now-three-arm recovery contract. Coordinator mails 996
+  and 998 ruled comments/docstrings only: state each current mechanism exactly,
+  search the whole wave surface for the claim rather than only the named lines,
+  and gate with TypeScript plus focused suites without manufacturing mutation
+  evidence for prose.
+
+- **D-2704 — D-2701's successful-write bridge never expires and can permanently
+  override a fresher route measurement.** `FleetScreen.poolWrite` is written
+  after success and read before the current `ProjectRow.pool`, but is never
+  cleared; after its own route refresh lands, a later external pool change can
+  therefore make a card display one value while its chip reopens the sheet on
+  the remembered write. Coordinator mail 998 ruled that the bridge last only
+  until the refresh triggered by that write settles, without being cleared by
+  an unrelated request that was already in flight. Preserve the pending-race
+  read-back, then pin that a later route change wins after the triggered refresh
+  settles. Removing the clear must red the latter while leaving the pending
+  direction green.
+
+- **D-2705 — D-2700's undecidable-pool note treats old-server omission as a
+  measured unknown.** `c.pool ?? null` feeds absence into `poolSide`'s unknown
+  arm, so a server that omits optional `ProjectRow.pool` can show the warning on
+  every project even though it reports no pool matching. Coordinator mail 998
+  ruled changing only the note's local predicate: require a present measured
+  pool whose classification is unknown. Do not alter pool classification,
+  splitting, crossing, or permissive behavior. Pin an absent-pool row as
+  visible, startable, silent, and submitted without `crossPool`, while retaining
+  every D-2700 assertion.
+
+- **D-2706 — D-2699's selected-row audit ground is hand-written but not checked
+  against the stylesheet that paints it.** Retinting `.proj-row--selected` in
+  CSS leaves the audit registered against `--accent-tint`, so the report stays
+  green while measuring a ground the UI no longer renders. Coordinator mail
+  998 ruled retaining inherited-ground registration and adding a check for the
+  safely expressible case where one named selector directly sets the registered
+  token as its background. Mutating only that CSS background token must red the
+  new assertion, not merely a registry mutation; a focused selector pin is
+  preferred over a fragile generic parser if necessary.
+
+- **D-2707 — Project remeasurement erases the last good rows for every refresh.**
+  `refreshProjects` unconditionally sets `pending`, so visibility return, pools
+  frames, and successful writes temporarily remove pool chips, placement
+  forecasts, and off-pool cues. Coordinator mail 998 ruled preserving cold-load
+  pending/failed behavior while retaining prior ready rows throughout a refresh
+  and a failed remeasurement. Pin both the cold-load pending state and the
+  continued chip/off-pool cue during an unresolved refresh. Restoring the
+  unconditional pending reset must red only the retained-row direction.
+
+- **D-2708 — D-2693's archived route-pool fixture asserted an unreachable live
+  session shape.** Archived membership requires a dead session, and dead rows
+  intentionally suppress the off-pool cue; the fixture omitted `status:'dead'`
+  and therefore made its call-site mutation red using a state the wire cannot
+  carry. Coordinator mail 998 ruled correcting the fixture to a reachable
+  archived state, then pinning only the behavior `projectPool` can actually
+  affect there or recording that the prop is inert for the dead row and why it
+  remains passed. An accurate smaller assertion replaces the fictional cue.
+
+- **D-2709 — StartProgramSheet keeps project placement as a once-per-open
+  snapshot.** A measured refusal or target cannot update while the sheet stays
+  open even when the screen receives its existing no-timer invalidations.
+  Polling every 20 seconds is explicitly rejected because `/api/projects` is an
+  O(N) fleet sweep and the programme requires fewer such calls. Coordinator
+  mail 998 ruled reusing visible-page and pools-frame invalidation while the
+  sheet is open, coalesced with D-2702 so no duplicate request is added. A
+  measured project-specific refusal must not be cleared merely because the
+  global projection changes; if the existing invalidation cannot be reused
+  without a new fetch path, park this smaller stale-until-reopen defect rather
+  than introduce polling.
+
+- **D-2710 — D-2688's fix commit also added account pool chips to
+  NewSessionSheet outside its ruling.** The product change is aligned with this
+  wave and makes the two shared account-row pickers consistent, so coordinator
+  mail 998 approved it after the fact rather than ordering churn. Keep the
+  behavior, correct `AccountRow.poolChip`'s falsified docstring to describe its
+  actual callers, and record the unruled addition. The durable process finding
+  is that a fix commit carried a separate product change outside the scope that
+  authorized it.
+
+- **D-2711 — D-2702's stable recursive pools fingerprint has no shipped red
+  behind key ordering.** Replacing the sorting replacer with plain
+  `JSON.stringify` left all 71 tests green, while an independently written
+  reordered-key probe failed on the same mutant and confirmed that production
+  correctly coalesces semantically equal objects despite insertion-order
+  differences. Coordinator mail 1000 ruled tests only: send a distinct equal
+  frame with reordered keys at the top level, in `byProject`, and inside each
+  project-pool object, and keep the request count coalesced. Removing the sorted
+  replacer must red that fixture while the remaining focused suite stays green.
