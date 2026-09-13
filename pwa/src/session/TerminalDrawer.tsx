@@ -113,6 +113,57 @@ const glass = () => ({
   },
 });
 
+/**
+ * THE ROWS AND THE PIXELS DO NOT LAND TOGETHER, and this is what holds them
+ * together anyway.
+ *
+ * The drag moves the history two ways at once: whole rows through
+ * `scrollLines`, and the leftover fraction of a row through a transform. The
+ * transform is a style write and is on the glass at the next paint; the rows
+ * are not. xterm's `scrollLines` updates the buffer and then asks its render
+ * debouncer for a repaint, which it schedules with its OWN
+ * `requestAnimationFrame` — and a frame callback registered from inside a
+ * frame callback runs in the NEXT frame. So on the step that crosses a row
+ * boundary, the transform snaps back by a row while the rows it was standing
+ * in for are still one frame away.
+ *
+ * At speed that is invisible: a dozen rows go past per frame and a one-row
+ * error is a fraction of the motion. As a throw decelerates it becomes the
+ * whole motion, and the rows shake — which is exactly where the operator saw
+ * it ("під час замедлення строки скачуть вверх-вниз").
+ *
+ * So the transform stands in for the rows until they are actually painted.
+ * `scrolled` records a displacement asked for and not yet seen, `painted`
+ * clears it on xterm's own `onRender`, and the invariant across all of it is
+ * one line: what is on the glass — painted rows plus transform — is always
+ * exactly what was asked for. Exported for its own tests, because that
+ * invariant is the whole of the fix and jsdom cannot see a pixel.
+ */
+export interface PaintLag {
+  /** The terminal was told to scroll — `rows` is the number handed to
+   *  `scrollLines` verbatim, and `rowPx` the row height at that moment. The
+   *  sign lives HERE rather than at the call site: `scrollLines(-1)` moves the
+   *  CONTENT down by a row, and a helper that took "px, downward" would put
+   *  that flip in an adapter no test can reach. */
+  scrolled(rows: number, rowPx: number): void;
+  /** The sub-row remainder the drag wants shown, positive downward. */
+  sub(px: number): void;
+  /** xterm says the rows are on the glass. */
+  painted(): void;
+  /** What the transform must be right now. */
+  transform(): number;
+}
+export function paintLag(): PaintLag {
+  let pending = 0;
+  let subPx = 0;
+  return {
+    scrolled: (rows, rowPx) => { pending += -rows * rowPx; },
+    sub: (px) => { subPx = px; },
+    painted: () => { pending = 0; },
+    transform: () => subPx + pending,
+  };
+}
+
 /** `fit()` over a FitAddon, with the one failure both terminals share. */
 const fitter = (term: Terminal, fit: FitAddon) => () => {
   try {
@@ -168,6 +219,24 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
+  const cellHeight = (): number => {
+    const screen = host.querySelector('.xterm-screen');
+    const px = screen === null ? 0 : screen.getBoundingClientRect().height;
+    return px > 0 && term.rows > 0 ? px / term.rows : 0;
+  };
+  const lag = paintLag();
+  const paint = (): void => {
+    const el = host.querySelector('.xterm');
+    if (!(el instanceof HTMLElement)) return;
+    const px = lag.transform();
+    el.style.transform = px === 0 ? '' : `translateY(${px}px)`;
+  };
+  // xterm's own word for "the rows are on the glass". Until it comes, the
+  // transform is carrying them — see `paintLag`.
+  term.onRender(() => {
+    lag.painted();
+    paint();
+  });
   return {
     write: (d, done) => term.write(d, done),
     fit: fitter(term, fit),
@@ -179,23 +248,25 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
     // rather than `clientHeight` so the answer is in the same visual pixels a
     // PointerEvent's `clientY` speaks, under whatever transform the sheet has
     // the panel in mid-animation.
-    rowHeight: () => {
-      const screen = host.querySelector('.xterm-screen');
-      const px = screen === null ? 0 : screen.getBoundingClientRect().height;
-      return px > 0 && term.rows > 0 ? px / term.rows : 0;
-    },
-    scrollLines: (n) => term.scrollLines(n),
+    rowHeight: cellHeight,
     // The TERMINAL element, not the host: `.term-host` is the one with
     // `overflow: hidden`, so it is what must stay put and clip while its child
     // slides. A transform is cosmetic to xterm — it lays its rows out inside
     // this element and never measures against the page — and it costs a
     // compositor layer rather than a relayout, which is what a per-frame shift
     // beside a repainting terminal needs.
+    scrollLines: (n) => {
+      // ROW HEIGHT FIRST: after the scroll the buffer has moved, and this
+      // reads the rendered cell, which must be the one the rows were standing
+      // at when they were asked to move.
+      const px = cellHeight();
+      term.scrollLines(n);
+      lag.scrolled(n, px);   // the same `n`, so nothing here can get the sign wrong
+      paint();
+    },
     offset: (px) => {
-      const el = host.querySelector('.xterm');
-      if (el instanceof HTMLElement) {
-        el.style.transform = px === 0 ? '' : `translateY(${px}px)`;
-      }
+      lag.sub(px);
+      paint();
     },
     onBottom: (cb) => {
       // LATCHED, and that is the whole of it: writing the history scrolls the

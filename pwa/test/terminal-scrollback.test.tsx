@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer, paintLag, type DrawerTerm } from '../src/session/TerminalDrawer';
 
 afterEach(() => {
   cleanup();
@@ -1255,6 +1255,81 @@ describe('the history keeps moving after the finger leaves', () => {
     expect(r.pending(), 'the throw survived the catch').toBe(0);
     r.frames(20);
     expect(total(h.scrolled), 'the history kept moving under a held finger').toBe(caught);
+  });
+});
+
+// — what the rows and the pixels agree on —
+//
+// The two halves of the motion do not land together: a transform is on the
+// glass at the next paint, while `scrollLines` updates xterm's buffer and then
+// schedules its repaint with xterm's own rAF, which from inside a frame
+// callback means the frame AFTER this one. Unmanaged, the transform snaps back
+// by a row at every boundary while the rows it stood in for are still coming —
+// invisible at speed, and the whole of the motion as a throw decelerates,
+// which is where the operator saw the rows shake.
+//
+// jsdom cannot see a pixel, so what is tested is the invariant the fix rests
+// on rather than the picture: what is on the glass — the rows that have
+// painted, plus the transform — is always exactly the displacement that was
+// asked for.
+describe('the rows and the transform stay one motion', () => {
+  const ROW = 18;
+
+  it('the transform stands in for a row until it lands, then steps back by exactly it', () => {
+    const lag = paintLag();
+
+    lag.scrolled(-1, ROW);   // scrollLines(-1): one row of content, downward
+    lag.sub(3);          // and three pixels over
+    expect(lag.transform(), 'the unpainted row was not carried').toBe(ROW + 3);
+
+    lag.painted();
+    expect(lag.transform(), 'the transform did not hand the row back').toBe(3);
+  });
+
+  it('holds "painted + transform === asked for" through a decelerating throw', () => {
+    // The drawer's own arithmetic, run here against a paint that lands late,
+    // on time, and twice in a row — the three schedules a real frame gives.
+    const lag = paintLag();
+    let carry = 0;
+    let issued = 0;   // displacement handed to scrollLines, painted or not
+    let painted = 0;  // displacement actually on the glass
+    let asked = 0;
+
+    const step = (travel: number): void => {
+      asked += travel;
+      const t = carry + travel;
+      const rows = Math.trunc(t / ROW);
+      carry = t - rows * ROW;
+      if (rows !== 0) { issued += rows * ROW; lag.scrolled(-rows, ROW); }
+      lag.sub(carry);
+    };
+    const paint = (): void => { painted = issued; lag.painted(); };
+    const check = (where: string): void => {
+      expect(painted + lag.transform(), `the glass disagreed with the drag ${where}`)
+        .toBeCloseTo(asked, 6);
+    };
+
+    let v = 4.5;                       // px/ms, a firm flick
+    for (let frame = 0; frame < 60; frame += 1) {
+      step(v * (1000 / 60));
+      check(`on frame ${frame}`);
+      // A paint lands on most frames, skips some, and doubles up on others.
+      if (frame % 3 !== 0) { paint(); check(`after the paint on frame ${frame}`); }
+      if (frame % 7 === 0) { paint(); check(`after the second paint on frame ${frame}`); }
+      v *= 0.95;
+    }
+    // And the whole throw actually crossed many rows, or the loop proved
+    // nothing about boundaries.
+    expect(Math.abs(issued) / ROW, 'the simulated throw never crossed a row').toBeGreaterThan(20);
+  });
+
+  it('is symmetric — a throw the other way carries its rows the same', () => {
+    const lag = paintLag();
+    lag.scrolled(1, ROW);
+    lag.sub(-4);
+    expect(lag.transform()).toBe(-ROW - 4);
+    lag.painted();
+    expect(lag.transform()).toBe(-4);
   });
 });
 
