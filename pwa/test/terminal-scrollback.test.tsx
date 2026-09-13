@@ -982,7 +982,13 @@ describe('the finger scrolls the history', () => {
     h.scrolled.length = 0;
     const el = histHost(view);
 
-    const touch = (y: number) => ({ touches: [{ clientY: y, clientX: 0, identifier: 1 }] });
+    // `changedTouches` is not decoration. react-remove-scroll — which vaul
+    // mounts under every open sheet through Radix's Dialog — reads it in a
+    // document-level capturing listener, so a synthetic touch without it
+    // throws inside the library instead of exercising the lock these cases
+    // exist to survive.
+    const point = (y: number) => [{ clientY: y, clientX: 0, identifier: 1 }];
+    const touch = (y: number) => ({ touches: point(y), changedTouches: point(y) });
     fireEvent.touchStart(el, touch(0));
     fireEvent.touchMove(el, touch(3 * ROW_PX));
     fireEvent.touchEnd(el, { changedTouches: [{ clientY: 3 * ROW_PX, clientX: 0, identifier: 1 }] });
@@ -1000,11 +1006,13 @@ describe('the finger scrolls the history', () => {
     h.scrolled.length = 0;
     const el = histHost(view);
 
-    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }] });
-    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }] });
+    const at = (y: number) => ({ touches: [{ clientY: y, clientX: 0, identifier: 1 }],
+                                 changedTouches: [{ clientY: y, clientX: 0, identifier: 1 }] });
+    fireEvent.touchStart(el, at(0));
+    fireEvent.touchMove(el, at(2 * ROW_PX));
     fireEvent.pointerCancel(el, { pointerId: 1, clientY: 2 * ROW_PX, pointerType: 'touch' });
-    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }] });
-    fireEvent.touchEnd(el, { changedTouches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, at(4 * ROW_PX));
+    fireEvent.touchEnd(el, at(4 * ROW_PX));
 
     expect(h.scrolled.reduce((a, b) => a + b, 0), 'the cancel killed a live finger').toBe(-4);
   });
@@ -1088,6 +1096,68 @@ describe('a finger opens the history from the live glass', () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl, 'a tap on the glass read the pane').not.toHaveBeenCalled();
+  });
+
+  const touchSwipe = (el: HTMLElement, dx: number, dy: number): void => {
+    const at = (x: number, y: number) => ({ touches: [{ clientX: x, clientY: y, identifier: 1 }],
+                                            changedTouches: [{ clientX: x, clientY: y, identifier: 1 }] });
+    fireEvent.touchStart(el, at(100, 100));
+    fireEvent.touchMove(el, at(100 + dx, 100 + dy));
+    fireEvent.touchEnd(el, { changedTouches: [{ clientX: 100 + dx, clientY: 100 + dy, identifier: 1 }] });
+  };
+
+  // — the path that had to exist, and did not —
+  //
+  // vaul installs `preventScrollMobileSafari` for as long as a drawer is open:
+  // document, capture phase, `passive: false`, and it calls `preventDefault()`
+  // on touchmove whenever the touch's scroll parent is the document — which on
+  // this glass is every touch, since `.term-host` and every xterm element
+  // inside it are `overflow: hidden`. Safari answers a prevented touchmove by
+  // tearing down the pointer stream for that gesture, so `pointermove` never
+  // arrives. The gesture above is therefore unreachable on an iPhone, which is
+  // where it was reported from and where it was never once seen to work.
+  it('a TOUCH drag DOWN opens the history with no pointer event in sight', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { h, view } = mountDrawer();
+
+    touchSwipe(liveGlass(view), 0, 3 * ROW_PX);
+
+    await waitFor(() => expect(h.write, 'the finger opened no history').toHaveBeenCalled());
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('/pane/history');
+  });
+
+  it('a finger that taps, wobbles or swipes sideways still opens nothing', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+
+    touchSwipe(liveGlass(view), 0, 0);
+    touchSwipe(liveGlass(view), 0, 6);
+    touchSwipe(liveGlass(view), 120, 30);
+    touchSwipe(liveGlass(view), 0, -4 * ROW_PX);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl, 'a finger that was not reaching for the history read the pane').not.toHaveBeenCalled();
+  });
+
+  it('is not lost to a descendant that stops the event — the listener sits above it', async () => {
+    // The clipboard fix was lost for a day to exactly this: a handler bound on
+    // the bubble phase, and xterm calling `stopPropagation()` one level below
+    // the host. Nothing in xterm 6.0.0 listens for touch today, so this is
+    // insurance — but it is the cheap kind, and the phase is what buys it.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { h, view } = mountDrawer();
+    const child = document.createElement('div');
+    liveGlass(view).appendChild(child);
+    for (const type of ['touchstart', 'touchmove', 'touchend']) {
+      child.addEventListener(type, (e) => e.stopPropagation());
+    }
+
+    touchSwipe(child, 0, 3 * ROW_PX);
+
+    await waitFor(() => expect(h.write, 'a child took the gesture away').toHaveBeenCalled());
   });
 
   it('a sideways swipe is left alone, and so is a drag UP', async () => {
