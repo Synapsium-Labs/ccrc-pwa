@@ -323,8 +323,9 @@ export function AccountRow({
   suggested?: boolean;
   onPick: (wrapper: string) => void;
   roster: readonly RosterWire[];
-  /** The account's pool name. Only crossing rows pass it, so eligible rows
-   *  retain their existing rendering and a missing account pool stays quiet. */
+  /** The account's pool name when a caller chooses to expose membership.
+   *  Swap targets pass it for crossing rows; new-session account rows pass it
+   *  for every known membership. A missing account pool stays quiet. */
   poolChip?: string | null;
 }): ReactNode {
   // A direct hue lookup, not a re-parse of `accountColorVar`'s returned

@@ -765,16 +765,16 @@ export function StartProgramSheet({
    *  its copy and its posture, and simply stops eating something that was never
    *  its business.
    *
-   *  KNOWN INCOMPLETE, and measured rather than assumed. The two OTHER arms
-   *  above the confirm fragment still retire this node, and both were measured
-   *  doing it while this fix was written: the D-284 arm swallows it when the
-   *  accounts poll turns `projected` null twenty seconds later — no operator act
-   *  at all, the same poll-tick shape the run arm had — and the D-292 arm
-   *  swallows it when the operator picks a DIFFERENT project that already has a
-   *  live main checkout. Both interactions predate this wave (the recovery is
-   *  wave 4's; both arms are older) and both were out of this review's scope.
-   *  They are named here so the next reader MEASURES the rest of the chain
-   *  rather than reading this fix as having cleaned it.
+   *  KNOWN INCOMPLETE, and measured rather than assumed. Three OTHER arms above
+   *  the confirm fragment still retire this node. The D-284 arm swallows it when
+   *  the accounts poll turns `projected` null twenty seconds later — no operator
+   *  act at all, the same poll-tick shape the run arm had. The D-292 arm swallows
+   *  it when the operator picks a DIFFERENT project that already has a live main
+   *  checkout. D-2694 added the authoritative project-placement refusal between
+   *  those arms and the confirm fragment, and it likewise renders instead of
+   *  this node. The first two interactions predate this wave; the third is this
+   *  wave's addition. They are named here so the next reader MEASURES the rest
+   *  of the chain rather than reading this fix as having cleaned it.
    *
    *  `null` when no failure is standing, so an arm that renders it says nothing
    *  extra in the ordinary case. */

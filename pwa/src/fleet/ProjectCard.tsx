@@ -63,10 +63,9 @@ export type ProjectPlacementRead =
   | { kind: 'legacy' }
   | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
 
-/** The project's pool as one chip. The caller supplies one coherent route read,
- *  falling back to the pools frame only for old-server omission. Unrecognised
- *  residue means this app is older than the fleet, not a tag that can be
- *  diagnosed as unreadable or malformed. */
+/** The project's measured route pool as one chip. A non-measured read yields
+ *  no pool and therefore no chip. Unrecognised residue means this app is older
+ *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
 function PoolChip({ pool, project, dim, onTap }: {
   pool: ProjectPoolWire;
   project: string;
@@ -214,8 +213,8 @@ export function ProjectCard({
   nowMs?: number;
 }): ReactNode {
   // A measured row carries pool and placement from one `/api/projects` read.
-  // Only a legacy row falls back to the frame; mixing the frame's pool with the
-  // route's placement would let their different cadences create a split claim.
+  // Only a legacy row's forecast falls back to the global projection; no row
+  // reads a pool value from the independently paced websocket frame.
   const pool = placement.kind === 'measured' ? placement.pool : null;
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';

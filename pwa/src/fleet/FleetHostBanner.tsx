@@ -15,8 +15,8 @@
 //    can or should do. `'unknown'` renders nothing — an older agent reports no
 //    digest, and a banner that fires when nothing is wrong stops being read.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
-//    capability, so a tag this app displays is not enforced. No action button:
-//    the remedy is an agent-lane deploy. `'unknown'` remains silent.
+//    capability. No action button: the remedy is an agent-lane deploy.
+//    `'unknown'` remains silent.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth } from '../../../shared/api';
