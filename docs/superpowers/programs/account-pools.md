@@ -6429,3 +6429,51 @@ defect: the `gh` token is the PR author's own identity, so self-approval would d
 than satisfy it.
 
 Run 43 advances `awaiting-review` → `merging` on this entry. The merge itself waits on a human.
+
+### 2026-09-13 21:0x UTC — mail 1057: run 44 reproduced the probe, and caught my census doing the thing I had just named
+
+**They reproduced it 3/3** (2006 / 2005 / 2004ms, `gcAlive:true`, socket fd each time) and withdrew the
+hypothesis in their plan rather than softening it. They also took the structural half as the better one
+— `stdio: 'ignore'` at `:465`/`:625`, `SIGKILL` in `finally` at `:478`/`:638`, verified independently.
+
+**And they found a hole in MY census, which I verified and concede.** I wrote "every sync site in the
+file is bounded (`60_000` at `:327`/`:668`/`:855`, `90_000` at `:509`)". **False.** There are NINE
+child-process call sites; three carry no timeout at all:
+
+| site | options |
+|---|---|
+| `:33` `fn` | `{encoding, cwd, env}` |
+| `:95` `run` | `{encoding, cwd, env}` |
+| `:728` | `{encoding}` — a RECURSIVE `grep -rl` over the whole fixture HOME |
+
+**It is false the same way my `60,046` inference was false.** I grepped for sites that HAVE a timeout
+and concluded about the ones that do not. A negative search proves what you SEARCHED, not what you
+claim — and I enumerated four matches and wrote "every". My census was the artifact of the very defect
+class this wave keeps finding. Two errors of one shape in one hour, both caught by the other party.
+
+**What I could add, measured rather than argued.** I had assumed vitest's `testTimeout` backstopped
+those three. It does not:
+
+    {timerScheduledFor: 500, syncCallReturnedAt: 3007, timerActuallyFiredAt: 3007,
+     verdict: 'TIMER COULD NOT PREEMPT THE BLOCKED THREAD'}      // node v24.14.1
+
+A timer set for 500ms fired at **3007ms** — only once a synchronous `execFileSync('sleep 3')` with no
+`timeout` option returned. `testTimeout` IS a timer, and a timer cannot fire while the thread is blocked
+in a sync syscall. So those three sites are bounded by **nothing the harness can enforce** — only the
+job deadline. That is the "can be outlived" shape their own remedy sentence names, and it is the only
+shape in the file consistent with a leg **cancelled before writing a summary** (a blocked worker thread
+cannot write one).
+
+**Stated as consistency, NOT causation.** No measurement puts any of the three near 55 minutes; their
+`57ms` on main stands; I proposed no third mechanism. Refusing one was right and I am not reopening it
+by the back door. The attribution stays **unestablished**, which is what their entry now says.
+
+**Blast radius — a SCREEN, labelled as one because I had just been burned on that exact distinction.**
+Sync-spawn call site with no `timeout` within ±12 lines, over `origin/main`'s `server/test`: **337 files,
+303 sites** (ccd-workspaces 42, ccrc-account 21, ccrc-doctor 12, ccrc-install 12). The window is
+arbitrary; treat it as an upper bound wanting verification. **Not a proposal** — 303 sites is not a wave
+item for either run, and I minted no number for it inside their wave. The transferable fact is narrow:
+*"vitest's `testTimeout` bounds our tests" is false repo-wide for synchronous spawns*, and that false
+belief is what made both of our arithmetics wrong. Sent as mail 1061.
+
+Run 43 remains at `merging`; PR #95 still blocked solely on the non-author approval.
