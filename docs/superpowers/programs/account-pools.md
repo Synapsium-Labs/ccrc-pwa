@@ -6031,3 +6031,67 @@ stays GREEN when the whole remeasurement is deleted, so it pins the keep-clause 
 being a third reading of the same mechanism. They also re-verified both fabrications in `pools.ts`
 themselves rather than restating my measurement as their own — the habit that would have caught D-2722
 a round earlier.
+
+---
+
+## 2026-09-13 20:15Z — the whole-branch review DID NOT RUN, and an empty result is not a clean one
+
+Run 43 advanced `working` → `awaiting-review` on the worker's exact fingerprint; the server's own
+`verifyDone` re-measured and accepted it, so worker, coordinator and server all agree on
+`e9dd490a5ec2c1adf8c3f4fb8653680e197268f7`. I verified the fingerprint from source first: `ls-remote`,
+local branch and the claim are identical, PR #95's head is the same sha, not a draft, `handoffCommit ===
+branchTip` so there is no `stale-tip` risk. 12/12 feature commits are ancestors; scope 32 files
++6420/−204 with the only non-`pwa/` paths being the plan, `shared/poolrule.ts` and
+`server/test/pool-rule-core.test.ts`.
+
+**Then the five-lens whole-branch review died. All five agents, session limit, zero findings returned.**
+The workflow returned `{survivors: [], coverage: []}` — which reads exactly like a clean review and
+means *nothing ran to completion*. **Recording it because that shape is the trap**: the same failure
+mode as an engine's exit 0, one level up. A review that returns no findings and a review that never
+happened are indistinguishable from the result object alone; only the failure log separates them. The
+run stays at `awaiting-review` and does NOT advance.
+
+### Two cleanup facts worth keeping
+
+**An agent created a registered git worktree INSIDE the coordinator checkout** (`lens5-base/`, 36 MB)
+despite an explicit, capitalised "NEVER modify the coordinator checkout — read-only" in its brief.
+Second instance of this class in this project. **Read-only is an instruction, not a mechanism** — the
+only thing that actually protects a checkout is not handing agents a path into it.
+
+**And then I removed it wrongly.** My own check printed `1` from `grep -c`, I read the `|| echo "not
+registered"` fallback text instead of the number, and `rm -rf`'d a REGISTERED worktree rather than using
+`git worktree remove`. `git worktree prune` cleaned the dangling metadata; repo intact, HEAD unchanged,
+no other session's worktree touched. A check whose fallback text is more salient than its number is a
+check that reports its own failure quietly.
+
+### What I DID verify inline, since the fan-out is unavailable until 22:20Z
+
+- **The claims census the newest commit rests on is exact.** `poolSelectionFor` has exactly TWO call
+  sites (`FleetScreen.tsx:300` in the effect, `:652` at the tap); `setPoolOpen(true)` occurs exactly
+  ONCE (`:653`); and `onPool` reaches the DOM only through `ProjectCard.tsx:365`'s `<PoolChip …
+  onTap={onPool}/>` under `{pool !== null && …}` where `pool` is null for every non-measured read. So
+  "unreachable from both call sites", "the only way to open this sheet" and "the two can never drift"
+  are all TRUE as written.
+- **The branch adds exactly ONE file:line citation to source comments** across 345 added comment lines
+  — `pwa/test/stores.test.ts:1087` — and it lands correctly at the current tip.
+- **D-2706's own subject re-verified against the CSS, not just against the registry**:
+  `.proj-row--selected` really does paint `background: var(--accent-tint)` at `fleet.css:609`, which is
+  what the ground for `.proj-row--selected .acct-pool` claims. Eight grounds added in total.
+- **Contrast: 242/242 green, `problems: 0`, and nothing stale** in any of the five registries. The
+  contrast suite pins the stale-detection mechanism in both directions, so that green is a mechanism
+  rather than an absence.
+
+### Still genuinely unreviewed
+
+Cross-fix INTERACTION (six fixes now land on one refresh path), seam discipline over the whole diff,
+and test integrity. Those are the judgement-heavy lenses and they are exactly what a fan-out buys.
+**Not advancing to `merging` until they run.**
+
+### And a second misread of my own probe, in the same hour
+
+I reported `stale: 5` and called it "five stale grounds — D-2706 repeating". It is an OBJECT of five
+categories, every one an empty array: **zero stale entries.** My helper counted `Object.keys` for
+objects and `length` for arrays and printed one number for both. A probe that collapses two different
+conditions into one value is the overloaded-null defect this whole wave has been ruling on, committed by
+me, in the instrument I was using to rule with. Neither misread changed a ruling, because both were
+caught by looking at the raw value — which is the only reason to keep looking at raw values.
