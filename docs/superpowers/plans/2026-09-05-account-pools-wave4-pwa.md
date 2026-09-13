@@ -4000,3 +4000,52 @@ deviation found while executing this plan is allocated in its own call at the mo
   silently add `crossPool:true`. Add a divergent global-versus-route-placement
   test before production changes. No source or test fix may begin until the
   coordinator issues a number and rules the remedy.
+
+- **D-2695 — FleetHostBanner lets an older health poll overwrite a newer
+  result.** Its effect starts one request on mount and another every 15 seconds,
+  but the only guard is an effect-lifetime `live` flag. If request A remains
+  pending until request B resolves, A can later replace B's newer state. An
+  isolated Sonnet verifier deferred A, resolved B to a divergent-roster state,
+  then resolved A to unreachable and observed the stale overwrite: the
+  registered baseline was 13/13, while the added newest-state assertion alone
+  failed on unmodified production. Coordinator mail 960 ruled an effect-local
+  monotonically increasing request generation: each load captures its issued
+  number and writes only while the effect is live and that number is still the
+  newest. Preserve interval polling and completion; mutation-pin deletion of
+  only the generation equality guard and restore it exactly.
+
+- **D-2696 — FleetHostBanner claims a visible project tag that it never
+  measures.** The warning mounts independently of project data and can render
+  while the project screen is empty, loading, has no pools frame, or contains
+  only measured untagged projects. Its clause `so a tag shown here is not being
+  enforced` is therefore false in reachable states with no tagged chip. An
+  isolated Sonnet full-screen fixture confirmed all four paths. Coordinator
+  mail 961 ruled replacing only the false clause with the exact complete copy
+  `The fleet host's ccd does not honour project pools yet. Redeploy the agent
+  lane.`, preserving state and priority behavior. Add an exact-copy assertion
+  in a reachable no-visible-tag state; restoring the old clause must red.
+
+- **D-2697 — ProjectCard's stranded aggregate counts dead rows whose visible
+  stranded cell is deliberately suppressed.** A `FleetSession` can retain a
+  `stranded` marker after its status becomes `dead`; live assembly and persisted
+  revival preserve that combination. `SessionLine` hides stranded on dead rows,
+  but `groupFleet` excludes only archived rows, so a card can say `1 stranded`
+  while its sole marked row shows no stranded cue. Coordinator mail 962 ruled
+  counting presence of the marker only on non-archived, non-dead sessions:
+  idle, working, and away marker-bearing rows count; dead and archived rows do
+  not, and `{at:0}` still counts. Add the classifications and an end-to-end dead
+  ProjectCard fixture; mutation-pin the dead exclusion, presence check, and the
+  breadth beyond idle-only, restoring each exactly.
+
+- **D-2698 — SessionLine's off-pool state is not visible to a sighted
+  operator.** For a known pool-B account on a known pool-A project, production
+  emits `data-offpool=true` and an exact accessible label, but no CSS or visible
+  text consumes the state, so the sighted account/meta presentation is identical
+  to a matching row. This is reachable while cooldown, hold, or non-idle gates
+  defer relocation. Coordinator mail 963 ruled preserving the existing data and
+  aria semantics while adding one concise conditional `off-pool` meta sibling,
+  rendered only when `offPoolLabel !== null`. Style it in mono attention ink and
+  include it in the selected-row achromatic override without changing the
+  account label, away arrow, or pool decision. Add conditional render, CSS, and
+  ordinary/selected contrast assertions; mutation-pin the sibling, both known-
+  pool guards, and selected override, restoring each exactly.
