@@ -30,7 +30,7 @@ Copied from the spec and from `CLAUDE.md`. Every task's requirements implicitly 
 - **`EXEC_COMMANDS = ['tmux','ccd']` stays closed; `gh` gets no grant, ever.** This wave adds no exec surface, and prose implying one is false.
 - **L0 `shared/*.ts` imports nothing.** Unchanged here; the pins read `shared/api.ts` by IMPORTING `RUN_REFUSE_CODES` (a value that is already L0-pure) and read every other source as TEXT.
 - **Mutation-table discipline.** Every prose correction and the one constant ship WITH an assertion that goes RED when the paragraph is deleted or the constant is reverted, measured before and after — not asserted in a comment. TDD, red first.
-- **Deviation numbers come only from the allocator.** This plan's five plan-time findings are already allocated and defined as D-2066–D-2070; do not mint replacements, placeholders, or another block. The later acceptance corrections are likewise already allocated and defined as D-2681–D-2687 and D-2715–D-2720 in the wave-2 plan. A deviation FOUND during execution gets its own allocator call at the moment it is found, never a number from a gap.
+- **Deviation numbers come only from the allocator.** This plan's five plan-time findings are already allocated and defined as D-2066–D-2070; do not mint replacements, placeholders, or another block. The later acceptance corrections are likewise already allocated and defined as D-2680–D-2687 and D-2715–D-2720 in the wave-2 plan. A deviation FOUND during execution gets its own allocator call at the moment it is found, never a number from a gap.
 - **README is canonical; `CLAUDE.md` is the non-obvious operational rules.** This wave adds prose to README only. Its single `CLAUDE.md` edit is the README line-count figure (Task 2, Step 7), nothing else.
 - **Node floor `>=22.13.0`,** identical across the three engines; if `node-floor.test.ts`'s absolute assertion reds while the others are green, RAISE engines — never lower them.
 - **Run suites in the FOREGROUND**, timeout ≥ 600000 ms, from inside the package, by absolute path: `cd server && ./node_modules/.bin/vitest run test/<file>.test.ts`. NEVER bare `npx vitest` — it resolves a global copy with no jsdom and falsely reports "no tests".
@@ -75,7 +75,7 @@ The other two plans, both under `docs/superpowers/plans/`:
 | `README.md:1378-1385`, `:1386-1401`, insertion at `:1484` | Modify | 2 | The run lifecycle's two refusals and two succession procedures, and the programme-mail paragraph between the mail-bus paragraph and `**Caps and pause.**` |
 | `CLAUDE.md:10` | Modify — one number | 2 | The README size claim, re-measured after the growth |
 | `docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md` | **Read only; byte-equality checked** | 3 | Historical ruling body preserved exactly; current docs point back to it |
-| `docs/superpowers/programs/crossrepo-programmes.md` | Modify | 4, 5, 7 | Waves 1–2 closed with their PRs; wave 2's D-2681–D-2687 and D-2715–D-2720 outcomes and wave 3's historical-preservation scope stated; the mandatory-plan/conditional-producer contract and corrected dogfood exit criteria; the flip measurement; the final row |
+| `docs/superpowers/programs/crossrepo-programmes.md` | Modify | 4, 5, 7 | Waves 1–2 closed with their PRs; wave 2's D-2680–D-2687 and D-2715–D-2720 outcomes and wave 3's historical-preservation scope stated; the mandatory-plan/conditional-producer contract and corrected dogfood exit criteria; the flip measurement; the final row |
 | `server/src/coord/routes.ts` — `HOME_PROJECT_LEGACY_ACCEPTED` | Modify — one constant | 6 | The legacy generation ends; `homeProject` becomes required at open |
 | `server/test/home-project-required.test.ts` | **Create** | 6 | The require branch, driven through the route, plus the shipped value of the constant |
 | `server/test/home-project.test.ts` | Modify | 6 | Wave 1's pure-function suite: gains the `required` case the deleted route test covered; its shipped-value assertion flips with the constant (Step 6) |
@@ -96,7 +96,7 @@ The other two plans, both under `docs/superpowers/plans/`:
 | `server/test/license.test.ts:105-127`, `server/test/ccrc-update.test.ts:929-930` | README's `## License` section (holder, licence, `(LICENSE)` link, §13) and its `bash ≥ <floor>` claim. Untouched. |
 | `server/test/topology-clean.test.ts` | Every tracked file, docs included: no operator host, address, tailnet or account residue. Fixture and placeholder names only. |
 | `server/test/single-definition.test.ts` | Four TS roots (`shared`, `server/src`, `pwa/src`, `agent/src`) — no second copy of a single-source value. `server/test` is not in `ROOTS`, which is why this plan's local `passage`/`read` helpers (the same shape `box-token-census.test.ts:227` and `readme-holds.test.ts:27` each already spell locally) are not a second definition of anything the guard governs. |
-| `server/test/dtbd.test.ts` | `git grep` over every tracked file: no concrete `D-TBD-<slug>` may land. This plan uses its already-issued D-2066–D-2070 and D-2681–D-2687 and D-2715–D-2720 numbers directly. |
+| `server/test/dtbd.test.ts` | `git grep` over every tracked file: no concrete `D-TBD-<slug>` may land. This plan uses its already-issued D-2066–D-2070 and D-2680–D-2687 and D-2715–D-2720 numbers directly. |
 | `server/test/deviation-refs.test.ts` | Compares this branch's plan entries against `origin/main`'s WITHOUT merging; run after `git fetch origin main` in Task 7. |
 
 `ccd/coordinator-skill/SKILL.md` and `ccd/worker-skill/SKILL.md` are VERBATIM-pinned by `server/test/coordinator-skill.test.ts` and `server/test/worker-skill.test.ts`. **This wave edits neither** — see the header note and D-2069.
@@ -108,7 +108,7 @@ The other two plans, both under `docs/superpowers/plans/`:
 | W3-1 | README's cross-repo subsection | the subsection is deleted or renamed; a `*-mismatch` code exists that it does not name; it stops naming a response field the open route sends; it loses the mandatory immutable-plan tuple/read, makes the conditional producer tuple/excerpt universal, omits the producer repository root/read or dependency-gated merge proof, or loses the authority split, fail-closed rule, or ledger/plan distinction; it stops naming the worker role, the `runId` rule, outstanding versus historical mail, the feed archive, `run-project`, `abroad`, or the measured cap predicates |
 | W3-2 | README's run-lifecycle steps and the programme-mail paragraph | either mismatch code or either succession procedure goes missing; either branch loses open-before-close or post-close closed-row ordering; the cross-project close loses `final:true`/`released:true`; a dependency-bearing arm loses its conditional same-SHA merge proof or dispatch ordering; the programme-mail paragraph is deleted or stops naming a role, `unknown-recipient`, the exact `&all=1` history URL, the default outstanding-mail behavior, or the feed's archive semantics |
 | W3-3 | historical-ruling preservation | the Aug 11 file differs byte-for-byte from `origin/main`, or either README or the current build spec stops naming it and saying its rulings stand |
-| W3-4 | the programme ledger | wave 1 or wave 2's row carries no PR or is not closed; wave 2 loses its D-2681–D-2687 and D-2715–D-2720 record; wave 3 regresses to editing the historical Status line or omits byte-preservation; the dogfood subject or any corrected §9 acceptance concept is missing; the mandatory plan tuple/read, this dependency-bearing dogfood consumer's producer tuple/read, the inline-shape authority, exact producer `done`, independent merge proof, same-SHA equality, board cue, cross-repo PR record, no-copy rule, or refusal-as-test rule is weakened |
+| W3-4 | the programme ledger | wave 1 or wave 2's row carries no PR or is not closed; wave 2 loses its D-2680–D-2687 and D-2715–D-2720 record; wave 3 regresses to editing the historical Status line or omits byte-preservation; the dogfood subject or any corrected §9 acceptance concept is missing; the mandatory plan tuple/read, this dependency-bearing dogfood consumer's producer tuple/read, the inline-shape authority, exact producer `done`, independent merge proof, same-SHA equality, board cue, cross-repo PR record, no-copy rule, or refusal-as-test rule is weakened |
 | W3-5 | the flip measurement | the ledger's `## Measurements` block is deleted, or loses either number or its date |
 | W3-6 | `HOME_PROJECT_LEGACY_ACCEPTED` | the constant is reverted to `true`; an open with no `homeProject` stops being refused; the refusal stops naming the field |
 | W3-7 | the whole tree | `topology-clean`, `single-definition`, `dtbd` or `deviation-refs` red after the last edit |
@@ -270,9 +270,9 @@ describe('README: cross-repo programmes', () => {
       expect(s, `the dependency-gated producer contract does not name ${coordinate}`).toContain(coordinate);
     }
     expect(s, 'the producer tuple and excerpt are not conditional on an interface dependency')
-      .toMatch(/only[\s\S]{0,100}?depends on a producer interface[\s\S]{0,220}?producerRepoRoot[\s\S]{0,160}?inline/i);
+      .toMatch(/only[\s\S]{0,100}?depends on a producer interface[\s\S]{0,220}?producerRepoRoot[\s\S]{0,240}?inline/i);
     expect(s, 'a no-dependency foreign wave still invents producer evidence')
-      .toMatch(/no producer-interface dependency[\s\S]{0,160}?no producer tuple[\s\S]{0,100}?no invented excerpt/i);
+      .toMatch(/no producer-interface dependency[\s\S]{0,160}?no producer tuple[\s\S]{0,100}?no invented\s+excerpt/i);
     expect(s, 'the section does not carry the exact producer-source read')
       .toContain('git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"');
     expect(s, 'the section does not fail closed when a required immutable object cannot resolve')
@@ -282,7 +282,7 @@ describe('README: cross-repo programmes', () => {
     expect(s, 'the inline excerpt is no longer the dispatched shape authority')
       .toMatch(/inline[\s\S]{0,100}?dispatched[\s\S]{0,80}?shape authority/i);
     expect(s, 'the named plan blob is no longer the requirements authority')
-      .toMatch(/plan blob[\s\S]{0,100}?requirements authority/i);
+      .toMatch(/plan blob[\s\S]{0,100}?requirements\s+authority/i);
     expect(s, 'the dependency-bearing arm never requires independent merge proof at producerSha')
       .toMatch(/when that dependency exists[\s\S]{0,180}?independently prove[\s\S]{0,180}?producerSha/i);
     expect(s, 'the current README no longer points to the immutable historical ruling')
@@ -325,7 +325,7 @@ describe('README: cross-repo programmes', () => {
       .toMatch(/GET \/api\/mail\?program=<slug>`[\s\S]{0,120}?outstanding/i);
     expect(s, 'the section does not name the feed filter').toContain('GET /api/feed?program=');
     expect(s, 'the section does not state that the feed is the full archive')
-      .toMatch(/feed[\s\S]{0,120}?full archive/i);
+      .toMatch(/feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i);
     expect(s, 'the section does not say what happens to an event with no run behind it')
       .toContain('programless');
   });
@@ -669,7 +669,7 @@ describe('README: the run lifecycle and programme mail', () => {
 
     const cross = p.slice(p.indexOf('For a cross-project successor'));
     expect(cross, 'cross-project succession does not omit the producer session')
-      .toMatch(/without the producer's `sessionId`/);
+      .toMatch(/without the producer's\s+`sessionId`/);
     expect(cross, 'cross-project succession does not verify the closed producer')
       .toMatch(/closed row[\s\S]{0,100}?`done`/i);
     expect(cross, '`done` is incorrectly treated as merge proof')
@@ -717,7 +717,7 @@ describe('README: the run lifecycle and programme mail', () => {
       .toMatch(/GET \/api\/mail\?program=<slug>`[\s\S]{0,120}?outstanding/i);
     expect(p, 'the paragraph does not name the feed filter').toContain('GET /api/feed?program=');
     expect(p, 'the paragraph does not say the feed is the full archive')
-      .toMatch(/feed[\s\S]{0,120}?full archive/i);
+      .toMatch(/feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i);
     // The heir promise, and the one writer it is kept in — grounded, so a
     // rename of the funnel reds the sentence that names it.
     const store = read('server/src/coord/store.ts');
@@ -894,7 +894,7 @@ git commit -m "docs(readme): the two refusals in the lifecycle steps that emit t
 - Consumes: the fetched `origin/main` blob of the historical file; the current build spec's existing `Supersedes for building purposes, inherits for rulings` block; README's pointer written in Task 1.
 - Produces: no file change and no new test. The evidence is a byte comparison plus a per-file pointer check recorded in the task run log.
 
-**Spec refs:** the current build spec's header block (`:10-14`) and §1. Its stale §9 phrase about editing the Aug 11 Status line is not an instruction: D-2681–D-2687 and D-2715–D-2720's acceptance correction preserves the historical ruling body and puts current operational corrections only in current prescriptive documents.
+**Spec refs:** the current build spec's header block (`:10-14`) and §1. Its stale §9 phrase about editing the Aug 11 Status line is not an instruction: D-2680–D-2687 and D-2715–D-2720's acceptance correction preserves the historical ruling body and puts current operational corrections only in current prescriptive documents.
 
 **Mutation table:** row W3-3. The byte comparison exits non-zero for any historical-file difference; the two per-file searches exit non-zero if either current prescriptive document loses the historical path or the statement that its rulings stand. Do not manufacture that red by editing the historical file: the comparison itself is the fail-closed guard, and this task is read-only.
 
@@ -962,7 +962,7 @@ Expected: PASS — 11 passed, exactly the Task 1 and Task 2 blocks. Task 3 appen
 
 **Spec refs:** §9 (the three waves and D-2684/D-2687/D-2715/D-2716-corrected dogfood acceptance list), §3 F3 (the mandatory plan read, conditional producer contract, producer-root read, authority split, exact closed-row proof and dependency-gated same-SHA merge proof), §6 (no replicated ledger — the exit criteria live in the home ledger and nowhere else). Template: `docs/superpowers/programs/TEMPLATE.md`.
 
-**Mutation table:** row W3-4. Measured in Step 6 by (a) reverting wave 1's row to `| — | not opened |`, (b) restoring wave 3's old Status-line rewrite or removing wave 2's D-2681–D-2687 and D-2715–D-2720 record, (c) deleting one independently pinned exit-criteria concept, and (d) dropping this dependency-bearing dogfood consumer's `producerRepoRoot` read or weakening its producer evidence from same-SHA merge proof to closed `done` alone: each mutation reds the assertion for the exact reverted, omitted, or weakened fact.
+**Mutation table:** row W3-4. Measured in Step 6 by (a) reverting wave 1's row to `| — | not opened |`, (b) restoring wave 3's old Status-line rewrite or removing wave 2's D-2680–D-2687 and D-2715–D-2720 record, (c) deleting one independently pinned exit-criteria concept, and (d) dropping this dependency-bearing dogfood consumer's `producerRepoRoot` read or weakening its producer evidence from same-SHA merge proof to closed `done` alone: each mutation reds the assertion for the exact reverted, omitted, or weakened fact.
 
 Anchor quotes from the original planning snapshot. Re-read both files on the fetched wave-2-merged execution base before editing the ledger; the current table rows, rather than the snapshots below, decide which cells may change.
 
@@ -1023,7 +1023,7 @@ describe('the programme ledger', () => {
       expect(row!, `wave ${n} is not closed`).toMatch(/merged/i);
     }
     expect(rows.get('2'), 'wave 2 does not record the allocated acceptance corrections')
-      .toMatch(/D-2681[\s\S]*D-2687[\s\S]*D-2715[\s\S]*D-2720/);
+      .toMatch(/D-2680[\s\S]*D-2687[\s\S]*D-2715[\s\S]*D-2720/);
     expect(rows.get('3'), 'wave 3 still says it edits the Aug 11 status line')
       .not.toMatch(/Aug 11 spec's status line/i);
     expect(rows.get('3'), 'wave 3 does not name byte-preservation of the historical Aug 11 spec')
@@ -1043,7 +1043,7 @@ describe('the programme ledger', () => {
       ['the home-card abroad cue', /abroad line[\s\S]{0,80}?home card/i],
       ['both PRs across two repositories', /wave table records both PRs across two repos/i],
       ['the no-copy rule', /no content moved by copy-paste/i],
-      ['the refusal-as-test rule', /`project-mismatch` never fires in anger[\s\S]{0,80}?proof is a test/i],
+      ['the refusal-as-test rule', /`project-mismatch`\s+never fires in anger[\s\S]{0,80}?proof is a test/i],
     ];
     const section = passage('the ledger exit criteria', LEDGER,
       '## Dogfood exit criteria', '\n## ');
@@ -1072,9 +1072,9 @@ describe('the programme ledger', () => {
     expect(section, 'the dogfood never reads through the producer repository root')
       .toContain('git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"');
     expect(section, 'the plan blob is not identified as the requirements authority')
-      .toMatch(/plan blob[\s\S]{0,80}?requirements authority/);
+      .toMatch(/plan blob[\s\S]{0,80}?requirements\s+authority/);
     expect(section, 'the dogfood never reads the immutable producer source blob')
-      .toMatch(/reads that immutable producer source blob/);
+      .toMatch(/reads[\s\S]{0,60}?immutable producer source blob/);
     expect(section, 'the producer source blob is not identified as provenance')
       .toMatch(/producer source blob[\s\S]{0,80}?provenance/);
     expect(section, 'the inline excerpt is no longer the dispatched shape authority')
@@ -1110,11 +1110,11 @@ In `docs/superpowers/programs/crossrepo-programmes.md`, replace the `| — | not
 
 ```markdown
 | 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #<wave-1 PR> | merged <short sha>, deployed agent-first <YYYY-MM-DD> |
-| 2 | Skills + PWA: the coordinator skill's project-specific succession and mandatory-plan/conditional-producer contract, canonical `homeProject` open body, dependency-gated closed-row plus exact producer-SHA merge proof, the worker skill's immutable plan read and conditional producer-root read, bounded ask list/answer/release with held-list semantics, safe no-default-id examples, and executable corpus parity across fenced and indented blocks, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, and the mail screen's programme grouping and chip; acceptance corrections D-2681–D-2687 and D-2715–D-2720. AGENT-FIRST. | #<wave-2 PR> | merged <short sha>, deployed agent-first <YYYY-MM-DD> |
+| 2 | Skills + PWA: the coordinator skill's project-specific succession and mandatory-plan/conditional-producer contract, canonical `homeProject` open body, dependency-gated closed-row plus exact producer-SHA merge proof, the worker skill's immutable plan read and conditional producer-root read, bounded ask list/answer/release with held-list semantics, safe no-default-id examples, and executable corpus parity across fenced and indented blocks, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, and the mail screen's programme grouping and chip; acceptance corrections D-2680–D-2687 and D-2715–D-2720. AGENT-FIRST. | #<wave-2 PR> | merged <short sha>, deployed agent-first <YYYY-MM-DD> |
 | 3 | Docs + the legacy flip: current README sections, byte-preservation proof for the historical Aug 11 spec, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` ONLY when `run_events` shows zero `legacy-home-project` events and `runs` shows at least one open over seven consecutive days (measured, or deferred with both measurements recorded). NOT agent-first (D-2069). | — | not opened |
 ```
 
-Preserve wave 1's scope cell byte-for-byte and change only its `PRs` and `state` cells. Wave 2's scope cell must retain its current D-2681–D-2687 and D-2715–D-2720 acceptance-correction wording rather than copying this plan's old pre-correction snapshot; change only its `PRs` and `state` cells unless the current row still omits those allocated corrections, in which case add the corrected scope above from the wave-2 plan itself, not from memory. In wave 3's scope cell, replace any inherited `Aug 11 spec's status line` wording with the byte-preservation wording above; this is the ledger correction Task 3's read-only historical boundary requires.
+Preserve wave 1's scope cell byte-for-byte and change only its `PRs` and `state` cells. Wave 2's scope cell must retain its current D-2680–D-2687 and D-2715–D-2720 acceptance-correction wording rather than copying this plan's old pre-correction snapshot; change only its `PRs` and `state` cells unless the current row still omits those allocated corrections, in which case add the corrected scope above from the wave-2 plan itself, not from memory. In wave 3's scope cell, replace any inherited `Aug 11 spec's status line` wording with the byte-preservation wording above; this is the ledger correction Task 3's read-only historical boundary requires.
 
 Then insert this section immediately BEFORE `## Decisions & deviations` (replacing the two-line "Dogfood follows as its own program…" paragraph that currently sits above it, whose content this section subsumes):
 
@@ -1151,7 +1151,7 @@ Expected: PASS — 14 passed.
 - [ ] **Step 6: Measure the mutation (row W3-4)**
 
 1. Set wave 1's row back to `| — | not opened |` → re-run: FAIL, 1 test, `wave 1 names no PR — the row still reads a dash`. Restore.
-2. Replace wave 3's byte-preservation phrase with `the Aug 11 spec's status line`, then separately remove `D-2681–D-2687 and D-2715–D-2720` from wave 2 → each re-run FAILS on the matching wave-row assertion. Restore between mutations.
+2. Replace wave 3's byte-preservation phrase with `the Aug 11 spec's status line`, then separately remove `D-2680–D-2687 and D-2715–D-2720` from wave 2 → each re-run FAILS on the matching wave-row assertion. Restore between mutations.
 3. Delete the `no content moved by copy-paste` bullet → re-run: FAIL, 1 test, `the ledger's exit criteria drop the no-copy rule`. Restore. Repeat once for each of the other four non-provenance patterns so every concept's named red is recorded.
 4. Delete `producerRepoRoot`, `producerSourceRepoPath`, or `producerSha`; replace `$producerRepoRoot` with `$PWD`; remove the dependency sentence, the exact producer-root read, or the immutable plan-read statement; or replace the independent same-SHA merge clause with `the producer row is done` → re-run after each single mutation: FAIL on the named coordinate, dependency, read, authority, or exact merge-proof assertion. Restore between mutations.
 5. Re-run: 14 passed.
@@ -1739,8 +1739,8 @@ Report this commit's short sha to the coordinator as a **distinct handoff item**
 - Everything else in this task only MEASURES.
 
 **Interfaces:**
-- Consumes: every task above; the already-issued D-2066–D-2070 entries in this plan and D-2681–D-2687 and D-2715–D-2720 entries in the wave-2 plan.
-- Produces: the measured evidence this wave is mergeable, the ledger's closing state, and the deploy instruction (or the statement that there is nothing to deploy). D-2066–D-2070 and D-2681–D-2687 and D-2715–D-2720 are consumed as already-issued identifiers; this task mints none.
+- Consumes: every task above; the already-issued D-2066–D-2070 entries in this plan and D-2680–D-2687 and D-2715–D-2720 entries in the wave-2 plan.
+- Produces: the measured evidence this wave is mergeable, the ledger's closing state, and the deploy instruction (or the statement that there is nothing to deploy). D-2066–D-2070 and D-2680–D-2687 and D-2715–D-2720 are consumed as already-issued identifiers; this task mints none.
 
 **Spec refs:** §7 (every guard ships with a row measured red), §8 (ordering and rollback), §9 wave 3.
 
@@ -1768,7 +1768,7 @@ Expected: PASS. Neither package is edited by this wave; they run because the gat
 cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/single-definition.test.ts test/dtbd.test.ts
 ```
 
-Expected: PASS. `topology-clean` walks every tracked file, docs included, and reds on an operator host, address, tailnet or account residue — a red naming a README, ledger or plan line means a real name was typed where a placeholder belonged. `dtbd` proves no concrete placeholder was introduced; D-2066–D-2070 and D-2681–D-2687 and D-2715–D-2720 are already issued and must not be reallocated.
+Expected: PASS. `topology-clean` walks every tracked file, docs included, and reds on an operator host, address, tailnet or account residue — a red naming a README, ledger or plan line means a real name was typed where a placeholder belonged. `dtbd` proves no concrete placeholder was introduced; D-2066–D-2070 and D-2680–D-2687 and D-2715–D-2720 are already issued and must not be reallocated.
 
 - [ ] **Step 3: Re-prove the historical boundary after every later edit**
 
@@ -1869,7 +1869,7 @@ git commit -m "docs(ledger): wave 3 closed, and the programme handed to its dogf
 
 ## Deviations found
 
-**Five plan-time findings, already allocated and defined as D-2066–D-2070.** Do not reallocate, renumber, or replace them. The later lifecycle/client/provenance/accounting corrections D-2681–D-2687 and D-2715–D-2720 are already allocated and defined in `2026-09-08-crossrepo-wave2-skills-pwa.md`; this plan consumes those rulings and does not redefine them. A deviation found during execution gets its own allocator call at the moment it is found.
+**Five plan-time findings, already allocated and defined as D-2066–D-2070.** Do not reallocate, renumber, or replace them. The later lifecycle/client/provenance/accounting corrections D-2680–D-2687 and D-2715–D-2720 are already allocated and defined in `2026-09-08-crossrepo-wave2-skills-pwa.md`; this plan consumes those rulings and does not redefine them. A deviation found during execution gets its own allocator call at the moment it is found.
 
 - **D-2066** (Task 5) — Spec §3 F2 dates the legacy flip on "`run_events` shows zero `legacy-home-project` events over seven consecutive days", phrased as though the programme's own machinery could answer it. Measured at `d0064e6e`: `run_events` is exposed by **no HTTP route**. The only mention in `server/src/coord/routes.ts` is a comment (`:1427`); `runEvents` appears nowhere in that file; the ten `app.get('/api…')` registrations serve mail, mail bodies, caps, runs, run items, the feed, lifecycle, peers, claims and the ledger, and none of them the run-event trail; `CoordStore.runEvents` (`store.ts:1580`) has no caller outside `server/test`. So the criterion is an **operator act** on the server box (`sqlite3 ~/.ccrc/coord.db`, two integers, no rows), and Task 5 says so in the ledger and pins the sentence to the absence that makes it true — the pin reds the day a route does serve the trail. Not fixed here: a route over `run_events` is a new read surface with its own gating decision (box token? session gate? both?), and inventing one inside a docs wave would be exactly the kind of unargued surface this repo's box-token census exists to prevent.
 - **D-2067** (Task 5) — The same criterion is satisfied by seven days in which nothing happened: a box that opened no runs reports zero `legacy-home-project` events, indistinguishably from a box on which every coordinator now sends `homeProject`. An absence is only evidence in proportion to the traffic behind it. Task 5 therefore measures a second number in the same window — runs opened (`runs.openedAt`) — and this wave's gate is `legacy_7d = 0` **and** `opens_7d > 0`. Recorded rather than silently applied, because it changes what the spec's own sentence means: the spec states a numerator and this wave supplies the denominator. The ledger's `## Measurements` block carries both numbers and the date, so a later reader can judge the window rather than inherit a verdict.

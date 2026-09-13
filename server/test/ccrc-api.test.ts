@@ -409,6 +409,84 @@ describe('the token', () => {
   });
 });
 
+// D-2724, D-2725. Two properties this file PROMISES in its own header — "stdout
+// stays machine-readable on every path", and "a caller never parses two shapes" —
+// and neither was pinned, so both were false. The existing refusal cases assert
+// `stdout + stderr`, a CONCATENATION that the stderr copy alone satisfies, and
+// `toContain` substrings rather than a parse. These parse.
+describe('every refusal leaves as one parseable envelope on stdout', () => {
+  /** The three refusals a caller meets before a request is ever built. They ran
+   *  inside `$(server_url)` / `$(read_token)`, so their envelope was captured
+   *  into a variable and discarded — the caller saw an EMPTY stdout. */
+  const CONFIG_REFUSALS: readonly (readonly [string, () => void, string])[] = [
+    ['the token file is absent',
+      () => fs.rmSync(path.join(home, '.cc-secrets', 'ccrc-mail.token')), 'no-token'],
+    ['the token file is all preamble',
+      () => fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'),
+        '# only a comment\n\n'), 'no-token'],
+    ['agent.env is absent',
+      () => fs.rmSync(path.join(home, '.ccrc', 'agent.env')), 'no-agent-env'],
+    ['CCRC_SERVER_URL is unset',
+      () => fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
+        'CCRC_AGENT_TOKEN=irrelevant\n'), 'no-server-url'],
+  ];
+
+  it.each(CONFIG_REFUSALS)('answers a parseable envelope when %s', async (_what, break_, code) => {
+    break_();
+    const r = await runBoth(['runs', 'list']);
+    expect(r.status, 'a config refusal must not exit 0').not.toBe(0);
+    expect(seen, 'a config refusal must send nothing').toHaveLength(0);
+    // The whole point: stdout ALONE, parsed — not `stdout + stderr`, and not a
+    // substring. An empty stdout throws here, which is the regression.
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string; detail: string };
+    expect(body.ok).toBe(false);
+    expect(body.error, `${_what} no longer refuses ${code}`).toBe(code);
+    expect(typeof body.detail).toBe('string');
+    expect(body.detail, 'the refusal detail must never carry the token').not.toContain(TOKEN);
+  });
+
+  /** D-2725: `detail` embeds caller argv verbatim at four sites. Every one of
+   *  these used to emit an envelope that does not parse. */
+  it.each([
+    ['a double quote', '/tmp/a"b'],
+    ['a backslash', '/tmp/a\\b'],
+    ['a trailing backslash', '/tmp/a\\'],
+    ['a newline', '/tmp/a\nb'],
+    ['a tab', '/tmp/a\tb'],
+  ])('keeps the envelope parseable when an argument carries %s', async (_what, arg) => {
+    const r = await runBoth(['runs', 'open', '--json', arg]);
+    expect(r.status).not.toBe(0);
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string; detail: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('no-body');
+    // Escaped, not dropped: the caller still learns which path failed.
+    expect(body.detail).toContain(arg);
+  });
+});
+
+// D-2726. `-` means "this row declares no query keys" AND is a string the
+// membership test matches, so `--- value` satisfied the guard and rode onto the
+// wire as `?-=value` for every such row. The value was still SAFE_RE-checked, so
+// nothing could be injected — but an UNDECLARED key reached the request, which is
+// the one property the closed table exists to state.
+describe('the no-query sentinel is not itself a query key', () => {
+  it('refuses `---` on a row that declares no query keys, and sends nothing', async () => {
+    const r = await runBoth(['runs', 'open', '---', 'smuggle']);
+    expect(r.status).not.toBe(0);
+    expect(seen, 'an undeclared query key reached the wire').toHaveLength(0);
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string };
+    expect(body.error).toBe('unknown-query');
+  });
+
+  it('still accepts a real declared query key on a row that has one', async () => {
+    // The control: the fix must not refuse the keys the table really declares.
+    reply = { code: 200, body: '{"ok":true,"mail":[]}' };
+    const r = await runBoth(['mail', 'list', '--to', 'someone']);
+    expect(r.status).toBe(0);
+    expect(seen.at(-1)!.url).toContain('to=someone');
+  });
+});
+
 describe('the address is config, never a guess', () => {
   it('refuses when CCRC_SERVER_URL is absent instead of guessing a host', async () => {
     // A worker guessed a host on 2026-08-25 and reported success against

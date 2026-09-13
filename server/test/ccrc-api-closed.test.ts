@@ -116,7 +116,13 @@ describe('the corpora no longer invoke curl', () => {
   it('every executable corpus client command maps to the closed route table', () => {
     const declared = routeKeys();
     const invoked = new Set<string>();
-    const command = /(?:"\$HOME\/\.local\/bin\/ccrc-api"|"?\$API"?)\s+([a-z][a-z0-9-]*)(?:\s+([a-z][a-z0-9-]*))?/g;
+    // D-2727: harvest on the BINARY NAME, not on the two spellings that already
+    // comply. The old alternation recognised only `$API`/`"$API"` and the fully
+    // quoted `"$HOME/.local/bin/ccrc-api"`, so a bare on-PATH `ccrc-api <group>
+    // <verb>` — the spelling the corpora themselves use elsewhere — entered no
+    // census at all: an undeclared verb written that way stayed green. A census
+    // assembled only from compliant forms cannot see its own next violation.
+    const command = /(?:"?(?:\$HOME\/\.local\/bin\/)?ccrc-api"?|"?\$API"?)\s+([a-z][a-z0-9-]*)(?:\s+([a-z][a-z0-9-]*))?/g;
     for (const file of corpusFiles()) {
       for (const block of executableBlocks(fs.readFileSync(file, 'utf8'))) {
         for (const match of block.matchAll(command)) {

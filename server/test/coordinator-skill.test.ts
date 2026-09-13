@@ -1796,6 +1796,31 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       .toBeGreaterThan(cond);
   });
 
+  // D-2730. The crossing section points BACK at step 5, and this branch rewrote
+  // step 5 — so the pointer's claim ("nothing in it says so") was falsified by
+  // the same commit that made it worth reading. A cross-reference is a claim
+  // about another section, and nothing checked it: the CROSSING table pins only
+  // the bolded lead sentence. Grounded in step 5's own arm markers, so rewriting
+  // either section without the other reds here.
+  it('describes step 5 as step 5 actually reads', () => {
+    const start = skill.indexOf('## When a wave crosses into another project');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = flat(skill.slice(start, end === -1 ? undefined : end));
+
+    const step5 = skill.slice(skill.indexOf('5. **Review the handoff commit**'),
+      skill.indexOf('\n6. **Final merge:**'));
+    for (const arm of ['**Same project:**', '**Different project:**']) {
+      expect(step5, `step 5 lost its ${arm} arm`).toContain(arm);
+      expect(section, `the crossing section does not name step 5's ${arm} arm`)
+        .toContain(arm);
+    }
+    // The falsified claim itself, by the property rather than the wording: the
+    // crossing section may not tell the reader step 5 is silent on this, because
+    // step 5 is not.
+    expect(section, 'the crossing section still claims step 5 does not distinguish the two')
+      .not.toMatch(/nothing in it says so|step 5[^.]{0,80}does not say/i);
+  });
+
   it('names BOTH new refusal codes where the rule that provokes them is stated', () => {
     // Not the refusal-list sentence (wave 1's, pinned by its own test above):
     // this is the section that tells a coordinator what it did to earn them, and
@@ -1956,6 +1981,80 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(crossCheck, 'cross-project closed-row proof must follow its close').toBeGreaterThan(crossClose);
     expect(merge, 'conditional exact-SHA merge proof must follow the cross-project row proof')
       .toBeGreaterThan(crossCheck);
+  });
+
+  // D-2728. The wave-3 plan prescribes BOTH a test and the prose that test runs
+  // against, and nothing executes a plan document — so the two halves drifted
+  // apart and the plan still declared "Expected: PASS". Measured against the
+  // shipped plan before this guard: five of its prescribed assertions could not
+  // match its prescribed prose, every one because the required phrase wraps
+  // across a line or a window is too narrow. A worker transcribing both halves
+  // as instructed gets a red suite and most naturally "fixes" the prose, which
+  // was correct. This runs the load-bearing ones for real, against the plan's own
+  // fenced markdown, so either half moving without the other reds HERE — in a
+  // suite that does run — rather than in wave 3's first hour.
+  describe("the wave-3 plan's prescribed assertions match its prescribed prose", () => {
+    /** The markdown/text fenced blocks are the prose the plan tells wave 3 to
+     *  WRITE; its `ts` blocks are the assertions it tells wave 3 to RUN. */
+    const prescribedProse = (): string => {
+      const plan = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave3-docs-flip.md'), 'utf8');
+      const blocks: string[] = [];
+      let inFence = false; let lang = ''; let buf: string[] = [];
+      for (const line of plan.split('\n')) {
+        const fence = /^```(\w*)\s*$/.exec(line);
+        if (fence) {
+          if (!inFence) { inFence = true; lang = fence[1]!; buf = []; }
+          else { if (['markdown', 'md', 'text', ''].includes(lang)) blocks.push(buf.join('\n')); inFence = false; }
+          continue;
+        }
+        if (inFence) buf.push(line);
+      }
+      expect(blocks.length, 'the wave-3 plan prescribes no prose at all').toBeGreaterThan(5);
+      return blocks.join('\n\n');
+    };
+
+    const PRESCRIBED: readonly (readonly [string, RegExp])[] = [
+      ['the producer tuple is conditional on a real dependency',
+        /only[\s\S]{0,100}?depends on a producer interface[\s\S]{0,220}?producerRepoRoot[\s\S]{0,240}?inline/i],
+      ['a no-dependency wave invents no producer evidence',
+        /no producer-interface dependency[\s\S]{0,160}?no producer tuple[\s\S]{0,100}?no invented\s+excerpt/i],
+      ['the named plan blob is the requirements authority',
+        /plan blob[\s\S]{0,100}?requirements\s+authority/i],
+      ['the programme feed read is the full archive',
+        /feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i],
+      ['cross-project succession omits the producer session',
+        /without the producer's\s+`sessionId`/],
+      ['the refusal-as-test rule survives',
+        /`project-mismatch`\s+never fires in anger[\s\S]{0,80}?proof is a test/i],
+      ['the dogfood reads the immutable producer blob',
+        /reads[\s\S]{0,60}?immutable producer source blob/],
+      ['the producer read is rooted at the producer repository',
+        /git -C "\$producerRepoRoot" show "\$producerSha:\$producerSourceRepoPath"/],
+    ];
+
+    it.each(PRESCRIBED)('%s', (_what, re) => {
+      expect(prescribedProse(), `the wave-3 plan prescribes an assertion its own prose cannot satisfy: ${_what}`)
+        .toMatch(re);
+    });
+
+    // D-2729, in the same place and for the same reason: the plan cites the
+    // coordinator's acceptance block, and a citation that drops its first number
+    // reds a correct ledger. Derived from THIS plan's own narrative rather than
+    // typed, so the block moving corrects both at once.
+    it('cites the acceptance block the wave-2 plan actually defines', () => {
+      const wave2 = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave2-skills-pwa.md'), 'utf8');
+      const block = /thirty-third through fortieth — (D-\d{4}–D-\d{4})/.exec(wave2)?.[1];
+      expect(block, 'the wave-2 plan no longer names the coordinator acceptance block').toBeTruthy();
+      const [first] = block!.split('–');
+      const wave3 = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave3-docs-flip.md'), 'utf8');
+      expect(wave3, `the wave-3 plan cites a block other than ${block!}`).toContain(block!);
+      const ledger = readFileSync(path.join(
+        root, 'docs/superpowers/programs/crossrepo-programmes.md'), 'utf8');
+      expect(ledger, `the ledger does not record ${first!}`).toContain(first!);
+    });
   });
 
   it('keeps the superseded 2026-08-11 specification byte-identical to origin/main', () => {

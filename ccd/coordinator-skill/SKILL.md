@@ -344,9 +344,10 @@ deploy generation and recorded as a `legacy-home-project` run event, with the
 column left NULL rather than guessed. You never omit it.)
 
 **Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 5
-above — same `sessionId`, same workspace — is a SAME-PROJECT idiom, and nothing
-in it says so because until now there was nothing else. A wave that CHANGES
-project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo,
+above says so itself: its **Same project:** arm — same `sessionId`, same
+workspace — is the one this rule governs, and its **Different project:** arm is
+the one below. A wave that CHANGES project opens WITHOUT `sessionId` and
+spawns a fresh workspace in the target repo,
 which is the path wave 1 already spawns on. Naming the old session for a wave in
 a different project is refused `project-mismatch` with `by:` the project that
 session's workspace belongs to — at the open, and again at the dispatch resume if

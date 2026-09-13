@@ -2523,8 +2523,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // error-code form. `oversize` is the mail seam's own spelling for exactly
     // this condition. REFUSED, never truncated: a shortened hold reason is a
     // silently altered operator statement.
+    //
+    // 413, not 400 (D-2731): every other `oversize` in this tree answers 413 —
+    // the kickoff seam three hundred lines up and all four mail seams in
+    // `coord/routes.ts` — and a client that routes on `err.status` rather than
+    // on the slug (`AbandonSheet` does) reads a 400 as "you sent the wrong
+    // shape", which is the one distinction the paragraph above exists to keep.
     if (Buffer.byteLength(body.reason, 'utf8') > HOLD_ROUTE_REASON_MAX_BYTES) {
-      return reply.code(400).send({ ok: false, error: 'oversize',
+      return reply.code(413).send({ ok: false, error: 'oversize',
         limit: HOLD_ROUTE_REASON_MAX_BYTES,
         detail: `reason exceeds ${HOLD_ROUTE_REASON_MAX_BYTES} bytes — it is written verbatim into ` +
           'the registry hold field and refused rather than shortened' });

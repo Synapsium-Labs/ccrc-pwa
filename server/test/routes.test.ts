@@ -1050,11 +1050,41 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     await app.close();
   });
 
+  // D-2731. The status is a second answer this route gives, and it was the only
+  // `oversize` in the tree that answered 400 — so a client routing on
+  // `err.status` (the PWA's own `AbandonSheet` does) read "your reason is too
+  // long" as "you sent the wrong shape", collapsing exactly the distinction the
+  // route's comment says it exists to keep. Pinned as a CENSUS over the whole
+  // server source rather than as a literal here, so the next seam to send
+  // `oversize` cannot quietly pick a different status either.
+  it('sends every `oversize` in the server with the same status', () => {
+    const sources = ['server/src/server.ts', 'server/src/coord/routes.ts'];
+    const statuses = new Map<string, string[]>();
+    for (const rel of sources) {
+      const src = readFileSync(new URL(`../${rel.replace('server/', '')}`, import.meta.url), 'utf8');
+      for (const m of src.matchAll(/'oversize'/g)) {
+        // Look back far enough to reach the status on any of the three shapes
+        // this tree uses: `reply.code(N).send({… 'oversize'`, the ternary
+        // `reply.code(x === 'oversize' ? N : M)`, and `refuse(reply, N, 'oversize'`.
+        const before = src.slice(Math.max(0, m.index! - 200), m.index!);
+        const after = src.slice(m.index!, m.index! + 80);
+        const code = /reply\.code\((\d{3})\)[^;]*$/.exec(before)?.[1]
+          ?? /refuse\(reply,\s*(\d{3}),\s*$/.exec(before)?.[1]
+          ?? /^'oversize'\s*\?\s*(\d{3})/.exec(after)?.[1];
+        if (code) statuses.set(code, [...(statuses.get(code) ?? []), rel]);
+      }
+    }
+    expect([...statuses.keys()].sort(), 'the server sends `oversize` with more than one status')
+      .toEqual(['413']);
+    expect(statuses.get('413')!.length, 'the oversize census found too few sites to be measuring anything')
+      .toBeGreaterThanOrEqual(5);
+  });
+
   it('refuses one byte over the cap with `oversize`, and never calls ws-hold', async () => {
     const { app, calls } = await makeApp(['❯ \n']);
     const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES + 1);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: 'oversize', limit: HOLD_ROUTE_REASON_MAX_BYTES });
     // THE SEAM, not just the status. A refusal that still fires the fleet act
     // is the failure worth catching: the whole point of refusing here is that
@@ -1074,7 +1104,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     expect(reason.length).toBeLessThan(HOLD_ROUTE_REASON_MAX_BYTES);
     expect(Buffer.byteLength(reason, 'utf8')).toBeGreaterThan(HOLD_ROUTE_REASON_MAX_BYTES);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
     expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
     await app.close();
@@ -1090,7 +1120,7 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     const reason = ` ${'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES)} `;
     expect(reason.trim().length).toBeLessThanOrEqual(HOLD_ROUTE_REASON_MAX_BYTES);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
     expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
     await app.close();
