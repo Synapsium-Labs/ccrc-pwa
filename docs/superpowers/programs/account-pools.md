@@ -5740,3 +5740,64 @@ argument for the issue-never-grep rule, demonstrated rather than asserted.
 and an issued number is orphan-exposed until its definition is COMMITTED — the gate cannot see a
 working-tree definition. Offered them the union run (their ledger over their worker tip in a disposable
 tree) that caught five stale placeholders in mine after four days.
+
+---
+
+## 2026-09-13 06:32Z — D-2721 fixed and ACCEPTED at `fc8ec80b`; both mutants reproduced by me, not read
+
+Worker landed it in the ruled order: `1a9093e8` defines D-2721 (+21/−0, plan only, no source), then
+`fc8ec80b` fixes it. **Every claim in that commit message was re-measured in a disposable worktree
+before acceptance.**
+
+**PoolSheet untouched — by blob hash, not by diff.** `030f4ce9` and `fc8ec80b` both give
+`b83a9740b41de99e39f9f19bed2038d580ab31e2`. D-2701 is not touched, and that is now a fact rather than
+an intention. This is the cheapest possible proof of a negative and I should have been asking for it
+all wave.
+
+**Baseline** on the two suites that own the mechanism: 105/105.
+
+**Mutant 1 — remeasurement deleted** (`45d8f737` → `d491d1e2`): **exactly 2 red**, `remeasures the
+selected route pool while its sheet remains open` and `replaces a settled write read-back with a later
+route pool while the sheet remains open`; 103 passed; `pool-sheet.test.tsx` entirely green. Both halves
+pinned — the no-write path from my probe and the post-write path from the worker's own refuter.
+
+**Mutant 2 — `poolOpen` guard dropped** (`ba567e6f`): **exactly 1 red**, `freezes the selected route
+pool during the sheet exit animation`; 104 passed. **The over-correction is PINNED, not ambiguous** —
+the half I was least confident would have a fixture, and the worker built one rather than reporting it
+unpinned. Restore verified by exact inverse with `git status --porcelain` empty; three distinct file
+hashes across the run.
+
+**Union gate at `fc8ec80b`: 225/225**, with D-2721's definition committed and therefore visible — which
+is exactly why the definition commit was ordered first.
+
+**Three things in the fix that could have gone wrong and did not**, recorded because each was a live
+risk: `poolSelectionFor` takes the write and the read as PARAMETERS rather than closing over them, so
+the two sites cannot drift; `placementFor` became a `useCallback` on `projectRows` as an honest
+dependency rather than a lint appeasement, with the reason written in the comment; and the
+remeasurement cannot blank the sheet mid-refresh, because `refreshProjects` degrades to `pending` only
+when it is NOT already ready — I checked that specifically, since a transient non-measured read would
+have reproduced **D-2707 inside D-2721's own fix**, which is this wave's signature failure.
+
+**Publication unpaused; push cleared** (mail 1028).
+
+### The intersection is EIGHT, and run 44 corrected itself within the hour
+
+Mail 1027 corrected mail 1025 on something only they could see: their local HEAD `5e6fd1dd` is **seven
+commits past the pushed `3d7b0225`**, and three of those touch `pwa/`. Re-measured at both current
+tips and their correction holds exactly — intersection **eight** (adding
+`pwa/test/start-program.test.tsx`, which auto-merges), and `pwa/test/project-card.test.tsx` is **still
+the only textual conflict**. My headline survived; only the census grew.
+
+**They raised a claim boundary rather than resolving it, and the measurement is wider than they knew.**
+All THREE contested paths are live-claimed by the worker under run 43 — claim 243
+(`start-program.test.tsx`), 267 (`FleetScreen.tsx`), 269 (`project-card.test.tsx`) — not just the one
+they found. **And it resolves itself**: merge order puts wave 5 first, so by the time run 44 integrates,
+run 43 has closed and those claims have ended. They will resolve files nobody holds, against a main
+that already contains them.
+
+**Two corrections in two hours, each from the side that could see it and neither caught by the other.**
+I measured a pushed ref and treated it as what their branch would merge; they told me their real head
+was seven commits past it. They told me their in-flight diff touches no `pwa/` files, which was true
+and incomplete, and corrected it unprompted. Neither error was detectable by the receiving side. That
+is the argument for consulting peers by measurement rather than by status, and it is worth more than
+the collision it found.
