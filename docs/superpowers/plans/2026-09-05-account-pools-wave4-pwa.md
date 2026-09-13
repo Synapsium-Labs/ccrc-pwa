@@ -4275,3 +4275,24 @@ deviation found while executing this plan is allocated in its own call at the mo
   fixture while the existing pending-race test remains green. Do not rewrite the
   existing test; record that it pins PoolSheet's local cache, not FleetScreen's
   bridge.
+
+- **D-2721 — FleetScreen's open pool sheet keeps the route snapshot taken when
+  the card was tapped after a later route remeasurement has landed.** Coordinator
+  mail 1023 accepted the final-review finding after measuring one screen showing
+  the refreshed route pool on its card and the previous pool in the still-open
+  sheet. `PoolSheet`'s write read-back, selected route snapshot, then frame
+  precedence remains correct under D-2701; the defect is that FleetScreen never
+  reconciles `poolSelection` after `refreshProjects` updates `projectRows`.
+  Mail 1023 ruled extracting the existing card-tap calculation into one named
+  function, using it both when the card opens the sheet and while `poolOpen` is
+  true after a route remeasurement. A live same-project `poolWrite` must still
+  precede the measured route value under D-2704/D-2707/D-2714, and the selection
+  must remain frozen while the sheet is closing so vaul's exit animation retains
+  its subject. Do not edit `PoolSheet` or let the pools frame become a pool-value
+  source. Mail 1024 additionally ruled two regressions: the no-write divergent
+  frame/route transition and the post-write A then route-measured B transition
+  must both update the card and still-open sheet to B. Deleting the open-sheet
+  remeasurement must red; dropping its `poolOpen` guard must red a pinned
+  exit-animation fixture, or be reported as ambiguous until that property is
+  pinned. The D-2701 selected-route precedence fixture and the
+  D-2704/D-2707/D-2714 bridge fixtures must stay green.
