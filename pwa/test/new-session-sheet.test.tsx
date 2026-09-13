@@ -40,6 +40,19 @@ const openAtStepTwo = async (projects: ProjectRow[]): Promise<void> => {
 };
 
 describe('NewSessionSheet step 2 and the pool line', () => {
+  it('preserves a maximum-length crossing account pool in the shared row name and title', async () => {
+    const maximumPool = `a${'z'.repeat(31)}`;
+    const roster = pooled({ claude: 'pool-a', claude2: maximumPool });
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+
+    const poolLabel = `pool · ${maximumPool}`;
+    const chip = await screen.findByLabelText(poolLabel);
+    expect(chip).toHaveAttribute('title', poolLabel);
+    expect(chip).toHaveTextContent(poolLabel);
+  });
+
   it('lists the projects this account may take, and counts the rest behind the disclosure', async () => {
     await openAtStepTwo([
       proj('demo', { state: 'tagged', name: 'pool-a' }),
@@ -53,15 +66,18 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     expect(screen.getByRole('button', { name: 'show other pools (1)' })).toBeInTheDocument();
   });
 
-  it('reveals crossing projects with their pool named on the row', async () => {
+  it('preserves a maximum-length crossing pool in the row name and title', async () => {
+    const maximumPool = `a${'z'.repeat(31)}`;
     await openAtStepTwo([
       proj('demo', { state: 'tagged', name: 'pool-a' }),
-      proj('quiet-basin', { state: 'tagged', name: 'pool-b' }),
+      proj('quiet-basin', { state: 'tagged', name: maximumPool }),
     ]);
 
     fireEvent.click(await screen.findByRole('button', { name: 'show other pools (1)' }));
-    const row = screen.getByRole('button', { name: /quiet-basin/ });
-    expect(row.textContent).toContain('pool · pool-b');
+    const poolLabel = `pool · ${maximumPool}`;
+    const chip = screen.getByLabelText(poolLabel);
+    expect(chip).toHaveAttribute('title', poolLabel);
+    expect(chip).toHaveTextContent(poolLabel);
   });
 
   it('sends crossPool only for a project behind the disclosure', async () => {

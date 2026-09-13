@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { POOL_NAME_RE } from '../../shared/roster';
 import {
   atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
 } from './cssRule';
@@ -932,5 +933,48 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
 
   it('keeps the unknown-pool note quiet — it explains a longer list, it does not warn', () => {
     expect(declValue(ruleFor('.pool-note'), 'color')).toBe('var(--ink-tertiary)');
+  });
+});
+
+describe('maximum pool name account-row fit (D-2688)', () => {
+  const maximumPool = `a${'z'.repeat(31)}`;
+
+  it('uses a legal 32-character pool name at the grammar boundary', () => {
+    expect(maximumPool).toHaveLength(32);
+    expect(POOL_NAME_RE.test(maximumPool)).toBe(true);
+  });
+
+  it('keeps the complete pool identity in both sheet renderers', () => {
+    const swapSheet = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SwapSheet.tsx'), 'utf8');
+    const newSession = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'NewSessionSheet.tsx'), 'utf8');
+    const fullIdentity = '<span className="acct-pool" aria-label={poolLabel} title={poolLabel}>';
+
+    expect(swapSheet).toContain(fullIdentity);
+    expect(newSession).toContain(fullIdentity);
+    expect(newSession).toContain('<AccountRow');
+  });
+
+  it('makes only the pool label yield room to the fixed gauges at 320px', () => {
+    const primitives = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'components', 'primitives.css'), 'utf8');
+    const tokens = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+    const viewportWidth = 320;
+    const sheetPanel = ruleIn(primitives, '.sheet-panel');
+    const spacingFour = declValue(ruleIn(tokens, ':root'), '--sp-4');
+    const rule = ruleFor('.acct-pool');
+
+    expect(spacingFour).toBe('16px');
+    expect(declValue(sheetPanel, 'padding')).toContain('var(--sp-4)');
+    expect(viewportWidth - 2 * Number.parseInt(spacingFour ?? '', 10)).toBe(288);
+    expect(declValue(rule, 'flex')).toBe('1 1 0');
+    expect(declValue(rule, 'min-width')).toBe('0');
+    expect(declValue(rule, 'overflow')).toBe('hidden');
+    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(rule, 'white-space')).toBe('nowrap');
+    expect(declValue(ruleFor('.acct-gauges'), 'flex')).toBe('none');
+    expect(declValue(ruleFor('.acct-gauges'), 'width')).toBe('148px');
   });
 });

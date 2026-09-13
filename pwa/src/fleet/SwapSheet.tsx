@@ -342,6 +342,7 @@ export function AccountRow({
     background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
   };
   const off = condemned(facts);
+  const poolLabel = `pool · ${poolChip ?? ''}`;
   return (
     <button
       type="button"
@@ -355,7 +356,9 @@ export function AccountRow({
       </span>
       {suggested && <span className="acct-suggested">suggested</span>}
       {poolChip != null && poolChip !== '' && (
-        <span className="acct-pool">pool · {poolChip}</span>
+        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
+          {poolLabel}
+        </span>
       )}
       <span className="acct-gauges">
         {/* Above the gauges, not instead of them: the numbers are still true of

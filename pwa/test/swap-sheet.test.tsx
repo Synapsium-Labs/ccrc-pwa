@@ -712,14 +712,17 @@ describe('SwapSheet and the pool line', () => {
     expect(screen.getByRole('button', { name: 'show other pools (1)' })).toBeInTheDocument();
   });
 
-  it('reveals the crossing rows with a pool chip when the disclosure is opened', () => {
+  it('preserves a maximum-length crossing pool in the chip name and title', () => {
+    const maximumPool = `a${'z'.repeat(31)}`;
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
-    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, tagged('demo', 'pool-a'))} />);
+    const pools = { claude: 'pool-a', claude2: maximumPool, 'claude-corp': 'pool-a' };
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], pools, tagged('demo', 'pool-a'))} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
-    const row = screen.getByRole('button', { name: /team·alt/ });
-    expect(row).toBeInTheDocument();
-    expect(row.textContent).toContain('pool · pool-b');
+    const poolLabel = `pool · ${maximumPool}`;
+    const chip = screen.getByLabelText(poolLabel);
+    expect(chip).toHaveAttribute('title', poolLabel);
+    expect(chip).toHaveTextContent(poolLabel);
   });
 
   it('names the crossing in the confirm sentence and posts crossPool on the wire', async () => {

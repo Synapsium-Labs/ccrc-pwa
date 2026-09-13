@@ -1683,10 +1683,13 @@ button.proj-card-pool::before {
 
 /* A crossing names its destination pool on the revealed account row. */
 .acct-pool {
-  flex: none;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  white-space: nowrap;
   color: var(--ink-tertiary);
 }
 

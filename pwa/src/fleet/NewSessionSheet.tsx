@@ -32,6 +32,7 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
   pool: string | null;
   onPick: (project: ProjectRow) => void;
 }): ReactNode {
+  const poolLabel = `pool · ${pool ?? ''}`;
   return (
     <button
       type="button"
@@ -40,7 +41,11 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
     >
       <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
       <span className="proj-name">{row.name}</span>
-      {pool !== null && <span className="acct-pool">pool · {pool}</span>}
+      {pool !== null && (
+        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
+          {poolLabel}
+        </span>
+      )}
       <span className="proj-dir">{row.workdir}</span>
     </button>
   );
@@ -230,6 +235,7 @@ export function NewSessionSheet({
                   facts={factsFor(accounts, w)}
                   onPick={setWrapper}
                   roster={roster}
+                  poolChip={accountPool(roster, w)}
                 />
               ))
             ) : (
