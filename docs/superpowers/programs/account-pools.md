@@ -6323,3 +6323,109 @@ red). What I have NOT done is audit the OLDER fixtures (the D-2688..D-2707 era) 
 green-but-wrong shapes — a fixture asserting a state the wire cannot carry, a test pinning shape rather
 than effect, coverage that would not red alone. That is the remaining gap and I am naming it rather
 than letting four clean lenses imply five.
+
+---
+
+## 2026-09-13 20:5x UTC — lens 3 CLOSED, the review is 5 of 5, and run 44 corrected me again
+
+### Mail 1055: my inference was wrong, and I checked before conceding
+
+I told run 44 that `60,000 + 46ms` was *vitest's* bound and therefore that D-2733's case B had **no
+internal timeout at all**. Both halves are false, and I verified both before agreeing:
+
+- `server/vitest.config.ts:87` is `testTimeout: darwin ? 90_000 : 20_000`. **Neither is 60,000**, so no
+  harness bound could have produced that stop.
+- `server/test/ccd-account-auth.test.ts:327` — `runLogin` passes `timeout: 60_000` to `execFileSync`
+  **at the call site**, with `CCRC_AUTH_TIMEOUT: '6'` at `:329`. So B *does* have a bound of its own,
+  and my passing `6,245ms` was the designed healthy path, not an anomaly.
+
+I reasoned from a number to a mechanism with the config two files away. Withdrawn.
+
+### Their hypothesis was NOT unmeasurable — and it is refuted on linux
+
+Run 44 recorded, honestly labelled as an unmeasured HYPOTHESIS, that `execFileSync`'s timeout signals
+the direct child while the synchronous read runs to stdout EOF, so a surviving grandchild holding the
+inherited pipe keeps it open past the signal — and said it was now unmeasurable, their leg cancelled
+and main's log aged out of the Actions API.
+
+**It needs none of those bytes.** It is a property of `execFileSync`, and a probe settles it. I wrote
+one (`…/scratchpad/execfilesync-probe/`, README carries the method):
+
+    {elapsedMs: 2004, outcome: threw, sig: SIGTERM/ETIMEDOUT,
+     gcAlive: true, gcFd1: 'socket:[2987614149]'}   // linux, node v24.14.1, timeout: 2000
+
+The bound **HELD at 2004/2000ms with the grandchild still alive and still holding the stdio channel.**
+The `gcAlive`/`gcFd1` fields are not decoration — without them the probe proves nothing, and my FIRST
+attempt was exactly that failure: it located the grandchild with `pgrep -f 'sleep 10'`, matched the
+wrong process entirely, and reported an fd that was **my own tool's output file**. The PID is now
+written out of band to a file, never down the pipe under measurement. Refuted on linux; **UNMEASURED on
+darwin**, which is the leg that actually failed, and I am not extending it there.
+
+**A stronger, platform-independent one.** The mechanism REQUIRES an inherited pipe. Both async sites —
+`:459` and `:619` — pass `stdio: 'ignore'` and `child.kill('SIGKILL')` in a `finally`, with per-case
+`60_000`. They hold no pipe, so it cannot apply there on ANY platform. That leaves `runLogin` as the
+only site where it is even possible, and that is the site the probe refutes.
+
+**What this does to the 55 minutes.** Every sync site is bounded (`60_000` at `:327`/`:668`/`:855`,
+`90_000` at `:509`); both async sites are contained and SIGKILLed; there is no `retry` in the config;
+the *login over a plain pipe* describe holds 6 cases, so 6 × 60s = **6 minutes**. Nothing in this
+file's arithmetic reaches 55. I proposed **no** third mechanism — I have none, and inventing one is the
+error I just made. The honest statement is that the attribution of that block to this file's bound is
+**unestablished**. Their remedy is untouched: it rests on the 10× gap, which is two source facts.
+
+Sent as mail 1056. D-2733 remains run 44's.
+
+### Lens 3 — the older-era audit, done by mutation
+
+The gap I named was the D-2688..D-2707 fixtures. Targeting was not by vibes: **two of that era's own
+deviations ARE the lens-3 defect class**, and each states its own falsification criterion.
+
+| # | its own stated criterion | mutant | result |
+|---|---|---|---|
+| D-2706 | "Mutating only that CSS background token must red the new assertion, **not merely a registry mutation**" | `fleet.css:609` `var(--accent-tint)` → `var(--bg-surface)` | **1 red / 241 green** — `keeps the selected project-pool registration on its selector's declared ground` |
+| D-2711 | "Removing the sorted replacer must red that fixture **while the remaining focused suite stays green**" | `FleetScreen.tsx:36` replacer removed → plain `JSON.stringify(pools)` | **1 red / 79 green**, `Type Errors no errors` — `coalesces a recursively reordered equal reconnect pools frame…` |
+| D-2695 | (no stated criterion — a race fix, chosen because that is where unpinned guards hide) | `FleetHostBanner.tsx:49` `mine === issued` → `mine <= issued` (always true) | **1 red / 13 green** — `keeps the newest issued poll authoritative when an older request resolves last` |
+
+Each mutant changes **one** mechanism and is type-clean by construction — the D-2711 and D-2695 mutants
+were deliberately written to keep their bindings USED, because deleting them would raise a tsc error
+and this suite typechecks: that red would have been a false one, not a pin. Baseline first (322/322
+across both files). Restores are exact inverses verified by hash, and the closing proof is whole-tree:
+`git diff e9dd490a` and `git status --porcelain` both **empty**.
+
+- `fleet.css` `04f9cff7…` → `4a746b61…` → `04f9cff7…`
+- `FleetScreen.tsx` `13a5b1d4…` → `c9422f0f…` → `13a5b1d4…`
+- `FleetHostBanner.tsx` `84a3face…` → `19bc77a9…` → `84a3face…`
+
+**Plus the source census, which needs no mutation.** Every `state:` literal in all 15 touched test
+files, checked against `ProjectPoolWire = tagged|untagged|malformed|unreadable`: the only
+out-of-vocabulary literals are `future-pool-state` and `future-state`, and **both are deliberate
+fail-shut probes**. `api.test.ts`'s `state: 'failed'` is a *run* state on `abandonRun`, not a pool
+state — a false lead I chased and dismissed. So no fixture asserts a state the wire cannot carry.
+
+**One observation, recorded rather than raised.** `ProjectPlacementRead` is
+`pending|failed|missing|legacy|measured`; the tests construct `failed`, `missing`, `legacy` and
+`measured` — **`pending` is constructed by no test in the wave.** It falls to `ProjectCard`'s bare
+`New workspace on ${project}` arm, which is the CORRECT behaviour (an unmeasured read must not become a
+claim), and it shares that arm with legacy-unsafe and non-projected-measured, all of which want the
+same silence. Not a defect, so not a deviation — but it is the one union member with no fixture, and if
+a later wave gives `pending` its own copy, nothing today would catch getting it wrong.
+
+**Lens 3: NO FINDING.**
+
+### The review is now 5 of 5
+
+| lens | state |
+|---|---|
+| claims audit | done — no finding |
+| grounds / contrast | done — no finding |
+| interaction | done — no finding |
+| seams | done — no finding |
+| test integrity | **done — no finding** (6 pins mutation-verified: D-2695, D-2706, D-2708, D-2711, D-2714, D-2722) |
+
+Measured at `e9dd490a`: PR #95 OPEN, MERGEABLE, head matches the branch tip, four REQUIRED checks
+SUCCESS, `test-macos` FAILURE — non-gating, failing identically on `main`, and now D-2733 under run 44.
+`mergeStateStatus: BLOCKED` / `reviewDecision: REVIEW_REQUIRED` is the **operator gate**, not a review
+defect: the `gh` token is the PR author's own identity, so self-approval would defeat the gate rather
+than satisfy it.
+
+Run 43 advances `awaiting-review` → `merging` on this entry. The merge itself waits on a human.
