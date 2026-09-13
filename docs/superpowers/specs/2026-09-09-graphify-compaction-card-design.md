@@ -70,11 +70,15 @@ mandatory non-vacuity control. **The two new provenance flags get a wire contrac
 `manual`/`main` leg — the only leg that can red a derivation mutant. **Both surviving pre-D-2605 producers
 change shape**, including the SessionStart claim, whose legacy grammar joins the transition allowance.
 **`_ws_slug_residue` is widened with `_ws_slug_free`**, so `ws-add`'s refusal still names what it found.
-**Lock-MECHANISM absence now has a stated blast radius:** closed for the three hook arms, open for
-`_reg_purge` and therefore `ws-rm`/`ws-reap`/`forget`/`ws-gc --prune`, argued from four facts and explicitly
-distinguished from the forbidden second lock-free regime. Plus enumeration and citation corrections:
-five `compact-card.test.ts` call sites (not four), all five `session-hook.test.ts` `.served` assertions (not
-three), `CompactSet.served`, the `(protocol steps 12–14)` off-by-one, the §2 diagram's argv line, its "set
+**Lock-MECHANISM absence now has a stated blast radius (SCOPED round 10):** closed for the three hook arms;
+open — gated on the absence of `$REG/<id>.generation` — for `_reg_purge` reached through
+`ws-rm`/`forget`/`ws-gc --prune` only. `ws-add`, `ws-restore` and `ws-reap` keep their SHIPPED fail-closed
+refusals (`ccd/ccd:4341`, `:6745`, `:10202`); round 9 asserted a blanket over "ccd's own registry operations"
+without measuring any of ccd's five `command -v flock` sites, and three of the five already fail closed.
+Plus enumeration and citation corrections: five `compact-card.test.ts` call sites (not four), **SEVEN**
+`session-hook.test.ts` assertions on the hook-written set's `served` (round 9 said five; `:2319` and `:2491`
+assert it in property position, invisible to a `\.served` grep), `CompactSet.served`, the
+`(protocol steps 12–14)` off-by-one, the §2 diagram's argv line, its "set
 carrying `steered`" and its two-condition `iff`, the hold-section fork enumeration, §5's steering row, the
 "(stage 2 only)" scope, rc 1's "nothing written", and `_reg_purge`'s "nothing here can gate the purge" comment.
 **Branch:** `ws/graphify-compaction-card`
@@ -483,7 +487,9 @@ fork it does not control.
 5. **Acquire the stable lock** (protocol step 4, `COMPACT_LOCK_WAIT`). It creates an absent stable lock only
    from a private `mktemp` regular source published with POSIX `link`; a missing, unsafe, replaced, or
    contended lock makes PreCompact inert: no overlap decision, sweep, set/card publication, or helper call.
-   Under that lock (protocol steps 5–7), first validate that `CCRC_SESSION_GENERATION` is a strict lowercase
+   Under that lock (protocol steps 5–7, continued into step 8 at item 7 — so this item-pair's own span, not
+   a contradiction of the "steps 5–8" first held section enumerated below), first validate that
+   `CCRC_SESSION_GENERATION` is a strict lowercase
    UUID and byte-for-byte equals the ccrc-owned `$REG/<id>.generation`; validate it again immediately before
    each publication or destructive mutation. A hook with no generation (including an already-running
    pre-upgrade process) fails closed for compaction lifecycle work only; ordinary hookstate behavior is
@@ -564,8 +570,10 @@ _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$HELPER" card \
    head-parse **is** the ownership check, run under the lock this time, which is what makes it a real
    compare-and-swap where the pre-round-7 helper-side version was check-then-act.
 10. Dispatch on the helper's exit code and this reacquired ownership, still under the lock (protocol step
-    13; step 12's revalidation is item 9's, step 14's release is item 11's, so each numbered box step is
-    claimed by exactly one prose item):
+    13; step 12's revalidation is item 9's, step 14's release is item 11's, so **steps 11–14 are each
+    claimed by exactly one prose item** — round 9 generalised this to "each numbered box step", which is
+    false at the other end and is corrected here (round 10, A-M4): step 8 is claimed by item 6's tail and
+    again by item 7's "(protocol step 8, continued)", and steps 1–2 are claimed jointly by items 1, 2 and 3):
     - **rc 0 and ownership confirmed:** rename the card-stage file to the canonical card, then — in stage 2
       only, after the steer switch is absent — print `STEER_TEXT` (§3.5) **and then** stamp `steered` onto the
       still-private set-stage file (one `jq` rewrite of that stage, never of canonical — the stage is not yet
@@ -614,15 +622,36 @@ sections, re-enumerated against the numbered box above rather than asserted** (r
 recorded this sentence as "measured-accurate on inspection" in the very round that added a second `jq` to it,
 which is a claim the inspection did not support): the FIRST held section is protocol steps 5–8, opened by the
 acquire at step 4 and closed by the release at step 9; the SECOND is steps 12–13, opened by the reacquire at
-step 11 and closed by the release at step 14. The first forks the scope `find`s, the overlap `find`, the
-exact-family sweep `find`, the `jq -cn` that builds the initial set document, and — inside
-`_hook_write_atomic` (`ccd/session-hook.sh:779-784`) — the `mv -f "$tmp" "$1"` at `:782` that publishes it,
-plus its failure-path `rm -f`. The second forks the card-stage rename, the round-8 `jq` that stamps `steered`
-into the still-private set-stage, the set-stage rename, and the stage `rm`s on every non-publishing outcome;
-its ownership re-read is the bounded `read -N` plus bash regex and forks nothing. Neither section is a short
-in-process sequence of syscalls alone, which is why Task 9 must measure them directly (§2) rather than assume
-they are cheap. Every one of those children is synchronous and reaped inside its section, which is what makes
-the Standing rule satisfied rather than inapplicable.
+step 11 and closed by the release at step 14. The first forks the overlap `find`
+(`ccd/session-hook.sh:862`), the exact-family sweep `find` (`:869`), the `jq -cn` that builds the initial set
+document (`:875`), and — inside `_hook_write_atomic` (`:779-784`) — the `mv -f "$tmp" "$1"` at `:782` that
+publishes it, plus the failure-path `rm -f` on either arm (`:781`, `:782`; the `printf` that writes the temp
+is a builtin and forks nothing). **The scope `find`s are NOT in it, and round 9's own enumeration wrongly put
+them there (round 10, A-I1):** `_hook_compact_scope` runs both of them (`:754`, `:761`) at protocol **step 2**,
+which the numbered box above marks `[no lock]` and item 3 restates as running "with **no lock held**" — they
+precede the step-4 acquire, and round 7 moved `_hook_graph_measure` out of the lock for exactly this reason,
+"narrowing the held section to exactly the work that needs it". Folding them back in has two concrete costs:
+§2's `COMPACT_LOCK_WAIT` row directs Task 9 to set that bound at ≥ 8× the measured p95 of each held section,
+so instrumenting this list with a recursive `find` over `<transcript>/subagents` inflates the bound every
+`_reg_purge` caller blocks on; and the other way to make the sentence true — moving the acquire above
+`_hook_compact_scope` — directly reverses round 8's I8 correction. **Step 8 adds no fork at all**, worth
+saying because the section boundary now extends to it: `_hook_gate_tree` (`:300-302`) is two builtin `[`
+tests and `[ -f "$COMPACT_HELPER" ]` is a builtin. The second section forks the card-stage rename, the
+round-8 `jq` that stamps `steered` into the still-private set-stage, the set-stage rename, and the stage
+`rm`s on every non-publishing outcome; its ownership re-read is the bounded `read -N` plus bash regex and
+forks nothing — measured with `strace -f -e trace=clone,clone3,fork,vfork,execve` over the shipped
+`:934-935` sequence, which produced **zero** child-creating syscalls (the only `execve` in the trace is the
+outer shell's own). Neither section is a short in-process sequence of syscalls alone, which is why Task 9
+must measure them directly (§2) rather than assume they are cheap. Every one of the children listed above is
+synchronous and reaped inside its own section, which is what makes the Standing rule satisfied rather than
+inapplicable.
+
+**Two source-order pins hold this enumeration in place (round 10, A-I1).** Task 9 asserts over
+`_hook_compact_pre` that (a) the acquire-helper call site's source offset is GREATER than
+`_hook_compact_scope`'s and `_hook_graph_measure`'s and LESS than the overlap `find`'s, and that the release
+precedes the `_hook_timeout … node … card` call — moving the acquire above the scope call reds; and (b)
+exactly two `find` invocations appear between the acquire and the release (the overlap and the sweep) —
+adding a third, or relocating either scope `find` into the section, reds.
 
 ### 3.2 Helper subcommand `card`
 
@@ -982,15 +1011,114 @@ util-linux and is absent from stock macOS/BSD by default — the same portabilit
 `find` in §3.1. It is an external binary and nothing else: measured, `type -t flock` answers `file`, so there
 is no builtin fallback and absence of the binary is absence of the mechanism.
 
-**The ruling (round 9): lock-mechanism absence fails CLOSED for the three hook arms and OPEN for ccd's own
-registry operations.** The round-8 text bounded the cost to "the ENTIRE compaction lifecycle — card, set,
+**The ruling (round 9, SCOPED and gated round 10): lock-mechanism absence fails CLOSED for the three hook
+arms, and OPEN — conditionally — for the three `_reg_purge` callers that carry no flock guard of their own.**
+The round-8 text bounded the cost to "the ENTIRE compaction lifecycle — card, set,
 journal, and lifecycle purge cleanup alike", which composed with §3.4's own "`_reg_purge` acquires/validates
 the stable lock BEFORE any registry mutation" into something far larger than it stated: a permanent,
 fleet-wide failure of `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune`, each of which calls `_reg_purge`
 (`ccd/ccd:4896` in `cmd_ws_rm`, `:11167` in `_ws_reap_tail` under `_ws_reap_locked`, `:11668` in
 `_ws_gc_prune_row` under `ws-gc --prune`, `:15555` in `cmd_forget`) — three of them only AFTER irreversible
 action. That is ccd's universal registry-destruction path, not the compaction lifecycle. The design does not
-accept that cost, and does not need to. The split is argued from four facts:
+accept that cost, and does not need to.
+
+**WHAT THIS RULING GOVERNS, measured against ccd's five shipped `command -v flock` sites (round 10, A-I2 /
+B-2).** Round 9 asserted a blanket over "ccd's own registry operations" without measuring any of them. All
+five, read at this commit:
+
+| site | function | shipped disposition |
+| --- | --- | --- |
+| `ccd/ccd:2378` | `_lc_rotate` | fail OPEN — the probe's failure arm is a bare `return 0`, so rotation is skipped and the caller proceeds |
+| `ccd/ccd:4341` | `cmd_ws_add` | fail **CLOSED** — `die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"` |
+| `ccd/ccd:6745` | `cmd_ws_restore` | fail **CLOSED** — `_lc_refuse restore … flock-unavailable` |
+| `ccd/ccd:10202` | `cmd_ws_reap` | fail **CLOSED** — `_lc_refuse reap … flock-unavailable`, pinned by `server/test/ccd-ws-reap.test.ts:342` |
+| `ccd/ccd:13242` | `_tmux_new_session` | fail OPEN (`if command -v flock …; then … fi`, no `else`) |
+
+**Each of the five keeps its shipped disposition. D-2605 adds one more gate, and only that one fails open.**
+Concretely, this ruling governs `_reg_purge` reached through `cmd_ws_rm` (`:4896`), `cmd_forget` (`:15555`)
+and `_ws_gc_prune_row` (`:11668`) — the three call paths with no flock gate of their own — plus generation
+initialization/export in row creation and `_spawn_start`. It does NOT govern `cmd_ws_add`, `cmd_ws_restore`
+or `cmd_ws_reap`, which refuse before reaching any of that; `cmd_ws_reap` never reaches `_ws_reap_locked`
+(`:10248`) → `_ws_reap_tail` (`:10594`) → `_reg_purge` (`:11167`) at all, since `_lc_refuse` "EMITS, THEN
+DIES. Never returns." (`:2766`). Their doctrine is ccd's own and this design CITES it rather than
+contradicting it — `ccd/ccd:10196-10197`: "NOT a degraded mode. Without `flock` the serialisation is absent,
+not weaker, so the destructive verb does not run." Round 9's "row creation and `_spawn_start` … continue" is
+accordingly **qualified**: it holds for row writes that do not pass through `cmd_ws_add`, and not for
+`ccd ws-add`, which dies at `:4341` before `_ws_slug_free` (`:4356-4357`), before the addlock, and before any
+registry row exists.
+
+**THE GATE: `_reg_purge`'s fail-open is conditioned on the ABSENCE of `$REG/<id>.generation` (round 10).**
+Fact (ii) below is a BOX-level claim established by a PROCESS-level probe: `command -v flock` resolves
+against the calling process's PATH, so a box where ccd's PATH lacks `flock` while the hook's PATH has it puts
+a locked, publishing hook beside an unlocked `_reg_purge` — the exact race the lock was added to remove, just
+on ccd's side. On this fleet that cannot happen: `flock` is `/usr/bin/flock` (measured), and the hook's
+environment descends from ccd's own tmux pane, so ccd's PATH is the ANCESTOR of the hook's and the dangerous
+asymmetry requires the reverse; `ccd/ccd:19` states "Both production fleet boxes are GNU/Linux". It **is**
+reachable on the second declared userland: `ccd/ccd:484-505` records that "a LaunchAgent gets launchd's own
+minimal PATH" and that this "already bit this port once", and `_svc_job_path` (`:511-517`) appends
+`/opt/homebrew/bin` and `/usr/local/bin` **only into the per-session plist** — so on a macOS box with
+Homebrew util-linux, the supervised hook resolves `flock` while `ssh <mac> 'ccd forget <id>'` may not.
+
+The witness is `$REG/<id>.generation`, **not** the permanent lock. The permanent lock is the wrong witness:
+it is "permanent for the registry ID/slot, deliberately spanning row generations" and is minted even by a
+purge against a never-existed id, so its presence proves history, not a live regime, and it would flip every
+later purge to fail-closed on a box that genuinely lost `flock` — the fleet-wide wedge this ruling exists to
+avoid. `.generation` is the right witness because this design already specifies all three properties it
+needs, each stated above rather than invented here:
+
+1. **Minted only by a flock-capable row creation.** "Row creation takes the stable lock only for exact
+   residue check and generation initialization" (§3.4, ccd row creation), and §4's row for genuinely-absent
+   generation says "only stable-lock protected private source plus no-clobber link may mint". A mechanism-absent
+   row creation skips generation initialization entirely (the fail-open path below), so it mints none.
+2. **Deleted LAST by purge.** "`_reg_purge` … deletes generation last, and never deletes permanent lock",
+   with the mechanism spelled out: `generation` joins the loop's `archived || reaping` skip and one explicit
+   `rm -f "$REG/$id.generation"` follows the archived/reaping tail.
+3. **Replaced on row reuse.** "Interrupted purge preserves generation until last; safe reuse mints a fresh
+   generation" (§3.4, `_ws_slug_free`).
+
+Together those mean a PRESENT `.generation` proves THIS row's hooks were handed a generation and may hold the
+lock right now. So: **generation present AND `flock` unresolvable ⇒ `_reg_purge` fails CLOSED**, returning the
+distinct mechanism-absent refusal, and the three post-action callers report `_lc_fail` naming the cause
+(mechanism absent with a live generation). **That refusal is RECOVERABLE** — re-run the verb from a
+flock-capable PATH — because the refusal itself adds nothing irreversible; it is the caller's own prior work
+that was irreversible, and `_lc_fail` already names exactly that. This answers the stranding objection: the
+row is not wedged forever, it is wedged until the operator invokes ccd with a PATH that resolves `flock`.
+**Generation ABSENT ⇒ fail OPEN**, because no hook on this row ever received a generation, so no hook arm ever
+ran the lifecycle, so there is nothing to race.
+
+**The generation channel is itself what makes fact (ii) true on a consistent box**, and round 9 did not cite
+it: a flock-less `_spawn_start` exports no `CCRC_SESSION_GENERATION`, and a hook with no generation "fails
+closed for compaction lifecycle work only" — so every hook arm on such a box refuses regardless of what its
+own PATH resolves. Fact (ii) is therefore carried by a mechanism, not by an assumption about the box.
+
+**Rejected: a shared fixed absolute-path candidate list** for `flock` (the alternative mitigation), as the
+primary fix. **(b) and (c) are decisive; (a) is real but weaker than it was argued, and the correction is
+worth recording (round 10).** (a) It creates a SECOND spelling beside ccd's five shipped `command -v flock`
+sites. The reviewer's supporting claim — and `ccd/session-hook.sh:1167-1168`'s own shipped comment, which
+says "`single-definition.test.ts` does not scan `ccd/` at all — its four roots are the TypeScript packages"
+— is **measurably FALSE against the shipped test.** `ROOTS` (`server/test/single-definition.test.ts:32-37`)
+is indeed TypeScript-only, but the file carries a SECOND corpus: `bashRoots` (`:1115`) is
+`[<repo>/ccd, <repo>/deploy]`, `BASH` (`:1139`) is every bash file under those plus `install.sh`, and
+`holdersOf` (`:1145`) filters exactly that corpus on non-comment lines — the mechanism seven existing rules
+already use, and `:1160-1164` pins `ccd/ccd` and `ccd/session-hook.sh` as members by name. So a single-spelling
+pin over `ccd/` IS buildable, and drift would be catchable; (a) is a cost to pay, not an unfixable gap.
+(b) It misclassifies any box whose `flock` sits off-list as mechanism-absent even though
+`command -v` finds it, turning a working box silently inert, which is the worse direction under §10's
+residual; and (c) the hook and ccd ship on the same AGENT-FIRST lane but as separate `install_atomic`
+targets, so any list change has a window in which one side carries it. (b) alone is sufficient, and (c) is
+untouched by the correction to (a). The darwin condition above is recorded
+as the REASON the generation gate is needed at all, not as a reason to adopt the list. **Separately: the
+stale hook comment at `session-hook.sh:1167-1168` is a defect in its own right** — it tells the next reader
+that no mechanism exists where one does — and joins Task 9's comment scope beside `:1098`.
+
+**Two caveats, stated plainly rather than hidden.** (1) The gate narrows the mint-after-test window, it does
+not close it: a hook could mint nothing, but a row could pass the generation-absent test microseconds before
+a concurrent row creation mints one — and only for a row still live enough to compact. It is a strict
+improvement, never a proof. (2) A box that genuinely loses `flock` wedges its generation-PRESENT rows until
+`flock` returns; that is the deliberate trade against silently racing them, and it is bounded by (1)'s own
+condition — rows that never compacted carry no generation and purge normally.
+
+The split is argued from four facts:
 
 - **(i) These operations predate D-2605 and never needed this lock.** Row creation, `_spawn_start` and
   `_reg_purge` are shipped, working ccd mechanisms; the compaction lock is introduced by this design to
@@ -1331,8 +1459,13 @@ otherwise delete it in ordinary glob order like any other field. Task 9 extends 
 `rm -f "$REG/$id.generation"` after the existing archived/reaping tail (which itself must run first, per the
 existing `reaping`-never-outlives-`archived` invariant) — mirroring the pattern the existing code already uses
 for `hookstate.json`, `reaping`, and the conditional `archived` removal. Without both the skip-list extension
-and the added final unlink, "deletes generation last" describes nothing the code does. A lock miss, unsafe
-lock, or removal failure returns nonzero, emits no purge-done fact, and never claims success.
+and the added final unlink, "deletes generation last" describes nothing the code does. A lock miss or unsafe
+lock returns nonzero, emits no purge-done fact, deletes nothing, and never claims success. **A removal
+failure is a different condition and round 9's text wrongly folded it into the same disjunction (round 10,
+B-4):** the unlink loop runs strictly AFTER the emit, so by the time any `rm -f` can fail the purge-done fact
+is already journaled; such a run returns nonzero with the fact on disk and registry/generation possibly still
+standing, and its three post-action callers report `_lc_fail`. It is the emit that never claims success it
+did not have, not the loop.
 
 **The purge-done mechanism, measured, not the round-5 phrasing.** Round 5 described `_lc_done purge` as
 emitted "only after successful purge using captured values"; round 6 dropped that sentence and kept only the
@@ -1399,7 +1532,26 @@ to build is the safe direction, it is visible … `rm` on the named files reclai
 (`ccd/ccd:3935-3939`), and it silently strands the slug in `_ws_slug_new` (`:3964-3974`) forever. So
 `_ws_slug_residue` takes the SAME exact `.<id>.`-prefix strip, the SAME family-suffix match and the SAME
 permanent-lock exclusion, emitting the dot-leading private names alongside the dot-free fields: **every reason
-`_ws_slug_free` can refuse is a reason `_ws_slug_residue` can name.** Two shipped comments assert the old
+`_ws_slug_free` can refuse is a reason `_ws_slug_residue` can name.**
+
+**Widening the residue function alone is NOT enough, and `cmd_ws_add`'s message template must change with it
+(round 10, B-3).** The template hard-codes the prefix `$REG/$project-$slug.` — a dot AFTER the id — while
+every widened family is dot-LEADING (`$REG/.<id>.compactions.lock-open.…`, the dot BEFORE the id). No return
+value of `_ws_slug_residue` can make that template name such a file. Measured, with the shipped function body
+in a throwaway `$REG` holding `.demo-quiet.compactions.lock-open.1.2.3`: returning the stripped suffix yields
+`$REG/demo-quiet.{compactions.lock-open.1.2.3}`, whose implied path `$REG/demo-quiet.compactions.lock-open.1.2.3`
+**does not exist**; returning the full dot-leading basename yields
+`$REG/demo-quiet..demo-quiet.compactions.lock-open.1.2.3`, which **also does not exist**. That is strictly
+worse than the empty-braces case round 9 set out to fix: the operator gets a confident reclaim instruction
+pointing at a path that is not there, `rm` on it is a silent no-op, and `_ws_slug_new` (`:3964-3974`) then
+skips that slug for its 60 attempts, forever. **So:** `_ws_slug_residue` emits complete `$REG`-relative
+BASENAMES — dot-free fields as `<id>.<field>`, private families as `.<id>.<suffix>` — and `cmd_ws_add`'s die
+prints them as a plain list rooted once, e.g. `die "slug in use: $slug — in $REG: $(…)"`, **dropping the
+`$REG/<id>.{…}` brace template**, which cannot express a dot-leading name. Worth recording separately: that
+template was never a working `rm` argument even for the dot-free case it was written for, because the shipped
+separator carries a space (`out+="${out:+, }$suffix"`). Measured — `echo prefix.{uuid,workdir}` expands to
+`prefix.uuid prefix.workdir`, while `echo prefix.{uuid, workdir}` prints the literal `prefix.{uuid, workdir}`
+unexpanded. Two shipped comments assert the old
 reason and must be restated as measured rather than left standing: `ccd/ccd:1129-1132`, which explains why
 `$REG/claude-authdead` is invisible to `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` alike (after the
 widening the reason is that the name is dotless *and* matches no `.<id>.`-prefixed private family, not the
@@ -1502,8 +1654,9 @@ Plan A.
 | later aged recovery | only matching exact-ID claim plus separately safe nonce marker/source is removed under stable lock; no retroactive journal record |
 | generation canonical present but invalid or unreadable | refuse promptly; never repair, replace, remove, or classify as absent |
 | generation canonical genuinely absent | only stable-lock protected private source plus no-clobber link may mint; EEXIST reclassifies winner |
-| ccd purge lock/mutation failure | no purge-done fact, generation and registry remain; callers decline or report explicit partial rather than success |
-| (round 9) lock MECHANISM absent — no `flock(1)` on the userland, established by `command -v flock` before any acquire is attempted, never by a failed acquire | the three hook arms fail CLOSED: no card, set, stage, claim, marker or journal is ever published. ccd's own registry operations fail OPEN: `_reg_purge` runs its unlink loop and emits its purge-done fact, so `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune` behave exactly as they did before D-2605; row creation and `_spawn_start` skip generation initialization/export and continue. `_ws_slug_free` answers consistently, since on such a box no compaction private residue exists to see (§3.4 Platform outcome, facts i–iv) |
+| ccd purge LOCK miss (or unsafe lock) | no purge-done fact, NOTHING deleted, generation and registry remain; the three post-action callers report `_lc_fail`, the dead-reg pre-action caller alone may decline unchanged |
+| ccd purge MUTATION failure (an `rm -f` inside the unlink loop) | **the purge-done fact is ALREADY journaled** — the emit precedes the loop unconditionally (`ccd/ccd:1828` before `:1840-1848`) — so registry and/or generation may remain WITH the fact on disk; callers report `_lc_fail`, never success. (Round 9's single combined row said "no purge-done fact" for this case too, which is false; corrected round 10, B-4) |
+| (round 9, SCOPED round 10) lock MECHANISM absent — no `flock(1)` resolvable by the calling process, established by `command -v flock` before any acquire is attempted, never by a failed acquire | the three hook arms fail CLOSED: no card, set, stage, claim, marker or journal is ever published. `ccd ws-add` (`ccd/ccd:4341`), `ccd ws-restore` (`:6745`) and `ccd ws-reap` (`:10202`) keep their SHIPPED fail-CLOSED refusals and are outside this ruling. Of the `_reg_purge` callers, only `ws-rm` (`:4896`), `forget` (`:15555`) and `ws-gc --prune` (`:11668`) are governed, and they are gated on `$REG/<id>.generation`: **absent** ⇒ fail OPEN (`_reg_purge` runs its unlink loop and emits its purge-done fact, exactly as before D-2605 — no hook on that row ever held a generation, so nothing can race); **present** ⇒ fail CLOSED with the distinct mechanism-absent refusal, the three post-action callers reporting `_lc_fail`, recoverable by re-running from a flock-capable PATH. Row creation and `_spawn_start` skip generation initialization/export and continue **for row writes that do not pass through `cmd_ws_add`** — `ws-add` itself dies first. `_ws_slug_free` answers consistently, since on a box where no arm ever published, no compaction private residue exists to see (§3.4 Platform outcome, the five-site table, the generation gate, and facts i–iv) |
 | crash after successful SessionStart stdout before marker | emitted card may later measure `served:false`; output and publication are not atomic |
 | external replay after journal rename | an external later event may duplicate one committed record; process itself makes no internal reattempt |
 
@@ -1527,7 +1680,7 @@ adds the following real process and source pins, each through fixture HOME/PATH 
 | retain row-creation or primary lock across setup/sleep, omit retry lock/env, or ignore an early close | deadline/same-shell reacquire/retry-reuse fixtures red; both primary/retry child envs carry exact generation |
 | keep the lock descriptor open across `_spawn_start`'s or PreCompact's own fork instead of closing before it (an EFFECT pin, not the shape pin above) | a real forked child that outlives the parent's own `exec {fd}>&-` still lets a fresh acquirer succeed within `COMPACT_LOCK_WAIT`; restoring the hold makes a fresh acquirer time out until the child exits |
 | **(round 9) background any command inside compact SessionStart's retained-lock section** — the one acquisition a human waits on, and previously the one held section with no mechanism at all, because the close-before-fork rule had been declared inapplicable here | enter the arm with the stable lock held and have the held section start a child that outlives it (`sleep 5 &`); let the arm return and close its FD, then assert a fresh acquirer still succeeds within `COMPACT_LOCK_WAIT_SERVE`. Backgrounding ANY command inside the section reds. Control, measured on bash 5.2.21: with every child synchronous a fresh acquirer succeeded in 424 ms (bounded by the holder's own lifetime), and with one `sleep 5 &` it timed out for the full 3 s wait — so the pin is effective in both directions, and it pins the property that actually makes holding safe (children are reaped in-section) rather than the false property that there are none |
-| **(round 9) lock-mechanism absence behaves as §4's row says** | fixture HOME with a PATH containing no `flock`: assert `ccd ws-add`, `ccd ws-rm` and `ccd forget` behave exactly as documented (registry operations complete; `_reg_purge` emits its purge-done fact), assert the three hook arms publish NOTHING — no card, set, stage, claim, marker or journal line — and assert `_ws_slug_free` answers consistently with that state. Making the hook arms fall back to an unlocked publish reds (that is §10's forbidden second regime); making `_reg_purge` refuse on mechanism-absence reds the `ws-rm`/`forget` legs; and confusing mechanism-absence with contention — testing the mechanism only by attempting an acquire — reds, since both spell their failure `1` |
+| **(round 9, REWRITTEN round 10 — A-I2/B-2) lock-mechanism absence behaves as §4's row says** | Fixture HOME with `flock` made unresolvable by SHIMMING `command` — `command() { [[ "${1-}" == -v && "${2-}" == flock ]] && return 1; builtin command "$@"; }` — per `server/test/ccd-ws-reap.test.ts:355`'s own idiom, **never by emptying PATH**, because every stub in that suite spells its passthrough `command git`/`command find` and an emptied PATH would break them. Assert, leg by leg: (a) `ccd ws-add` REFUSES, exit non-zero, stderr containing its shipped `refusing to create a workspace unserialised`, and creates no registry field; (b) `ccd ws-reap` REFUSES with its shipped `_lc_refuse reap … flock-unavailable` / `refusing to run the destructive verb unserialised`, prints no document, and emits no `purge` fact; (c) `ccd ws-rm`, `ccd forget` and `ccd ws-gc --prune` on a **generation-ABSENT** row COMPLETE and `_reg_purge` emits exactly one `_lc_done purge`; (d) the same three on a **generation-PRESENT** row REFUSE with the distinct mechanism-absent condition and their post-action callers emit a named `_lc_fail`; (e) the three hook arms publish NOTHING — no card, set, stage, claim, marker or journal line; (f) `_ws_slug_free` answers consistently with that state. Mutations, each reddening exactly one leg: deleting `ccd/ccd:4341-4342` or `:10202-10204` reds (a)/(b); making `_reg_purge` refuse on mechanism-absence regardless of generation reds (c); making it proceed regardless of generation reds (d); making the hook arms fall back to an unlocked publish reds (e) — that is §10's forbidden second regime. And establishing mechanism-absence by ATTEMPTING AN ACQUIRE instead of `command -v flock` reds, since both spell their failure `1` and only the probe that answered distinguishes absence from contention |
 | revert the hook's set-temp producer to the pre-round-6 single-id `<pid>.compactset.tmp` grammar (or make the transition scanner assume single-id stripping) | residue planted at the shipped `_hook_write_atomic` name (`<pid>.<id>.compactset.tmp`), aged past `COMPACT_CARD_MAX_AGE`, is swept by the PreCompact arm while a same-aged foreign-id lookalike survives; reverting the grammar leaves the real residue standing |
 | fold a genuinely absent canonical set into the link-failure no-record branch | PostCompact run with no `.compactset` present commits exactly one journal line with `scope:null`; collapsing the branches leaves zero journal lines |
 | ignore `_reg_purge` result in any of four callers, or report a post-action lock-miss as decline/unchanged instead of `_lc_fail` | held-lock real fixture emits a named `_lc_fail` (not a suppressed success or a bare decline) for `cmd_ws_rm`, `_ws_reap_locked`, and `cmd_forget`, naming completed action and retained registry/generation; only the dead-reg pre-action caller may decline unchanged |
@@ -1537,12 +1690,13 @@ adds the following real process and source pins, each through fixture HOME/PATH 
 | **(round 7) the helper writes to a canonical set/card while both already exist** | run the card command against fixture canonical files present at both `.compactset` and `.compactcard`; assert both are byte-identical afterward — restoring either canonical write inside the helper reds this |
 | **(round 7) the CAS: a sibling publishes `{ambiguous}` and removes the card while the helper runs** | a barrier fixture flips the canonical set to `ambiguous`/removes the card mid-helper-run; assert the originating PreCompact publishes nothing, the sibling's set survives byte-for-byte, no card exists, and only this process's own stages are gone; publishing without re-reading the nonce under the reacquired lock reds |
 | **(round 7) stage completeness under a killed helper** | kill the helper mid-write (SIGKILL between its `.part` write and rename); assert no stage file exists, only a `.part`, and the hook publishes nothing |
-| **(round 7, corrected round 9) publication order and the steering bit** | assert the card rename precedes the print, which precedes **the private `jq` rewrite that stamps `steered` into the still-unrenamed set-stage**, which precedes the set rename; a failed `printf` leaves `steered:false` stamped into the stage that same rename then publishes; stamping `steered` before the print, **rewriting canonical directly instead of the stage**, or stamping under a second lock acquisition, reds. (Round 8's I1 inserted the stage rewrite into §3.1 and the plan's own control but left this checklist describing a bare print→set-rename with no stage rewrite and no canonical-rewrite mutation; round 9 brings the two into line) |
+| **(round 7, corrected round 9, SPLIT round 10 — A-I3) publication order — the PLAN A half, owned by Task 9** | Inside the reacquired held section, assert the **card-stage rename precedes the set-stage rename** (swapping the two reds), and that the arm publishes the helper's staged `steered:false` **byte-for-byte** (any hook-side rewrite of that member reds). That no `jq` ever rewrites the canonical set is already carried by the inverted source scan below, which reds on an unlocked or canonical-targeted `_hook_write_atomic`. These are the only legs a Plan A fixture can produce, because Plan A runs neither the print nor the stamp |
+| **(PLAN C / stage 2 — owned by NO Task 9 step, marked outside Plan A the way §3.5 and §3.6 already are) print → stage-stamp → set-rename ordering** | When stage 2 exists: assert the card rename precedes the print, which precedes **the private `jq` rewrite that stamps `steered` into the still-unrenamed set-stage**, which precedes the set rename; a failed `printf` leaves `steered:false` stamped into the stage that same rename then publishes; stamping `steered` before the print, **rewriting canonical directly instead of the stage**, or stamping under a second lock acquisition, reds. **Round 9 made this row unreachable and round 10 moves it out:** the same round scoped "(stage 2 only)" to BOTH the print and the stamp and stated three times that in Plan A neither runs, while leaving this row inside a checklist §5 declares "every row this plan owns is named in a task" — so Task 9 was asked for a red no fixture can produce. That is D-2548's own recorded defect class, reopened by the commit that created the scoping |
 | **(round 7) parameterized wait, not a same-named constant** | hold the lock 3 s while only the final transaction waits on it; exactly one journal line lands using `COMPACT_LOCK_WAIT`; passing `COMPACT_LOCK_WAIT_SERVE` at that call site instead reds (times out at 3 s under the 2 s bound) |
 | **(round 8) wire `COMPACT_LOCK_WAIT_SERVE` at compact SessionStart's one acquisition, or leave it unwired** | hold the stable lock 3 s, then fire compact SessionStart; assert it returns having served nothing within ~2 s; passing `COMPACT_LOCK_WAIT` (5 s) at that call site instead serves at ~3 s and reds |
-| **(round 7, recognizer INVERTED round 9) absent-canonical has exactly one meaning** | The round-8 recognizer grepped for a canonical-set literal *adjacent to* a primitive, and measured against the shipped tree it matches ZERO canonical-set mutation sites: in `ccd/session-hook.sh` the literal `compactset` occurs only at `:795`, `:796`, `:851`, `:920`, `:986` and the comment at `:1094`, none of which carries `rm`, `mv -f` or `link`; every mutating line (`:782`, `:802`, `:810`, `:817`, `:825`, `:836`, `:954`, `:964`, `:970`) names only a variable; and `ccd/ccd` contains ZERO occurrences of `compactset`/`compactcard`/`compactions` anywhere (measured `grep -c` = 0), so its own named inventory entry is unreachable by the stated pattern and the whole scan's single hit across both files is a comment (`ccd/ccd:1741`). **The recognizer is therefore inverted.** Enumerate every rename/unlink/link/write primitive in the named files — `mv`, `rm`, `link`, `>` redirection and `_hook_write_atomic` in `ccd/session-hook.sh`; the BODY of `ccd/ccd:1840-1848`'s purge loop, not only its glob line; and `renameSync`/`unlinkSync`/`linkSync` in `ccd/compact-card.mjs`, which imports all three at `:23` and after Task 9 retains exactly the two inside `writeAtomic` (`:422-431`) — its `renameSync` at `:426` and the failure-path `unlinkSync` at `:428` — permitted only because no canonical pathname reaches the helper's argv; every other current occurrence (`:502`, `:506`, `:507`, `:508`, `:517`, `:519`, `:520`, `:528`, `:529`, `:537`, `:538`, `:546`, `:552`) sits inside `:433-560`, which Task 9 deletes — and require EACH to appear on a named allow-list together with its lock state. Resolve the canonical pathname through the variables bound to it rather than by text adjacency: `set="$REG/$id.compactset"` at `session-hook.sh:851` and `:920`, and `_hook_write_atomic`'s positional `$1` (`:780`, mutating at `mv -f "$tmp" "$1"`, `:782`) traced from every call site that passes one. **"Adjacent" means same statement**, not same line and not same file. The allow-list: PreCompact's step-7 initial publication via `_hook_write_atomic` (call site `:886`, under its FIRST held lock — round 8's inventory omitted this site entirely), PreCompact's stage-renames under its reacquired lock, PostCompact's unlink/link/touch settlement sequence under its lock, and `ccd/ccd:1840-1848`'s purge-loop body, lock-protected only because `_reg_purge` holds the stable lock for its whole body. **NON-VACUITY control, mandatory:** assert the found set is NON-EMPTY and contains `_hook_write_atomic`'s call site at `:886` — a scan that finds nothing cannot red on anything, and the round-8 spelling found nothing. Mutations: restore `_hook_compact_rollback_set` (`ccd/session-hook.sh:792-819`) verbatim ⇒ reds, reached through `$set` → `$1` → the `mv -f "$set" "$claim"` at `:802`; add an unlocked `_hook_write_atomic "$set" "$doc"` outside any held lock ⇒ reds. Both stay GREEN under the round-8 literal-adjacency spelling, and both leave every behaviour test green |
+| **(round 7, recognizer INVERTED round 9) absent-canonical has exactly one meaning** | The round-8 recognizer grepped for a canonical-set literal *adjacent to* a primitive, and measured against the shipped tree it matches ZERO canonical-set mutation sites: in `ccd/session-hook.sh` the literal `compactset` occurs only at `:795`, `:796`, `:851`, `:920`, `:986` and the comment at `:1094`, none of which carries `rm`, `mv -f` or `link`; every mutating line (`:782`, `:802`, `:810`, `:817`, `:825`, `:836`, `:954`, `:964`, `:970`) names only a variable; and `ccd/ccd` contains ZERO occurrences of `compactset`/`compactcard`/`compactions` anywhere (measured `grep -c` = 0), so its own named inventory entry is unreachable by the stated pattern and the whole scan's single hit across both files is a comment (`ccd/ccd:1741`). **The recognizer is therefore inverted.** Enumerate every rename/unlink/link/write primitive in the named files — `mv`, `rm`, `link`, `>` redirection and `_hook_write_atomic` in `ccd/session-hook.sh`; the BODY of `ccd/ccd:1840-1848`'s purge loop, not only its glob line; and `renameSync`/`unlinkSync`/`linkSync` in `ccd/compact-card.mjs`, which imports all three at `:23` and after Task 9 retains exactly the two inside `writeAtomic` (`:422-431`) — its `renameSync` at `:426` and the failure-path `unlinkSync` at `:428` — permitted only because no canonical pathname reaches the helper's argv; every other current occurrence (`:502`, `:506`, `:507`, `:508`, `:517`, `:519`, `:520`, `:528`, `:529`, `:537`, `:538`, `:546`, `:552`) sits inside `:433-560`, which Task 9 deletes. **THE ORDER MATTERS, and round 9 stated it backwards (round 10, A-M3): the canonical-pathname resolution is the FILTER that PRODUCES the found set, and only then must the found set EQUAL the allow-list.** Read the other way round — "require EACH primitive to appear on a named allow-list" — the row demands that every `mv`/`rm`/`>` in a 1,400-line hook and the whole purge-loop body sit on a four-entry list, which no correct tree satisfies. **The filter:** resolve the canonical pathname through the variables and positionals that carry it — `set="$REG/$id.compactset"` at `session-hook.sh:851` and `:920` (the third binding at `:986` belongs to `_hook_compact_served`, which this task DELETES, so it is absent from the post-Task-9 tree the scan runs over), `_hook_write_atomic`'s positional `$1` (`:780`, mutating at `mv -f "$tmp" "$1"`, `:782`) traced from every call site that passes one, and — **new clause, round 10** — **a variable bound by a GLOB whose pattern can match a canonical basename resolves to canonical.** That last clause is what puts `ccd/ccd:1848` (`rm -f "$f"`, with `f` bound by `for f in "$REG/$id".*` at `:1840`) into the found set honestly: measured, `ccd/ccd` contains ZERO `compactset`/`compactcard`/`compactions` literals, so its allow-list entry is unreachable by variable-binding or text adjacency alone, and a second glob-based canonical unlink added elsewhere in `ccd/ccd` outside the lock would otherwise evade the scan entirely. **"Adjacent" means same statement**, not same line and not same file. The helper's two surviving `writeAtomic` primitives (`renameSync` `:426`, `unlinkSync` `:428`) are excluded **BY THE FILTER** — no canonical pathname reaches the helper's argv at all, which is option A's load-bearing property — **not** by an allow-list entry; they appear on no entry and must not. The allow-list, which the filtered found set must equal: PreCompact's step-7 initial publication via `_hook_write_atomic` (call site `:886`, under its FIRST held lock — round 8's inventory omitted this site entirely), PreCompact's stage-renames under its reacquired lock, PostCompact's unlink/link/touch settlement sequence under its lock, and `ccd/ccd:1840-1848`'s purge-loop body, lock-protected only because `_reg_purge` holds the stable lock for its whole body. **NON-VACUITY control, mandatory (strengthened round 10):** assert the found set is NON-EMPTY and contains BOTH `_hook_write_atomic`'s call site at `session-hook.sh:886` AND `ccd/ccd:1848` — a scan that finds nothing cannot red on anything, the round-8 spelling found nothing, and requiring only `:886` would leave the glob clause itself unproven. Added mutation: a second unlocked `rm -f "$REG/$id".*` loop elsewhere in `ccd/ccd` must red; under the round-9 resolution rule, with no glob clause, it stayed green. Mutations: restore `_hook_compact_rollback_set` (`ccd/session-hook.sh:792-819`) verbatim ⇒ reds, reached through `$set` → `$1` → the `mv -f "$set" "$claim"` at `:802`; add an unlocked `_hook_write_atomic "$set" "$doc"` outside any held lock ⇒ reds. Both stay GREEN under the round-8 literal-adjacency spelling, and both leave every behaviour test green |
 | delete generation-last, drop `generation` from the purge loop's `archived`/`reaping` skip condition, or make `_ws_slug_free`'s widened dot-leading-residue check (round 8, Task 9) ignore a planted lock-open-alias residue, or let it leak across ids | interrupted purge permits reuse or safe reuse retains old generation; a fixture that leaves `generation` out of the skip list reds by deleting it out of order; `.demo.compactions.lock-open.1.2.3` planted alongside live id `demo.quiet` must read as not-free for `demo` only — the permanent lock alone must NOT, and `demo.quiet` must answer free for itself — a fixture that makes any of these read the wrong way reds |
-| **(round 9) widen `_ws_slug_free` without widening `_ws_slug_residue`, so `ws-add`'s refusal names nothing** | plant a private-family residue file for a slug in a fixture `$REG` and run `ccd ws-add --slug <it> <project>`: assert it refuses AND that the `die` message NAMES that exact file. Measured on the shipped tree, `_ws_slug_free` (`ccd/ccd:3940-3951`) and `_ws_slug_residue` (`:3953-3962`) carry identical dot-skip logic and `cmd_ws_add`'s refusal at `:4356-4357` interpolates the latter, so widening only the former yields `slug in use: <slug> — $REG/<id>.{}` — empty braces, naming no file, falsifying the shipped contract three lines above it (`:4350-4354`, "The refusal NAMES WHAT IT FOUND … The field list is the reclaim instruction"). Reverting `_ws_slug_residue` alone reds this while `_ws_slug_free`'s own not-free pin stays green, so the two functions cannot drift apart again |
+| **(round 9, STRENGTHENED round 10 — B-3) widen `_ws_slug_free` without widening `_ws_slug_residue` AND `cmd_ws_add`'s message template, so `ws-add`'s refusal names nothing — or names a path that does not exist** | Plant `.<project>-<slug>.compactions.lock-open.1.2.3` in a fixture `$REG` beside a second live id `<project>-<slug>.mesa`, run `ccd ws-add --slug <slug> <project>`, and assert **(a)** it refuses, **(b)** the die message contains the literal basename `.<project>-<slug>.compactions.lock-open.1.2.3`, and **(c) every filesystem path the message names EXISTS** — parse the message, `stat` each path. **(c) is the mutation-effective part:** it goes RED under the round-9 text as written, because the `$REG/<id>.{…}` template cannot express a dot-leading name, and GREEN only once the template is replaced by a plain list rooted once. Reverting `_ws_slug_residue` alone must still red (a)+(b), while `_ws_slug_free`'s own not-free pin stays green, so the two functions cannot drift apart again. Measured on the shipped tree, `_ws_slug_free` (`ccd/ccd:3940-3951`) and `_ws_slug_residue` (`:3953-3962`) carry identical dot-skip logic and `cmd_ws_add`'s refusal at `:4355-4357` interpolates the latter, so widening only the former yields `slug in use: <slug> — $REG/<id>.{}` — empty braces, naming no file, falsifying the shipped contract three lines above it (`:4350-4354`, "The refusal NAMES WHAT IT FOUND … The field list is the reclaim instruction") |
 
 ## 6. Rings, invariants, and the waiting amendment
 
@@ -1568,16 +1722,22 @@ adds the following real process and source pins, each through fixture HOME/PATH 
   `COMPACT_JOURNAL_FINAL_LOCK_WAIT` in favor of this one shared bound. No lock is held over arbitrary setup,
   TUI settle, or `SPAWN_RESUME_SETTLE_S` sleep. `flock(1)`
   is util-linux and absent from stock macOS/BSD; there the **compaction lifecycle** refuses uniformly, like a
-  missing `find` or `jq`, while ccd's own registry operations — `_reg_purge` and therefore `ws-rm`, `ws-reap`,
-  `forget` and `ws-gc --prune`, plus row creation and `_spawn_start` — keep working as they did before D-2605
-  (§3.4, Platform outcome, and §4's row). Mechanism-absence is established by `command -v flock` before any
-  acquire is attempted, never inferred from a failed one.
+  missing `find` or `jq`. `ws-add`, `ws-restore` and `ws-reap` keep their own SHIPPED fail-closed refusals
+  (`ccd/ccd:4341`, `:6745`, `:10202`), which this design does not touch; `_reg_purge` reached through
+  `ws-rm`, `forget` or `ws-gc --prune`, plus row creation and `_spawn_start`, keep working as they did before
+  D-2605 **only on a row with no `$REG/<id>.generation`** — a row that carries one refuses, recoverably, per
+  §3.4's generation gate (§3.4, Platform outcome, and §4's row). Mechanism-absence is established by
+  `command -v flock` before any acquire is attempted, never inferred from a failed one.
 - **Exact lifecycle ownership.** §3.4's family table is the sole inventory for initial sources, open/read
   aliases, claim, marker, stage/snapshot, generation and cleanup. The stable lock spans generations and is
   intentionally excluded from slug residue; all other private families and `.generation` are residue.
 - **Purge honesty.** The stable lock precedes lifecycle journaling/rotation; the full ordering is reap lock
   (outermost, when reached through `_ws_reap_locked`), then stable compaction lock, then lifecycle
-  journal/rotation lock, never reversed. `_reg_purge` may not emit its terminal fact until completed; its
+  journal/rotation lock, never reversed. **`_reg_purge` emits its terminal fact EARLY — capture under lock,
+  emit, then delete** — and this invariants section said the opposite ("may not emit its terminal fact until
+  completed") for three rounds after §3.4 retracted it; an implementer obeying §6 would gate the emit on the
+  unlink loop's success, which is precisely the mutant `ccd-lifecycle-purge.test.ts:37`/`:99` exists to red
+  and which `ccd/ccd:1822-1827`'s own comment argues the backstop exists to avoid (round 10, B-4). Its
   three post-action callers (`cmd_ws_rm`, `_ws_reap_locked`, `cmd_forget`) report a lock miss as `_lc_fail`,
   never a suppressed success or a bare decline, since irreversible work already happened by the time they
   call it — only the dead-reg pre-action caller may decline unchanged. `ws-rm` and `forget` can therefore
@@ -1694,12 +1854,19 @@ This spec yields **three plans at two explicit seams**, each independently usefu
   silent second, lock-free concurrency regime living alongside the locked one, which is exactly the
   "accept and document the race" option §3.0 already forbids — just gated on a different condition. The
   honest choice is uniform inertness, stated here as its cost rather than left implicit.
-- **(round 9) The scope of that inertness, and the part of it this design declines to pay.** The bullet above
-  is about compaction artifacts, and only those. `_reg_purge` is ccd's universal registry-destruction backstop
-  — `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune` all terminate in it, three of them only after
-  irreversible action — and gating it on a mechanism it never needed would have wedged every slug on such a
-  box permanently, not transiently. §3.4's Platform-outcome ruling therefore fails OPEN there and CLOSED in
-  the hook arms, argued from four facts and pinned by a §5 fixture. The residual that remains is narrower and
+- **(round 9, SCOPED round 10) The scope of that inertness, and the part of it this design declines to pay.**
+  The bullet above is about compaction artifacts, and only those. `_reg_purge` is ccd's universal
+  registry-destruction backstop — `ws-rm`, `forget` and `ws-gc --prune` reach it with no flock gate of their
+  own, two of them only after irreversible action — and gating it unconditionally on a mechanism it never
+  needed would have wedged every slug on such a box permanently, not transiently. §3.4's Platform-outcome
+  ruling therefore fails OPEN there **on a generation-absent row** and CLOSED in the hook arms, argued from
+  four facts plus the generation gate and pinned by a §5 fixture. **`ws-reap` is NOT in that list and round 9
+  wrongly put it there (round 10, B-2):** `cmd_ws_reap` already refuses at `ccd/ccd:10202-10204` on such a
+  box, pinned by `server/test/ccd-ws-reap.test.ts:342`, so it was never among the commands this ruling
+  rescued — it is wedged there by shipped code independent of this design, deliberately. B's strengthening is
+  worth recording: on a box where `ccd ws-add` also refuses (`:4341`), **no workspace row and hence no slug is
+  ever taken at all**, so the "every slug wedged permanently" cost feared here cannot arise from ws-add. The
+  residual that remains is narrower and
   real: **on a `flock`-absent box this design measures nothing at all.** No journal line is ever written, so
   the box is invisible to every question the journal exists to answer, and no diagnostic distinguishes it from
   a box on which nobody compacted. The fleet in question is Linux throughout, so this is a portability
