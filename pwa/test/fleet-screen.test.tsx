@@ -748,6 +748,57 @@ describe('FleetScreen', () => {
       });
     });
 
+    it('keeps the successful-write bridge while its route refresh remains unresolved', async () => {
+      let resolveWriteRefresh!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+      const projects = vi.spyOn(api, 'projects')
+        .mockResolvedValueOnce({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveWriteRefresh = resolve; }));
+      vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+        ok: true,
+        pool: { state: 'tagged', name: 'pool-a' },
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open',
+        roster: TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
+        })),
+        pools: { listed: true, byProject: { alpha: { state: 'untagged' } }, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      const poolChip = await screen.findByRole('button', {
+        name: 'no project pool — any account may serve this project',
+      });
+      fireEvent.click(poolChip);
+      fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+      await waitFor(() => expect(projects).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      fireEvent.click(screen.getByRole('button', {
+        name: 'no project pool — any account may serve this project',
+      }));
+      expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+        .toHaveTextContent('alpha is in pool pool-a.');
+
+      await act(async () => {
+        resolveWriteRefresh({
+          roots: [],
+          projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' },
+            placement: { kind: 'unmeasurable' },
+          }],
+        });
+      });
+    });
+
     it('lets a successful write win until its own remeasurement settles, then lets a later route measurement win', async () => {
       let resolveEarlier!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
       let resolveWriteRefresh!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
