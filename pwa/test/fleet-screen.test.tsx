@@ -129,11 +129,11 @@ class FleetSocket {
   }
 }
 
-const makeLiveStore = (): FleetStore => createFleetStore({
+const makeLiveStore = (roster = TEST_ROSTER): FleetStore => createFleetStore({
   makeSocket: () => new FleetSocket() as unknown as WebSocket,
   catchUp: async () => ({ events: [], epoch: 'test', seq: 0, resync: false }),
   fetchFeed: async () => ({ events: [] }),
-  fetchAccounts: async () => ({ accounts: [], projected: null, roster: TEST_ROSTER }),
+  fetchAccounts: async () => ({ accounts: [], projected: null, roster }),
 });
 
 const latestFleetSocket = (): FleetSocket => {
@@ -832,6 +832,91 @@ describe('FleetScreen', () => {
         .toHaveTextContent('alpha is in pool pool-b.');
     });
 
+    it('clears a successful-write bridge when its refresh settles after an equal reconnect frame is skipped', async () => {
+      vi.useFakeTimers();
+      try {
+        let resolveInitial!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        let resolveWriteRefresh!: (value: { roots: string[]; projects: ProjectRow[] }) => void;
+        const projects = vi.spyOn(api, 'projects')
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
+          .mockImplementationOnce(() => new Promise(() => {}))
+          .mockImplementationOnce(() => new Promise((resolve) => { resolveWriteRefresh = resolve; }));
+        vi.spyOn(api, 'setProjectPool').mockResolvedValue({
+          ok: true,
+          pool: { state: 'tagged', name: 'pool-a' },
+        });
+        const roster = TEST_ROSTER.map((account) => ({
+          ...account,
+          pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
+        }));
+        const store = makeLiveStore(roster);
+        render(<FleetScreen store={store} />);
+        seed(store, {
+          conn: 'open',
+          roster,
+          sessions: [session({ id: 'a', project: 'alpha' })],
+        });
+        const pools = {
+          listed: true as const,
+          byProject: { alpha: { state: 'untagged' as const } },
+          enforcement: 'enforced' as const,
+        };
+
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        await act(async () => {
+          resolveInitial({ roots: [], projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' },
+            placement: { kind: 'unmeasurable' },
+          }] });
+        });
+        expect(projects).toHaveBeenCalledTimes(1);
+
+        act(() => {
+          latestFleetSocket().drop();
+          Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        expect(projects).toHaveBeenCalledTimes(2);
+
+        fireEvent.click(screen.getByRole('button', {
+          name: 'no project pool — any account may serve this project',
+        }));
+        fireEvent.click(screen.getByRole('button', { name: 'pool pool-a' }));
+        await act(async () => { await Promise.resolve(); });
+        expect(projects).toHaveBeenCalledTimes(3);
+        expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+          .toHaveTextContent('alpha is in pool pool-a.');
+
+        // The visibility request remains unresolved while the write refresh is
+        // active. Its equal reconnect frame is coalesced, not turned into a
+        // fourth request that could hide which request owns bridge settlement.
+        act(() => { vi.advanceTimersByTime(650); });
+        expect(FleetSocket.instances).toHaveLength(2);
+        act(() => {
+          latestFleetSocket().open();
+          latestFleetSocket().message({ type: 'pools', pools });
+        });
+        expect(projects).toHaveBeenCalledTimes(3);
+
+        await act(async () => {
+          resolveWriteRefresh({ roots: [], projects: [{
+            name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-b' },
+            placement: { kind: 'unmeasurable' },
+          }] });
+        });
+        fireEvent.click(screen.getByTestId('sheet-overlay'));
+        fireEvent.click(screen.getByLabelText('project pool pool-b'));
+        expect(screen.getByRole('dialog', { name: 'Which pool runs this project?' }))
+          .toHaveTextContent('alpha is in pool pool-b.');
+        store.getState().disconnect();
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
     it('makes no account claim while a cold project read is pending or after it fails', async () => {
       let reject!: (error: Error) => void;
       vi.spyOn(api, 'projects').mockImplementation(
