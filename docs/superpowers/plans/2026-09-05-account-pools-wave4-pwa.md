@@ -4296,3 +4296,69 @@ deviation found while executing this plan is allocated in its own call at the mo
   exit-animation fixture, or be reported as ambiguous until that property is
   pinned. The D-2701 selected-route precedence fixture and the
   D-2704/D-2707/D-2714 bridge fixtures must stay green.
+
+- **D-2722 — D-2721's own remedy hands the open sheet to the pools frame.**
+  `poolSelectionFor` omits the `pool` key for every read that is not
+  `{kind:'measured'}`. At the card tap that arm was effectively dead, because
+  the sheet's only entry point is `PoolChip` and `ProjectCard` renders no chip
+  at all for a non-measured read; the extraction was byte-faithful and moved a
+  dead arm into a live position. Applied by the open-sheet remeasurement to an
+  already-populated selection it clears `selectedPool`, so `PoolSheet` falls to
+  the third term of its precedence and the websocket frame becomes a pool-value
+  source — D-2721's own constraint violated by D-2721's own fix. Coordinator
+  mail 1031 confirmed it against a pre-fix control: the probe is green at
+  `1a9093e8` and red at `fc8ec80b`, so the commit causes it. Severity is HIGH
+  rather than Medium, because the frame does not merely state a stale pool, it
+  fabricates measurements: a project the frame never listed yields
+  `{state:'untagged'}` and the sheet asserts every account may serve it, which
+  is the constraint-lifting direction `shared/api.ts` forbids by name, and a
+  `listed:false` frame yields `{state:'unreadable'}` and the sheet names a tag
+  file nobody opened. Reachability is routine and needs no user action:
+  `listProjects` is built entirely on `io.readdir`, which folds absent,
+  unreadable and timed-out into one `null`, and `/api/projects` carries no 503
+  arm, so an agent-link drop answers 200 with an empty list while the same
+  outage emits a changed `listed:false` frame that drives the refresh. The
+  `legacy` arm is refuted as a live trigger, since that server age ships a new
+  PWA in the same artifact under `registerType:'autoUpdate'`; the finding rests
+  on `missing` alone. `pending` and `failed` are unreachable from a populated
+  selection, and the governing guard is that the sheet cannot be opened unless
+  the read was already measured. Mail 1031 ruled the remedy ACCEPTED with four
+  amendments: key the decision on the read's own kind rather than on the
+  result's shape, so a change to the helper's absence convention cannot
+  silently change the remedy's meaning; pin it, because the two owning suites
+  pass with and without it and that green is genuine non-coverage rather than
+  ambiguity, the delete-the-effect control having already proved the code
+  exercised; state in the comment that the seam has no vocabulary for
+  measured-absence so keeping the last route value is FORCED, and that it is
+  chosen over the frame because the frame fabricates, naming both fabrications,
+  rather than claiming a non-measured read is ignorance; and rewrite
+  `poolSelectionFor`'s docstring, whose justification cites an old-server frame
+  fallback that no shipped path reaches. The already-pushed comment predicting
+  that the degrade flips to "this box has not said" must also be corrected,
+  since that copy is reachable only when `pools` is null. Deleting the
+  keep-clause must red the new pin; the two D-2721 fixtures and D-2701's
+  selected-route precedence fixture must stay green. Closing the sheet was
+  rejected as the only option that can destroy operator input mid-write, and a
+  per-arm policy splitting `missing` from the rest was rejected because the
+  stack does not measure that distinction.
+
+- **D-2723 — the sheet's pool seam cannot express measured absence.** PARKED to
+  wave 6 by coordinator mail 1031. `PoolSheet`'s `selectedPool` documents
+  `undefined` as one thing, absent on old servers, while `ProjectPoolWire`'s
+  four members all assert that a tag file was reached, so nothing can say the
+  route answered and did not list this project. Adding a member is the wrong
+  lever, because that type is the element type of the pools frame itself and a
+  new member would become a state the frame can carry. D-2722's remedy
+  therefore masks the fabrication rather than removing it: `projectPoolOf`
+  still invents `{state:'untagged'}` whenever `selectedPool` is undefined, and
+  D-2722 only guarantees that this one parent never passes undefined, so a
+  second entry point or a direct `PoolSheet` render re-exposes it. The carrier
+  is already shipped: `ProjectPlacementRead` already distinguishes `legacy`,
+  where the frame fallback is correct and `pool-sheet.test.tsx` pins its exact
+  meaning, from `missing`, where the frame fallback is a false statement. It is
+  PWA-local and exported, the sibling component already takes it as a prop,
+  `placementFor` already computes it for this project, and one production call
+  site would migrate, with no wire change and no new type. It is parked rather
+  than done here only because it requires editing `PoolSheet`, which this
+  wave's rulings forbid; it is the only option that also fixes the fabrication
+  at its source.
