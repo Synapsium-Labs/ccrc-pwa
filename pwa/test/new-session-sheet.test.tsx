@@ -112,11 +112,23 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     });
   });
 
-  it('offers a project whose pool key is absent plainly', async () => {
-    await openAtStepTwo([proj('demo'), proj('quiet-basin')]);
+  it('offers an old-server project row whose pool key is absent plainly and starts it without crossPool', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    const oldServerProject = proj('demo');
+    expect(Object.hasOwn(oldServerProject, 'pool')).toBe(false);
+    await openAtStepTwo([oldServerProject, proj('quiet-basin')]);
+
     expect(await screen.findByText('demo')).toBeInTheDocument();
     expect(screen.getByText('quiet-basin')).toBeInTheDocument();
+    expect(screen.queryByText(UNKNOWN_POOL_NOTE)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('demo'));
+    const start = screen.getByRole('button', { name: /^Start demo/ });
+    expect(start).toBeEnabled();
+    fireEvent.click(start);
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+    }));
   });
 
   it.each(['unreadable', 'malformed'] as const)(

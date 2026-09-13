@@ -160,7 +160,9 @@ export function NewSessionSheet({
   const isCrossing = (candidate: ProjectRow): boolean => poolClass(candidate) === 'crossing';
   const inPool = matching.filter((candidate) => poolClass(candidate) !== 'crossing');
   const otherPool = matching.filter((candidate) => poolClass(candidate) === 'crossing');
-  const hasUnknownPool = inPool.some((candidate) => poolClass(candidate) === 'unknown');
+  const hasUnknownPool = inPool.some(
+    (candidate) => candidate.pool !== undefined && poolClass(candidate) === 'unknown',
+  );
 
   useEffect(() => {
     if (project !== null && selectedCrossingRef.current === false && isCrossing(project)) {
