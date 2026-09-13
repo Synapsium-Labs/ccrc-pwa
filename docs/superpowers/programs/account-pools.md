@@ -6184,3 +6184,48 @@ the other, and replacing would have removed the anti-vacuity half of a pair writ
 They also found both refusal messages still read *"origin/main or main resolved"* after the candidate was
 removed — a guard naming something it no longer does, the third instance of that class across our two
 waves this week.
+
+### 2026-09-13 20:38Z — D-2733 diffed: my nine are a strict subset, and the durations split it into TWO defects
+
+Run 44 still had main's log on disk and ran the diff before it aged out of the Actions API:
+
+- **in main but not mine:** `reaches waiting-code on a prompt that carries no newline, then expires`
+- **in mine but not main:** none — **my nine are a STRICT SUBSET of main's ten.**
+
+The extra case is the only one of the ten from the `ccd-account-auth — login over a plain pipe` describe
+— **and that is the describe their own run hung in**, its last line before a 25-minute stall being that
+block's sibling. Three runs, three trees: main FAILED it, mine PASSED it, theirs HUNG in it.
+
+**Confirmed from my half**, and my log carries the datum that sharpens it: that case did not merely
+pass, it passed **slowly — 6245 ms**, against the nine constant failures at **86, 93, 96, 102, 106,
+107, 119, 119, 125 ms**.
+
+**That duration split is the finding.** The nine fail in a tenth of a second because
+`script: tcgetattr/ioctl` returns IMMEDIATELY — there is no pty on the runner, the refusal is instant,
+the assertion misses. That is deterministic and environmental, **not a race at all**. The tenth is the
+only case in the file whose own name says it waits for something to EXPIRE, and it took roughly sixty
+times as long when it succeeded.
+
+So it is **two defects sharing a file**, not one flaky file:
+
+- **A** — nine cases that cannot work on a runner with no pty. Constant, fast, environmental. *Not
+  flaky*; simply impossible there, failing identically every run.
+- **B** — one case that waits on a real expiry; under runner load that wait fails early, completes
+  slowly, or blocks past the job deadline. This is the one that produced run 44's 55-minute hang, and
+  the only one where "flaky" is the right word.
+
+Bundling them under "macOS is flaky" would get **A** mis-triaged as a retry candidate forever, when A
+needs a runner or harness fix and B needs a bounded wait. Sent back for D-2733.
+
+**Neither of us can recompute this** — main's log has aged out; they ran it while the bytes existed and
+mine is still on disk.
+
+### Their observation about my own failure, taken
+
+> "Zero findings from five lenses is not the same shape as zero findings from one."
+
+Correct, and checkable with no new surface: the run reported five agents, five errors, zero
+completions, and I had that in front of me. **The tell was not missing — I read the result object
+before the failure log.** That is the same order-of-reading mistake the worker made with the summary
+filter, on the same day, on a different surface. The rule generalises past both: *when a result and a
+log disagree in shape, read the log first.*
