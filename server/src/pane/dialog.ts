@@ -66,6 +66,57 @@ export function hasMenu(pane: string): boolean {
   );
 }
 
+/**
+ * Is a menu PAINTED on this pane — cursor and all?
+ *
+ * A narrower question than `hasMenu`'s, and the two must not be collapsed into
+ * one predicate, because the callers handle the difference oppositely. The
+ * WRITERS (`inject/send.ts`, and `inject/ask.ts` behind its own identity gate)
+ * must not TYPE into a menu, so for them the sight of the footer sentence is
+ * reason enough to stop: a false refusal costs a retry, a false permit presses
+ * Enter on someone's behalf. The DISPLAY path (`sessionws.ts`'s `checkDialog`,
+ * `watch.ts`'s `detectDialogs`) is not deciding whether to act — it is deciding
+ * whether to put a picker in front of a human — and there a false positive is
+ * not conservative at all. It is a modal with nothing in it, re-raised on every
+ * tick for as long as the text stays on screen, with no way to answer it.
+ *
+ * That was not hypothetical. It landed on the operator's console twice in one
+ * turn while this very defect was being explained, because `MENU_RE` is the
+ * footer sentence and nothing else — no structure, no proximity, no cursor —
+ * and `OPTION_RE` harvests `N. text`, which is also ordinary markdown. A
+ * session DISCUSSING ccrc is the exact shape that trips it, i.e. the work this
+ * repo exists for.
+ *
+ * What separates the two, measured rather than reasoned: a painted menu always
+ * carries the `❯` cursor on one of its numbered rows. All nine pane fixtures in
+ * `server/test/fixtures/panes/` do, the partial redraw and both 2-column
+ * captures included; five false-positive screens measured in a live session's
+ * scrollback (2026-09-13) carried none. Prose has no cursor, and the input
+ * box's own `❯` is never followed by a digit and a dot.
+ *
+ * THE ONE SHAPE THIS GIVES UP, stated rather than discovered later: a menu
+ * whose cursor has been arrowed down onto an UNNUMBERED extra row ("❯ Chat
+ * about this") paints no numbered cursor, so a tick that catches it there reads
+ * as no-menu and the open sheet clears until the cursor moves back. That row
+ * cannot be told from an input box carrying typed text — both are `❯ ` plus
+ * prose at column 0 in every capture we hold — so admitting it would admit
+ * every pane with a half-written reply on it, which is the defect again.
+ *
+ * Being narrower, this is NOT a drop-in for the writers' gates. Swapping it in
+ * there would loosen an injection guard while looking like a display fix — the
+ * trap `hasMenu`'s own docstring names above. Their argument is separate and
+ * has not been made.
+ */
+export function menuPainted(pane: string): boolean {
+  const lines = pane.split('\n');
+  if (!lines.some((l) => SELECTED_OPTION_RE.test(l))) return false;
+  // Cursor plus EITHER of the two things that make a list a menu: the footer
+  // the TUI prints under one, or a second numbered row for the cursor to move
+  // between. Both arms of `hasMenu` are therefore still satisfied whenever this
+  // is true, which is what keeps this a strict subset of it.
+  return MENU_RE.test(pane) || lines.filter((l) => NUMBERED_OPTION_RE.test(l)).length >= 2;
+}
+
 export function paneState(pane: string): PaneState {
   if (BUSY_RE.test(pane)) return 'busy';
   if (hasMenu(pane)) return 'menu';
