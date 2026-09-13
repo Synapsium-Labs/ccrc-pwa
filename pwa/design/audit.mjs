@@ -535,7 +535,7 @@ export const INHERITED_GROUNDS = {
   },
   'fleet.css .proj-row--selected .acct-pool': {
     under: ['var(--accent-tint)'],
-    why: 'a selected crossing project paints --accent-tint behind its pool chip. The explicit descendant rule gives this rendered state its own audit identity instead of letting the ordinary --bg-sheet registration stand in for a different ground',
+    why: 'a selected crossing project paints --accent-tint behind its pool chip. The contrast test binds this registration to .proj-row--selected\'s declared background so the two cannot silently diverge',
   },
   'fleet.css .acct-disclosure': {
     under: ['var(--bg-sheet)'],

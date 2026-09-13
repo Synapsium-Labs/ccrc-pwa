@@ -1638,9 +1638,15 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     }
   });
 
-  it('measures the selected project pool chip against its tinted row', () => {
+  it('keeps the selected project-pool registration on its selector\'s declared ground', () => {
+    // A selected project row replaces the sheet ground. Compare the registry
+    // with THIS selector's declaration, not a generic CSS parse, so either side
+    // changing independently fails rather than pricing an obsolete surface.
     const key = 'fleet.css .proj-row--selected .acct-pool';
-    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--accent-tint)']);
+    const selectedRow = rulesOf(ROOT, 'src/fleet/fleet.css')
+      .find((rule) => rule.selector === '.proj-row--selected');
+    expect(selectedRow).toBeDefined();
+    expect(INHERITED_GROUNDS[key]?.under).toEqual([bgOf(selectedRow?.body ?? '')]);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
     expect(rows, key).toHaveLength(2);
     expect(report.uncovered, key).not.toContain(key);
