@@ -562,8 +562,16 @@ export function TerminalDrawer({
             /* A real toggle, not two buttons: one key in, the same key out.
                `aria-pressed` is what carries the engaged state to AT and,
                through the attribute selector, to the inverted fill in CSS —
-               one fact, one source, with no `data-` twin to drift from it. */
-            aria-pressed={!atLive}
+               one fact, one source, with no `data-` twin to drift from it.
+               ENGAGED MEANS A LAYER IS UP, so it reads the history state
+               itself and not `!atLive`: `reading` and `empty` are also "not
+               live", but in neither has anything been entered, and `empty` is
+               where every reader lands after a swap re-creates the pane with
+               no scrollback. A pressed cap over the live pane tells them they
+               are somewhere they are not. The LEGEND still names the
+               destination in those states, because the cap's job there is to
+               dismiss the notice — engaged and useful are different claims. */
+            aria-pressed={hist.at === 'history'}
             onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
             onClick={() => (atLive ? openHistory() : goHist({ at: 'live' }))}
           >

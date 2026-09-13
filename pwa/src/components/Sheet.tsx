@@ -39,6 +39,16 @@ export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetPr
   return (
     <Drawer.Root
       open={open}
+      // THE FULL VARIANT GIVES THE PANEL'S DRAG BACK TO ITS CONTENT. Every
+      // other sheet holds a list that vaul's own scroll detection handles, so
+      // a downward swipe anywhere is a dismissal and should stay one. The
+      // terminal is not a list: its glass owns the wheel and the touch drag
+      // (that is the whole of the history this drawer exists to reach), and a
+      // panel that also claims the gesture wins it — measured on a phone, a
+      // swipe over the console collapsed the drawer instead of scrolling it.
+      // `handleOnly` leaves exactly one place that drags the panel: the
+      // grabber, which is why it becomes a real `Drawer.Handle` below.
+      handleOnly={full}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
@@ -49,7 +59,14 @@ export function Sheet({ open, onClose, children, title, eyebrow, full }: SheetPr
           className={full ? 'sheet-panel sheet-panel--full' : 'sheet-panel'}
           aria-describedby={undefined}
         >
-          <div className="sheet-grabber" aria-hidden="true" />
+          {/* A DECORATIVE BAR CANNOT BE THE ONE THING THAT DRAGS. vaul's own
+              handle carries the pointer wiring and an invisible hit area
+              larger than the 4px bar a thumb would otherwise have to find;
+              the plain div stays for every other sheet, where the whole panel
+              is still the drag target and the bar is only a hint. */}
+          {full
+            ? <Drawer.Handle className="sheet-grabber" aria-hidden="true" />
+            : <div className="sheet-grabber" aria-hidden="true" />}
           {eyebrow ? <p className="sheet-eyebrow">{eyebrow}</p> : null}
           {inBody ? null : heading}
           <div className="sheet-body">
