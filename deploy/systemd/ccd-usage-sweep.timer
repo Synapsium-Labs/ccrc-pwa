@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the usage accounting sweep every 30 minutes (routing spec 2026-09-14 §6)
+Description=Run the usage accounting sweep every 4 hours (routing spec 2026-09-14 §6)
 [Timer]
 # `OnActiveSec=`, for ccd-telemetry-keepalive.timer's reason: this unit is first
 # armed by a deploy on a box that has been up for days, and the first pass should
@@ -7,7 +7,14 @@ Description=Run the usage accounting sweep every 30 minutes (routing spec 2026-0
 # stakes are lower than the keepalive's; the anchor is still the honest one for a
 # unit in the per-user manager.
 OnActiveSec=5min
-OnUnitActiveSec=30min
+# Four hours, not the 30 minutes this unit shipped with. A pass costs 7m07s warm
+# and 3m39s of CPU (MEASURED 2026-09-14, see the .service), so a half-hourly
+# cadence spent a quarter of the box's wall clock re-reading a corpus that had
+# barely changed. Nothing downstream wants it sooner: what this sweep feeds is
+# the SEVEN-DAY window of spec §6 — a gate that needs days of data, not minutes —
+# and the live per-session signal is the statusline sidecar, which is rewritten
+# on every render and does not wait for a sweep at all.
+OnUnitActiveSec=4h
 AccuracySec=1min
 [Install]
 WantedBy=timers.target

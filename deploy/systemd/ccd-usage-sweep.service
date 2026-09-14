@@ -3,10 +3,21 @@ Description=Usage accounting sweep — de-duplicated transcript totals (routing 
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/ccd-usage-sweep
-# budget: a full 7-day scan of every lane's transcripts is well under a minute on
-# the fleet box (the 30-day survey took ~4 minutes single-threaded); a pass past
-# this is wedged, not slow.
-TimeoutStartSec=900
-# the scanner holds one dict of deduped records; the 30-day survey peaked well
-# under 1G. A sweep must never be the thing that OOMs the fleet host.
-MemoryMax=2G
+# Budget, MEASURED on this fleet 2026-09-14 (the numbers that shipped with the
+# unit — "well under a minute", "well under 1G" — were extrapolated from a
+# 30-day single-lane survey and were both wrong). The seven-day corpus here is
+# 32563 transcript files / 48.3 GB (45.0 GiB), which does not fit the box's page
+# cache, so every pass re-reads most of it from disk. The first three passes:
+#   cold (first after the deploy): 12m46s wall, 3m15s CPU, 1.9G peak
+#   warm (18 minutes later):        7m07s wall, 3m39s CPU
+#   warm (again):                   7m48s wall, 3m45s CPU, 2.2G peak
+# The third pass is why these two keys moved. It peaked ABOVE the MemoryMax=2G
+# it was running under — the cgroup survived it only because most of that peak
+# is reclaimable page cache, which is luck, not headroom — and the cold pass
+# spent 766s of a 900s TimeoutStartSec, so one busier day of transcripts
+# SIGTERMs a pass mid-write. 1800s and 3G are ~2.3x and ~1.4x the measured
+# worst case. A pass past this timeout is wedged, not slow. Making the scanner
+# incremental (so a pass costs the delta, not the corpus) is a later slice's
+# change; until then the honest fix is to budget for what a pass costs.
+TimeoutStartSec=1800
+MemoryMax=3G

@@ -14,6 +14,13 @@ import path from 'node:path';
 
 const DEPLOY = path.join(import.meta.dirname, '..', '..', 'deploy', 'deploy.sh');
 const deploySh = (): string => fs.readFileSync(DEPLOY, 'utf8');
+const SYSTEMD = path.join(import.meta.dirname, '..', '..', 'deploy', 'systemd');
+const unit = (name: string): string => fs.readFileSync(path.join(SYSTEMD, name), 'utf8');
+/** Directives only — the units argue for their numbers in prose, and a scrape
+ *  that counted the prose would read a comment about a key as the key. The
+ *  same split `timer-first-run.test.ts` makes, for the same reason. */
+const directives = (name: string): string[] =>
+  unit(name).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 
 /** Executable lines only. deploy.sh's own comments name its helpers, so a
  *  scrape that counted prose would "prove" an ordering the shell never runs —
@@ -97,5 +104,55 @@ describe('the usage-accounting sweep ships on the agent lane (Task 7 fix round 1
     expect(runner, 'deploy.sh installs ccd-usage-sweep').toBeGreaterThan(-1);
     expect(Math.abs(runner - keepalive),
       'ccd-usage-sweep drifted away from its sibling executables').toBeLessThanOrEqual(2);
+  });
+});
+
+describe('the sweep unit is budgeted from the first measured passes (routing slice 0, Task 8; ruling R13)', () => {
+  // Task 8 measured what Task 7 had only guessed. The unit shipped saying a
+  // full seven-day scan was "well under a minute" at "well under 1G"; on this
+  // fleet the first cold pass took 12m46s of wall clock and peaked at 1.9G
+  // against a 2G cap, over a 48.3 GB / 32563-file seven-day corpus that does
+  // not fit the box's page cache — and the third pass peaked at 2.2G, ABOVE
+  // that cap, surviving only because most of the peak is reclaimable page
+  // cache. Both shipped numbers were a busy day away from killing a pass. These
+  // assertions are the mechanism that keeps a later "harmonisation" from
+  // putting the guessed numbers back.
+  it('the service gives the measured pass headroom, not the guessed budget', () => {
+    const d = directives('ccd-usage-sweep.service');
+    expect(d, 'the sweep service lost the 3G cap the 1.9G measured peak needs')
+      .toContain('MemoryMax=3G');
+    expect(d, 'the sweep service lost the 1800s start timeout the 12m46s cold pass needs')
+      .toContain('TimeoutStartSec=1800');
+  });
+
+  it('the service says WHY, in the measured numbers — a false budget comment is worse than none', () => {
+    // `ccd-account-health.timer`'s lesson, pinned the same way in
+    // `timer-first-run.test.ts`: the next reader's instinct is to trim these
+    // back towards the siblings', so the argument has to live at the key.
+    const prose = unit('ccd-usage-sweep.service');
+    expect(prose, 'the service no longer states the measured cold-pass wall clock')
+      .toContain('12m46s');
+    expect(prose, 'the service no longer states the measured peak RSS')
+      .toContain('1.9G');
+    expect(prose, 'the service no longer states the corpus the two numbers were measured over')
+      .toContain('48.3 GB');
+  });
+
+  it('the timer runs four-hourly — the gate is days of data, and the sidecar is the live signal', () => {
+    const d = directives('ccd-usage-sweep.timer');
+    expect(d, 'the sweep timer is back on a cadence shorter than its own pass costs')
+      .toContain('OnUnitActiveSec=4h');
+    // Unchanged by the re-budgeting, and listed here so a sweep of these three
+    // keys cannot quietly drop the two that were already right.
+    expect(d, 'the sweep timer lost its OnActiveSec anchor').toContain('OnActiveSec=5min');
+    expect(d, 'the sweep timer lost its AccuracySec').toContain('AccuracySec=1min');
+  });
+
+  it('the timer says why four hours, in the measured cost of a pass', () => {
+    const prose = unit('ccd-usage-sweep.timer');
+    expect(prose, 'the timer no longer states the measured warm-pass cost that sets the cadence')
+      .toContain('7m07s');
+    expect(prose, 'the timer no longer states that the seven-day gate is what the cadence serves')
+      .toMatch(/seven-day/i);
   });
 });
