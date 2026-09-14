@@ -557,6 +557,66 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
     }
   });
 
+
+  it('_spawn_start CLOSES the lock before either fork — BY EFFECT, not by source order', () => {
+    // §5 carries TWO rows for this property and says the second is "an EFFECT
+    // pin, not the shape pin above". PreCompact's half is a real effect fixture
+    // (`session-hook.test.ts`'s CLOSE-BEFORE-FORK test, where the CHILD tries
+    // the mutex); `_spawn_start` had only the source-offset pin above it.
+    // MEASURED: replacing `_compact_lock_release "$genfd"` with
+    // `if false; then _compact_lock_release "$genfd"; fi` — which keeps every
+    // string that pin searches for, in the same order — left the shape pin and
+    // the whole suite green while the tmux server daemon inherited the row's
+    // mutex, for the daemon's lifetime.
+    const id = 'demo-still-river';
+    h.sh(`_reg_set ${id} wrapper claude
+      _reg_set ${id} workdir "$HOME"
+      _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+    // `_tmux_new_session` stands in for the SERVER DAEMON: it outlives the
+    // critical section and inherits whatever descriptors are open across the
+    // fork. Each invocation opens the row's lock on its OWN descriptor and
+    // reports whether it could take it — a held `flock` conflicts between open
+    // file descriptions even inside one process, so an inherited hold answers
+    // `blocked` here. That is the question no source-order pin can ask.
+    const PROBE = `
+      _tmux_new_session() {
+        SPAWN_N=$(( \${SPAWN_N:-0} + 1 ))
+        ( exec 9<>"$REG/.${id}.compactions.lock" || { echo "open$SPAWN_N" >> "$HOME/acq"; exit 0; }
+          if flock -w 1 9; then echo "got$SPAWN_N" >> "$HOME/acq"; else echo "blocked$SPAWN_N" >> "$HOME/acq"; fi )
+        case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac
+      };
+      sleep() { :; };
+      tmux() { case "\${1:-}" in has-session) [[ -e "$HOME/pane-up" ]] ;; *) : ;; esac; };`;
+    h.sh(`${PROBE} _spawn_start ${id} resume 2>/dev/null`);
+    const acq = fs.readFileSync(path.join(h.home, 'acq'), 'utf8').trim().split('\n');
+    // BOTH forks, and the second is the one that gets forgotten: the `--resume`
+    // line dies, and the `--session-id` retry takes its OWN acquisition
+    // immediately before its own fork.
+    expect(acq, 'both spawn lines forked, and each child found the row mutex free')
+      .toEqual(['got1', 'got2']);
+  }, 30_000);
+
+  it('CONTROL: a second, never-closed reference to the same lock leaves both children BLOCKED', () => {
+    // What makes the leg above a measurement rather than a fixture that cannot
+    // fail: the same probe, with the row's mutex genuinely held across the
+    // forks by a descriptor nothing closes.
+    const id = 'demo-still-river';
+    h.sh(`_reg_set ${id} wrapper claude
+      _reg_set ${id} workdir "$HOME"
+      _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+    const PROBE = `
+      _tmux_new_session() {
+        SPAWN_N=$(( \${SPAWN_N:-0} + 1 ))
+        ( exec 9<>"$REG/.${id}.compactions.lock" || { echo "open$SPAWN_N" >> "$HOME/acq"; exit 0; }
+          if flock -w 1 9; then echo "got$SPAWN_N" >> "$HOME/acq"; else echo "blocked$SPAWN_N" >> "$HOME/acq"; fi )
+        case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac
+      };
+      sleep() { :; };
+      tmux() { case "\${1:-}" in has-session) [[ -e "$HOME/pane-up" ]] ;; *) : ;; esac; };`;
+    h.sh(`${PROBE} _compact_lock_acquire ${id} 5; _spawn_start ${id} resume 2>/dev/null`);
+    const acq = fs.readFileSync(path.join(h.home, 'acq'), 'utf8').trim().split('\n');
+    expect(acq, 'a leaked hold is visible to both children').toEqual(['blocked1', 'blocked2']);
+  }, 30_000);
   it('_spawn_start CLOSES the lock before either tmux command, and a contended miss spawns without the generation', () => {
     const src = readFileSync(CCD, 'utf8');
     const body = src.slice(src.indexOf('_spawn_start() {'));

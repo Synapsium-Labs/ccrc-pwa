@@ -1355,3 +1355,113 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
   });
 });
+
+// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9) ─────────────────
+// The plan widens this enumeration from `_ws_slug_residue` invocations and
+// assertions ALONE to their UNION with every assertion on `cmd_ws_add`'s die
+// message — any `server/test/**` line naming the `.{` brace template, or
+// asserting on the `slug in use:` string. Every member of the union must be
+// named in a disposition list, and an UNLISTED one reds.
+//
+// Each member WAS disposed correctly by Task 9, so the property holds today.
+// What was missing is the mechanism: a NEW `_ws_slug_residue` assertion, or a
+// new `slug in use:` one, added later and not thought about, reds nothing.
+describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposition list (plan Task 9)', () => {
+  const TESTS = path.resolve(__dirname);
+  /** THE UNION, three grammars. `\.{` is the brace template Task 9 deleted from
+   *  the die: it could not express the dot-LEADING private compaction families
+   *  `_ws_slug_free` now also refuses on, so every path it printed for one
+   *  would not exist. A surviving assertion on it is a test pinning a message
+   *  the code no longer produces. */
+  const GRAMMARS: Array<[string, RegExp]> = [
+    ['residue', /_ws_slug_residue/],
+    ['slug-in-use', /slug in use:/],
+    ['brace-template', /\$REG\/<id>\.\{|\$\{?REG\}?\/\$\{?id\}?\.\{/],
+  ];
+
+  /** THE DISPOSITION LIST, as DATA. Each entry names a file, the grammar it
+   *  belongs to, how many lines carry it, and what Task 9 did with them —
+   *  which is what makes an unlisted member visible as a count mismatch rather
+   *  than as prose nobody re-reads. */
+  const DISPOSITION: Array<{ file: string; grammar: string; count: number; what: string }> = [
+    { file: 'ccd-workspaces.test.ts', grammar: 'residue', count: 5,
+      what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, and the comment that states the pair rule' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
+    { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
+      what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
+    { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
+      what: 'a comment naming the three globs that share the dot-leading second pass' },
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 2,
+      what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
+      what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
+  ];
+
+  const scan = (): Array<{ file: string; grammar: string; line: number }> => {
+    const out: Array<{ file: string; grammar: string; line: number }> = [];
+    for (const f of fs.readdirSync(TESTS).filter((n) => n.endsWith('.ts')).sort()) {
+      const lines = fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        for (const [grammar, re] of GRAMMARS) {
+          if (re.test(lines[i]!)) out.push({ file: f, grammar, line: i + 1 });
+        }
+      }
+    }
+    // THIS FILE'S OWN describe carries all three grammars as literals — a
+    // self-reading scan must exclude its own, or it can never be green.
+    return out.filter((h) => !(h.file === 'ccd-workspaces.test.ts' && h.line >= SELF[0] && h.line <= SELF[1]));
+  };
+
+  /** This describe's own line range, bounded BY NAME so the exclusion cannot
+   *  silently widen. */
+  const SELF: [number, number] = (() => {
+    const lines = fs.readFileSync(path.join(TESTS, 'ccd-workspaces.test.ts'), 'utf8').split('\n');
+    const a = lines.findIndex((l) => l.startsWith('// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9)'));
+    let b = a;
+    while (b < lines.length && lines[b] !== '});') b++;
+    return [a + 1, b + 1];
+  })();
+
+  it('the found union EQUALS the disposition list, file by file and grammar by grammar', () => {
+    const hits = scan();
+    expect(hits.length, 'the scan found members at all').toBeGreaterThan(0);
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    const listed = new Set(DISPOSITION.map((d) => `${d.file}|${d.grammar}`));
+    // AN UNLISTED MEMBER, which is the whole point: a new assertion in a file
+    // nobody thought about.
+    expect([...counted.keys()].filter((k) => !listed.has(k)).sort(),
+      'an assertion on no disposition entry').toEqual([]);
+    // AND EVERY ENTRY ITS EXACT COUNT, so adding a second copy inside a listed
+    // file reds too.
+    expect(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .toEqual(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+    // THE BRACE TEMPLATE SURVIVES ONLY AS PROSE. Its entry above has a count,
+    // because the two lines that carry it are RETRACTING comments beside the
+    // assertions that replaced them — quoted history, which this project keeps
+    // rather than deletes. What must not exist is a CODE line pinning it: the
+    // die no longer prints that message, so an assertion on it would be a test
+    // pinning a shape the tree cannot produce.
+    const code = (f: string, line: number): string => fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n')[line - 1] ?? '';
+    expect(hits.filter((h) => h.grammar === 'brace-template' && !/^\s*(\/\/|\*|\/\*)/.test(code(h.file, h.line)))
+      .map((h) => `${h.file}:${h.line}`),
+      'no CODE line still pins the `$REG/<id>.{…}` message the die no longer prints').toEqual([]);
+  });
+
+  it('CONTROL: an unlisted assertion in another file reds, and a second copy in a listed file reds', () => {
+    // Measured against the real found set rather than by writing a file: the
+    // property is of the LIST, so the mutation is to the list.
+    const hits = scan();
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    // (a) drop an entry ⇒ its members become unlisted.
+    const without = new Set(DISPOSITION.filter((d) => d.file !== 'ccd-authdead.test.ts').map((d) => `${d.file}|${d.grammar}`));
+    expect([...counted.keys()].filter((k) => !without.has(k)),
+      'dropping an entry orphans its members').toEqual(['ccd-authdead.test.ts|residue']);
+    // (b) a count that no longer matches ⇒ red, with the file named.
+    const bumped = DISPOSITION.map((d) => (d.file === 'ccd-reg-set-atomic.test.ts' ? { ...d, count: d.count + 1 } : d));
+    expect(bumped.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .not.toEqual(bumped.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+  });
+});

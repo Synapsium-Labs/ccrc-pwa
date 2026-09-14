@@ -3106,6 +3106,58 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     return () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
   };
 
+
+  /** A FRESH ACQUIRER, from outside the hook entirely: the only way to ask
+   *  whether the row's mutex is actually free. Returns GOT or BLOCKED. */
+  const freshAcquire = (waitS: number): string => {
+    const r = spawnSync('bash', ['-c',
+      'exec 9<>"$1" || exit 1; if flock -w "$2" 9; then echo GOT; else echo BLOCKED; fi',
+      '_', lockFile(), String(waitS)], { encoding: 'utf8', timeout: (waitS + 10) * 1000 });
+    return (r.stdout ?? '').trim();
+  };
+
+  it('NOTHING MAY BE BACKGROUNDED inside compact SessionStart\'s retained-lock section — both directions, measured', () => {
+    // §5's round-9 row. The serve arm RETAINS its lock descriptor past
+    // `_hook_compact_card`'s own return (`COMPACT_SERVE_FD`), and a held
+    // `{fd}<>` descriptor is inherited across fork/exec — the flock lifts only
+    // when EVERY referencing descriptor closes — so one child started inside
+    // that section and outliving it pins the ROW's mutex for the child's whole
+    // life. Nothing measured this: a `sleep 5 &` inside the section reds only
+    // the compact cost-ratio row, whose subject is COST and whose own comment
+    // forbids raising its bound, so a future regression here would surface as a
+    // performance failure naming the wrong cause.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+
+    // THE CONTROL FIRST, on the shipped arm: every child inside the section is
+    // forked and reaped there, so the mutex is free the moment the arm returns.
+    run(preCompact(tree, transcript));
+    const served = runFull(compactStart(tree, transcript));
+    expect(served.stdout, 'the card was served, so the RETAINED-lock path really ran').not.toBe('');
+    expect(freshAcquire(2), 'the shipped arm leaves the row free').toBe('GOT');
+
+    // …AND THE OTHER DIRECTION, which is what makes the control a measurement.
+    // `find` is forked by the locked body itself (the card's age check); the
+    // stub leaves a child behind that outlives the arm. The orphan is not
+    // inside the hook's source at all — it is what an added `&` would produce.
+    // AGE THE UNCONSUMED SET FIRST, or the second leg is VACUOUS — measured:
+    // the first cycle's set is still standing (SessionStart consumes the CARD,
+    // not the set), so the next PreCompact is overlap-forced, removes the card
+    // and publishes none, and `_hook_compact_card_locked` then returns at its
+    // `[[ -f "$f" ]]` test BEFORE it ever forks `find`. The orphan would never
+    // be started and the leg would pass for the wrong reason.
+    const stale = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), stale, stale);
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(cardFile()), 'a card really was republished').toBe(true);
+    stub('find', [
+      `${sh(realTool('sleep'))} 5 >/dev/null 2>&1 &`,
+      `exec ${sh(realTool('find'))} "$@"`,
+    ].join('\n'));
+    const second = runFull(compactStart(tree, transcript));
+    expect(second.stdout, 'and the retained-lock path really ran again').not.toBe('');
+    expect(freshAcquire(2), 'a child that outlives the section keeps the ROW locked').toBe('BLOCKED');
+  }, 90_000);
   it('the two waits are constants, and the acquire helper takes its wait as its FIRST positional', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toMatch(/^COMPACT_LOCK_WAIT=5$/m);
@@ -5715,11 +5767,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 11 ("Final D-2605 documentation and committed-byte audit") is where they
     // are re-measured. Measured with THIS audit, run unchanged against both
     // trees: 41 failing citations at the commit this task started from
-    // (8e457995c23b) and 200 here. The difference is this task's own runtime
+    // (8e457995c23b) and 198 here. The difference is this task's own runtime
     // edits, not a change in the rule. (Fix round 1 LOWERED it by six — five
     // in `ccd/ccd` and one in `ccd/session-hook.sh` — because its edits shifted
     // those files' lines back under six anchors that had drifted past them.
-    // Re-measured against the tree, never adjusted to keep a number green.)
+    // Re-measured against the tree, never adjusted to keep a number green.
+    // A later commit in the same round lowered `compact-card.test.ts` by two
+    // the same way, by shifting its lines under two drifted anchors.)
     //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
@@ -5733,7 +5787,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
       'server/test/ccd-ws-reap.test.ts': 7,
-      'server/test/compact-card.test.ts': 9,
+      'server/test/compact-card.test.ts': 7,
     });
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about

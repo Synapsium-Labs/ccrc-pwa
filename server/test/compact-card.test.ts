@@ -33,6 +33,27 @@ const helper = (args: string[], input = ''): { status: number | null; stdout: st
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 
+
+describe('the helper exports nothing D-2605 deleted (plan Task 9)', () => {
+  it('no `slotIsMine`, no `ownedSlot`, no `reserveClaim`, no `hasCanonicalOwner`, no `rollback*`', async () => {
+    // Task 9 deleted twelve helper symbols with the slot-check and rollback
+    // families, and removed `slotIsMine` from this file's import list. The
+    // import removal landed; the POSITIVE assertion that keeps a re-export out
+    // did not, so a future editor restoring any of them — the whole class the
+    // canonical-set-is-never-rewritten ruling removes — would be caught by
+    // nothing. Asserted on the MODULE NAMESPACE rather than by grepping the
+    // source, so a re-export under any spelling reds.
+    const mod = await import('../../ccd/compact-card.mjs');
+    const gone = Object.keys(mod)
+      .filter((k) => /^(slotIsMine|ownedSlot|reserveClaim|hasCanonicalOwner|firstCardLine|firstSetNonce|rollback)/.test(k));
+    expect(gone, 'a deleted slot-check or rollback symbol is exported again').toEqual([]);
+    // NON-VACUITY: the namespace really is the helper's, and really does carry
+    // the surface this file imports — so the emptiness above is a measurement
+    // and not a failed import resolving to nothing.
+    expect(Object.keys(mod), 'the module surface is real').toContain('cardCommand');
+    expect(Object.keys(mod)).toContain('measureCommand');
+  });
+});
 describe('readWindow — the transcript since the last boundary (spec §3.2)', () => {
   const boundary = tl.boundary();
   const row = (i: number): string => tl.user(`row ${i}`);
