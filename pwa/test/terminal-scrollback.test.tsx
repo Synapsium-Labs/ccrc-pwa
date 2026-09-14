@@ -222,6 +222,12 @@ const HISTORY = 'older output\nolder still\n';
  *  a number, because what is under test is the arithmetic on top of it. */
 const ROW_PX = 18;
 
+/** `TOUCH_OPEN_PX` as the drawer spells it. Restated rather than imported — a
+ *  hardcoded literal is this repo's mutation-table control. Every drag below
+ *  clears it by 4x, so this number being stale cannot make a test pass that
+ *  should fail. */
+const OPEN_PX = 24;
+
 describe('the wheel scrolls the console history', () => {
   it('a wheel-up reads the pane history over capture-pane and renders it, touching the pty not at all', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) =>
@@ -1466,6 +1472,34 @@ describe('a finger opens the history from the live glass', () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a MOUSE drag selects text on the live glass — it does not open the history', async () => {
+    // The history layer already stands the mouse down for exactly this reason
+    // (`a MOUSE drag selects text — it does not scroll the view`); the live
+    // glass never learned it. A reader dragging across the live pane to copy a
+    // line got a history layer over their selection instead, and the selection
+    // with it. The mouse loses nothing: its gesture is the wheel, which opens
+    // the history already.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveGlass(view);
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 100, clientY: 100, isPrimary: true, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 100, clientY: 100 + 4 * OPEN_PX, isPrimary: true, pointerType: 'mouse' });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 100, clientY: 100 + 4 * OPEN_PX, isPrimary: true, pointerType: 'mouse' });
+    await act(async () => { await flush(); });
+
+    expect(fetchImpl, 'a mouse selection opened the console history').not.toHaveBeenCalled();
+  });
+
+  it('a bare pointer drag still opens it — the guard names the mouse, not the pointer', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    swipe(liveGlass(view), 0, 4 * OPEN_PX);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
   });
 });
 

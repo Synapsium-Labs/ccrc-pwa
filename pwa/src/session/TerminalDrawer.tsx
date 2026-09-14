@@ -613,6 +613,14 @@ export function TerminalDrawer({
     };
     const openDown = (ev: PointerEvent): void => {
       if (openViaTouch) return;                           // the finger owns this
+      // THE MOUSE IS SELECTING TEXT, NOT REACHING FOR HISTORY — the same
+      // stand-down the history layer's own drag makes one level down, and for
+      // the same reason. xterm starts a selection on mousedown and follows it
+      // with a document-level mousemove; a reader dragging across the live pane
+      // to copy a line got a history layer over their selection, and the
+      // selection with it. The mouse loses nothing by standing down: its
+      // gesture for this is the wheel, which opens the history already.
+      if (ev.pointerType === 'mouse') { from = null; return; }
       if (ev.defaultPrevented) { from = null; return; }   // xterm's own scrollbar
       from = { x: ev.clientX, y: ev.clientY };
     };
