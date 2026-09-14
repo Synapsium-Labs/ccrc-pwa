@@ -2472,10 +2472,32 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     const kept = [
       // PERMANENT: it spans row generations and safe slug reuse by design.
       '.demo-quiet-basin.compactions.lock',
-      // Another id's residue is not ours, and the literal `.<id>.` strip is
-      // what keeps a NESTED id out rather than a substring match.
+      // WHICH GUARD EXCLUDES WHICH, measured rather than asserted — the comment
+      // that stood here credited the `.<id>.` strip with keeping these two out,
+      // and it does not: the sweep's OUTER `find "$REG" -maxdepth 1 -name
+      // ".$id.*"` never hands them over. Measured over a directory holding both,
+      // `find . -maxdepth 1 -name '.demo-quiet-basin.*'` returns ONLY the
+      // dotted-nested name; the hyphen neighbour and the other id are excluded
+      // by the GLOB, before any strip runs.
       '.demo-quiet-basin-x.compactset.999.compact-1-999-1-2.stage',
       '.other-id.compactset.999.compact-1-999-1-2.stage',
+      // THESE are the strip's own subjects, and they were absent. A project
+      // DIRECTORY name may hold dots (the hazard `_reg_purge`'s header
+      // measures), so `demo-quiet-basin.x-y` is a legal sibling id whose
+      // artifacts DO reach `_hook_family_sweepable` through the glob above —
+      // and only the literal `.<id>.` strip keeps them. Measured on the shipped
+      // matcher: exact-strip leaves `x-y.compactset.999.compact-1-999-1-2.stage`
+      // unrecognised (KEEP), while a substring matcher over the whole basename
+      // answers SWEEP — i.e. it would delete another LIVE session's stage,
+      // claim and marker under this row's lock, with 260/260 green.
+      '.demo-quiet-basin.x-y.compactset.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.x-y.compactcard.999.compact-1-999-1-2.session-claim.tmp',
+      '.demo-quiet-basin.x-y.compactions.lock-open.999.1.2',
+      '.demo-quiet-basin.x-y.compactserved.compact-1-999-1-2',
+      // …and the GRAMMAR's own subject: a name that begins `compact` and is in
+      // no declared family. An over-broad `compact*) return 0` arm swallows it
+      // while every other assertion here stays green.
+      '.demo-quiet-basin.compactfoo',
       // A name in no family at all: an unrecognised aged dotfile is LEFT
       // ALONE, which is the direction a sweep must fail in.
       '.demo-quiet-basin.something-nobody-declared',
