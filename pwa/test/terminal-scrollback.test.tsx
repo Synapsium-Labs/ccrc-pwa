@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
 
 afterEach(() => {
   cleanup();
@@ -166,6 +166,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
    *  `scrollLines` could not tell a pixel-smooth glide from a stepped one. */
   const offsets: number[] = [];
   const madeWith: number[] = [];
+  const panes: Array<{ history: number; width: number } | undefined> = [];
   /** Every call this terminal received, in order — the latch has to be armed
    *  before the scroll that takes the reader away from the bottom. */
   const order: string[] = [];
@@ -178,14 +179,16 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
     fits,
     offsets,
     madeWith,
+    panes,
     order,
     /** Run the parse callbacks a deferred stub is holding. */
     flushParse: () => {
       for (const done of parses.splice(0)) done?.();
     },
     toBottom: () => bottom?.(),
-    makeHistoryTerm: (_host: HTMLElement, lines: number) => {
+    makeHistoryTerm: (_host: HTMLElement, lines: number, pane?: { history: number; width: number }) => {
       madeWith.push(lines);
+      panes.push(pane);
       return {
         write: (d: string, done?: () => void) => {
           write(d);
@@ -1801,5 +1804,55 @@ describe('a rotation while reading refits the history', () => {
     act(() => { window.dispatchEvent(new Event('resize')); });
 
     expect(h.fits.length, 'a disposed history terminal is still being refitted').toBe(after);
+  });
+});
+
+describe('the reader sizes its own buffer from the pane it measured', () => {
+  it('a stored line is at most ceil(paneWidth / readerCols) rows, plus the screen', () => {
+    // MEASURED RATHER THAN ASSUMED. `lines * 3` was derived from one pane at
+    // 220 columns read on one phone. The fleet census of 2026-09-14 holds a
+    // 302-column window, where a 43-column reader needs 8 rows per stored line,
+    // not 3 — and xterm silently drops the oldest history past its scrollback.
+    // The screen's own rows are added because `capture-pane -S -N` returns the
+    // visible screen along with the history above it.
+    expect(historyScrollback(2000, 43, 20, { history: 1953, width: 302 }))
+      .toBe(1953 * Math.ceil(302 / 43) + 20);
+    expect(historyScrollback(2000, 220, 50, { history: 1953, width: 220 }))
+      .toBe(1953 + 50);
+    // A reader WIDER than the pane re-wraps nothing: the multiplier floors at 1.
+    expect(historyScrollback(2000, 400, 50, { history: 100, width: 220 })).toBe(100 + 50);
+  });
+
+  it('falls back to lines * 3 when the pane could not be measured', () => {
+    expect(historyScrollback(2000, 43, 20, undefined)).toBe(6000);
+  });
+
+  it('a measured zero leaves the screen as the floor, never a buffer of nothing', () => {
+    // A measured zero history reaches here only through a race (the drawer
+    // refuses to open a layer on one), and a scrollback of 0 would be a
+    // terminal that cannot scroll at all. The screen's rows are the floor.
+    expect(historyScrollback(2000, 43, 20, { history: 0, width: 220 })).toBe(20);
+  });
+
+  it('the drawer hands the measurement through to the terminal it makes', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, {
+      ok: true, text: HISTORY, lines: 1953, scrollback: 1953, alternate: false, width: 302,
+    }));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+
+    expect(m.h.panes, 'the reader was given no pane to size itself against')
+      .toEqual([{ history: 1953, width: 302 }]);
+    expect(m.h.madeWith).toEqual([1953]);
+  });
+
+  it('an older server that sends no width leaves the reader on the fallback', async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, { ok: true, text: HISTORY, lines: 2000 }));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+
+    expect(m.h.panes, 'absence was read as a measurement').toEqual([undefined]);
   });
 });

@@ -78,7 +78,44 @@ export interface HistoryTerm {
   onBottom(cb: () => void): void;
   dispose(): void;
 }
-export type MakeHistoryTerm = (host: HTMLElement, lines: number) => HistoryTerm;
+/** What the server measured about the pane this history came out of — the two
+ *  numbers the reader needs to size its own buffer. Absent when the probe was
+ *  not `ok`, and absent is not zero. */
+export interface HistoryPane {
+  history: number;
+  width: number;
+}
+
+/**
+ * HOW MANY ROWS THE READER MUST BE ABLE TO HOLD.
+ *
+ * `capture-pane -J` returns LOGICAL lines, and the reader re-wraps each of them
+ * at its own width: a line stored at `pane.width` columns becomes at most
+ * `ceil(pane.width / cols)` rows here. `-S -N` also returns the visible screen
+ * along with the history above it, so the screen's own rows are added (F13's
+ * shape, one layer up: the screen counts).
+ *
+ * `lines * 3` was the old rule and it was derived from ONE pane at 220 columns
+ * read on ONE phone. The fleet census of 2026-09-14 holds a 302-column window,
+ * where a 43-column reader needs 8 rows per stored line — and xterm answers an
+ * under-provisioned scrollback by silently dropping the oldest history, which
+ * is the half of the read the reader scrolled up for.
+ *
+ * PURE, and exported for its own tests: jsdom cannot measure a row, so the
+ * arithmetic is what can be held still.
+ */
+export function historyScrollback(
+  lines: number,
+  cols: number,
+  rows: number,
+  pane?: HistoryPane,
+): number {
+  if (pane === undefined) return lines * 3;
+  const wrap = cols > 0 ? Math.max(1, Math.ceil(pane.width / cols)) : 1;
+  return pane.history * wrap + rows;
+}
+
+export type MakeHistoryTerm = (host: HTMLElement, lines: number, pane?: HistoryPane) => HistoryTerm;
 
 /** A token's resolved value at attach time — xterm paints to canvas and
  *  cannot read CSS custom properties itself. `undefined` (token missing)
@@ -203,29 +240,30 @@ const defaultMakeTerm: MakeTerm = (host) => {
 /** The history terminal: the same glass, no cursor, no keyboard, and a real
  *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
  *  touch-drag scrolls it, exactly as a console does. */
-export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
+export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
   const term = new Terminal({
     ...glass(),
     cursorBlink: false,
     disableStdin: true,
-    // DERIVED from the number of lines the server actually sent, never a second
-    // constant to keep in step with it. The factor is the WRAP: the capture
-    // arrives as LOGICAL lines (`capture-pane -J`), and a phone renders one of
-    // them as several rows — measured at 500 captured lines becoming 948 rows
-    // at 48 columns (1.9×), against 527 at 220. 3× leaves headroom over the
-    // narrowest phone rather than silently dropping the oldest history.
-    //
-    // NOT because tmux holds the pane's width still: it reflows stored lines on
-    // a horizontal resize (F1, spec §2 — 1853 lines became 9460 at 43 columns
-    // on a measured private socket). An earlier version of this comment said
-    // otherwise. The pane's width is held still by the server's own pin at the
-    // canonical grid, and this factor is about the READER's width, not the
-    // pane's.
+    // A FIRST GUESS, replaced by a measurement below. xterm needs some
+    // scrollback at construction and `term.cols` does not exist until the addon
+    // has fitted against a mounted host, so the real number is set once both
+    // facts are in hand. See `historyScrollback` for what it means, and for the
+    // reflow note this comment used to get wrong.
     scrollback: lines * 3,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
+  const fitTo = fitter(term, fit);
+  /** Fit, then re-derive the buffer at the width that fit produced — so a
+   *  rotation re-sizes the scrollback as well as the grid. */
+  const sized = (): { cols: number; rows: number } => {
+    const grid = fitTo();
+    term.options.scrollback = historyScrollback(lines, grid.cols, grid.rows, pane);
+    return grid;
+  };
+  sized();
   const cellHeight = (): number => {
     const screen = host.querySelector('.xterm-screen');
     const px = screen === null ? 0 : screen.getBoundingClientRect().height;
@@ -246,7 +284,7 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
   });
   return {
     write: (d, done) => term.write(d, done),
-    fit: fitter(term, fit),
+    fit: sized,
     // THE ROW HEIGHT, BY IDENTITY RATHER THAN BY ESTIMATE. The DOM renderer
     // sets `.xterm-screen`'s height to `css.cell.height * rows` exactly, so
     // dividing it back out IS xterm's own cell height — no private API, and no
@@ -355,7 +393,7 @@ type Conn = 'connecting' | 'open' | 'down';
 type Hist =
   | { at: 'live' }
   | { at: 'reading' }
-  | { at: 'history'; text: string; lines: number }
+  | { at: 'history'; text: string; lines: number; pane?: HistoryPane }
   | { at: 'empty'; why: string };
 
 export interface TerminalDrawerProps {
@@ -454,7 +492,14 @@ export function TerminalDrawer({
           });
           return;
         }
-        goHist({ at: 'history', text: r.text, lines: r.lines });
+        // ABSENT IS NOT ZERO, one last time: only a probe that answered `ok`
+        // gives the reader two numbers to size itself by, and an older server
+        // or an unmeasurable pane leaves it on the `lines * 3` fallback that
+        // shipped before either field existed.
+        const pane = typeof r.scrollback === 'number' && typeof r.width === 'number'
+          ? { history: r.scrollback, width: r.width }
+          : undefined;
+        goHist({ at: 'history', text: r.text, lines: r.lines, pane });
       },
       (e: unknown) => {
         if (req !== reqRef.current) return;
@@ -719,7 +764,7 @@ export function TerminalDrawer({
   // coming back to it lands on the pane's newest line, not on a stale screen.
   useEffect(() => {
     if (hist.at !== 'history' || histHost === null) return undefined;
-    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines);
+    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines, hist.pane);
     // THE LATCH, AND STRICTMODE IS WHY IT EXISTS. React runs every effect twice
     // on mount in development: set up, tear down, set up. xterm's
     // `write(data, done)` parses ASYNCHRONOUSLY, so the first mount's `done`
