@@ -1132,6 +1132,57 @@ _hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST refer
   return 0
 }
 
+# ── THE PRE-MUTATION IDENTITY RE-CHECK (spec §3.4, stable lock item 3) ────
+# Item 3 asks the holder to prove its descriptor still names canonical BEFORE
+# EACH MUTATION, not only across its own `flock`. The acquire's paired checks
+# cannot stand in for that, and the gap is MEASURED rather than argued (r3 R1),
+# in a fixture $REG with the SHIPPED acquire on both sides:
+#
+#   holder H acquires (rc 0) and a stranger's `flock -n` on canonical answers
+#   1 — H really holds it. A same-UID actor then UNLINKS canonical and mints a
+#   fresh inode at the same pathname off a private `mktemp` source, exactly as
+#   the acquire itself mints one: inode 1591479 -> 1591427. A second acquirer S
+#   runs the same shipped acquire and GETS IT — rc 0, fd 11, no `WHY` — while H
+#   is still alive and still inside its section. CONTROL, same fixture with the
+#   replacement suppressed: S answers rc 1. So the instrument is real, and the
+#   two processes genuinely hold one pathname's mutex at once.
+#
+# D-2793 refuses a canonical DISAPPEARANCE, and this is a REPLACEMENT: the
+# acquire's `[ -e "$lock" ]` arm is satisfied, the vanished probe never runs,
+# and every identity check the acquire makes compares the NEW inode with
+# itself. Nothing in the acquire CAN see it, because by the time it happens the
+# acquire has returned. Only the holder can, and only by asking again.
+#
+# The check itself is `_hook_lock_same`, unchanged and uncopied — the identity
+# predicate has one definition, and this is a NAME for calling it at a second
+# moment, not a second implementation of it.
+#
+# WHY THERE IS NO ccd TWIN, MEASURED RATHER THAN OMITTED. The same rule was
+# built for `_reg_purge` and then REFUSED on the measurement, because that
+# function has no placement where the check both helps and stays truthful:
+#
+#   - Before its unconditional `_lc_done purge` emit is the only spot where a
+#     refusal can honestly answer 1 ("nothing deleted, no purge fact"), and
+#     there it is ADJACENT to the acquire's own post-`flock` identity check —
+#     nothing runs between them, so it closes a zero-width window.
+#   - Before the unlink loop is where the window is real (the emit's own
+#     `_reg_get` children have run by then), and there NO status in
+#     `_reg_purge`'s vocabulary is true: 1 and 2 both assert no purge fact, 3
+#     asserts the row IS destroyed. A refusal told by any of them fabricates a
+#     cause, which is the defect D-2782 was minted to end.
+#   - Measured, the before-emit form also reds two shipped guards that exist on
+#     purpose: `ccd-lifecycle-purge`'s "the acquisition is the ONE statement
+#     before the unconditional emit" (nothing there may GATE the purge) and
+#     this suite's canonical-write census, which read the guard's own release
+#     as an early unlock and reported two later unlinks as lock-free.
+#
+# So the ccd side's residual is STATED rather than closed: a canonical
+# replacement landing between `_reg_purge`'s emit and its unlinks is not
+# refused today, and closing it needs a fourth status and four caller arms.
+_hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the canonical inode
+  _hook_lock_same "${1-}" "$REG/.$id.compactions.lock"
+}
+
 # ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
 # Called from the very end of this file, AFTER the hookstate rename: the
 # `working` stamp lands first and never waits on the helper (Task 6's sole
@@ -1175,6 +1226,9 @@ _hook_compact_pre() {
   if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then
     CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
   fi
+  # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
+  # the acquire and here, so this is a fresh moment and it gets a fresh proof.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
   [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
   # THE SWEEP — EXACT FAMILY, age-gated, under this held lock. A hook killed
   # between a temp write and its rename leaves a dot-leading private file
@@ -1186,6 +1240,10 @@ _hook_compact_pre() {
   # which matters inside a held lock section — and each basename is then
   # matched against the exact family grammar.
   aged=$(find "$REG" -maxdepth 1 -name ".$id.*" -mmin "+$mins" 2>/dev/null) || aged=""
+  # ITEM 3 again: the `find` above is a synchronous child, which is exactly the
+  # window a replacement lands in. One proof covers the whole loop because the
+  # loop forks nothing.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
   while IFS= read -r cand; do
     [[ -n "$cand" ]] || continue
     suffix="${cand##*/}"; suffix="${suffix#".$id."}"
@@ -1217,6 +1275,9 @@ _hook_compact_pre() {
         built:(if $built=="" then null else $built end),
         fresh:(if $fresh=="" then null else $fresh end),
         steered:false, files:null, stats:null}' 2>/dev/null) || { _hook_lock_release "$lockfd"; return 0; }
+  # ITEM 3, the third: `date` and `jq` both ran since the last proof, and this
+  # is the section's one canonical PUBLICATION.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
   _hook_write_atomic "$set" "$nonce" "$doc" || { _hook_lock_release "$lockfd"; return 0; }
   # RELEASE BEFORE THE HELPER FORK (spec §3.1, round 6/7). A held `flock`
   # descriptor is inherited across fork/exec in bash — measured, an exec'd
@@ -1296,6 +1357,13 @@ _hook_compact_pre() {
   # never be. A sibling that published its own verdict while the helper ran
   # owns the slot now, and this arm publishes NOTHING over it.
   IFS= read -r -N 4096 ownhead 2>/dev/null < "$set"
+  # ITEM 3, before the two renames: the reacquire proved identity at ITS
+  # moment, and the whole helper window sat before it. The disposition is this
+  # arm's own — drop this process's stages, publish nothing.
+  if ! _hook_lock_still_canonical "$lockfd"; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
   if [[ "$ownhead" =~ \"nonce\":\"([^\"]+)\" ]] && [[ "${BASH_REMATCH[1]}" == "$nonce" ]]; then
     # STEP 13. CARD BEFORE SET, one uninterrupted section. In stage 2 the print
     # and the `steered` stamp sit between these two renames; Plan A runs
@@ -1383,6 +1451,13 @@ _hook_compact_post() {
     # point: HARD LINKS SHARE MTIME (measured), so a `touch` taken while both
     # names still point at one inode would age canonical too, and a sibling's
     # overlap check would then read this settled compaction as still in flight.
+    # ITEM 3, before the settlement's own two mutations: a `find` ran just
+    # above for the age measurement, so the proof is taken again here. The
+    # disposition is the one the `rm` failure below already uses.
+    if ! _hook_lock_still_canonical "$lockfd"; then
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
     if ! rm -f "$set" 2>/dev/null; then
       # Only the VERIFIED claim goes; canonical's bytes and mtime are untouched.
       rm -f "$claim" 2>/dev/null || true
@@ -1591,6 +1666,11 @@ _hook_compact_post() {
   elif [ -e "$journal" ] || [ -L "$journal" ]; then
     _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
   fi
+  # ITEM 3, before the journal commit: this section reacquired, then read and
+  # wrote a private stage through several synchronous children. Same handler as
+  # a failed `mv`, because the outcome is the same one — nothing committed, and
+  # this arm's own residue cleaned up.
+  _hook_lock_still_canonical "$lockfd" || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
   mv -f "$stage" "$journal" 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
   # COMMITTED. Claim and marker cleanup happens ONLY here, under the
   # successfully reacquired and validated lock — never on a failure path.
@@ -1710,6 +1790,11 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
   [[ -f "$f" && -r "$f" ]] || return 0
   command -v find >/dev/null 2>&1 || return 0
+  # ITEM 3 in the retained-lock body. `HOOK_LOCK_FD` is the descriptor the
+  # caller acquired and still holds; this function has no local for it. On a
+  # failed proof the arm says nothing and the caller releases, which is this
+  # body's own disposition on every other refusal.
+  _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
   [ -n "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || { rm -f "$f"; return 0; }
   # ARGUED, UNPINNABLE (fix-round M3): measured on this box, deleting this
   # guard changes nothing observable — a missing/unreadable `$set` makes the
@@ -1771,6 +1856,9 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   # 2 above validated it before step 3 claims.
   claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"
   ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  # ITEM 3 again: `find` and the nonce read sit between the proof above and
+  # this one, and this is where canonical actually moves.
+  _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
   if ! { mv -f "$f" "$claim"; } 2>/dev/null; then
     { rm -f "$claim"; } 2>/dev/null || true
     return 0
