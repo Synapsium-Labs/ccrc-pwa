@@ -88,6 +88,30 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
     expect(h.reg(id, 'uuid'), 'nothing was actually removed').not.toBeNull();
   });
 
+  it('reclaims the TWO TRANSITION LEGACY GRAMMARS, which begin with a pid and match no target family', () => {
+    // §3.4's transition allowance names `<pid>.<id>.compactset.tmp` and
+    // `<pid>.compactcard-claim.tmp`. `_hook_family_sweepable` carried them and
+    // `_ws_private_family` did not, and every arm there requires the FAMILY
+    // word first — so a row upgraded across the deploy that carried legacy
+    // residue and was then purged kept it FOR EVER: the purge's private loop
+    // skipped it, and no PreCompact runs for a destroyed row.
+    const id = seed('demo-quiet-basin');
+    const REGD = path.join(h.home, '.cc-sessions');
+    const legacy = [`.${id}.999.${id}.compactset.tmp`, `.${id}.999.compactcard-claim.tmp`];
+    for (const n of legacy) fs.writeFileSync(path.join(REGD, n), '');
+    // A NEIGHBOUR's legacy residue, so the reclamation is not a substring
+    // sweep: the same two grammars under a DOTTED nested id share this id's
+    // `.<id>.` prefix exactly and must survive.
+    const neighbour = `.${id}.x-y.999.compactcard-claim.tmp`;
+    fs.writeFileSync(path.join(REGD, neighbour), '');
+    expect(h.sh(`_reg_purge ${id}; echo "rc=$?"`), 'the purge took everything it owns').toContain('rc=0');
+    for (const n of legacy) expect(fs.existsSync(path.join(REGD, n)), `legacy reclaimed: ${n}`).toBe(false);
+    expect(fs.existsSync(path.join(REGD, neighbour)), 'a nested id\'s legacy residue is not ours').toBe(true);
+    // Only the permanent lock (and the stranger) is left standing.
+    expect(fs.readdirSync(REGD).filter((n) => n.startsWith(`.${id}.`) && n !== neighbour))
+      .toEqual([`.${id}.compactions.lock`]);
+  });
+
   it('CONTROL: the same purge with a working `rm` returns ZERO and takes the row', () => {
     const id = seed();
     const out = h.sh(`_reg_purge ${id}; echo "rc=$?"`);

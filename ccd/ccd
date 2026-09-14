@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e456e506202c537fdd8e9d8d56877c66c86873c0688f73d8e09feb9f7bc7cae3
+# ccrc:generated 1 sha256=3a301c50ce44c392e52bf8c6d05ad3ee77bd2e20fb4ed40d56c4fa155070a39a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4324,6 +4324,53 @@ _ws_private_family() {   # <suffix after the literal `.<id>.` strip> -> 0 iff it
     compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
     compactions-stage.*|compactions-snapshot.*) return 0 ;;
     generation-init.*|generation-read.*) return 0 ;;
+    # ── THE TRANSITION ALLOWANCE, exactly the two legacy grammars ────────
+    # `_hook_family_sweepable` (`ccd/session-hook.sh`) already carries these,
+    # but that sweep runs only from a LIVE row's PreCompact. Without them here,
+    # a row upgraded across the D-2605 deploy that carries legacy residue and is
+    # then purged by `ws-rm`, `forget` or `ws-gc --prune` keeps
+    # `$REG/.<id>.<pid>.<id>.compactset.tmp` (or the claim) FOR EVER: the purge's
+    # private-family loop skips it, and no PreCompact will ever run for that id
+    # again. Both begin with the pid, so no target-family arm above can match
+    # them — every one of those requires the family word first.
+    #
+    # BLOCKING SLUG REUSE ON THEM IS CORRECT, not a side effect to be split
+    # away. This predicate answers one question — "is this dot-leading name
+    # private residue of a row that did not finish?" — and legacy residue is
+    # residue: a slug handed back while it stands is handed back with a
+    # stranger's claim on it, which is the whole property the dot-leading pass
+    # exists to establish. The cost is the same bounded one the header above
+    # already discloses (a slug, recycled by ws-reap, with `ws-add` naming the
+    # file), and it is paid only inside the upgrade window.
+    #
+    # ANCHORED ON THE DECIMAL PID, not a bare `*`. MEASURED while writing this:
+    # the bare `*.compactcard-claim.tmp` arm — which is what
+    # `_hook_family_sweepable` still carries — makes `_reg_purge` of
+    # `demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`,
+    # a DOTTED NESTED id's legacy residue, because after the literal `.<id>.`
+    # strip that basename still ends in the grammar. That is the exact cross-id
+    # hazard the `*.*` skip on the dot-free pass exists to prevent, reintroduced
+    # through the transition allowance. A legacy name's first component is the
+    # WRITER'S PID, and a nested id's first component is the rest of its id, so
+    # requiring a pure decimal head separates them.
+    #
+    # The claim grammar is pinned EXACTLY — decimal head, then the grammar and
+    # nothing else. The set grammar carries the id in the middle and cannot be,
+    # so one contrived collision remains and is stated rather than hidden: an id
+    # whose own trailing component is all digits (project `demo-quiet-basin.99`,
+    # slug `9`) presents a decimal head after this id's strip. Legal, and its
+    # cost is one reclaimed legacy tmp of a neighbour, inside the upgrade window.
+    *.compactcard-claim.tmp)
+      # The grammar itself carries a dot, so "exactly two components" is the
+      # wrong exactness test here — measured, it rejected the real
+      # `999.compactcard-claim.tmp`. What exactness means is that everything
+      # after the head IS the grammar.
+      [[ "${1#*.}" == "compactcard-claim.tmp" ]] || return 1
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;                            # `<pid>.compactcard-claim.tmp`
+    *.compactset.tmp)
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;                            # `<pid>.<id>.compactset.tmp`
   esac
   return 1
 }

@@ -1478,6 +1478,22 @@ names TWO legacy grammars, not one:** the hook set temp's two-id-occurrence `<pi
 just derived, and the SessionStart claim's `<pid>.compactcard-claim.tmp`. It never uses an old `*compact*.tmp`,
 generic pid/tmp, or broad glob matcher, and no new writer emits a legacy name.
 
+**EXACT PURGE COVERS THE LEGACY GRAMMARS TOO (D-2801).** The PreCompact sweep is not the only reclaimer, and it
+is the one that stops running first: a row upgraded across this deploy carrying legacy residue and then
+destroyed by `ws-rm`, `forget` or `ws-gc --prune` has no further PreCompact, so anything `_reg_purge`'s
+private-family loop does not recognise stands for ever. Both legacy grammars therefore also belong to
+`_ws_private_family`, whose target-family arms all require the family word FIRST and so matched neither.
+Blocking slug reuse on legacy residue — which that predicate also answers for — is CORRECT and not a side
+effect to be split away: the property it establishes is that a partially-purged id is never reused as a clean
+one, and legacy residue is residue. **The legacy arms are anchored on a DECIMAL PID** rather than a bare `*`,
+which the sweep's own matcher is not: measured, a bare `*.compactcard-claim.tmp` makes a purge of
+`demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`, a DOTTED NESTED id's legacy
+residue, because after the literal `.<id>.` strip that basename still ends in the grammar. A legacy name's
+first component is the writer's pid and a nested id's is the rest of its id, which is what separates them; the
+claim grammar is pinned exactly (decimal head, then the grammar and nothing else), the set grammar carries the
+id in the middle and cannot be, so one contrived collision remains — an id whose own trailing component is all
+digits — and it is stated rather than hidden.
+
 The marker source grammar is deliberately disjoint from the final marker grammar while carrying the already
 validated nonce verbatim. After `link "$source" "$marker"`, unlink the owned source on success, on `EEXIST`
 after validating the exact same-nonce final marker, and on every handled failure. Crash before or after link

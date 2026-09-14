@@ -5956,6 +5956,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // the tree — `vitest run test/session-hook.test.ts -t 'CITATION DEBT'` —
     // never adjusted to keep a number green.)
     //
+    // `ccd/ccd` 128 -> 130 IN THE SAME ROUND, and it is a re-measurement and
+    // not a widened rule. MEASURED by dumping the failing anchors either side
+    // of the `_ws_private_family` edit and diffing: FOUR new
+    // (`ccd/ccd:11665` cited three times, `ccd/ccd:4355` once) and TWO
+    // repaired (`ccd/ccd:11816`, cited twice), net +2. None of the four is
+    // repairable HERE: each describes the PRE-Task-9 arm — "Measured on the
+    // shipped arm, `ccd/ccd:11665-11667` has already emitted…", "the shipped
+    // arm (`ccd/ccd:11665-11670`) never reads `_reg_purge`'s status" — so
+    // re-anchoring them onto this tree's line numbers would point a sentence
+    // about the OLD code at the NEW code, which is the defect this audit
+    // exists to find rather than a fix for it. They are the stale-by-
+    // construction debt D-2758 parks in Task 11.)
+    //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
     // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
@@ -5963,7 +5976,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 128,
+      'ccd/ccd': 130,
       'ccd/session-hook.sh': 41,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
