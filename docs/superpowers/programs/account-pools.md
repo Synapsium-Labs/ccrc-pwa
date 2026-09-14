@@ -6598,3 +6598,67 @@ its reason written down rather than deferred to the other.
 They also named the thing worth generalising: having the measurement, they would have stopped at "we
 were both wrong". Asking **why we were both wrong in the same direction** is what found the sentence —
 and that was a better finding than the probe that produced it.
+
+---
+
+## 2026-09-14 06:2x UTC — the merge order INVERTED: run 44 landed first, so I paid the integration
+
+**PR #92 merged at 06:15:48Z as `5480fea8`** — one minute after I handed the operator both links. We had
+agreed wave 5 lands first and run 44 pays the integration; the opposite happened, so the conflict became
+mine. PR #95 went `CONFLICTING` / `DIRTY`, which is how the operator found it.
+
+**A mistake of mine, stated plainly.** My first attempt chained `cd` into a `git worktree add` that FAILED
+(`ws/clear-meadow` is already checked out by the worker's own worktree). The `cd` failed, the rest of the
+compound command ran in the coordinator checkout, and **`git merge origin/main` landed on `ws/amber-summit`**
+— my own ledger branch. Local only, clean, ledger intact. I kept it rather than reach for a destructive
+undo: this branch was known-stale (the documented coordinator-drift hazard), so merging main in fixes
+that. Reversible if the operator prefers. The lesson is narrow and mechanical: **guard `cd` with `&&`**,
+or a failed directory change silently re-points every command after it.
+
+**The conflict was byte-identical to the one both sides analysed, with the SIDES SWAPPED.** Hashing the
+four hunk-sides against yesterday's simulation: now-side0 == yesterday-side1 and vice versa, both hunks
+(276 and 313 lines). Same two contents, opposite orientation, because the merge direction reversed. Both
+traps applied unchanged — trap 1 resolved to MY superset `ProjectCard` import plus THEIR `runWords` line;
+trap 2's lifted closers re-inserted between the blocks.
+
+**Verified five ways, two of which reproduce run 44's own figures:**
+
+| check | result |
+|---|---|
+| brace balance of resolved file | **0** |
+| title set | base 58, mine 84, theirs 76 → union **102**; resolved file **102**, set-equal — nothing lost or invented (run 44's number, third derivation, third method) |
+| full `pwa` suite on the merged tree | **84 files / 2487 passed**, Type Errors none — run 44's exact figures |
+| mechanical proof | `diff-tree` vs a pure `merge-tree e9dd490a origin/main` lists **one** path — every other file took git's own resolution unedited, so no evil merge hides in the other eight |
+| fast-forward | `e9dd490a` is an ancestor of `175668b0` |
+
+Pushed as **`175668b0`**; PR #95 is **MERGEABLE** again.
+
+### Run 44's four look-here items, run on MY merged tree — all NO FINDING
+
+They named four things a green merged suite cannot cover, and they now apply to my tree rather than
+theirs. I ran them rather than letting 2487 green stand in for them.
+
+1. **The optional `abroad` prop.** Props at the single production `<ProjectCard>` call site: wave 5 **17**,
+   main **15**, merged **18** — *exactly* the union, nothing lost from either side, nothing invented.
+   **And I nearly reported this as a dead feature**: `grep -A12` could not reach past a ~25-line comment
+   block, so `abroad=` looked absent on every ref. It is at `:692`. That is "a negative search proves what
+   you searched" for the third time in this exchange, in a third costume — a *window* too small rather
+   than a *pattern* too narrow. Caught before sending, unlike the first two.
+2. **The merged FleetScreen placement path.** The merge's only deletion in that file is an import line
+   replaced by its own superset (`+ runHomeProject`). Nothing of mine was dropped; `placementFor`,
+   `refreshProjects`, `poolSelectionFor` and D-2722's keep-clause survive byte-identically.
+3. **fleet-css selector list.** wave 5 **76**, main **68**, merged **79** = the union exactly.
+4. **Standalone contrast audit, not either side's total** — and baselined against BOTH parents, which is
+   the whole point of running it standalone:
+
+   | ref | measured | problems | uncovered | rules |
+   |---|---|---|---|---|
+   | `e9dd490a` (wave 5) | 368 | 0 | 255 | 842 |
+   | `origin/main` (run 44) | 366 | 0 | 255 | 840 |
+   | **`175668b0` (merged)** | **388** | **0** | **255** | 854 |
+
+   `uncovered` is **identical on all three** — a standing baseline, not a merge regression — while
+   `measured` rises above both parents. The merge added grounded surface and zero blind spots.
+
+CI on `175668b0`: `build-pwa`, `test (agent)`, `test (pwa)` green; `test (server)` and `test-macos`
+still running. `reviewDecision` remains `REVIEW_REQUIRED` — the same human gate, untouched by any of this.
