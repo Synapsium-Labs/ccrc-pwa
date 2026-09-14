@@ -391,6 +391,12 @@ export function TerminalDrawer({
   const gridRef = useRef({ cols: 80, rows: 24 });
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
+  /** WHICH READ, not merely "a read is running". `reading` is a state and two
+   *  reads share it: a reader who leaves the history and opens it again has two
+   *  requests in flight, and the old guard admitted whichever RESOLVED last —
+   *  painting a history captured before they left. A number that only ever goes
+   *  up gives each response an identity to be checked against. */
+  const reqRef = useRef(0);
   const kbInset = useKeyboardInset({ active: open });
   /** Live, or one of the three history states — the only distinction the key
    *  bar's door and its legend turn on. */
@@ -412,10 +418,16 @@ export function TerminalDrawer({
    */
   const openHistory = (): void => {
     if (histRef.current.at !== 'live') return;
+    reqRef.current += 1;
+    const req = reqRef.current;
     goHist({ at: 'reading' });
     void api.paneHistory(id).then(
       (r) => {
-        if (histRef.current.at !== 'reading') return;
+        // THE ANSWER HAS TO BE THE ONE THAT WAS ASKED FOR. The state check
+        // stays — a reader who typed their way back to live wants no layer at
+        // all — and the identity check is what keeps a stale answer from
+        // standing in for a newer one.
+        if (req !== reqRef.current || histRef.current.at !== 'reading') return;
         // NOTHING ABOVE THE SCREEN IS NOT A HISTORY. `capture-pane` answers
         // with the visible screen even when no line has ever scrolled off, so
         // a successful read alone would put up a second copy of what the
@@ -445,6 +457,7 @@ export function TerminalDrawer({
         goHist({ at: 'history', text: r.text, lines: r.lines });
       },
       (e: unknown) => {
+        if (req !== reqRef.current) return;
         // WHY, not just "failed": a dead pane and an unreachable box are
         // different facts to the reader, and the server already told them
         // apart. `ApiError.body` carries the route's own word for it.

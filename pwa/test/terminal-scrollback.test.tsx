@@ -1645,3 +1645,95 @@ describe('the history terminal survives being disposed mid-parse', () => {
       'the parse callback scrolled a terminal the effect had already disposed').toBe(false);
   }, 20_000);
 });
+
+describe('the newest read wins', () => {
+  it('a stale answer cannot overwrite a newer one', async () => {
+    // `reading` is a STATE, not a request identity. Sequence: open (read A in
+    // flight), return to live, open again (read B). Both land in `reading`, so
+    // the old guard admits whichever RESOLVES last — and A resolving after B
+    // paints the reader a history captured before they left. Two distinct
+    // bodies make the difference visible.
+    const bodies = [
+      { ok: true, text: 'STALE-A\n', lines: 2000 },
+      { ok: true, text: 'FRESH-B\n', lines: 2000 },
+    ];
+    const gates: Array<() => void> = [];
+    let n = 0;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => {
+      const body = bodies[n] ?? bodies[1]!;
+      n += 1;
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      return new Response(JSON.stringify(body), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const t = fakeTermFactory();
+    const h = fakeHistoryFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={h.makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+
+    act(() => { t.wheel(-120); });                  // read A starts
+    await waitFor(() => expect(gates).toHaveLength(1));
+    act(() => { t.type('x'); });                    // a keystroke returns to live
+    act(() => { t.wheel(-120); });                  // read B starts
+    await waitFor(() => expect(gates).toHaveLength(2));
+
+    // B answers first, then the stale A.
+    await act(async () => { gates[1]!(); await flush(); });
+    await act(async () => { gates[0]!(); await flush(); });
+
+    expect(h.write.mock.calls.map((c) => c[0]),
+      'a read the reader had already left overwrote the one they asked for')
+      .toEqual(['FRESH-B\r\n']);
+  });
+
+  it('a stale FAILURE cannot put up a notice over a newer success either', async () => {
+    const gates: Array<(v: Response) => void> = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
+      new Promise<Response>((resolve) => { gates.push(resolve); }));
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const t = fakeTermFactory();
+    const h = fakeHistoryFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={h.makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+
+    act(() => { t.wheel(-120); });
+    await waitFor(() => expect(gates).toHaveLength(1));
+    act(() => { t.type('x'); });
+    act(() => { t.wheel(-120); });
+    await waitFor(() => expect(gates).toHaveLength(2));
+
+    await act(async () => {
+      gates[1]!(new Response(JSON.stringify(OK_HISTORY), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }));
+      await flush();
+    });
+    await act(async () => {
+      gates[0]!(new Response(JSON.stringify({ ok: false, error: 'gone' }), {
+        status: 404, headers: { 'content-type': 'application/json' },
+      }));
+      await flush();
+    });
+
+    expect(screen.queryByText(/no history/), 'a stale failure covered a live history').toBeNull();
+    expect(historyDoor()?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
