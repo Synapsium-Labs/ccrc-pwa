@@ -2804,6 +2804,58 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(again).not.toContain('graphify card');
   });
 
+  // ── §3.3 step 2's SAFE-NONCE GATE, its REJECTION leg ───────────────────
+  // Replacing the gate with `:` left session-hook at 260/260 (mutant M21), and
+  // the line IS executed — changing its anchor from `$` to `\z` reds 8 tests
+  // (M22) — so the rejection leg was genuinely unpinned rather than dead code.
+  // What it gates is a PATH COMPONENT: the nonce is interpolated into the
+  // claim name and into the marker and its source, so a nonce carrying `/` or
+  // `..` names a path OUTSIDE `$REG`. No code change — the gate is correct; the
+  // fixture is what was missing.
+  const everyFileUnder = (dir: string): string[] => {
+    const out: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory() && !e.isSymbolicLink()) walk(f); else out.push(f);
+      }
+    };
+    walk(dir);
+    return out;
+  };
+
+  it.each([
+    ['a path traversal', '../../escape'],
+    ['a trailing-`z` near-miss', 'compact-1-2-3-4z'],
+    ['an embedded slash', 'compact-1-2-3/4'],
+  ])('REFUSES to serve on %s nonce — no card, no claim anywhere under $HOME, no marker', (_label, badNonce) => {
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT, { setNonce: badNonce, nonce: badNonce });
+    const before = fs.readFileSync(cardFile());
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out, 'nothing was served').not.toContain('graphify card');
+    // CONSUME-ONCE IS NOT TRIGGERED EITHER: the gate precedes the atomic claim,
+    // so the card is neither claimed nor deleted.
+    expect(fs.readFileSync(cardFile()), 'the card is untouched').toEqual(before);
+    // THE WHOLE OF $HOME, not just `$REG` — the point of the gate is that an
+    // unsafe component names a path this arm never intended to write.
+    expect(everyFileUnder(home).filter((f) => f.includes('session-claim.tmp')),
+      'no claim was created anywhere').toEqual([]);
+    expect(everyFileUnder(home).filter((f) => f.includes('compactserved')),
+      'no marker and no marker source, anywhere').toEqual([]);
+  });
+
+  it('CONTROL: the SAME fixture with a well-formed nonce serves, claims and marks', () => {
+    // Without this the legs above could be a fixture that never serves for some
+    // other reason — a stale card, a missing set, a broken plant.
+    const tree = cardTree();
+    plantPair(1, CARD_TEXT);
+    const out = cardChecked(compactStart(tree, '/t.jsonl'));
+    expect(out, 'the same fixture DOES serve when the nonce is safe').toContain('graphify card');
+    expect(fs.existsSync(cardFile()), 'and the card is consumed').toBe(false);
+    expect(markers(), 'and exactly one marker is published').toHaveLength(1);
+  });
+
   it('EEXIST at the marker is idempotent ONLY after the incumbent validates (§3.3 step 5)', () => {
     // The arm published its marker with `link "$src" "$marker" || true` and
     // then dropped the source UNCONDITIONALLY. If the pathname is already
