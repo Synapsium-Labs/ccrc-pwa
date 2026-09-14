@@ -3741,7 +3741,11 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   // it is counted rather than trusted.
   it('THE ACQUIRE-SITE CENSUS: the numerals in the prose are the numbers in the source', () => {
     const hookSrc = fs.readFileSync(HOOK, 'utf8');
-    const ccdSrc = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccd'), 'utf8');
+    // THROUGH `CCD`, never a second spelling of the path: `single-definition`
+    // allows exactly one file in the test tree to name the ccd script, and it
+    // is `ccdWsHelpers.ts`. (Measured — this line spelled it directly for one
+    // commit and reds that rule in chunk 03.)
+    const ccdSrc = fs.readFileSync(CCD, 'utf8');
     const specSrc = fs.readFileSync(path.resolve(__dirname,
       '../../docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md'), 'utf8');
     // CALL SITES, not the definition: the trailing quote is what separates
