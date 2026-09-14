@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the usage accounting sweep every 30 minutes (routing spec 2026-09-14 §6)
+[Timer]
+# `OnActiveSec=`, for ccd-telemetry-keepalive.timer's reason: this unit is first
+# armed by a deploy on a box that has been up for days, and the first pass should
+# land after the supervisor sweep, not on top of it. It spends no tokens, so the
+# stakes are lower than the keepalive's; the anchor is still the honest one for a
+# unit in the per-user manager.
+OnActiveSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

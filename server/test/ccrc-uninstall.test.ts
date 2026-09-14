@@ -120,6 +120,10 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
   // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
+  // Routing slice 0 Task 7: the usage-accounting sweep's runner and scanner,
+  // on the sweep's exact terms — a bash driver plus its Python engine.
+  writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
   // spec 2026-09-07 §C: the sixth `_inst_bins` executable (account-health,
   // just above, already took the fifth).
@@ -154,6 +158,9 @@ function plantInstalledBox(home: string): void {
     'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+    // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
+    // terms as the graph sweep above it.
+    'ccd-usage-sweep.service', 'ccd-usage-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -343,6 +350,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -494,7 +502,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }

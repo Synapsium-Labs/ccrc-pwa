@@ -112,6 +112,12 @@ export const TREE_FILES = [
   // role-gated, per `_inst_units`/`_inst_enable`. NB fixture INPUT only — the
   // assertions that make this land are in the two suites, not here.
   'ccd/ccd-telemetry-keepalive',
+  // Routing slice 0 Task 7: the usage-accounting sweep's runner and its
+  // scanner, shipped beside the other three on the non-Darwin arm. Two files,
+  // not one — the runner is a thin bash driver, the scanner is the Python
+  // engine Task 6 landed, and `_inst_bins` places both under this name each.
+  'ccd/ccd-usage-sweep',
+  'ccd/ccd-usage-sweep.py',
   // The account-connection helper `ccd account-pane` execs. `_inst_bins`
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.

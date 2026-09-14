@@ -1,0 +1,12 @@
+[Unit]
+Description=Usage accounting sweep — de-duplicated transcript totals (routing spec 2026-09-14 §6)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-usage-sweep
+# budget: a full 7-day scan of every lane's transcripts is well under a minute on
+# the fleet box (the 30-day survey took ~4 minutes single-threaded); a pass past
+# this is wedged, not slow.
+TimeoutStartSec=900
+# the scanner holds one dict of deduped records; the 30-day survey peaked well
+# under 1G. A sweep must never be the thing that OOMs the fleet host.
+MemoryMax=2G
