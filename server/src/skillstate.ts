@@ -50,7 +50,7 @@ export const COORDINATOR_SKILL_DIR = 'ccrc-coordinator';
 /** The directory `ccd/install-reviewer-skill.sh` writes, same parent. */
 export const REVIEWER_SKILL_DIR = 'ccrc-reviewer';
 
-/** THE join — one, still. The file both installers' `REQUIRED_FILES` name. */
+/** THE join — one, still. The file all three installers' `REQUIRED_FILES` name. */
 export function skillPath(configDir: string, skillDir: string): string {
   return path.join(configDir, 'skills', skillDir, 'SKILL.md');
 }

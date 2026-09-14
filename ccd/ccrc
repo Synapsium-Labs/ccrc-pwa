@@ -5426,10 +5426,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6613),
   # `_inst_hooks` (:6812), `_inst_skills` (:6850) and `_inst_graphify_skill` (:6865) take
   # no arguments by contract and converge EVERY rostered home; this verb has one home to
-  # provision, and the four standalone scripts all take `--homes <dir>…`
+  # provision, and the five standalone scripts all take `--homes <dir>…`
   # (install-session-hooks.sh:63, and the identical line at
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
-  # install-graphify-skill.sh:77). So the scripts are called directly,
+  # install-reviewer-skill.sh:31, install-graphify-skill.sh:77). So the
+  # scripts are called directly,
   # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
@@ -5477,10 +5478,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   fi
   # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's — `_inst_hooks`'
   # rule (:6799-6804): "the INSTALLED copy, never the one in the tree … It is also the
-  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER:
-  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6841-6844).
+  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER
+  # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
+  # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-graphify-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -10333,7 +10335,8 @@ _inst_hooks() {
 # THE COORDINATOR GOES FIRST, for deploy.sh's reason: the worker skill carries
 # no `references/` of its own and points a live worker at the coordinator's
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
-# skills side by side under one config dir).
+# skills side by side under one config dir) — and the reviewer skill, third,
+# points into the same tree.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -10342,13 +10345,13 @@ _inst_hooks() {
 _inst_skills() {
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator and ccrc-worker in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker and ccrc-reviewer in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -11497,11 +11500,12 @@ _uninst_cc_sessions() {
   fi
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/install-reviewer-skill.sh" \
     "$reg/install-graphify-skill.sh" \
     || _ccrc_die "removing ccrc's files under $reg failed"
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the three skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

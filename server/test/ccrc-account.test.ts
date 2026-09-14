@@ -2150,9 +2150,9 @@ function plantUpstream(home: string): void {
   writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
 }
 
-/** The four standalone installers, as ARGV RECORDERS at the installed path
+/** The five standalone installers, as ARGV RECORDERS at the installed path
  *  `_acct_provision` must reach them by. Recorders rather than the real
- *  scripts because three of the four need a box this fixture is not
+ *  scripts because four of the five need a box this fixture is not
  *  (`install-graphify-skill.sh` assembles from a pinned venv, :12-20) — and
  *  because the property under test is that each is invoked once, in order,
  *  scoped to the one new home. The settings.json merge gets the REAL script in
@@ -2169,7 +2169,7 @@ function plantInstallers(home: string): void {
   const d = join(home, '.cc-sessions');
   mkdirSync(d, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
-    'install-worker-skill.sh', 'install-graphify-skill.sh']) {
+    'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh']) {
     writeFileSync(join(d, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
       { mode: 0o755 });
@@ -2802,14 +2802,15 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(readFileSync(join(home, '.claude-lab-dev0', 'settings.json'), 'utf8'))
       .not.toContain(CANARY);
 
-    // FOUR CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker.
-    // This is also the step list Task 26 turns into an answer key: at THIS
-    // commit `ACCT_PROVISIONED` is written and not yet read, and the recorder
-    // is what measures it.
+    // FIVE CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker
+    // before reviewer. This is also the step list Task 26 turns into an
+    // answer key: at THIS commit `ACCT_PROVISIONED` is written and not yet
+    // read, and the recorder is what measures it.
     expect(installerCalls(home)).toEqual([
       `install-session-hooks.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-coordinator-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-worker-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-reviewer-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
     ]);
   });
@@ -2831,7 +2832,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(4);
+    expect(installerCalls(home).length).toBe(5);
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -2940,7 +2941,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'));
     for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
-      'install-graphify-skill.sh']) {
+      'install-reviewer-skill.sh', 'install-graphify-skill.sh']) {
       writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -3231,11 +3232,12 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       ['disabled', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
     expect(j['id']).toBe('lab-dev0');
     expect((j['roster'] as { accounts: unknown[] }).accounts.length).toBe(4);
-    // Task 25's step list, now an answer key — the four installers plus the env
-    // merge, in the order `_acct_provision` ran them. `settings-env` is the
-    // WROTE token: this lane has an endpoint, so the merge produced a file.
+    // Task 25's step list, now an answer key — the five installers plus the
+    // env merge, in the order `_acct_provision` ran them. `settings-env` is
+    // the WROTE token: this lane has an endpoint, so the merge produced a file.
     expect(j['provisioned']).toEqual([
-      'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+      'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill',
+      'reviewer-skill', 'graphify-skill',
     ]);
   });
 
@@ -3269,7 +3271,8 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     expect(oneObject(r)['provisioned']).toEqual([
-      'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+      'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
+      'reviewer-skill', 'graphify-skill',
     ]);
   });
 
@@ -3288,7 +3291,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('5 2');
+    expect(r.stdout.trim()).toBe('6 2');
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
@@ -3645,7 +3648,8 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       const r = run(home, addArgs(), `${CANARY}\n`);
       expect(r.code, r.stderr).toBe(0);
       expect(oneObject(r)['provisioned']).toEqual([
-        'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+        'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
+        'reviewer-skill', 'graphify-skill',
       ]);
       // The bytes are untouched — the converge arm returns before the backup, so
       // this is also the idempotence claim `_acct_settings_env` makes for itself.

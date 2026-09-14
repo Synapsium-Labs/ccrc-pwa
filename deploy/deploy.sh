@@ -815,6 +815,15 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/worker-skill/ "$BOX":.cc-sessions/worker-skill/
   install_atomic ccd/install-worker-skill.sh .cc-sessions/install-worker-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-worker-skill.sh'
+  # THE REVIEWER SKILL SHIPS THIRD (design 2026-09-14 §8). Like the worker's,
+  # its SKILL.md carries no references of its own and points a live reviewer at
+  # the coordinator's installed tree by relative path, so it lands after that
+  # lane for the worker's reason. server/test/install-reviewer-skill.test.ts
+  # pins the order against both run lines above.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/reviewer-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/reviewer-skill/ "$BOX":.cc-sessions/reviewer-skill/
+  install_atomic ccd/install-reviewer-skill.sh .cc-sessions/install-reviewer-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-reviewer-skill.sh'
   # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER both
   # roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
