@@ -29,7 +29,7 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 | 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | run 34 | opened 2026-09-07 03:15 UTC — same workspace `clear-meadow`, reclaimed (`released:false` on run 33's close is correct: 34 already held it); **dispatched 2026-09-07 09:16 UTC** — `resumed:true`, `/clear` injected, `briefQueued:true`, `skillState:present`, 8 items. The six-hour open-to-dispatch gap is this coordinator pane being compacted between the two acts, not a machinery stall: an open run holds its workspace indefinitely and nothing expires |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
 | 4 | PWA: `accountPool`, `splitByPool`, `PoolSheet`, chips, sheets, store slot. Defines no deviation. | — | not opened |
-| 5 | README, `CLAUDE.md`, `config.ts` / `ccd` comment corrections. | — | not opened |
+| 5 | README, `CLAUDE.md`, `config.ts` / `ccd` comment corrections. | — | **run 47, opened 2026-09-14 11:3x UTC** — wave 6/6, `planned`, workspace `clear-meadow`, opened BEFORE run 43 closed |
 
 ## Decisions & deviations
 
@@ -6662,3 +6662,53 @@ theirs. I ran them rather than letting 2487 green stand in for them.
 
 CI on `175668b0`: `build-pwa`, `test (agent)`, `test (pwa)` green; `test (server)` and `test-macos`
 still running. `reviewDecision` remains `REVIEW_REQUIRED` — the same human gate, untouched by any of this.
+
+---
+
+## 2026-09-14 11:33 UTC — WAVE 5 MERGED as `bb8cc111`; run 43 closed, run 47 open
+
+Operator authorised the admin bypass. Squash-merged with a hand-written body; PR #95 `MERGED`,
+`mergeCommit bb8cc1119834e7e9f7e30b4ceb9ab7e64c0986b5`, all four REQUIRED checks green.
+
+**Main had moved again before the merge** — `5480fea8` → `676d1a5f` (#93, docs) — and GitHub reported
+`mergeable: UNKNOWN` while it recomputed. I did not wait on the API: `merge-tree` against the new main
+came back clean, so the merge went ahead on a measurement rather than on a cached field.
+
+**`test-macos` red and non-gating, and I proved it could not be mine** rather than asserting it: all
+**10** failures are in `server/test/ccd-account-auth.test.ts` (the `tcgetattr/ioctl` class), and this
+branch's ENTIRE delta from main was 29 `pwa`, 1 `shared`, 1 `docs` and exactly one server file —
+`server/test/pool-rule-core.test.ts`, which appears nowhere in the failure set. Same count as main.
+
+### Two close-time traps, both measured, both worth the next coordinator's time
+
+1. **The head branch is AUTO-DELETED on merge.** `git ls-remote origin ws/clear-meadow` returned empty
+   immediately after, so a fingerprint built from the remote tip sent empty strings and the server
+   correctly refused `no-handoff-commit`. Build it from the LOCAL ref.
+2. **And the local ref was stale in a way that reads as "no PR at all".** I had pushed the integration
+   merge from a DETACHED worktree via `HEAD:ws/clear-meadow`, which moves the remote ref and leaves the
+   local branch at `e9dd490a`. `ccd pr-state --session` then reported `phase: none`, `number: null`, and
+   close refused **`pr-regressed`: "the claim says merged, the PR is none."** The rows were all present —
+   `#95 MERGED head=175668b0` — but every one carried **`ours: false`**, because `ccd` decides `ours` by
+   matching the PR head against the LOCAL TIP. Fast-forwarding the workspace branch to `175668b0`
+   flipped it to `phase: merged / number: 95 / ours: true` and the close went through.
+   **If close says `pr-regressed`, read `ours`, not whether the row exists.**
+
+   That fast-forward touched the WORKER's worktree, which I otherwise never do. It was safe and I
+   checked before acting: `e9dd490a` is a parent of `175668b0`, the worktree had no tracked changes, and
+   `log 175668b0..HEAD` was empty — nothing of the worker's could be lost. Leaving it stale was itself
+   the wrong state, and no ref-only fix exists for a branch that is checked out.
+
+### Sequence held — open before close
+
+Run **47** opened FIRST (wave 6/6, the docs wave, workspace `clear-meadow`), then run **43** closed with
+`final:false` and **no `archive`** → `{"ok":true,"id":43,"state":"done","released":false}`. The hold
+handed to run 47 rather than releasing, and the workspace stays live for a human to archive. Close-first
+would have left zero open runs and retired the programme.
+
+**Side effect worth knowing:** `programTitle` is a property of the PROGRAMME, not the run, so opening
+run 47 with wave 6's title rewrote run 43's displayed title too. Historical runs do not keep their own.
+
+**No branch reset is needed for wave 6.** Clause 2 of the worker skill keeps work on `ws/<slug>`, and the
+integration already merged main into it, so the merge-base is current despite the squash.
+
+Merged sha sent to run 45 as mail 1125, with both traps above.
