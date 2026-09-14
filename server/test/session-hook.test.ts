@@ -6584,7 +6584,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 11 ("Final D-2605 documentation and committed-byte audit") is where they
     // are re-measured. Measured with THIS audit, run unchanged against both
     // trees: 41 failing citations at the commit this task started from
-    // (8e457995c23b) and 198 here. The difference is this task's own runtime
+    // (8e457995c23b) and, here, THE SUM OF THE PER-FILE CENSUS ASSERTED BELOW
+    // — stated that way, and asserted as `total`, because the two drifted
+    // (r3 B-M3): this sentence read 198 while its own map summed to 200, and
+    // fix round 2's commits had moved `ccd/ccd` 128->131 and
+    // `ccd/session-hook.sh` 42->41 without the headline following. A reader
+    // re-measuring the debt for Task 11 took 198 as the figure to close and
+    // was two short. The difference is this task's own runtime
     // edits, not a change in the rule. (Fix round 1 LOWERED it by six — five
     // in `ccd/ccd` and one in `ccd/session-hook.sh` — because its edits shifted
     // those files' lines back under six anchors that had drifted past them.
@@ -6615,6 +6621,25 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // dangling-identifier sentences lengthens lines and shifts `ccd/ccd` under
     // one more drifted anchor. Re-measured with the same audit.)
     //
+    // FIX ROUND 3 moves it again, and the movement is MEASURED rather than
+    // narrated: the audit was run unchanged against a `git archive` of the
+    // round's base (eb1d4502) and of this tip, and the two failure sets
+    // diffed. THREE new, TWO repaired, all six of them line shifts under
+    // anchors that had already drifted — no rule changed and no document
+    // gained a citation.
+    //   new:      `ccd/session-hook.sh:862`, `:954` (the file grew by the
+    //             step-12 regular-file guard, the two anchored sweep arms,
+    //             `_hook_lock_still_canonical` with its eight call sites, the
+    //             served-nonce gate and the acquire-site comment)
+    //             and `ccd/ccd:15545` (the four mechanism-absent arms).
+    //   repaired: `ccd/ccd:6838` — the SAME ccd growth shifted one anchor back
+    //             onto its referent, so `ccd/ccd` nets to 131 unchanged — and
+    //             `server/test/compact-card.test.ts:842-871`, shifted back by
+    //             D-2802's rewritten comment and its new cross-reference.
+    // So `ccd/session-hook.sh` 41 -> 43 and `compact-card.test.ts` 7 -> 6.
+    // Each one points into a file this task rewrote, which is what the TOUCHED
+    // assertion below keeps true.
+    //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
     // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
@@ -6623,12 +6648,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       'ccd/ccd': 131,
-      'ccd/session-hook.sh': 41,
+      'ccd/session-hook.sh': 43,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
       'server/test/ccd-ws-reap.test.ts': 7,
-      'server/test/compact-card.test.ts': 7,
+      'server/test/compact-card.test.ts': 6,
     });
+    // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
+    // number of its own, and it went stale against this very map. Now the
+    // sentence names the sum and the sum is asserted, so the two cannot drift:
+    // ±1 on any entry reds the map AND this line.
+    const total = Object.values(byFile).reduce((a, b) => a + b, 0);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
