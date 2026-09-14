@@ -5655,6 +5655,11 @@ export type LifecycleAct =
                     // additive-only — a newer ccd emitting `gc` at an older
                     // server is what absence-permits exists to survive.
   | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
+  | 'route'         // a routing field written (routing spec 2026-09-14 §5.3):
+                    // `cmd_route` is the one emitter; dec.actor / dec.reason
+                    // carry who and why, `detail` carries "<field>: <from> ->
+                    // <to>" (no new dec key — the dec vocabulary is pinned at
+                    // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
@@ -5666,7 +5671,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true,
   unknown: true,
 };
