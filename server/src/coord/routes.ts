@@ -20,7 +20,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -1578,13 +1578,13 @@ export function registerCoordRoutes(
     // — `awaiting-review`/`merging` -> `working`, a review sending work back
     // or a lost merge race — must take the cap check dispatch takes, or the
     // exclusion is a bypass. `dispatched -> working` is not checked: that run
-    // is already counted. The refusal carries the numbers, as dispatch's does.
+    // is already counted. The numbers come from `capsMeasured` (D-2805), the
+    // one reader both routes share; this file's own `.capsUsage(` stays the
+    // caps view's alone, as `coord-caps-route.test.ts` pins.
     if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
-      const caps = coord.caps();
-      const usage = coord.capsUsage();
-      if (usage.running >= caps.maxConcurrentWorkers) {
-        return reply.code(409).send({ ok: false,
-          reject: { code: 'cap-concurrency', limit: caps.maxConcurrentWorkers, running: usage.running } });
+      const { overConcurrency } = capsMeasured(coord);
+      if (overConcurrency !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency', ...overConcurrency } });
       }
     }
 

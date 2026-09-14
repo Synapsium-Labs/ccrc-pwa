@@ -20,7 +20,7 @@ import {
 } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  type CoordCaps, type CoordCapsUsage, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readWorkerSkillState } from '../skillstate.js';
 
@@ -164,6 +164,31 @@ export type DispatchOutcome =
  * the route used to (D-46: the transition guard runs BEFORE the body is even
  * looked at).
  */
+
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): {
+  caps: CoordCaps; usage: CoordCapsUsage;
+  overConcurrency: { limit: number; running: number } | null;
+} {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
+
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
 ): Promise<DispatchOutcome> {
@@ -274,11 +299,9 @@ export async function dispatchRun(
 
   // 2: caps. The refusal carries the numbers — a cap that refuses without
   // saying what it is is indistinguishable from a bug.
-  const caps = coord.caps();
-  const usage = coord.capsUsage();
-  if (usage.running >= caps.maxConcurrentWorkers) {
-    return { ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: caps.maxConcurrentWorkers, running: usage.running };
+  const { caps, usage, overConcurrency } = capsMeasured(coord);
+  if (overConcurrency !== null) {
+    return { ok: false, kind: 'refused', code: 'cap-concurrency', ...overConcurrency };
   }
   if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
     return { ok: false, kind: 'refused', code: 'cap-daily',
