@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=aadcb3aadc6a5dee459619de6d43ed6b0fc2f8f982d81deec48dfdda0a15b81f
+# ccrc:generated 1 sha256=fac99cf804e6a6d524604e97496e852f8827788c1ea00b1e5fdf6eac4be341d9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6039,6 +6039,7 @@ pr-open
 pr-state
 prefer
 project-pool
+route
 start
 stop
 supervise
@@ -6158,6 +6159,11 @@ EOF
   # so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
   # argument, same polarity, as `actor-flags-v1` above.
   echo pools-v1
+  # route-v1 — this ccd implements `ccd route --session <id> --set <field>=<value>`
+  # and reads the routing record at every settle (routing spec 2026-09-14
+  # §5.3). A server that sees this token may write routing fields through the
+  # verb; a server that does not sees no route verb and passes nothing.
+  echo route-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -6560,6 +6566,59 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # a JSON string literal is produced by the one encoder, not by a printf whose
   # safety is an argument in a comment.
   printf '{"pane":%s,"method":%s}\n' "$(_json_str "$pane")" "$(_json_str "$method")"
+}
+
+cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
+  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD, NEVER A KEYSTROKE: this
+  # slice has no --apply (slice 4 adds it for the server's picker path only),
+  # so a coordinator running this against a worker types nothing into that
+  # worker's pane — ccd applies the fields at the next settle. Every value is
+  # validated BEFORE anything is written, so a bad call is a `die` the caller
+  # sees and an unchanged record, never a silently-absent field. The PREVIOUS
+  # value is read VALIDATED: an unrecognised one is rendered as a byte count in
+  # the log and the journal, never its bytes — the file is writable by any
+  # session on the box and a multi-line value would forge log lines.
+  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--actor <text>] [--reason <text>]"
+  local id="" actor="" reason="" kv f v cls eff old raw
+  local -a sets=()
+  while (( $# )); do
+    case "$1" in
+      --session) [[ $# -ge 2 ]] || die "$usage"; id="$2"; shift 2 ;;
+      --set)     [[ $# -ge 2 ]] || die "$usage"; sets+=("$2"); shift 2 ;;
+      --actor)   [[ $# -ge 2 ]] || die "$usage"; actor="$2"; shift 2 ;;
+      --reason)  [[ $# -ge 2 ]] || die "$usage"; reason="$2"; shift 2 ;;
+      *)         die "$usage" ;;
+    esac
+  done
+  [[ -n "$id" && ${#sets[@]} -gt 0 ]] || die "$usage"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  for kv in "${sets[@]}"; do
+    [[ "$kv" == *=* ]] || die "bad --set '$kv' (want <field>=<value>)"
+    f="${kv%%=*}"; v="${kv#*=}"
+    _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
+    [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    _route_valid "$f" "$v" || die "bad value for $f (${#v} bytes) — not in its vocabulary"
+  done
+  # Haiku takes no effort level: the PAIR is refused whether it arrives in one
+  # call or across two (the record on disk is half of the pair).
+  cls=$(_route_get "$id" class); eff=$(_route_get "$id" effort)
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    [[ "$f" == class ]] && cls="$v"
+    [[ "$f" == effort ]] && eff="$v"
+  done
+  [[ "$cls" == haiku && -n "$eff" ]] && die "class haiku takes no effort level — clear effort or pick another class"
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    raw=$(_reg_get "$id" "$f" 2>/dev/null) || raw=""
+    old=$(_route_get "$id" "$f")
+    if [[ -n "$raw" && -z "$old" ]]; then old="<${#raw} bytes, unrecognised>"; fi
+    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
+    echo "set $id $f=$v"
+  done
 }
 
 cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
@@ -17729,9 +17788,10 @@ case "${1:-}" in
   coord-pause) shift; cmd_coord_pause "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
+  route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
