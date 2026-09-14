@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, paintLag, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
 
 afterEach(() => {
   cleanup();
@@ -1544,4 +1544,104 @@ describe('a pinch is not a reach for the history', () => {
     expect(t.wheelWith({ deltaY: -120, ctrlKey: true }),
       'xterm was handed a pinch it will turn into arrow keys').toBe(false);
   });
+});
+
+// — the terminal, disposed while its write is still parsing —
+//
+// xterm's `write(data, done)` parses ASYNCHRONOUSLY, so `done` can land after the
+// effect that started the write has been torn down and has called `dispose()`.
+// Calling `scrollLines` on a disposed Terminal throws — a blank drawer with a
+// TypeError behind it, which is how the operator would meet it.
+//
+// TWO HALVES, because neither alone is a guard. The first drives the REAL
+// `defaultMakeHistoryTerm` and holds the latch by hand: it is the control, and what
+// it establishes is that the window is genuinely there and genuinely fatal (measured
+// on this branch, xterm 6.0.0: the callback fires after `dispose()` has RETURNED,
+// and `scrollLines` then throws `TypeError: Cannot read properties of undefined
+// (reading 'dimensions')`). The second drives the COMPONENT and proves it holds that
+// latch itself — see its own comment for why it provokes the reader's race rather
+// than a StrictMode double mount.
+describe('the history terminal survives being disposed mid-parse', () => {
+  it('a real terminal disposed while its write is in flight does not throw', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const term = defaultMakeHistoryTerm(host, 2000);
+    let threw: unknown = null;
+    let alive = true;
+
+    term.write('older output\r\nolder still\r\n', () => {
+      // THE LATCH, as the drawer holds it: the callback checks whether the
+      // terminal it is about to touch is still the live one.
+      if (!alive) return;
+      try {
+        term.scrollLines(-3);
+      } catch (e) {
+        threw = e;
+      }
+    });
+    alive = false;
+    term.dispose();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(threw, 'the parse callback reached a disposed terminal').toBeNull();
+    host.remove();
+  }, 20_000);
+
+  it('the drawer holds that latch itself — a reader returning to live mid-parse', async () => {
+    // NOT StrictMode, and the reason is measured. React double-invokes an effect
+    // only on a component's INITIAL mount commit; this effect's body does nothing
+    // until `hist` flips to 'history', which happens LATER, on a state change of an
+    // already-mounted component. So StrictMode never double-invokes THIS effect and
+    // the race is never provoked: with `if (!alive) return;` deleted outright, a
+    // StrictMode double-mount test stays GREEN (measured on this branch, 57 passed).
+    // A test that cannot fail is not a guard, so this drives the race that is real.
+    //
+    // THE REAL RACE IS THE READER'S OWN. The history lands, xterm begins parsing
+    // ASYNCHRONOUSLY, and a keystroke returns to live — which runs this effect's
+    // cleanup, and `dispose()`, while the parse callback is still in flight. The
+    // control test above holds the other half still: against the REAL terminal that
+    // callback then throws (measured, xterm 6.0.0, `TypeError: Cannot read
+    // properties of undefined (reading 'dimensions')`), and `dispose()` does NOT
+    // flush it early (measured: the callback fires after `dispose()` has returned).
+    //
+    // The stub RECORDS the violation rather than throwing it, because an async throw
+    // does not reach `window`'s error event here — it surfaces as a vitest unhandled
+    // error, which is not something an assertion can name. Recording makes the red
+    // deterministic and points at the defect instead of at the plumbing.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const seen = { disposed: false, scrolledAfterDispose: false };
+    let parse: (() => void) | null = null;
+    const makeHistoryTerm = (): HistoryTerm => ({
+      // xterm's contract: `done` is called after `write` returns, never during it.
+      write: (_d: string, done?: () => void) => { parse = done ?? null; },
+      fit: () => ({ cols: 48, rows: 20 }),
+      rowHeight: () => ROW_PX,
+      scrollLines: () => { if (seen.disposed) seen.scrolledAfterDispose = true; },
+      offset: () => {},
+      onBottom: () => {},
+      dispose: () => { seen.disposed = true; },
+    });
+
+    const t = fakeTermFactory();
+    render(
+      <TerminalDrawer
+        id={ID} open onClose={() => {}}
+        makeSocket={makeSocket} makeTerm={t.makeTerm} makeHistoryTerm={makeHistoryTerm}
+      />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+
+    act(() => { t.wheel(-120); });
+    await act(async () => { await flush(); });   // the history lands; the write is in flight
+    expect(parse, 'the history was never written, so there is no race to test').not.toBeNull();
+
+    act(() => { t.type('x'); });                 // back to live: cleanup runs, and disposes
+    expect(seen.disposed, 'the effect never tore the history terminal down').toBe(true);
+    act(() => { parse?.(); });                   // the parse callback lands, after dispose
+
+    expect(seen.scrolledAfterDispose,
+      'the parse callback scrolled a terminal the effect had already disposed').toBe(false);
+  }, 20_000);
 });

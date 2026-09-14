@@ -203,7 +203,7 @@ const defaultMakeTerm: MakeTerm = (host) => {
 /** The history terminal: the same glass, no cursor, no keyboard, and a real
  *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
  *  touch-drag scrolls it, exactly as a console does. */
-const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
+export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
   const term = new Terminal({
     ...glass(),
     cursorBlink: false,
@@ -707,6 +707,18 @@ export function TerminalDrawer({
   useEffect(() => {
     if (hist.at !== 'history' || histHost === null) return undefined;
     const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines);
+    // THE LATCH, AND STRICTMODE IS WHY IT EXISTS. React runs every effect twice
+    // on mount in development: set up, tear down, set up. xterm's
+    // `write(data, done)` parses ASYNCHRONOUSLY, so the first mount's `done`
+    // lands after that mount's cleanup has already called `dispose()` — and
+    // `scrollLines` on a disposed Terminal throws, out of a callback nothing
+    // catches, into React's commit. A blank drawer and a TypeError.
+    //
+    // A flag rather than a try/catch: swallowing the throw would also swallow a
+    // real one, and what this needs to express is "the terminal this callback
+    // was written for is gone", which is a fact the effect knows and the
+    // callback does not.
+    let alive = true;
     term.fit();
     // ARMED BEFORE THE DEPARTURE IT LATCHES. `onBottom` fires only for a
     // reader who has been AWAY from the newest line, and the opening scroll
@@ -725,6 +737,10 @@ export function TerminalDrawer({
       // it. INSIDE the parse callback: xterm writes asynchronously, and a
       // scroll issued beside the write runs against the buffer as it stood
       // BEFORE the history landed, which moves nothing and arms nothing.
+      //
+      // AND GUARDED, because "asynchronously" includes "after this effect was
+      // torn down" — see the `alive` note above.
+      if (!alive) return;
       term.scrollLines(-WHEEL_LINES);
     });
 
@@ -962,6 +978,15 @@ export function TerminalDrawer({
       histHost.removeEventListener('touchend', touchEnd, true);
       histHost.removeEventListener('touchcancel', touchEnd, true);
       stopGlide();
+      // Before `dispose()` because that is the order that states the intent — but
+      // the ordering carries NO mechanism, and saying so here is the honest half:
+      // both statements run in this one synchronous block and the parse callback
+      // fires strictly after it returns (measured, xterm 6.0.0 — `dispose()` does
+      // not flush the write queue early), so `alive` is false by then either way.
+      // What is load-bearing is the FLAG, and `terminal-scrollback.test.tsx` reds
+      // when its check is removed. Do not add a test for this line's position; no
+      // test can distinguish the two orderings.
+      alive = false;
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- goHist writes a ref + state only
