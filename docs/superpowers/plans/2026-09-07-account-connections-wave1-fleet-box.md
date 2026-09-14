@@ -292,7 +292,7 @@ allocated block (D-1854..D-1867) has none spare.
 
 The second thing this task ships is a pin that should have existed since Stage 2a. `shared/roster.ts` imports nothing (measured 2026-09-07: `grep -c '^import' shared/roster.ts` → **0**, over 653 lines) and **no test asserts it**. The two L0 no-import pins in the tree cover other files: `server/test/lifecycle.test.ts:840-844` (`expect(src).not.toMatch(/^\s*import /m)` over `shared/lifecycle.ts`) and `server/test/peers-claims-l0.test.ts:156-161` (`expect(imports).toEqual(["import type { Hue } from './roster.js';"])` over `shared/api.ts`). The rule is load-bearing on exactly one shipped import: `pwa/src/lib/offline.ts:10` is `import { HUES } from '../../../shared/roster';` — a VALUE import, so `shared/roster.ts` really is in the browser bundle, and a `node:*` import in it would break that bundle in a way no vitest run feels (`pwa/src/lib/accounts.ts:29` is `import type { Hue }`, fully erased, and does not bundle anything). This wave adds two more L0 files and, in Task 3, gives `roster.ts` its first import ever; landing the pin here means Task 3 cannot add that import without stating it (**D-1864**).
 
-- [ ] **Step 1: Write the failing test — the L0 pins and the derivations**
+- [x] **Step 1: Write the failing test — the L0 pins and the derivations**
 
 Create `server/test/providers.test.ts`:
 
@@ -587,12 +587,12 @@ carry no `FIELD` token, and the composing literal carries every `FIELD` token an
 Step re-runs THIS suite to prove it; if a later task rewrites that mirror as rows, this scan reds and the
 rewrite is the thing that is wrong.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/providers.test.ts`
 Expected: FAIL at collection — `Failed to resolve import "../../shared/providers.js"`. That is the right first failure: the module does not exist, and nothing in the suite runs. Cured by Step 3a.
 
-- [ ] **Step 3a: Write `shared/providers.ts`**
+- [x] **Step 3a: Write `shared/providers.ts`**
 
 ```ts
 // The provider table — the ONE place in this tree that enumerates the model
@@ -796,7 +796,7 @@ export const ACCOUNT_FINDINGS = [
 export type AccountFinding = (typeof ACCOUNT_FINDINGS)[number];
 ```
 
-- [ ] **Step 3b: the TypeScript-root half of the promise, in the file §4.2 names**
+- [x] **Step 3b: the TypeScript-root half of the promise, in the file §4.2 names**
 
 Insert in `server/test/single-definition.test.ts` immediately after line **935** — the `});` that closes the
 roster describe opened at `:827`. Measured, not inferred: `:912` is
@@ -871,7 +871,7 @@ Add one line directly beneath it:
 import { PROVIDER_IDS } from '../../shared/providers.js';
 ```
 
-- [ ] **Step 4: Run both and watch them pass**
+- [x] **Step 4: Run both and watch them pass**
 
 From inside `server/`, in this order:
 ```
@@ -903,7 +903,7 @@ too, under options the server's config does not carry — `noUncheckedIndexedAcc
 2026-09-07). `server/test/typecheck-tests.test.ts:55-68` typechecks `serverRoot` and `agentRoot` only, so nothing
 in the server suite can see a PWA-only error. Expected: no output, exit 0.
 
-- [ ] **Step 5: MUTATION CHECK — three, each against a different half**
+- [x] **Step 5: MUTATION CHECK — three, each against a different half**
 
 **(a) The derivation.** In `shared/providers.ts` replace the derived list with a hand-written one, byte-identical in behaviour:
 ```ts
@@ -961,7 +961,7 @@ whenever `@types/node` is resolvable from `pwa/node_modules` as a transitive dep
 then the typecheck cannot see this class of defect at all and the import-list pin is the ONLY mechanism that
 does. That second outcome is the one D-1864 was written for. Revert.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add shared/providers.ts server/test/providers.test.ts server/test/single-definition.test.ts
 git commit -m "feat(accounts): the provider table, derived lists, and the two pins nothing measured (D-1860, D-1864)"
@@ -1060,7 +1060,7 @@ Two behaviours of `URL` decide the implementation and are measured rather than a
 
 The last three rows are the traps. A bare `?` or `#` leaves `search`/`hash` EMPTY while `href` keeps the character, so a gate written as `u.search !== ''` admits `https://orchard-api/v1?` and then stores an endpoint whose last byte is a question mark — which is why the gate tests the RAW string for `?` and `#` and not the parsed components. And the scheme and host are lower-cased by `URL` while the path is not, which is why the verdict carries `u.href` rather than the operator's input: the value that is stored, shown on the card and written into `settings.json` must be the one the lane will actually resolve, and a stored `HTTPS://Orchard-API/V1` beside a resolved `https://orchard-api/V1` is two answers to one question. Normalisation is visible here precisely because §4.1 says the endpoint is shown and never hidden.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/fixtures/baseUrlCases.ts`:
 
@@ -1225,12 +1225,12 @@ describe('BASE_URL_OK', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/base-url.test.ts`
 Expected: FAIL at collection — `Failed to resolve import "../../shared/base-url.js"`.
 
-- [ ] **Step 3: Write `shared/base-url.ts`**
+- [x] **Step 3: Write `shared/base-url.ts`**
 
 ```ts
 // The endpoint gate (spec §4.1). L0 and import-free, `shared/providers.ts`
@@ -1325,7 +1325,7 @@ export const BASE_URL_OK = (raw: unknown): BaseUrlVerdict => {
 };
 ```
 
-- [ ] **Step 3b: Write `shared/base-url.mjs` and `shared/base-url.d.mts`**
+- [x] **Step 3b: Write `shared/base-url.mjs` and `shared/base-url.d.mts`**
 
 Two files a bare `node` can load, so that the ONE decision above is reachable from `deploy/account-op.mjs`
 (Task 23) and from `shared/roster-json.mjs` (Task 4) without either of them re-spelling it. The body is the
@@ -1402,7 +1402,7 @@ export declare const LOOPBACK_HOSTS: readonly string[];
 export declare const BASE_URL_OK: (raw: unknown) => BaseUrlVerdict;
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 First, ONCE for the whole wave, prime the package `typecheck-tests.test.ts` spawns `tsc` in. That suite runs
 `tsc -p test/tsconfig.tests.json` with `cwd: agentRoot` (`server/test/typecheck-tests.test.ts:44-48`), and
@@ -1447,7 +1447,7 @@ cd ../pwa && ./node_modules/.bin/tsc --noEmit
 (`npm ci` was paid in Task 1 Step 4; if you are running this task on a fresh worktree, `pwa/node_modules` does
 not exist and it must be paid here instead.) Expected: no output, exit 0.
 
-- [ ] **Step 5a: The L0 row `providers.test.ts` was waiting for**
+- [x] **Step 5a: The L0 row `providers.test.ts` was waiting for**
 
 `shared/base-url.ts` now exists, so its no-import row can be asserted without shipping a red. Insert one `it`
 into `describe('L0 stays import-free: the PWA bundles these files')` in `server/test/providers.test.ts`,
@@ -1470,7 +1470,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/providers.test.ts`
 Expected: **13 passed, 0 failed** — the twelve from Task 1 plus this one. If it reds with
 `ENOENT … shared/base-url.ts`, Step 3 has not landed; do not commit past this point.
 
-- [ ] **Step 5b: Add the single-definition row and run it**
+- [x] **Step 5b: Add the single-definition row and run it**
 
 Insert one `it` inside the `describe('the provider table — one table, one home')` block from Task 1, before its closing `});`:
 
@@ -1514,7 +1514,7 @@ Expected: PASS, whole file. If `loopHolders` comes back with a second entry, tha
 three-element set somewhere else under the four roots and IS a second copy of this decision — stop and read it,
 rather than widening the assertion to admit it.
 
-- [ ] **Step 6: MUTATION CHECK — the two traps, the exception, and the two halves of the ordering**
+- [x] **Step 6: MUTATION CHECK — the two traps, the exception, and the two halves of the ordering**
 
 **(a) The bare-delimiter trap.** In `shared/base-url.ts` replace the two raw-string tests with the parsed-component form:
 ```ts
@@ -1563,7 +1563,7 @@ was expected. The 25 `it.each` rows stay GREEN, because they drive the `.ts`. Re
 whole reason the twin gets its own row rather than being trusted to look the same — the suite that reads the
 TypeScript cannot feel a change in the file `deploy/account-op.mjs` actually loads. Revert.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 ```bash
 git add shared/base-url.ts shared/base-url.mjs shared/base-url.d.mts \
         server/test/base-url.test.ts server/test/fixtures/baseUrlCases.ts \
@@ -1609,7 +1609,7 @@ The three-set split is forced, not stylistic. `parseExec:294` reads `warnUnknown
 
 Two spec sentences contradict each other on `models` and the plan rules between them. §4.1 line 229: *"`models` is legal on the two api-key providers, `openrouter` and `compatible`"*. §14 line 1455: *"`models` refused on a non-openrouter provider"* (measured: that clause and the `secretsFile` one below share line 1455). **§4.1 wins**, and not by preference: §14's sentence predates decision 22 (§15.22), which created the `compatible` id — it says "non-openrouter" because at the time openrouter was the only api-key lane — and §4.2's own table gives `compatible` the degraded model field as its documented arm. The gate is not written from either sentence: it reads `PROVIDERS[provider].apiKeyModels`, so the answer is table data and the contradiction has one home instead of two gates.
 
-- [ ] **Step 0: Measure the rosters BEFORE shipping the refusal — this step is not optional**
+- [x] **Step 0: Measure the rosters BEFORE shipping the refusal — this step is not optional**
 
 The hoist turns a warning into a boot refusal on both boxes at once, agent-first, and the only rosters that matter are the ones on disk. Run, from the repo root:
 
@@ -1652,7 +1652,7 @@ echo "rc=$?"
 
 **The gate:** the script exits **1** if any roster carries a non-generated `secretsFile` OR could not be read, and **0** only when every roster was read and none did — so `rc=0` is the evidence, not a line of output somebody eyeballed. If it exits 1, STOP: that roster parses today and will not parse after this task, and the fix is to move the value or delete it BEFORE the agent deploy, not after a box has stopped booting. Record `rc` in the execution log either way. An unreadable roster fails the gate deliberately: absence of evidence is not evidence of absence, and this is the one non-additive change in the wave.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `server/test/roster.test.ts` (after `:213`, the end of the file). `parseRoster`, `RosterError`, `describe`, `it`, `expect` and `vi` are already imported at `:1-2`:
 
@@ -1913,7 +1913,7 @@ to
       .toEqual({ kind: 'generated', provider: 'anthropic' });
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/roster.test.ts`
 Expected: FAIL. The two edited assertions fail first, and both are the same shape:
@@ -1928,7 +1928,7 @@ and the `generated` arm carries only `kind` and `secretsFile`, so `accepts the f
 `is DECLARATIVE on external` all receive an exec stripped of everything they assert. Count the reds before
 proceeding — this is the before half of the mutation measurement for the whole task.
 
-- [ ] **Step 3a: The declarations — `shared/roster.ts`, header first**
+- [x] **Step 3a: The declarations — `shared/roster.ts`, header first**
 
 **The header goes first, and it is not a courtesy.** `shared/roster.ts:5-9` currently asserts the exact opposite
 of what this step is about to make true:
@@ -2100,7 +2100,7 @@ const EXEC_KEYS: Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>> = {
 };
 ```
 
-- [ ] **Step 3b: `parseExec` — `shared/roster.ts:278-323`, replaced whole**
+- [x] **Step 3b: `parseExec` — `shared/roster.ts:278-323`, replaced whole**
 
 ```ts
 /** Validates `exec.models`. Returns the value, so the caller cannot forget to
@@ -2321,7 +2321,7 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
 
 The conditional spreads replace the old per-arm whole literals (`:319-322`). That literal-per-arm shape existed so a new field would be a compile error until every path computed it; with three optional fields on one arm it would take eight literals to keep, and the property it bought is bought here instead by `ExecSpec`'s non-optional `provider` on the `generated` arm — a path that forgets it does not compile.
 
-- [ ] **Step 3c: thread the collector — `parseAccount` and `parseRoster`**
+- [x] **Step 3c: thread the collector — `parseAccount` and `parseRoster`**
 
 `parseAccount`'s signature (`:325`) takes a third parameter and passes it on; the `parseExec` call at `:435` becomes `parseExec(raw['exec'], id, assumedProvider)`:
 
@@ -2351,7 +2351,7 @@ In `parseRoster`, replace the single `drafts` line — **`:581`**, `const drafts
   }
 ```
 
-- [ ] **Step 3d: the four `adopt.test.ts` literals**
+- [x] **Step 3d: the four `adopt.test.ts` literals**
 
 `ccd/ccrc-adopt` composes `{"kind":"generated"}` and `{"kind":"generated","secretsFile":…}` in one `case` arm (`:496-503`: the jq-composed form at `:498`, the bare literal at `:500`; the whole `case` is `:494-505`) and writes the roster; `adopt.test.ts` feeds that output through `parseRoster` and asserts the parsed `exec` whole. Adopt is NOT changed by this wave — an adopted roster is legal, warns once per boot, and the warning is the operator's cue to state the provider. Four assertions therefore gain the defaulted field:
 
@@ -2369,7 +2369,7 @@ Add above `:124`, once, so the next reader knows why:
     // naming the accounts, which is the operator's cue to state the provider.
 ```
 
-- [ ] **Step 3e: `config.test.ts:315` — the assertion that means one thing and says another**
+- [x] **Step 3e: `config.test.ts:315` — the assertion that means one thing and says another**
 
 `server/test/config.test.ts:294-317` (`it('SAYS SO when it rejects a CCRC_PORT …')`) spies `console.warn`, then at `:311-315` calls `loadConfig` three times with a valid or absent `CCRC_PORT` and asserts `expect(warn).not.toHaveBeenCalled()`. `ROSTER_PATH` there is built at `config.test.ts:16-18` (`mkTmp` → `seedRoster(rosterFixtureDir)` at `:17` → the path at `:18`), so it is `DEFAULT_TEST_ROSTER` (`helpers.ts:60-99`) — which carries three `generated` accounts, none of them naming a `provider`: `claude-a` (`helpers.ts:67-71`, its `exec` at `:69`), `claude-b` (`:72-82`, `exec` at `:81`) and `claude-d` (`:93-97`, `exec` at `:95`). After Step 3c each `loadConfig` emits one migration warning, so the block reds with three calls where it demands zero.
 
@@ -2399,7 +2399,7 @@ The fix is not to silence the warning and not to edit the fixture (§4.1 pins `D
       expect(saidLater).not.toContain('7788');
 ```
 
-- [ ] **Step 3f: the roster import pin**
+- [x] **Step 3f: the roster import pin**
 
 In `server/test/providers.test.ts`, the `it('shared/roster.ts imports nothing …')` from Task 1 now asserts a stale value. Replace the assertion and the title:
 
@@ -2416,7 +2416,7 @@ In `server/test/providers.test.ts`, the `it('shared/roster.ts imports nothing �
   });
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 From inside `server/`, in this order — the last two are the ones nobody would think to open:
 ```
@@ -2451,7 +2451,7 @@ resolves the new `./providers.js` and `./base-url.js` value specifiers into a re
 `pwa/node_modules` does not exist in this worktree, so the `npm ci` is required if Task 1 did not already pay it.
 Expected: `tsc` silent, then a vite build ending in `✓ built in …`.
 
-- [ ] **Step 5: MUTATION CHECK — four, one per gate**
+- [x] **Step 5: MUTATION CHECK — four, one per gate**
 
 **(a) The hoist (D-1857).** Move the two `secretsFile` blocks back inside an `if (kind === 'generated') { … }`.
 Expected **THREE** reds, not two, and the third is the one worth having:
@@ -2492,7 +2492,7 @@ above it (which then becomes an unused local, so `npm run build` reds too; delet
 the mutant to be a pure behaviour change). Expected RED: `accepts a selectable allowlist and requires every alias
 to be in it` on its second half, receiving no throw where it demands one naming `vendor/opus-1`. Revert.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add shared/roster.ts server/test/roster.test.ts server/test/adopt.test.ts \
         server/test/config.test.ts server/test/providers.test.ts
@@ -2542,7 +2542,7 @@ is the only way that hole closes.
 
 **And the ACCEPT direction cannot help with any of this.** `generateAccountsSh` emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs, labels and hues (`shared/generate.mjs:206-238`) — and nothing else. `provider`, `baseUrl` and `models` never reach `accounts.sh`, so byte-agreement between the CLI and the TypeScript stays green whether or not the mirror validates them at all. The REJECT table is the only half of the harness that can see these fields, which is why every one of them gets a row there rather than being trusted to the byte comparison (**D-1861**).
 
-- [ ] **Step 1: The `hidden` row alone, and watch it fail**
+- [x] **Step 1: The `hidden` row alone, and watch it fail**
 
 In `server/test/gen-accounts.test.ts`, insert ONE row into `CASES` (`:227-276`), directly after `['an unknown hue', roster(acct({ hue: 'chartreuse' }))],` — which is at **`:262`**, not `:259` (`:259` is `['a secretsFile with a space', …]`, measured 2026-09-07):
 
@@ -2563,7 +2563,7 @@ In `server/test/gen-accounts.test.ts`, insert ONE row into `CASES` (`:227-276`),
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 Expected: exactly **one** failure — `a non-boolean hidden … — the CLI exits nonzero and writes NO bash`, on `expect(r.code, 'a roster the server refuses to boot on must fail the deploy, not generate a file').not.toBe(0)` with received `0`. The parser half of the same row PASSES, which is the pair to record: the harness has two directions and only one of them was ever wrong.
 
-- [ ] **Step 2: Add the `hidden` gate to the mirror, and watch the same row go green**
+- [x] **Step 2: Add the `hidden` gate to the mirror, and watch the same row go green**
 
 In `shared/roster-json.mjs`, insert after the `telemetry` block (**`:198-202`**) and before the `hue` block (**`:204-211`** — its comment opens at `:204` and the `const hue` is `:207`) — the position `parseRoster` uses (`roster.ts:450` sits between `homeAble` and `telemetry`; the mirror's order differs already and the header does not claim otherwise, so this goes where it reads best):
 
@@ -2586,7 +2586,7 @@ In `shared/roster-json.mjs`, insert after the `telemetry` block (**`:198-202`**)
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 Expected: PASS, whole file. **The mechanism is now measured, not assumed**, and only now may the rows below be added.
 
-- [ ] **Step 3: Write the remaining failing rows**
+- [x] **Step 3: Write the remaining failing rows**
 
 Insert into `CASES`, after the `hidden` row:
 
@@ -2735,7 +2735,7 @@ import { baseUrlCases } from './fixtures/baseUrlCases.js';
 
 The file already imports `rosterFromJson` dynamically inside two `it`s (**`:200`** and `:215`; `:203` is `expect(byId.get('claude')?.execKind).toBe('upstream');`) to prove that importing it runs no CLI; a static import beside them does not weaken that — the dynamic-import test measures `process.exitCode` before and after and is unaffected by the module having already been loaded, and the aliased name keeps the two uses visibly distinct.
 
-- [ ] **Step 4: Run them and watch them fail**
+- [x] **Step 4: Run them and watch them fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 Expected: **16 failures** from the sixteen rows just added (3 `secretsFile` + 3 `provider` + 6 `baseUrl` + 4
@@ -2757,7 +2757,7 @@ because the block has four `expect(m).not.toBeNull()` and one comparison:
 **Total: 21 reds.** Anything other than 21 means a row is testing something else and the count is the first
 thing to explain.
 
-- [ ] **Step 5a: The mirror's constants — `shared/roster-json.mjs`, between `:99` and `:101`**
+- [x] **Step 5a: The mirror's constants — `shared/roster-json.mjs`, between `:99` and `:101`**
 
 Insert directly after `const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;` (**`:99`**, its docstring `:96-98`) and before `const EXEC_KINDS` (**`:101`**), so the new constants sit with the other mirrored ones — `ID_RE` `:81`, `SUFFIX_SAFE_RE` `:88`, `SECRETS_SAFE_RE` `:94`:
 
@@ -2824,7 +2824,7 @@ comment gains its clause. The fixture RUNS the generator, so a missing sibling t
 `ERR_MODULE_NOT_FOUND` at the first `gen-accounts.mjs` spawn.
 
 
-- [ ] **Step 5b: The hoist and the new gates — `shared/roster-json.mjs:174-190`, replaced and extended**
+- [x] **Step 5b: The hoist and the new gates — `shared/roster-json.mjs:174-190`, replaced and extended**
 
 Replace the two `exec['kind'] === 'generated' &&`-conjoined blocks with the un-conjoined pair, and append the three new gates after them:
 
@@ -2944,7 +2944,7 @@ Replace the two `exec['kind'] === 'generated' &&`-conjoined blocks with the un-c
   }
 ```
 
-- [ ] **Step 5c: The header and the `.d.mts` docstring stop asserting the opposite of the code**
+- [x] **Step 5c: The header and the `.d.mts` docstring stop asserting the opposite of the code**
 
 `shared/roster-json.mjs`'s header lists two changes from the code's old home (**`:59-68`**; `:58` is a bare `//`). Append a third, so the file records what it now does:
 
@@ -2980,7 +2980,7 @@ That second clause was never true of the code (`:224` returned the field with no
    *  (D-1855). */
 ```
 
-- [ ] **Step 6: Run it and watch it pass**
+- [x] **Step 6: Run it and watch it pass**
 
 From inside `server/`:
 ```
@@ -2999,7 +2999,7 @@ inside it, so a missing `shared/base-url.mjs` row surfaces as `ERR_MODULE_NOT_FO
 `deploy/gen-accounts.mjs` rather than as a lint failure. If either reds with that message, the row did not
 land — add it rather than working around it. `source-bytes.test.ts` is not optional here and is not ceremony: this task copies two regex literals into a `.mjs` file, which is the exact act that produced the incident that suite is named after — twice in one task, invisible in a terminal diff, with `tsc` clean. Note also what will NOT catch a mistake inside `shared/roster-json.mjs`: no `checkJs` is set anywhere in this repo, so JSDoc types on the `.mjs` files are applied at `.ts` CALL SITES and errors INSIDE the file are reported by nothing. The verification for every mirror step is a run of `gen-accounts.test.ts`, never "tsc is green".
 
-- [ ] **Step 7: MUTATION CHECK — three, one per divergence class**
+- [x] **Step 7: MUTATION CHECK — three, one per divergence class**
 
 **(a) Re-conjoin the hoist.** Restore `exec['kind'] === 'generated' &&` on both `secretsFile` gates. Expected RED: three CASES rows (`a parent-directory hop in an UPSTREAM secretsFile`, `an absolute EXTERNAL secretsFile`, `a non-string EXTERNAL secretsFile`), each on the CLI half with received code `0`, and all three parser halves still green. Revert.
 
@@ -3007,7 +3007,7 @@ land — add it rather than working around it. `source-bytes.test.ts` is not opt
 
 **(c) Diverge a derived list.** Change the mirror's `API_KEY_PROVIDERS` to `new Set(['openrouter'])` — §14 line 1455's spelling, and the plausible mistake. Expected RED: `its api-key provider list is the table's apiKeyModels column`, receiving `['openrouter']` against `['openrouter','compatible']`. Expected GREEN: every CASES row, because no row in the table declares `models` on a `compatible` lane that both sides accept — record that, and note it is why the list-agreement test exists rather than being left to the refusal table. Revert.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 ```bash
 git add shared/roster-json.mjs shared/roster-json.d.mts server/test/gen-accounts.test.ts \
         server/test/ccrc-install.test.ts server/test/ccrc-install-graphify.test.ts
@@ -3087,7 +3087,7 @@ part of the header that survives the change, so it is the only part left alone.
 
 **Two facts the implementation turns on, both measured 2026-09-07.** `ccd` runs under `set -uo pipefail` (`:9`), and its own header at `:191-202` records that an empty-array `"${a[@]}"` expansion is fatal under `set -u` below bash 4.4 — so the read must copy the ONE existing idiom for this variable verbatim, `statusline-command.sh:240`'s `for m in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do`. And `declare -p CCRC_MEASURED` distinguishes UNSET from SET-AND-EMPTY (verified: unset → rc 1; `CCRC_MEASURED=()` → rc 0). That distinction is load-bearing: an `accounts.sh` predating Stage 2a leaves the name unset, and AGENT-FIRST deploys mean a box can briefly hold a new `ccd` beside an older `accounts.sh`. "The roster did not say" and "the roster says none" must not collapse — a collapse would make every lane unmeasured on such a box and hand every placement to the fallback.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/projected-home.test.ts` at the **end of the file** — after `:196`, the `});` that closes
 `describe('projectHome ranks unmeasured below measured')`. (`:121` closes `describe('projectHome edge cases')`
@@ -3260,7 +3260,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
 
 Add `afterEach` to the `vitest` import at `:10` if it is not already there — it is (`:10` imports `describe, it, expect, beforeEach, afterEach`).
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/projected-home.test.ts`
 Expected: FAIL on **five** of the six new tests, and the fifth fails for a reason worth reading rather than
@@ -3283,7 +3283,7 @@ would PASS against a tree that has no predicate in it, and the row would be a te
 Three of them are LIVE disagreements between two shipped implementations, and the count is this deviation's
 evidence.
 
-- [ ] **Step 3a: The predicate — `ccd/ccd`, inserted after `:1028`**
+- [x] **Step 3a: The predicate — `ccd/ccd`, inserted after `:1028`**
 
 Directly beneath `_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }`:
 
@@ -3312,7 +3312,7 @@ _account_measured() {
 }
 ```
 
-- [ ] **Step 3b: The loop — `ccd/ccd:3583-3591`, replaced whole**
+- [x] **Step 3b: The loop — `ccd/ccd:3583-3591`, replaced whole**
 
 ```bash
   local best="" bs=1000 first="" firstm="" w sc
@@ -3332,7 +3332,7 @@ _account_measured() {
   echo "$best"
 ```
 
-- [ ] **Step 3c: The comments that are false — `ccd/ccd:3536-3582`, rewritten whole**
+- [x] **Step 3c: The comments that are false — `ccd/ccd:3536-3582`, rewritten whole**
 
 Replace everything from **`:3536`** (the bare `#` line that follows the UNKNOWN-IS-NOT-ZERO paragraph) through
 **`:3582`**, whose text is `# server's ` + `` `projectHome` `` + ` ranks ties by the same declaration order.` —
@@ -3410,7 +3410,7 @@ The replacement:
   # order.
 ```
 
-- [ ] **Step 3d: Re-stamp the marker — not optional**
+- [x] **Step 3d: Re-stamp the marker — not optional**
 
 `ccd/ccd` line 2 is `# ccrc:generated 1 sha256=…` and `server/test/ownership.test.ts:139-152` verifies it against the file's own bytes, with the message *"ccd/ccd was edited without re-stamping its provenance marker"*. From the repo root:
 
@@ -3424,7 +3424,7 @@ head -2 ccd/ccd
 ```
 `markGenerated` strips any existing marker before hashing, so it is idempotent and safe to run whether or not the file is already stamped. The command is the one `ownership.test.ts:131-134` prints in its own comment (the idempotence note is `:136-138`, and the describe it guards opens at `:139`); it is copied here so the executor does not have to find it after a red.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 From inside `server/`, in this order:
 ```
@@ -3438,7 +3438,7 @@ From inside `server/`, in this order:
 ```
 Expected: all green. `macos-platform.test.ts:53` asserts `ccd/ccd`'s platform block is byte-identical to `ccd/ccrc`'s; both edits here are far outside it (`ccd:11-757`), and running it is how that is proved rather than reasoned. `ccd-workspaces.test.ts` is the file that exercises `_ws_least_loaded` through real `ws-add` runs and is the one place a placement regression would surface as something other than a parity assertion.
 
-- [ ] **Step 5: MUTATION CHECK — two, and the second is the one nobody would write a test for**
+- [x] **Step 5: MUTATION CHECK — two, and the second is the one nobody would write a test for**
 
 **(a) Delete the filter.** Remove the single line `_account_measured "$w" || continue` from the loop — leaving
 the `[[ -z "$firstm" ]] && firstm="$w"` assignment that sits **directly BELOW it** in place, which is the whole
@@ -3459,7 +3459,7 @@ Restore and re-stamp.
 
 **(b) Collapse UNSET into EMPTY.** Delete the `declare -p` line from `_account_measured` and re-stamp. Expected RED: exactly one test — `an accounts.sh that predates CCRC_MEASURED means "the roster did not say", not "nothing reports"`, whose `_ws_least_loaded` receives `a` instead of `b` (with every lane unmeasured, the score loop is skipped entirely and the fallback takes the first placeable account, ignoring the limits file that says `b` is ten times emptier). Expected GREEN: every other test in the file, including all five other new ones — which is the measurement worth recording. The collapse is invisible on a current box and only bites during the window an AGENT-FIRST deploy opens, which is exactly the class of defect that ships. Restore and re-stamp.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add ccd/ccd server/test/projected-home.test.ts
 git commit -m "fix(ccd): _ws_least_loaded consults CCRC_MEASURED, and the comment saying it could not is corrected (D-1856)"
@@ -3504,7 +3504,7 @@ The reasoning that the emitter is unaffected is sound — `generateAccountsSh` (
 
 The anti-vacuity control matters as much as the assertion. An equality between two `generateAccountsSh` calls is satisfied by an emitter that returns a constant, so the same describe asserts that a roster differing in something the emitter DOES read produces different bytes and a different digest.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Insert `ENRICHED_ROSTER` after `HUELESS_ROSTER` — the const is **`:66-72`** and `:73` is the blank line beneath it, so the insertion goes at `:73` and the range the const occupies is `:66-72`, not `:64-73` — in `server/test/gen-accounts.test.ts`:
 
@@ -3629,12 +3629,12 @@ Extend the `shared/mark.mjs` import at `:40` from `import { markGenerated } from
 import { markGenerated, bodyDigest } from '../../shared/mark.mjs';
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts -t "do not reach accounts.sh"`
 Expected: FAIL at collection with `bodyDigest is not exported` if the import line was missed, otherwise **PASS on the first run**. That is the honest outcome and the plan says so rather than inventing a red: this task asserts a property the tree already has, and its value is that the property is now measured. What must be run and recorded is Step 3's mutation, which is where the red lives.
 
-- [ ] **Step 3: MUTATION CHECK — make the emitter read a new field**
+- [x] **Step 3: MUTATION CHECK — make the emitter read a new field**
 
 In `shared/generate.mjs`, inside `generateAccountsSh` (after `:173`, where `measuredIds` is built), add a fifth
 array and emit it — the plausible future change this whole task exists to catch:
@@ -3680,7 +3680,7 @@ Expected RED, and count them:
 
 Revert.
 
-- [ ] **Step 4: Run the chain and watch it pass**
+- [x] **Step 4: Run the chain and watch it pass**
 
 From inside `server/`:
 ```
@@ -3694,7 +3694,7 @@ cd agent && npm ci && ./node_modules/.bin/vitest run test/roster-fp.test.ts
 ```
 `agent/node_modules` does not exist in this worktree, so the `npm ci` is required and is not boilerplate.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add server/test/gen-accounts.test.ts
 git commit -m "test(accounts): prove accounts.sh is byte-identical for a roster carrying provider, baseUrl and models"
@@ -3719,7 +3719,7 @@ What exists today is a test that every field is NON-EMPTY (`gen-wrappers.test.ts
 
 The `spawnSync('bash', …)` below is deliberate: the reason for the guard is measured inside the suite rather than asserted in a comment. This file is not in scope for `ccd-workspaces.test.ts`'s containment scan, whose basename filter is at **`:1177`** — `const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));`; `:1176` is `const dir = __dirname;`. `gen-wrappers.test.ts` does not match `/^ccd.*\.ts$/` — and the snippet reads a here-string fed from `$1`, touches no filesystem, and spawns nothing but the one `bash -c`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/gen-wrappers.test.ts`:
 
@@ -3807,12 +3807,12 @@ describe('the manifest grammar cannot grow a column in silence', () => {
 
 The file already imports `spawnSync` (`:18`), `readFileSync`/`writeFileSync` (`:20-22`), `path` (`:23`), `markGenerated` (`:26`) and `generateWrapperBody` (`:25`), and defines `ccrcRoot` (`:31`), `run` (**`:41`** — `:40` is its docstring's closing line), `fixture` (**`:48`** — `:47` likewise) and `UPSTREAM_ID` (`:36`). Nothing new is imported.
 
-- [ ] **Step 2: Run it and watch it pass, then break it**
+- [x] **Step 2: Run it and watch it pass, then break it**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-wrappers.test.ts`
 Expected: PASS. Like Task 6 this pins a property the tree already has, so the measurement is the mutation and not a first-run red.
 
-- [ ] **Step 3: MUTATION CHECK — add the fifth field**
+- [x] **Step 3: MUTATION CHECK — add the fifth field**
 
 In `deploy/gen-wrappers.mjs`, find the `wrapper` line construction — `wrapperLines` is built at **`:308-311`**.
 Measured 2026-09-07: `:308` is `const wrapperLines = generated.map((a) => {`, **`:309` is
@@ -3834,7 +3834,7 @@ Record that the existing test caught this particular mutant too, and then run th
 
 Revert.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 ```bash
 git add server/test/gen-wrappers.test.ts
 git commit -m "test(accounts): pin the wrapper manifest's per-record arity, and measure the tab collapse it guards"
@@ -3859,7 +3859,7 @@ The precedent for how to write it is `server/test/readme-holds.test.ts`, and its
 
 `topology-clean.test.ts` scans `README.md` (`:465` names it explicitly) over the commit range `origin/main..HEAD`, so the table's examples use blessed vocabulary only. As written below it needs none: the prose names the three loopback literals and no other host, and no label at all. If a later edit needs one, the blessed set is `orchard-api` for a hostname and `team·max`/`alt·max`/`team·shared`/`lab·dev0` for a label. No account label from any real roster appears.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/readme-roster-mirror.test.ts`:
 
@@ -3954,12 +3954,12 @@ describe('README: the roster mirror table', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/readme-roster-mirror.test.ts`
 Expected: FAIL on `the mirror table's heading must be findable`, received `-1` — the heading does not exist yet. Every other test fails on the same `expect` inside `mirrorRows()`.
 
-- [ ] **Step 3: Write the section**
+- [x] **Step 3: Write the section**
 
 In `README.md`, replace the account-entry paragraph at **`:641-647`** — currently ending *"…so its permanent unknown is not read as permanent emptiness."* — with the same paragraph, widened, plus the table beneath it:
 
@@ -4026,7 +4026,7 @@ it stops being true.
 
 (the last two lines above are the existing paragraph opener at **`:649`**, unchanged — `:648` is the blank line the insertion ends on. They are quoted only to show where the insertion stops.)
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 From inside `server/`:
 ```
@@ -4047,13 +4047,13 @@ generic and the table's cells are symbol names. That is a claim to measure rathe
 suite is in this list and not in a sentence. `source-bytes.test.ts` because the table's cells were typed by hand
 and it walks every tracked file.
 
-- [ ] **Step 5: MUTATION CHECK — two, in opposite directions**
+- [x] **Step 5: MUTATION CHECK — two, in opposite directions**
 
 **(a) Delete a gate the table names.** Remove the `hidden` block from `shared/roster-json.mjs` (Task 4, Step 2). Expected RED: `every mirror line it names is in shared/roster-json.mjs` — `\`hidden\`: shared/roster-json.mjs does not contain non-boolean hidden` — AND `gen-accounts.test.ts`'s `a non-boolean hidden` row on its CLI half. Two suites, one mutation, which is the property: the prose and the mechanism fail together instead of the prose surviving the mechanism. Revert.
 
 **(b) Add a row with nothing behind it.** Append a sixth table row `| \`exec.region\` | \`REGION_RE\` | \`REGION_RE\` | “an unknown region” |`. Expected RED on all four resolution tests plus `has a row per field this wave added, and no more`, which receives a six-element array. Right reason: a table is only worth reading if a row in it implies something exists. Revert.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add README.md server/test/readme-roster-mirror.test.ts
 git commit -m "docs(readme): the roster's exec fields and the two-validator mirror table, resolved against the files it names"
@@ -4204,7 +4204,7 @@ a value the spec documents. This is a reading of the spec, not an amendment
 to it, so it carries no deviation number; had it been an amendment it would have needed one, and this
 wave's allocated block (D-1854..D-1867) has none spare.
 
-- [ ] **Step 1: Write the failing test** — new file `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — new file `server/test/ccrc-account.test.ts`
 
 ```ts
 // `ccrc account` — the account-connection verb (spec §5). This file owns what
@@ -4454,7 +4454,7 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts`
 
@@ -4468,7 +4468,7 @@ running this file alone; on the branch it has). With Task 1 in place the failure
 - *the dispatcher and the printed list*: `ccd/ccrc has no file-scope ACCT_SUBS: expected null to be
   truthy`.
 
-- [ ] **Step 3: Create `deploy/account-op.mjs`**
+- [x] **Step 3: Create `deploy/account-op.mjs`**
 
 ```js
 #!/usr/bin/env node
@@ -4699,7 +4699,7 @@ process.exitCode = main(process.argv);
 void rosterFromJson; void RosterInvalid; void readFileSync;
 ```
 
-- [ ] **Step 4: Edit `ccd/ccrc`** — four edits, one commit
+- [x] **Step 4: Edit `ccd/ccrc`** — four edits, one commit
 
 **(a) The constants block, inserted at `ccd/ccrc:916`** (between `CCRC_DDNS_UNIT="ccrc-ddns"` at
 `:915` and the `# ── THE PASSPHRASE SECRET` banner at `:917`):
@@ -4764,7 +4764,7 @@ usage: $PROG {doctor|status|adopt|wrappers|account|install|update|uninstall|back
   account) cmd_account "$@" ;;
 ```
 
-- [ ] **Step 5: `cmd_account`, inserted at `ccd/ccrc:3637`**
+- [x] **Step 5: `cmd_account`, inserted at `ccd/ccrc:3637`**
 
 Between `_exp_status`'s closing brace (`:3636`) and the `# ── cmd_install` banner (`:3638`) — after
 the other subcommand-bearing verb and before the install spine, which is where the file's own
@@ -4864,7 +4864,7 @@ cmd_account() {
 }
 ```
 
-- [ ] **Step 6: Run it and watch it pass**
+- [x] **Step 6: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts test/ccrc-cli.test.ts`
 
@@ -4894,7 +4894,7 @@ existing paragraph asserts (today `:180-192`) down by one. That file's stated co
 which dispatches and is not in this line "is a verb nobody can find" — so the two edits are one
 commit or the suite is red either way.
 
-- [ ] **Step 7: Mutation check**
+- [x] **Step 7: Mutation check**
 
 1. **Delete the `ACCT_SUBS` match loop** and let every `$sub` through to the trailing `case`. Re-run
    `-t "both directions"`: RED — `expected 'internal-no-arm' to be 'unknown-subcommand'`. Restore.
@@ -4906,7 +4906,7 @@ commit or the suite is red either way.
    `SyntaxError: Expected ',' or '}' after property value in JSON at position …`. RIGHT REASON: this
    is exactly `ccrc-api`'s bash `printf` shape, and this test is why it did not come across. Restore.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts server/test/ccrc-cli.test.ts
@@ -5014,7 +5014,7 @@ and this verb's JSON answer — but the NAME must be minted before two waves min
 here: **`AccountAuthState`**. Wave 2's route declares the interface under that name; Tasks 29 and 51
 use it; nothing in this repository will carry two `AuthStatus`es.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 /** A roster on the fixture box, plus the accounts.sh projection ccd and the
@@ -5243,7 +5243,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "roster"`
 and `-t "candidates"`.
@@ -5253,7 +5253,7 @@ Expected: FAIL — every case in both new describes reports
 arm. The first assertion to fire is *answers the roster verbatim*:
 `expected 2 to be +0` on `r.code`.
 
-- [ ] **Step 3: The reader and the two node ops** — `deploy/account-op.mjs`
+- [x] **Step 3: The reader and the two node ops** — `deploy/account-op.mjs`
 
 The one reader, placed above `OPS`:
 
@@ -5359,7 +5359,7 @@ and `main` gains the two arms, above the `refuse` fallthrough:
   }
 ```
 
-- [ ] **Step 4: The two bash arms** — `ccd/ccrc`
+- [x] **Step 4: The two bash arms** — `ccd/ccrc`
 
 `ACCT_SUBS` becomes:
 
@@ -5481,7 +5481,7 @@ and the trailing `case` in `cmd_account` grows two arms above its `*)`:
   esac
 ```
 
-- [ ] **Step 5: Run it and watch it pass**
+- [x] **Step 5: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts`
 
@@ -5489,7 +5489,7 @@ Expected: PASS, **20 tests** (10 from Task 20 + 10 here). Then the neighbours th
 generator and the same shape library: `cd server && ./node_modules/.bin/vitest run
 test/gen-accounts.test.ts test/ccrc-wrappers.test.ts test/ccrc-doctor.test.ts` — PASS, unchanged.
 
-- [ ] **Step 6: Mutation check**
+- [x] **Step 6: Mutation check**
 
 1. **Answer with the validator's return value**: replace `out({ ok: true, roster: json })` with
    `out({ ok: true, roster: { version: 1, accounts: rosterFromJson(json).accounts } })`. Re-run
@@ -5535,7 +5535,7 @@ test/gen-accounts.test.ts test/ccrc-wrappers.test.ts test/ccrc-doctor.test.ts` �
    file was then read to its last line, which is the obligation `ccrc-wrapper-shape:150-152` puts on
    this caller. Restore.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -5623,7 +5623,7 @@ any failure. Two things it deliberately does NOT do:
   (`^[a-z][a-z0-9-]{0,31}$`), so no assertion below distinguishes them. It is a convention followed,
   not a guard measured, and the mutation table does not pretend otherwise.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 /** A marked, obviously-fake token. It appears in exactly one place on a healthy
@@ -5768,7 +5768,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "credential"`
 
@@ -5776,7 +5776,7 @@ Expected: FAIL — every case reports
 `bash: line 2: _acct_read_credential: command not found` on stderr and
 `stdout carried 0 lines, not one: expected 1 to be 2` from `oneObject`.
 
-- [ ] **Step 3: The two helpers** — appended to `cmd_account`'s section in `ccd/ccrc`
+- [x] **Step 3: The two helpers** — appended to `cmd_account`'s section in `ccd/ccrc`
 
 ```bash
 # ── THE CREDENTIAL: ONE DOOR, AND IT IS SHUT WHEN NOTHING IS BEHIND IT ─────
@@ -5877,13 +5877,13 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts`
 
 Expected: PASS, **28 tests** (20 + 8 here).
 
-- [ ] **Step 5: Mutation check** — four that go red, and two stated results that do not
+- [x] **Step 5: Mutation check** — four that go red, and two stated results that do not
 
 The two GREENs are reported rather than dressed up. A mutation table whose rows are all red is only
 worth reading if the rows that are not red are in it too.
@@ -5916,7 +5916,7 @@ worth reading if the rows that are not red are in it too.
    `700`. It is refused by argument (`:2309-2313`), not by a test, because the only test that could
    see it would have to assert the mode of a directory this verb is not allowed to touch.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc server/test/ccrc-account.test.ts
@@ -6060,7 +6060,7 @@ The method vocabulary is settled in Task 1, and restated in Task 20 for the mirr
 table would refuse `--method setup-token`, which spec `:417` documents. The anthropic acceptance case
 below exercises that value.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 /** `ccrc account add` with the given overrides folded onto a legal request. A
@@ -6347,7 +6347,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "identity refusal"`
 
@@ -6365,7 +6365,7 @@ when `add` joins `ACCT_SUBS`. This task's own red-to-green cycle is the five `ch
 drive node directly; the rest are written HERE because they are this task's subject and writing them
 later would let Task 24's longer transcript hide which guard fired.
 
-- [ ] **Step 3: `check-add`** — `deploy/account-op.mjs`
+- [x] **Step 3: `check-add`** — `deploy/account-op.mjs`
 
 The import line grows:
 
@@ -6640,7 +6640,7 @@ and the arm, placed after `roster`'s:
   }
 ```
 
-- [ ] **Step 4: `_acct_add_parse`** — `ccd/ccrc`, in the `cmd_account` section
+- [x] **Step 4: `_acct_add_parse`** — `ccd/ccrc`, in the `cmd_account` section
 
 ```bash
 # ── THE `add` FLAG LOOP ────────────────────────────────────────────────────
@@ -6733,7 +6733,7 @@ _acct_add_parse() {
 }
 ```
 
-- [ ] **Step 5: Run the half this task can turn green**
+- [x] **Step 5: Run the half this task can turn green**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "loopback exception"`,
 then `-t "openrouter lane with no"`, `-t "anthropic login lane"`, `-t "check-add reaches its own"`
@@ -6744,7 +6744,7 @@ stay RED with `expected 'unknown-subcommand' to be …` until Task 24 adds `add`
 stated in Step 2 and re-stated in Task 24's Step 2, so neither commit can be mistaken for a green
 suite.
 
-- [ ] **Step 6: Mutation check**
+- [x] **Step 6: Mutation check**
 
 Five of these run at THIS commit, against `check-add` directly. Four need Task 24's arm, and the
 deferral is a fact about the ordering rather than a gap — each is named here because these are this
@@ -6806,7 +6806,7 @@ the message, which is the failure mode a mutation table is supposed to be immune
    then shows `ok: true` on the following line. That is the whole point of the gate: nothing further
    down the arm has an opinion about an external launcher. Restore.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -6948,7 +6948,7 @@ these two commits a freshly added lane could be picked by `_ws_least_loaded`. Wa
 `bash deploy/deploy.sh agent <host>`, so no box ever runs the intermediate state — but a worker who
 stops after this task must not deploy.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 /** The upstream account's own executable — a BINARY, not a wrapper. Doctor says
@@ -7119,7 +7119,7 @@ describe('ccrc account add: the ordered write', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "ordered write"`
 
@@ -7132,7 +7132,7 @@ Expected: FAIL —
 Task 23's sixteen table rows and its two `run`-driven cases are red for the same reason and go green
 in this commit — run `-t "identity refusal"` alongside, and expect the whole file green at Step 5.
 
-- [ ] **Step 3: `add-entry`** — `deploy/account-op.mjs`
+- [x] **Step 3: `add-entry`** — `deploy/account-op.mjs`
 
 `renameSync`, `writeFileSync` and `unlinkSync` join the `node:fs` import.
 
@@ -7213,7 +7213,7 @@ in this commit — run `-t "identity refusal"` alongside, and expect the whole f
   }
 ```
 
-- [ ] **Step 4: `_acct_converge` and `_acct_add`** — `ccd/ccrc`
+- [x] **Step 4: `_acct_converge` and `_acct_add`** — `ccd/ccrc`
 
 `ACCT_SUBS` becomes `"add candidates roster"`, the `case` gains an `add)` arm, and:
 
@@ -7394,7 +7394,7 @@ function as far as every `/name\(\) \{([\s\S]*?)\n\}/` probe in the suites is co
 for the shim's heredoc at `:4412-4415`). The `node -e` block above is the one place to watch: its JS
 closing brace is indented, and it must stay that way.
 
-- [ ] **Step 5: Run it and watch it pass**
+- [x] **Step 5: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts` — PASS, **58 tests**
 (28 + Task 23's 23 + 7 here), Task 23's table included.
@@ -7403,7 +7403,7 @@ Then the suites this commit could have moved:
 `cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts test/ccrc-wrappers.test.ts
 test/gen-accounts.test.ts test/roster-generate.test.ts test/ccrc-cli.test.ts` — PASS, unchanged.
 
-- [ ] **Step 6: Mutation check**
+- [x] **Step 6: Mutation check**
 
 1. **Swap the order** — move the `add-entry` call above `_acct_read_credential`/`_acct_write_secret`.
    Re-run `-t "failure at the roster write"`: RED —
@@ -7439,7 +7439,7 @@ test/gen-accounts.test.ts test/roster-generate.test.ts test/ccrc-cli.test.ts` �
    pre-write validation an unparseable roster is written to the user-owned file and only the NEXT
    step notices — `_inst_roster`'s poisoning case. Restore.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -7532,7 +7532,7 @@ also the copy every future run, and every operator, will reach."* (`_inst_skills
 `:5228-5230`.) And **coordinator before worker**, because the worker skill points at
 `../ccrc-coordinator/references/…` — `_inst_skills`' own ordering, argued at `:5235-5237`.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 /** The four standalone installers, as ARGV RECORDERS at the installed path
@@ -7726,7 +7726,7 @@ describe('ccrc account add: the new home, provisioned', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "the new home"`
 
@@ -7735,7 +7735,7 @@ Expected: FAIL —
 - *converged home*, *clear removes*, *refuses a settings.json*: `bash: line 2: _acct_settings_env:
   command not found`, then `stdout carried 0 lines, not one: expected 1 to be 2`.
 
-- [ ] **Step 3: The jq programs** — `ccd/ccrc`, in the constants block beside `ACCT_SECRETS_DIR`
+- [x] **Step 3: The jq programs** — `ccd/ccrc`, in the constants block beside `ACCT_SECRETS_DIR`
 
 ```bash
 # ── WHICH settings.json ENV KEYS ARE CCRC'S ───────────────────────────────
@@ -7776,7 +7776,7 @@ JQ_ACCT_CLEAR="$JQ_ACCT_MANAGED"'
 '
 ```
 
-- [ ] **Step 4: `_acct_settings_env` and `_acct_provision`** — `ccd/ccrc`
+- [x] **Step 4: `_acct_settings_env` and `_acct_provision`** — `ccd/ccrc`
 
 ```bash
 _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
@@ -7891,7 +7891,7 @@ Both values are Task 24's, read once off the checked plan: `ACCT_BASE_URL_RESOLV
 value `JQ_ACCT_SET` treats as "no endpoint key" — and `ACCT_MODELS_RESOLVED` is the plan's validated
 `models` object, or `{}`, which is what `--argjson` needs.
 
-- [ ] **Step 5: Run it and watch it pass**
+- [x] **Step 5: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts` — PASS, **65 tests**
 (58 + 7 here).
@@ -7901,7 +7901,7 @@ Then, because this task's whole claim about the install spine is a negative one:
 test/ccrc-uninstall.test.ts` — PASS, unchanged, and `ccrc install: the order is stated in one place`
 green with its 23-entry array untouched.
 
-- [ ] **Step 6: Mutation check**
+- [x] **Step 6: Mutation check**
 
 1. **Replace `managed` with a hand-written list** that omits `CLAUDE_CODE_SUBAGENT_MODEL`. Re-run
    `-t "clear removes exactly the managed keys"`: RED —
@@ -7932,7 +7932,7 @@ green with its 23-entry array untouched.
    subshell and the run went on to answer `{"ok":true,…}`. Noted here because this is the guard's
    own task; it is executable one commit later, and Task 26's Step 6 repeats it.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add ccd/ccrc server/test/ccrc-account.test.ts
@@ -7986,7 +7986,7 @@ an operator reads, and the PWA renders them (§12.6's done step). They are named
 the same list is `declare`'s (Task 27): a second spelling would be a lane connected two ways, told
 two different things.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
+- [x] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
 
 ```ts
 describe('ccrc account add: the lane is off, and the verb says what it did not do', () => {
@@ -8072,7 +8072,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "the lane is off"`
 
@@ -8090,7 +8090,7 @@ about the STATE a run ends in, and the only way to guarantee it is to write the 
 run can still fail — the lane becomes pickable the instant the roster entry and the wrapper exist,
 which is two steps earlier.
 
-- [ ] **Step 3: The constants and the two helpers** — `ccd/ccrc`
+- [x] **Step 3: The constants and the two helpers** — `ccd/ccrc`
 
 In the constants block, beside `ACCT_SECRETS_DIR`:
 
@@ -8169,7 +8169,7 @@ built by the new `added` op instead of a bare `roster`:
   _acct_node added "${ans[@]}" || exit $?
 ```
 
-- [ ] **Step 4: The `added` op** — `deploy/account-op.mjs`
+- [x] **Step 4: The `added` op** — `deploy/account-op.mjs`
 
 ```js
   added: {
@@ -8200,7 +8200,7 @@ built by the new `added` op instead of a bare `roster`:
   }
 ```
 
-- [ ] **Step 5: Run it and watch it pass**
+- [x] **Step 5: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts` — PASS, **70 tests**
 (65 + 5 here). That is the whole of this work item's suite; the running totals across the cluster are
@@ -8211,7 +8211,7 @@ Then the whole package, in the foreground, because this is the last task of the 
 `typecheck-tests` and `ccd-session-state` IN ISOLATION before calling any of them a real break —
 CLAUDE.md's known load flakes.
 
-- [ ] **Step 6: Mutation check**
+- [x] **Step 6: Mutation check**
 
 1. **Delete the `: > "$_SVC_REG/$1-disabled"` line.** Re-run `-t "writes the marker"`: RED —
    `expected false to be true`. Re-run `-t "the marker is written before"`: RED —
@@ -8250,7 +8250,7 @@ CLAUDE.md's known load flakes.
    out-of-tree plumbing"`: RED — `expected 30 to be 2`, the two sentences having been split on every
    space into one `--operator-step` each. Restore.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -8418,7 +8418,7 @@ GLOBAL — `ACCT_OUT`, `ACCT_ROSTER_IDS`, `ACCT_ALIAS_OF` here, and `ACCT_LIVE_I
 `x="$(_acct_…)"` for a function that can refuse. `_acct_read_op` is the one exception and it is the
 rule's implementation: it runs the substitution ITSELF, and re-emits what it caught.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `server/test/ccrc-account.test.ts`. ONE fixture helper lands here — `seedRosterJson`, which
 Tasks 28–32 also use. **`plantLauncher` is NOT re-declared**: Task 21 already defines
@@ -8585,7 +8585,7 @@ built from. **`rmSync` is NOT in that list** (measured: the token appears nowher
 it joins the `node:fs` import in THIS commit, or *tells "not a regular file" and "not executable"
 apart* does not compile.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t declare`
 
@@ -8614,7 +8614,7 @@ cases whose names carry the word — *lists an undeclared id-shaped launcher wit
 lists a declared account, and never lists a declared account's alias*. Expect them in the run and
 expect them green; the eight below are this task's.
 
-- [ ] **Step 3: The shared helpers, the candidate predicate, and the subcommand**
+- [x] **Step 3: The shared helpers, the candidate predicate, and the subcommand**
 
 In `ccd/ccrc`, at insertion point A (after `_exp_status`'s `}` at `:3636`), inside the `cmd_account`
 section:
@@ -8931,7 +8931,7 @@ and `main` gains the two arms:
   }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts test/gen-accounts.test.ts`
 
@@ -8940,7 +8940,7 @@ Expected: PASS. The whole file, not only the new describe — Task 23's `-t "bad
 the lift did not change either answer. `gen-accounts` is unchanged: `declare` writes only fields the
 roster model already accepts.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Delete the `-ef` loop** (the `for other …` block and the `[ -z "$ACCT_ALIAS_OF" ]`
     refusal): expect RED on *collapses an alias* — `expected 0 to be 1`, the verb having declared
@@ -8964,7 +8964,7 @@ roster model already accepts.
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -9094,7 +9094,7 @@ it sends a fifth field that may be `""` and then a literal `END`, "so the END se
 truncation duty at index 5" (`ccd/ccrc:1255-1256`), reads with `mapfile -t`, and refuses on a count
 mismatch or a control character (`:1272-1278`). This is that, with eight lines instead of six.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 First, one edit to Task 20's `env(home)`, before its `for (const k of ['CCRC_ADDR', …])` deletion
 line:
@@ -9304,7 +9304,7 @@ describe('ccrc account credential', () => {
 `chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync,
 writeFileSync`), so this step adds no import of its own.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t credential`
 
@@ -9315,7 +9315,7 @@ describe's. `ACCT_SUBS` is `"add candidates declare roster"`, so each red is the
 `expected 'unknown-subcommand' to be 'not-managed'` (and `'secrets-path-unmanaged'`,
 `'credential-empty'`, `'credential-not-stdin'`) on the refusals.
 
-- [ ] **Step 3: The lane reader, the liveness read, and the subcommand**
+- [x] **Step 3: The lane reader, the liveness read, and the subcommand**
 
 `deploy/account-op.mjs`, two ops. `OPS` gains:
 
@@ -9516,14 +9516,14 @@ _acct_credential() {
 `ACCT_SUBS` becomes `"add candidates credential declare roster"`, and the `case` gains
 `credential) _acct_credential "$@" ; return 0 ;;`.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts`
 
 Expected: PASS (9 new cases; Tasks 20–27's blocks still green — including Task 22's own credential
 describe, which now shares this file's tmux poison and is unaffected by it).
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Replace `ACCT_LIVE_MEASURED=false` in the `rc -ne 0` arm with `ACCT_LIVE_MEASURED=true`**:
     expect RED on *answers live:null* — `expected [] to be null`. RIGHT REASON: the unmeasured case
@@ -9551,7 +9551,7 @@ describe, which now shares this file's tmux poison and is unaffected by it).
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -9679,7 +9679,7 @@ are `auth-status` and `probe`, and neither this task nor Task 51's status file s
 (The first draft of this task wrote `AccountAuthStatus`, which is neither the deviation's name nor
 Task 21's; it is corrected here.)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 First, two edits to Task 20's harness. `env(home)`'s deletion array gains the new name — measured, it
 is a second copy of `ccrcEnv`'s three-name list (`server/test/ccrc-cli.test.ts:98`), and both must
@@ -9898,7 +9898,7 @@ describe('ccrc account check: auth status', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "check: auth status"`
 
@@ -9919,7 +9919,7 @@ red — Task 29's `_acct_probe` is a stub that runs no subprocess, so no build o
 `-p ` in `claude-argv`. It is written now because it is the cost claim the whole task exists for, it
 is documented as dormant in the case itself, and Task 30 makes it live in the same file.
 
-- [ ] **Step 3: The reader, the classifier and the short-circuit**
+- [x] **Step 3: The reader, the classifier and the short-circuit**
 
 `ccd/ccrc`, in the file-scope constant block beside `: "${CCRC_HEALTH_TIMEOUT:=5}"` (`:1024`):
 
@@ -10214,7 +10214,7 @@ and `main` gains the two arms:
     'CCRC_ACCOUNT_AUTH_TIMEOUT']) delete env[k];
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts test/ccrc-cli.test.ts`
 
@@ -10231,7 +10231,7 @@ back into one condition and the `-t` filter will not tell you.
 `test/ccrc-cli.test.ts` runs beside it because `ccrcEnv`'s array changed in this commit; its own
 suite is the one that would notice a knob that leaks from the developer's shell.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Make `_acct_auth_status` return early on `[ "$rc" -ne 0 ]`** (read the exit code as the
     answer): expect RED on *reads exit 1 with parseable JSON as an ANSWER* —
@@ -10266,7 +10266,7 @@ suite is the one that would notice a knob that leaks from the developer's shell.
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts server/test/ccrc-cli.test.ts
@@ -10365,7 +10365,7 @@ mechanism rather than a promise: the test below compares the two literals, exact
 `ccrc-doctor.test.ts`'s *names the same directory the wrapper library does* compares `_check_path`'s
 against `WRAPPER_BIN_DIR`'s.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 /** A `claude` that answers `-p` from fixture files: stdout from
@@ -10509,7 +10509,7 @@ in the assertion is a defensive no-op rather than a portability fix. It is kept 
 makes the assertion independent of whether `mkTmp` keeps resolving — but the comment must say what it
 actually does, because a false reason is a fact the next reader will build on.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "check: the probe"`
 
@@ -10536,7 +10536,7 @@ reads a subtype property* is a source scan over a file that does not yet mention
 the same mutation **(v)** is what makes it a mechanism, since it is the change that would introduce
 the read.
 
-- [ ] **Step 3: The probe, and the table**
+- [x] **Step 3: The probe, and the table**
 
 `ccd/ccrc`, in the file-scope constant block:
 
@@ -10655,7 +10655,7 @@ function classifyProbe(row, j, exit) {
     'CCRC_ACCOUNT_AUTH_TIMEOUT', 'CCRC_ACCOUNT_PROBE_TIMEOUT']) delete env[k];
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts test/macos-platform.test.ts test/ccrc-cli.test.ts`
 
@@ -10663,7 +10663,7 @@ Expected: PASS. `macos-platform` is run in the same command deliberately: `ccd/c
 derived corpus (`:175-179`, `:209`), so a bare GNU deadline reintroduced here reds
 *ccd/ccrc carries no un-shimmed GNU call* rather than this file.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Replace `_plat_timeout "$CCRC_ACCOUNT_PROBE_TIMEOUT"` with the bare GNU spelling and a
     literal 60**: expect RED in `macos-platform.test.ts` on *ccd/ccrc carries no un-shimmed GNU call*
@@ -10701,7 +10701,7 @@ derived corpus (`:175-179`, `:209`), so a bare GNU deadline reintroduced here re
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts server/test/ccrc-cli.test.ts
@@ -10794,7 +10794,7 @@ why the last-placeable refusal is evaluated only when the marker is currently ab
 already-disabled lane cannot reduce the placer's choices, and refusing it would be a refusal that
 protects nothing.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 const marker = (home: string, id: string) => join(home, '.cc-sessions', `${id}-disabled`);
@@ -10917,7 +10917,7 @@ describe('ccrc account enable / disable', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "enable / disable"`
 
@@ -10928,7 +10928,7 @@ commit, so every case gets the dispatcher's `unknown-subcommand` envelope at exi
 but --id* the exit code already agrees at 2 while
 `expected 'unknown-subcommand' to be 'unknown-argument'` is the red.
 
-- [ ] **Step 3: The placer's own predicate, and the two arms**
+- [x] **Step 3: The placer's own predicate, and the two arms**
 
 ```bash
 # ── the one flag these two verbs take ─────────────────────────────────────
@@ -11067,14 +11067,14 @@ between `_acct_converge` and `_acct_provision` — becomes `_acct_mark_off "$ACC
   }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts`
 
 Expected: PASS (8 new cases; Tasks 20–30's blocks still green, including Task 26's marker cases,
 which move with the rename and are the mechanism that proves it changed no behaviour).
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Delete the `[ -x "$WRAPPER_BIN_DIR/$a" ]` line from `_acct_placeable`**: expect RED on
     *does NOT count a home-able, enabled lane whose launcher is missing* — `expected 0 to be 1`, the
@@ -11119,7 +11119,7 @@ which move with the rename and are the mechanism that proves it changed no behav
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -11294,7 +11294,7 @@ stdout. Each list is a bash array, passed as a repeated `--kept` / `--removed` /
 `readPairs`' `repeat` shape (Task 20), which Task 21's `candidates` op
 established and Task 26's `added` op already uses for two lists.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 /** A generated wrapper carrying the marker `verifyMarker` calls
@@ -11579,7 +11579,7 @@ describe('ccrc account remove', () => {
 imports, as `ccrc-uninstall.test.ts:39` and `gen-wrappers.test.ts:26` already import them;
 `appendFileSync` joins the `node:fs` import.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t "account remove"`
 
@@ -11592,7 +11592,7 @@ fixture's `env.ANTHROPIC_BASE_URL` is still there and would fail the second asse
 fourteenth, *names the registry field files*, fails on its own terms:
 `expected '#!/usr/bin/env bash…' to contain '_plat_mv_notdir "$tmp" "$_SVC_REG/$1.$2"'`.
 
-- [ ] **Step 3: The four steps, in the one order that works**
+- [x] **Step 3: The four steps, in the one order that works**
 
 ```bash
 # ── the projection's two scalars, read the way `_uninst_graphify_skills` does ──
@@ -11988,7 +11988,7 @@ and `main` gains three arms:
   }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-account.test.ts test/ccrc-wrappers.test.ts test/ccrc-uninstall.test.ts`
 
@@ -11996,7 +11996,7 @@ Expected: PASS (14 new cases). `ccrc-wrappers` and `ccrc-uninstall` are run besi
 task reuses `_uninst_wrappers`' verdict block and the marker module: neither is edited, and this is
 the run that proves it.
 
-- [ ] **Step 5: Mutation check — the config dir is the one that matters**
+- [x] **Step 5: Mutation check — the config dir is the one that matters**
 
   - **(i) THE CONFIG-DIR MUTATION (§14's own words).** Add `rm -rf -- "$cfg"` immediately before
     `[ -n "$cfg" ] && kept+=("$cfg")`: expect RED on *removes what it owns, keeps what it does not* —
@@ -12050,7 +12050,7 @@ the run that proves it.
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc deploy/account-op.mjs server/test/ccrc-account.test.ts
@@ -12178,7 +12178,7 @@ other two, `CCRC_AUTH_TIMEOUT` and `CCRC_AUTH_SCRIPT` (Tasks 51 and 54), are rea
 (`makeCcdHarness` + `ghContainedEnv`) rather than to `ccrcEnv`'s deletion list — the array is a
 claim about which PROGRAM reads a name, not about which wave added one.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 First the two fixture edits. `installCcrc` (`server/test/ccrc-doctor.test.ts:81-101`) gains four
 lines after its `plantAuthModule(join(home, 'ccrc'));`:
@@ -12426,7 +12426,7 @@ describe('ccrc doctor: accounts', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t accounts`
 
@@ -12444,7 +12444,7 @@ Also FAIL in the same run, once the table entry lands without the function, is
 *every name in the table has a `_check_<name>` function, and vice versa* (`:1089-1103`):
 `expected 'MISSING _check_accounts' to be ''`. That is the point of adding both in Step 3.
 
-- [ ] **Step 3: The table entry, the check, and the reader**
+- [x] **Step 3: The table entry, the check, and the reader**
 
 `ccd/ccrc-doctor-checks`, inside `CCRC_DOCTOR_CHECKS` immediately after `wrappers` (`:190`):
 
@@ -12667,7 +12667,7 @@ this commit; the line says 26):
 ccrc doctor      # every check in the table: binaries, units, roster, accounts, hooks, auth posture
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts test/typecheck-tests.test.ts`
 
@@ -12681,7 +12681,7 @@ is not optional). None carries a hand-kept cardinal, which is why the entry cost
 that file. `typecheck-tests` is run beside it because the `RosterEntry` widening is a
 compile-time-only change, invisible to every runtime assertion.
 
-- [ ] **Step 5: Mutation check**
+- [x] **Step 5: Mutation check**
 
   - **(i) Delete the `accounts` line from `CCRC_DOCTOR_CHECKS`** (leaving `_check_accounts`
     defined): expect RED on *every name in the table has a `_check_<name>` function* —
@@ -12728,7 +12728,7 @@ compile-time-only change, invisible to every runtime assertion.
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc-doctor-checks deploy/account-op.mjs README.md server/test/ccrc-doctor.test.ts
@@ -12757,7 +12757,7 @@ Enrolment in `REQUIRED_VERB_FLAG` moves with it, and for a reason worth stating:
 
 The verb is flag-anchored in BASH regardless — `[[ $# -ge 2 && $1 == --id ]] || die` — following `cmd_coord_pause`'s exact shape at `ccd/ccd:5102`, so wave 2's enrolment describes a refusal that already exists rather than inventing one. And the pane goes through `_tmux_new_session` (`ccd/ccd:11547`) rather than `_spawn`: `_spawn_start` (`ccd/ccd:11699`) reads `wrapper`/`workdir`/`uuid` out of the registry and dies on `incomplete registry for '<id>'` (`ccd/ccd:11721`) for an id that is an ACCOUNT and not a session, and `_spawn_settle` (`:11813`) then drives `_accept_first_run_prompts`, which presses `Down`/`Enter` into the pane at `ccd/ccd:11492-11506`. An auth pane that a ccd typer answers is a pane whose sign-in has been dismissed by a robot.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/ccd-account-pane.test.ts`. The filename matters: `server/test/ccd-workspaces.test.ts:1177` selects `/^ccd.*\.ts$/`, so every `execFileSync('bash'` in this file must carry `ghContainedEnv(` plus `systemd: true` and `tmux: true` inside a twelve-line lookback window (`SCAN_LOOKBACK_LINES`, `ccdWsHelpers.ts:39`; the window is `[i-12, i+8]`, `ccd-workspaces.test.ts:1192`).
 
@@ -12959,14 +12959,14 @@ describe('ccd account-pane — the structural guards', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-pane.test.ts`
 Expected: FAIL — **11 red of 12, and the twelfth is green on purpose.** The five argv cases exit 1 for the right reason but the wrong words — ccd's generic dispatcher answers `usage: ccd {start|ensure|…}` (`ccd:13453`), so `expect(r.stderr).toContain('usage: ccd account-pane --id <id>')` and the three token assertions all fail. The four pane cases fail on `JSON.parse('')` (`SyntaxError: Unexpected end of JSON input`) because the dispatcher printed nothing to stdout. Two of the three structural cases fail: `goes through _tmux_new_session and never through _spawn` with `AssertionError: ccd/ccd has no cmd_account_pane`, and `the verb is dispatched, advertised and named in the usage line` on the first of its three regexes, `expected '…' to match /^ {2}account-pane\) shift; cmd_account_pane "\$@" ;;$/m`.
 
 The twelfth, `EVERY tmux send-keys in ccd targets a REGISTRY id`, **passes on the current tree and is supposed to** — it is a guard over ccd as it already is, not over anything this task adds, and it has nothing to go red on until somebody writes a literal-target `send-keys`. Measured 2026-09-07: `grep -n 'tmux send-keys' ccd/ccd` returns exactly nine lines — 11340, 11492, 11495, 11500, 11503, 11506, 11907, 11911, 13417 — and every one of them matches `/tmux send-keys -t "(\$t|\$\(_tmux "\$id"\))"/`. So the honest red is eleven; a headline claiming twelve asserts a failure this tree cannot produce, and an executor who reads only the headline stops here on a red that is not there. Step 5's second mutation is where that guard earns its place.
 
-- [ ] **Step 3: Add the verb, its dispatcher arm, its caps entry and its usage token**
+- [x] **Step 3: Add the verb, its dispatcher arm, its caps entry and its usage token**
 
 In `ccd/ccd`, insert at line 5117 (immediately after `cmd_coord_pause`'s closing `}` at `:5116` and before `cmd_ws_archive` at `:5118`, so the two flag-anchored verbs read together):
 
@@ -13086,7 +13086,7 @@ node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:f
   || { echo "re-stamp failed"; exit 1; }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```bash
 set -uo pipefail
@@ -13097,7 +13097,7 @@ cd "$(git rev-parse --show-toplevel)/server" || exit 1
 
 Expected: PASS — 12 in `ccd-account-pane`, and the three neighbours green. `ccd-archive`'s caps↔dispatcher parity (`:156-190`) now sees `account-pane` on both sides; `caps-token-shape` is unmoved, because its scraper takes only bare `echo <token>` lines (`:42-54`, the regex at `:49`) and the heredoc entry is not one; `ownership` verifies `ccrc-unmodified`.
 
-- [ ] **Step 5: Mutation — route the pane through `_spawn` and watch it go red**
+- [x] **Step 5: Mutation — route the pane through `_spawn` and watch it go red**
 
 In `cmd_account_pane`, replace the `_tmux_new_session -d -s "$pane" …` call with `_spawn "$id" new`, re-stamp, and run `cd server && ./node_modules/.bin/vitest run test/ccd-account-pane.test.ts`.
 Expected: RED, three failures — `creates cc-auth-<id> at 120x40 running the helper` fails on `JSON.parse('')` after the real `_spawn` dies with `ccd: incomplete registry for 'claude-a'`; `presses NO key into the pane it just made` fails with the `accept …` line `_accept_first_run_prompts` writes into `h.calls()`; and `goes through _tmux_new_session and never through _spawn` fails with `the auth pane must never be a _spawn — see the header`, on the COMMENT-STRIPPED body, which is the point of stripping it. Restore the line and re-stamp.
@@ -13105,7 +13105,7 @@ Expected: RED, three failures — `creates cc-auth-<id> at 120x40 running the he
 Second mutation, on the typer guard: add `tmux send-keys -t "cc-auth-$id" Enter` to `cmd_account_pane`, re-stamp, re-run.
 Expected: RED twice — `EVERY tmux send-keys in ccd targets a REGISTRY id` with `send-keys with a target ccd did not derive from a registry id: tmux send-keys -t "cc-auth-$id" Enter`, and `goes through _tmux_new_session and never through _spawn` on `this verb sends no keys`. Restore and re-stamp.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd server/test/ccd-account-pane.test.ts
@@ -13135,7 +13135,7 @@ Second, the helper cannot source ccd or ccrc to get `_plat_timeout`: both run co
 
 The status file is a dot-DIRECTORY for the reason `$REG/.lifecycle/` is one (`ccd/ccd:1611-1614`): `_reg_purge`'s glob is `$REG/<id>.*` and ids never begin with a dot, so a per-session field could never hold this and a dotted directory is untouchable. `$REG` gains a NINTH dot-prefixed artifact, which amends two comments — the LC block's "counted seven dot-prefixed artifacts and this block adds an eighth" (`:1617-1618`) and `_ws_project_valid`'s "EIGHT dot-prefixed artifacts live under `$REG`; the four above are reachable, these four are not" (`:3427-3438`). Nothing reds when those drift, which is precisely why they must be edited by hand in this commit; `.auth/` joins the UNREACHABLE half, because no id's purge glob matches a bare directory and `rm -f` cannot take one regardless (`ccd:3432-3435`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/ccd-account-auth.test.ts`:
 
@@ -13294,12 +13294,12 @@ describe('ccd-account-auth — the platform shim it had to carry', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL — and specifically, the file does not COLLECT. `describe('ccd-account-auth — the platform shim it had to carry')` reads `HELPER` in its body, which vitest evaluates at collection, so the run reports `Error: ENOENT: no such file or directory, open '…/ccd/ccd-account-auth'` against the FILE and runs none of its ten tests. That is the honest red for a file that does not exist yet; a step claiming "10 failed" would be describing a run that never happened.
 
-- [ ] **Step 3: Write the helper's skeleton**
+- [x] **Step 3: Write the helper's skeleton**
 
 Create `ccd/ccd-account-auth`, mode 755:
 
@@ -13559,7 +13559,7 @@ and becomes:
 
 Re-stamp `ccd/ccd` with the command in Task 50 Step 3.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```bash
 set -uo pipefail
@@ -13570,7 +13570,7 @@ cd "$(git rev-parse --show-toplevel)/server" || exit 1
 
 Expected: PASS — 10 in `ccd-account-auth`, and `macos-platform` gains one automatically-derived case, `ccd/ccd-account-auth carries no un-shimmed GNU call`, green. That case appears without editing `macos-platform.test.ts` at all, because its corpus is `readdirSync(ccdRoot)` (`:175-179`); if it does NOT appear, the file is missing its `#!` first line and the derivation skipped it.
 
-- [ ] **Step 5: Mutation — spell `timeout 600` and watch two suites go red**
+- [x] **Step 5: Mutation — spell `timeout 600` and watch two suites go red**
 
 No caller of `_auth_timeout` exists yet, so mutate the shim itself: replace `_auth_timeout`'s first two body lines (`local bin` and the `for bin in timeout gtimeout` loop through its `done`) with `timeout "$@"; return $?`.
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts test/macos-platform.test.ts`
@@ -13583,7 +13583,7 @@ Expected: RED on `is 0600 in a 0700 DOT-directory the registry globs cannot see`
 Third mutation, on the byte-copy pin: delete the nine-line `|| exit 0` comment block (`ccd:363-371`, measured) from `_auth_timeout`'s body only.
 Expected: RED on `_auth_timeout carries _plat_timeout's body byte for byte` alone, with the comment block shown as the diff — which is the measurement that makes "byte for byte" a mechanism rather than a word. `macos-platform` stays green, because a deleted comment spells no GNU call. Restore.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd-account-auth ccd/ccd server/test/ccd-account-auth.test.ts
@@ -13610,7 +13610,7 @@ Two consequences shape the code. **The escape must be stripped before the URL is
 
 So `login` runs **the upstream launcher with `CLAUDE_CONFIG_DIR` set explicitly**, which is what `spec:514-516` actually says: *"it runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR=~/<suffix>` (the lane's REAL config dir — the point is to sign that dir in) and `CLAUDE_CODE_OAUTH_TOKEN` unset"*. That is the same shape `setup-token` takes in Task 54, and the two are now one rule rather than two: **run the upstream launcher, and set the config dir this method wants.** The only thing that differs between the methods is WHICH dir — the lane's own for `login`, a throwaway for `setup-token`. The generated wrapper's export is a convenience for an interactive shell; it is not the mechanism here, and leaning on it would have made `env -u` decorative.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/ccd-account-auth.test.ts`:
 
@@ -13760,12 +13760,12 @@ describe('ccd-account-auth — login over a plain pipe', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL, 8 new failures over the 10 already green. The four strip cases fail because `fn` throws — `bash: line 1: _auth_strip_osc8: command not found`, exit 127, so `execFileSync` raises and the assertion never runs. The four login cases fail against the Task 51 stub: `ccd-account-auth: not-implemented: login` on stderr, `status('claude-a')` reads `{state:'failed', error:'not-implemented: login'}`, so `expected undefined to be 'https://claude.com/…'` and `expected 'failed' to be 'expired'`.
 
-- [ ] **Step 3: Implement the pipes, the strip and the pump**
+- [x] **Step 3: Implement the pipes, the strip and the pump**
 
 In `ccd/ccd-account-auth`, above the stubs:
 
@@ -13958,12 +13958,12 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: PASS, 18 tests. Each of the four login cases takes a little over `CCRC_AUTH_TIMEOUT=6` seconds, because the fixture blocks on a stdin nobody feeds and the deadline is what ends it — that is the behaviour under test, not slowness.
 
-- [ ] **Step 5: Mutation — delete the strip and watch the doubled URL land in the status file**
+- [x] **Step 5: Mutation — delete the strip and watch the doubled URL land in the status file**
 
 In `_auth_line`, replace `clean="$(_auth_strip_osc8 "$clean")"` with `clean="$clean"`.
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
@@ -13975,7 +13975,7 @@ Expected: RED on `reaches waiting-code on a prompt that carries no newline, then
 Third mutation, on the CR strip: delete `clean="${raw%$'\r'}"` and read from `$raw` directly.
 Expected: GREEN here and RED in Task 54, where the child runs under a pty — recorded now so the executor does not conclude the line is dead. `login` has no pty and no CR, so this task cannot measure it; Task 54's `captures the token to a 0600 file` fails with a trailing CR inside the written secret.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd-account-auth server/test/ccd-account-auth.test.ts
@@ -13998,7 +13998,7 @@ This task exists because §6 says two things that only reconcile one way. It say
 
 The credential half is the point of the whole method. Claude Code writes `~/<suffix>/.credentials.json` itself, 0600 — measured across every existing `~/.claude*` dir on this fleet (`spec:479-482`), which is also the evidence that every lane the operator runs today was made by logging in rather than by pasting a token. So a `login` lane has **no `~/.cc-secrets/<id>-*.env` and no `exec.secretsFile` roster field at all**: there is nothing for ccrc to hold, which is a stronger custody claim than any careful handling of a secret it did hold. `ccrc account credential --id X` must therefore answer `not-managed` on such a lane (Task 28's refusal, `spec:419`), and this task is where that fact becomes measurable rather than asserted.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/ccd-account-auth.test.ts`:
 
@@ -14102,12 +14102,12 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL, 5 new failures. Nothing reads fd 7, so the feeder's `printf … > "$1"` blocks on a FIFO whose only other end is the helper's own read-write fd 9… no — on `$AUTH_RUN/in`, whose read-write end fd 7 the helper holds, so the WRITE completes and the line sits in the pipe unread. The child never receives it, `IFS= read -r got` in the fixture never returns, and the run ends at `CCRC_AUTH_TIMEOUT=45` with `expired`. So: `forwards the code the operator typed` fails with `ENOENT … seen-code`; `says exchanging on stdout` with `expected '…' to contain '[code written to stdin by ccrc — not shown]'`; `never prints the code` PASSES (vacuously — nothing printed it because nothing forwarded it); `leaves the credential where Claude Code put it` fails on `expected false to be true` for `.credentials.json`; `refuses done when the child exited 0` fails with `expected 'expired' to be 'failed'`. **Four fail, one passes vacuously** — and that one is worth naming, because a canary test that passes for the wrong reason is exactly what Step 5's mutation exists to disprove.
 
-- [ ] **Step 3: Add the forward, and call it on every tick**
+- [x] **Step 3: Add the forward, and call it on every tick**
 
 In `ccd/ccd-account-auth`, immediately above `_auth_line`:
 
@@ -14149,12 +14149,12 @@ and in `_auth_pump`'s timeout branch, replace the four-line "TASK 53 ADDS THE CO
       _auth_forward_code
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: PASS, 23 tests.
 
-- [ ] **Step 5: Mutation — print the code, and watch the canary find it**
+- [x] **Step 5: Mutation — print the code, and watch the canary find it**
 
 In `_auth_forward_code`, replace `printf '[code written to stdin by ccrc — not shown]\n'` with `printf 'code: %s\n' "$code"`.
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
@@ -14169,7 +14169,7 @@ Second mutation, on the custody assertion: after the `printf '%s\n' "$code" >&9`
 `SECRETS_DIR` is declared in Task 51's globals block; `_auth_write_secret` does NOT exist yet (Task 54 introduces it), so a mutation calling it would be `command not found` under `set -uo pipefail` with no `-e`, would create nothing, and would leave this suite green while looking like a red-first measurement.
 Expected: RED on `leaves the credential where Claude Code put it, and ccrc holds NOTHING` — `expected true to be false` on `existsSync(<home>/.cc-secrets)`. Restore.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd-account-auth server/test/ccd-account-auth.test.ts
@@ -14211,7 +14211,7 @@ The config dir is a **throwaway**, `~/.ccrc/auth-scratch/<id>` (`spec:518-521`),
 
 **Two harness facts the draft got wrong, recorded because they change the code and not only the test.** First, `CCD_OS` is DERIVED at source time from `$OSTYPE`, so passing `{ CCD_OS: 'linux' }` in a test's environment is inert — the helper overwrites it three lines into the file. The argv tests therefore set `CCD_OS` *in the snippet*, after the source, which is the only place the assignment survives; that also means both arms are measured on both platforms rather than one of them being skipped forever on the box that runs CI. Second, **`pane-unsupported-here` cannot be provoked by emptying `PATH`.** `ghContainedEnv` returns `PATH: \`${bin}:${env['PATH'] ?? ''}\`` (`ccdWsHelpers.ts:245`), so a caller-supplied empty directory leaves only `harnessBin` — which holds `gh`, `systemctl`, `launchctl`, `systemd-run` and `tmux` and nothing else. `mkdir`, `date`, `jq`, `mv` and `chmod` all vanish with `script`, `_auth_publish` returns 1 at its first line, `_auth_die` runs `_auth_publish || true`, no status file is written at all, and the assertion on that file gets `ENOENT` instead of the refusal it came to measure. That is why Task 51 shipped `CCRC_AUTH_SCRIPT`: the knob names the pty vehicle, so a test can point it at a name no box has while leaving the rest of PATH intact.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/ccd-account-auth.test.ts`:
 
@@ -14342,12 +14342,12 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL, 7 new failures. The four behavioural cases and the refusal case all die on the Task 51 stub — `ccd-account-auth: not-implemented: setup-token` on stderr, `status('claude-a')` reading `{state:'failed', error:'not-implemented: setup-token'}` — so `expect(r.code).toBe(0)` fails three times, `the canary appears in that ONE file` fails at `execFileSync('grep', …)` (grep exits 1 on no match and throws), and `answers pane-unsupported-here` fails on `expected 'not-implemented: setup-token' to contain 'pane-unsupported-here'`. The two argv cases fail because `fn` throws: `bash: line 1: _auth_script_argv: command not found`, exit 127.
 
-- [ ] **Step 3: Implement the capture, the secret write and the platform branch**
+- [x] **Step 3: Implement the capture, the secret write and the platform branch**
 
 In `ccd/ccd-account-auth`, above `_auth_line`, and REPLACING the `_auth_capture_token` stub Task 51 shipped:
 
@@ -14459,12 +14459,12 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: PASS, 30 tests — no skips, because both `script` arms are argv-shape tests that set `CCD_OS` in the snippet rather than platform-gated `it`s.
 
-- [ ] **Step 5: Mutation — comment out the filter, watch the canary appear**
+- [x] **Step 5: Mutation — comment out the filter, watch the canary appear**
 
 In `_auth_line`, comment out `_auth_capture_token "$clean" && return 0`.
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
@@ -14496,7 +14496,7 @@ entirely on this fixture's token line actually carrying a CR through the pty. Co
 way; a guard whose deletion changes nothing is exactly what this repo's mutation discipline exists to catch,
 and shipping one silently is worse than shipping neither.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd-account-auth server/test/ccd-account-auth.test.ts
@@ -14521,7 +14521,7 @@ The one thing this method publishes that the others do not is `userCode`. §11 s
 
 An `external` lane's id and its launcher are the same name by construction (`spec:418`, the doctor's `wr_cands` rule with its `-ef` alias collapse), so the program to run is `$WRAPPER_DIR/$AUTH_ID login`. `shared/wrapper.mjs:89-93` refuses to generate a wrapper for `external` outright — pinned by `wrapper-generate.test.ts` — so there is no ccrc-written file in this path at all: the launcher is somebody else's and stays that way.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/ccd-account-auth.test.ts`:
 
@@ -14608,12 +14608,12 @@ describe('ccd-account-auth — openai-login runs somebody else\'s program', () =
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL, 5 new failures — four against the Task 51 stub with `ccd-account-auth: not-implemented: openai-login` on stderr (`expected 1 to be 0`, `ENOENT … seen-argv`, `expected undefined to be 'WXYZ-4321'`, `expected '' to contain '[token captured to …]'`), and `refuses when the launcher is not there` failing on `expected 'ccd-account-auth: not-implemented: openai-login' to contain 'launcher-absent'` — it exits 1 and stamps `failed`, so only the message is wrong, which is exactly the shape of a refusal that is not yet the right refusal.
 
-- [ ] **Step 3: Implement the method and the device-code reader**
+- [x] **Step 3: Implement the method and the device-code reader**
 
 In `ccd/ccd-account-auth`, replacing the `_auth_user_code` stub Task 51 shipped, beside `_auth_capture_token`:
 
@@ -14670,12 +14670,12 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: PASS, 35 tests.
 
-- [ ] **Step 5: Mutation — mint a config dir for the external lane, and watch the custody claim break**
+- [x] **Step 5: Mutation — mint a config dir for the external lane, and watch the custody claim break**
 
 Add `mkdir -p "$SCRATCH_ROOT/$AUTH_ID"` to `_auth_openai_login` before the run.
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
@@ -14684,7 +14684,7 @@ Expected: RED on `holds nothing: the credential is the launcher's file and ccrc 
 Second mutation, on the first-match rule: change `[[ -z "$AUTH_CODE" ]] || return 0` to `:`.
 Expected: RED on `publishes the FIRST device code, which §11 says is not a secret and is shown` — `expected 'MNOP-0000' to be 'WXYZ-4321'`, because the fixture's "Waiting for approval" line overwrites the code. This reds against the fixture AS SHIPPED IN STEP 1: the second code line is in `OAI_REPLAY` from the start, precisely so that this mutation measures the guard rather than requiring the test to be edited mid-mutation, which would be a measurement of an edit. Restore.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccd-account-auth server/test/ccd-account-auth.test.ts
@@ -14726,7 +14726,7 @@ The second edit, `_uninst_wrappers`' toolchain `case` at `:6318` (`case "$name" 
 
 Adding `ccd-account-auth` to `TOOLCHAIN_EXECUTABLES` (`deploy/gen-wrappers.mjs:160`) is **defence in depth AND a real refusal, and the draft had the mechanism backwards**. The orphan scan's order is: `if (!ID_RE.test(name) || rosterIds.has(name)) continue;` (`:352`), then `if (TOOLCHAIN_EXECUTABLES.has(name)) continue;` (`:357`), and only THEN `readIfScript` (`:364`) and `if (verifyMarker(text) === 'foreign') continue;` (`:366`). The Set check runs BEFORE the marker test, not only for marked files — the file's own comment at `:353-356` says so in those words (*"before the marker test, because the marker is exactly what made these three reachable here"*). So whether an unlisted `ccd-account-auth` is reported as an orphan turns on whether it carries a ccrc marker; it does not (only `ccd/ccd` is stamped, `ownership.test.ts:139-153`), so today it would fall out at `:366` and the live counter-example is `ccrc-api` — installed by `deploy.sh:624`, `ID_RE`-shaped, absent from the Set, and never reported. Listing it is still right: it stops the answer depending on whether someone later stamps the file.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `server/test/ccd-account-auth.test.ts`:
 
@@ -14816,14 +14816,14 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts`
 Expected: FAIL, 5 new failures — `expected [ 'account-pane', 'attach', … ] to contain 'account-v1'`; `expected '…' to contain "const KNOWN_CAPABILITY_TOKENS = ['account-v1', …"`; `expected '…' to contain '_inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755'`; `expected '…' to contain 'case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-auth) continue ;; esac'`; and, in `the agent deploy ships it, BEFORE the agent restart`, `expected '…' to contain 'install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755'`.
 
 That last message is the `toContain` on the FIRST line of that `it`, not the `shipAt` one. An earlier draft of this step predicted `the helper is not shipped on the agent lane` (`expected -1 to be greater than -1`), and that message can never be printed on a red tree: vitest stops an `it` at its first failing assertion, and `expect(deploySh).toContain(…)` runs before `shipAt` is even computed. The labelled `shipAt` assertions are there for the OTHER failure — a future edit that ships the helper but puts it after the agent restart — which is a real mode and the only one they can report.
 
-- [ ] **Step 3: Advertise it, install it, ship it, and take it back off**
+- [x] **Step 3: Advertise it, install it, ship it, and take it back off**
 
 **`ccd/ccd`** — first correct the three stale line numbers in the `stop-surface` comment. Lines `:4784-4788` currently read:
 
@@ -15087,7 +15087,7 @@ And a per-file case beside the `ccd-graph-sweep` one at `:1768-1778`, as a plain
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```bash
 set -uo pipefail
@@ -15104,7 +15104,7 @@ npm ci || { echo "agent npm ci failed"; exit 1; }
 
 Expected: PASS on all of them — 40 in `ccd-account-auth`, 12 in `ccd-account-pane`, and `ccrc-uninstall` one case longer than it was (the stamped-fixture `it` added in Step 3). The `npm ci` is a STEP rather than an assumption: `agent/node_modules` does not exist in this worktree (only `server/node_modules` does), and a bare `./node_modules/.bin/vitest` there is a `No such file or directory`.
 
-- [ ] **Step 5: Mutation — advertise the token without classifying it, and watch `ccd-archive` red twice**
+- [x] **Step 5: Mutation — advertise the token without classifying it, and watch `ccd-archive` red twice**
 
 Revert `server/test/ccd-archive.test.ts:154` to `['actor-flags-v1', 'lifecycle-v1', 'stop-surface']` and run `cd server && ./node_modules/.bin/vitest run test/ccd-archive.test.ts`.
 Expected: RED on `advertises exactly the verbs the dispatcher implements, plus the known capability tokens` at `:184` — `expected [ 'account-pane', 'account-v1', 'attach', … ] to deeply equal [ 'account-pane', 'attach', … ]`, the token counted as a phantom verb. Restore, and confirm the other direction by deleting `echo account-v1` from `ccd/ccd` (re-stamp), which reds the same test at `:189` with `expected [ 'actor-flags-v1', 'lifecycle-v1', 'stop-surface' ] to deeply equal [ 'account-v1', 'actor-flags-v1', 'lifecycle-v1', 'stop-surface' ]`. Restore and re-stamp.
@@ -15120,7 +15120,7 @@ Expected: RED three times — `ccrc-uninstall`'s preserve-set loop with `ccd-acc
 Fourth mutation, on the wrapper misclassification: with everything restored, delete `|ccd-account-auth` from `_uninst_wrappers`' `case` at `ccd/ccrc:6318` and re-run the same two files.
 Expected: RED twice — `a STAMPED ccd-account-auth is still the bin arm's subject, never counted as a wrapper` with `a toolchain executable was counted in the wrapper census`, because `_uninst_wrappers` now reads `ccrc-unmodified` off the stamped fixture and prints `uninstall: wrappers: removed …/ccd-account-auth (marker-verified: exactly what ccrc last wrote)`; and `the uninstall takes it back off PATH, and does not mistake it for a wrapper` on its `case` text pin. Note what stays GREEN: the preserve-set loop at `:477`, because the file is gone either way — only which arm removed it, and what the operator is told about it, changed. That is exactly why the stamped fixture had to exist for `:6318` to be a mechanism rather than a comment. Restore.
 
-- [ ] **Step 6: Commit, then deploy agent-first**
+- [x] **Step 6: Commit, then deploy agent-first**
 
 ```bash
 git add ccd/ccd ccd/ccrc deploy/deploy.sh deploy/gen-wrappers.mjs \
@@ -19470,7 +19470,7 @@ PRODUCT side carries that knowledge and the FIXTURE did not, so a test written t
 property failed for a reason with nothing to do with security. Recorder now tries GNU, falls back to
 BSD, and normalises the same way `_plat_mode` does.
 
-### D-2614 — the BSD `script(1)` arm shipped labelled UNVERIFIED, and the first real Mac refutes it — OPEN
+### D-2614 — the BSD `script(1)` arm shipped labelled UNVERIFIED, and the first real Mac refuted it — DIAGNOSED, fixed by D-2673
 
 `_auth_setup_token` mints under a pty because `claude setup-token` is an Ink full-screen TUI that
 produces ZERO BYTES without one. The two userlands spell that differently, so `_auth_script_argv`
@@ -19500,14 +19500,14 @@ commit is. It is booked, not buried.
 log saw only the setup-token describe and this entry said "one of the two". The run on `42e31622` shows
 **9 failures — 5 setup-token and 4 openai-login** — and `_auth_openai_login` has the identical shape:
 `_auth_script_argv` for the argv, then `<"$AUTH_RUN/in.child"` for stdin. Every method that goes through
-`script(1)` fails on macOS; every method that does not (`login`, `paste`, which drive a plain pipe with
-no pty at all — measured 2026-09-07) passes. That is a much stronger fit for the tcgetattr hypothesis
-than the first reading was: the common factor is exactly `script` + a FIFO on stdin, and nothing else.
+`script(1)` fails on macOS, on both runs. The `script`-plus-FIFO fit is a much stronger one for the
+tcgetattr hypothesis than the first reading was. **The corollary drawn from it was not, and D-2662
+retracts it** — see D-2661: the pty-less lane failed too, on the very next run.
 
-**What it does NOT threaten:** the wave's DEFAULT path. `login` is the method an operator reaches for
-first and it needs no pty; `paste` likewise. What is broken on macOS is the PAIR of pane-bound methods.
-`test-macos` is not a required check on this repo, so nothing about this blocks the PR mechanically —
-which is exactly why it is written down here instead.
+**What it threatens is no longer bounded to the pane-bound pair** (D-2662). This entry claimed the
+wave's DEFAULT path was untouched because `login` and `paste` need no pty. One run later, on identical
+bytes, `login`'s expiry case hung (D-2661). `test-macos` is not a required check on this repo, so none
+of this blocks a merge mechanically — which is exactly why it is written down here instead.
 
 **WHY THE FIX IS NOT MECHANICAL, stated so nobody applies the obvious one blind.** "Drop the stdin
 redirect" is the shape of the answer, but `_auth_pump` calls `_auth_forward_code`, which writes into
@@ -19515,3 +19515,392 @@ that same FIFO — so removing it unconditionally would take the code channel aw
 that can be asked for one, on Linux, where all of this currently works. Establishing which of the two
 actually needs that channel is the real task, and it is a credential path being changed on a platform
 no box here can run, verifiable only through a ~35-minute CI cycle.
+
+### D-2661 — the pty-less `login` lane hung to the hard cap against a six-second deadline, on macOS, intermittently — OPEN
+
+> **STILL OPEN, and now open for a BETTER REASON — both stated candidates are REFUTED (2026-09-14).**
+> Measured on macos-latest by `server/test/platform-hazards.test.ts`, asking the shim DIRECTLY rather
+> than through the helper, because D-2736's backstop masks the symptom: **(a) the deadline DOES fire** —
+> `_auth_timeout 2 sleep 60` returned 124 in 2 109 ms; **(b) EOF DOES arrive** on the output FIFO after
+> it fires, in 2 143 ms, even with a descendant that outlives its parent holding the inherited stdout.
+> Neither "it never fires" nor "a descendant holds the FIFO" is the cause. Taken with D-2738's refutation
+> of the missing-`gtimeout` theory, **all three hypotheses this entry has carried are now dead**, and the
+> original 60 046 ms observation has no explanation. What the probe found instead is a REAL and separate
+> defect, D-2764 — the shim never escalates to KILL — which is not this, because the fixture's launcher
+> was never shown to ignore TERM. Do not close D-2661 on D-2764's evidence.
+
+D-2614 established that both PANE-BOUND methods fail on macOS and reasoned that `login` and `paste`,
+which drive a plain pipe and touch no `script(1)`, were therefore unaffected. **The next macOS run
+falsified the second half.**
+
+Two runs, the same executable bytes (`42e31622` → `ecd953b0` changes zero non-comment lines in
+`ccd/ccd-account-auth`, measured with `git diff -U0 … | grep -v '^[+-][[:space:]]*#'` = 0):
+
+| run | Tests failed | `the mint exited 1` | `login` expiry case |
+|---|---|---|---|
+| `42e31622` | 9 | 9 | passed |
+| `ecd953b0` | **10** | 9 | **failed, 60046 ms** |
+
+The tenth is `ccd-account-auth — login over a plain pipe > reaches waiting-code on a prompt that carries
+no newline, then expires`. **It is not a slow-runner artifact of a tight budget.** `runLogin` sets
+`CCRC_AUTH_TIMEOUT: '6'` — the fixture's own sibling comment says "6, NOT 45" precisely so a slow leg
+cannot reach the test timeout — and wraps the child in an `execFileSync` cap of 60_000 ms. 60046 ms is
+that hard cap. A six-second deadline that runs sixty seconds did not fire at all.
+
+**That signature has a precedent on this exact leg, recorded in `.github/workflows/ci.yml` itself:**
+the job installs `coreutils` because `_plat_timeout`'s Darwin fallback is `gtimeout`, and "without
+which the shim degrades to NO deadline and every wedge-shaped fixture hangs to the test clock instead
+of being cut: the first leg run measured exactly that, 40 tests shed at 20s." A deadline that silently
+becomes no deadline is the known failure mode here.
+
+**NOT DIAGNOSED, and deliberately not folded into D-2614.** Two failures on one platform are not
+automatically one bug: D-2614's cases fail FAST with rc 1 and never execute; this one HANGS. The shared
+suspect is the deadline shim, not `script(1)`. What is missing before anyone calls it: whether the
+overrun is in `_auth_timeout`/`_plat_timeout` or in the helper's own tick loop, and why it reproduces on
+one run and not the one before it on identical bytes. Intermittent is a property to measure, not a
+reason to dismiss — a deadline that fires nine times in ten is a worse defect on a credential path than
+one that never fires.
+
+### D-2662 — the "default path is unaffected" corollary was an inference, shipped as a measurement, and it is retracted
+
+D-2614 measured something true (every `script(1)` method fails on macOS) and then stated something it
+had not measured: that `login` and `paste` "both pass, so the DEFAULT path is unaffected on either
+userland", with a dedicated **What it does NOT threaten** paragraph built on it. One run later D-2661
+falsified it.
+
+The claim was wrong in KIND, not only in fact. "Every observed failure went through `script`" supports
+"`script` is implicated". It does not support "nothing else is broken" — that is an argument from a
+single run's silence, which is the same shape as reading zero CI runs as zero failures. The branch had
+exactly ONE macOS run at the time; the sentence spent it twice, once as evidence for the hypothesis and
+once as proof of the negative.
+
+Retracted in all three places it was written: `ccd/ccd-account-auth`'s `_auth_script_argv` comment, and
+both paragraphs of D-2614 above. The grep that found all three is the point — the entry named one
+instance and the claim had propagated to three, in a source comment and two paragraphs of prose written
+at different times.
+
+### D-2673 — BSD `script` refuses a FIFO on stdin with ENOTSUP, and accepts a pipe: the D-2614 fix
+
+**Measured, on macos-latest, 2026-09-12** (`server/test/script-shim-platform.test.ts`, two rounds):
+
+| stdin | live? | BSD `script -q /dev/null <cmd>` |
+|---|---|---|
+| FIFO | yes | **rc 1**, `script: tcgetattr/ioctl: Operation not supported on socket` — refused before the child runs |
+| pipe | yes | **accepted** |
+| `/dev/null` | no | accepted |
+
+D-2614's hypothesis was right and **the objection this branch raised against it was wrong, for a reason
+worth keeping.** The objection read FreeBSD's `script.c` —
+
+```c
+if (tcgetattr(STDIN_FILENO, &tt) == -1 || ioctl(…, TIOCGWINSZ, …) == -1) {
+        if (errno != ENOTTY)        /* For debugger. */
+                err(1, "tcgetattr/ioctl");
+```
+
+— and concluded a FIFO is forgiven, because a FIFO "is" ENOTTY. It is not, on macOS: FIFOs there are
+implemented over the **socket layer**, so `tcgetattr` answers **ENOTSUP**, the `errno != ENOTTY` guard is
+TRUE, and `err(1, …)` runs. **The errno decides, not the fd type** — which reading the fd's name could
+never have revealed, and which is the whole argument for having probed rather than patched. A fix
+applied on the original reasoning would have been right by accident; one applied on the objection's
+reasoning would have been wrong.
+
+**The `/dev/null` control is the load-bearing half.** BSD does not require a TTY here — only a stdin
+whose `tcgetattr` fails in the way it tolerates. That is what collapses the "which method keeps the code
+channel" question the entry had been sitting on: nothing has to lose it. A pipe is accepted and a pipe
+is LIVE, so `_auth_spawn_pty_child` pipes on darwin and redirects on linux, both handing the child the
+same `$AUTH_RUN/in.child`. The operator's code still arrives on fd 7 and `_auth_forward_code` still
+writes it to fd 9; on darwin `cat` copies it into the pipe `script` reads.
+
+**util-linux is LEFT ALONE, deliberately.** It tolerates the FIFO directly and is measured doing so.
+This is a credential-minting path: the arm that works does not change shape to match the arm that did
+not, however tempting one code path is to read.
+
+`_auth_login` is untouched — it drives a plain pipe with no `script(1)` at all, so it never had this
+problem. (It has a different one: D-2661.)
+
+### D-2674 — the two userlands disagree about a failing mint, and only one of them tells the helper
+
+Measured in the same two rounds, and **this one is not fixed — it is now merely visible:**
+
+- **util-linux** `script -qfc … /dev/null` reports **rc 0** for a child that exits 7. It propagates the
+  child's status only with `-e`/`--return`, which `_auth_script_argv` does not pass.
+- **BSD** `script -q /dev/null …` reports an rc that **distinguishes** a child that exited 7 from one
+  that exited 0.
+
+`_auth_setup_token` and `_auth_openai_login` both branch on `rc` — `124` means expired, non-zero means
+`the mint exited $rc`, zero falls through to the credential assertion. So the same failing mint takes
+DIFFERENT paths on the two platforms: on macOS it dies at `the mint exited N`, and on Linux it reaches
+`(( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'` — which is why that
+guard exists and why it is the only thing standing between a silent mint and a `done` stamp on Linux.
+
+Round 1 could not see this: with a FIFO the child never ran, so rc 1 was `script`'s OWN error and said
+nothing about propagation. It is answerable only over a shape that runs, which is why it is asked over
+`/dev/null`.
+
+**Left open on purpose.** Making the two agree means passing `--return` on the util-linux arm, which
+changes what `rc` means on the platform the whole fleet runs, to fix an asymmetry nothing has yet been
+bitten by. That is a separate decision from D-2673, wants its own red-first test against the
+`exited 0 but printed no token` guard, and should not ride a fix for a different bug.
+
+### D-2675 — the pane-bound methods' stdin FIFO is unexercised: a GREEN mutation, against a RED control
+
+Measured while checking that D-2673's fix was pinned rather than decorative, on linux, 2026-09-12:
+
+| mutation | result |
+|---|---|
+| `_auth_spawn_pty_child`'s linux arm: `<"$AUTH_RUN/in.child"` → `</dev/null` | **48/48 GREEN** |
+| `_auth_login`'s own redirect: `<"$AUTH_RUN/in.child"` → `</dev/null` | **8 failed / 40 passed** |
+
+A green mutation alone proves nothing — it reads the same whether the guard is unpinned or whether
+nothing runs that code at all. The control is what makes it a finding: the harness demonstrably reds
+when a redirect that IS exercised is removed, so the first result means what it says. **No test in the
+suite sends a byte through the pane-bound methods' stdin.** Those methods do execute (all of
+`setup-token`'s and `openai-login`'s cases run and pass on linux) — they simply never have a code
+forwarded to them, so the FIFO's byte-carrying role is never exercised on that path.
+
+**What this changes about D-2673.** The fix preserves a channel nothing proves is used. That is the
+right conservative call for a credential path — it keeps the shipped shape and changes only what
+`script` is handed — but it means the "which pane method actually needs `_auth_forward_code`?" question
+D-2614 sat on is STILL UNANSWERED by the suite. It was made moot rather than resolved: a pipe is
+accepted, so nothing had to lose the channel, and no one had to find out who wanted it.
+
+**Not closed here.** Closing it means a red-first test that drives a code through `setup-token` and
+`openai-login` and asserts the child received it — which is a fixture that has to model a child reading
+its stdin under a pty, on both userlands, where the two disagree about exit status (D-2674). That is
+its own piece of work, and inventing it inside a bug fix would be the third unrelated change in one
+commit.
+
+Recorded rather than fixed, and recorded as a MEASUREMENT with its control, because the green half on
+its own is exactly the shape that gets mistaken for coverage.
+
+### D-2679 — D-2673 alone makes macOS WORSE: a fast failure becomes an indefinite hang. DO NOT SHIP IT WITHOUT D-2661
+
+> **CORRECTED BY D-2734 AND D-2736 — the CONCLUSION held, the MECHANISM below is wrong, and the
+> remedy it prescribes is measured not to work.** Kept unedited beneath this line because it is the
+> record of what was believed, and because the error is instructive. Three corrections: (1) the hang
+> does not depend on the deadline at all — `wait` on a backgrounded PIPELINE waits for the whole job,
+> and the darwin arm hung on the SUCCESS path with the mint exiting normally (D-2734); (2) there are
+> TWO gates, not one — a mint that never exits parks the run in `_auth_pump`, a mint that does exit
+> parks it in `wait`, and each hid the other (D-2736); (3) the prescribed "a `wait` that cannot block
+> forever" was implemented and measured, and the run still hung, because control never reaches `wait`
+> (D-2736). What survives intact: D-2673 alone was a regression, a loud fast failure beats a silent
+> hang on a credential path, and a bound had to land WITH it rather than after it.
+
+**Measured on `295c876c`, macos-latest, and it reverses this branch's own claim one commit earlier.**
+
+D-2673 was reported as working on the strength of one number: `the mint exited 1` went from **9** to
+**0**. That number is real and the refusal is genuinely gone. The conclusion drawn from it was not.
+
+| | before D-2673 (`42e31622`) | after D-2673 (`295c876c`) |
+|---|---|---|
+| `the mint exited 1` | 9 | **0** |
+| pane-bound cases that FINISH | all of them, in ~50 ms each | **none — 2 started, 0 completed in 24 min** |
+| leg outcome | completed, red | **cut at the deadline, no verdict** |
+
+**The mechanism, and it is a consequence of the fix rather than a coincidence.** Before, BSD `script`
+died instantly on the FIFO, so `_auth_spawn_pty_child`'s child was already gone when the helper reached
+`wait "$child"` — the deadline never mattered because nothing was alive to need cutting. Now the child
+genuinely runs, so the ONLY thing that can end the run is `_auth_timeout`'s deadline, and D-2661 says
+that deadline intermittently does not fire on this runner. When it does not, `wait` blocks forever, the
+helper never returns, and `execFileSync` — SYNCHRONOUS, so vitest cannot time it out either — blocks the
+worker thread. One hung case stalls the whole file. The two orphan `cat`s in the same cleanup are
+D-2673's copier, left parented to init by the same never-closed pipes.
+
+**Why this is not merely a test-harness problem.** The suite is only where it is visible. The same shape
+on a real macOS fleet box is `ccrc account add … --method setup-token` never returning — a
+credential-minting verb that hangs instead of failing. **A loud fast failure is strictly better than a
+silent hang on this path**, so D-2673 in isolation is a regression even though it removes the defect it
+was written for.
+
+**What has to happen before D-2673 ships:** either D-2661 is closed so the deadline fires, or the helper
+gains a bound of its own that cannot depend on it — a `wait` that cannot block forever. The second is
+the more honest fix regardless of D-2661, because `_auth_setup_token`'s contract already promises
+`expired` as a terminal state and today that promise rests entirely on an external `gtimeout`
+behaving. Not attempted here: it is a third change to a credential path in one branch, and the
+branch that has just been wrong once about this code should not guess twice.
+
+**Recorded as a self-correction, deliberately.** The error was not the fix; it was reading ONE metric
+going to zero as "works", when the question was whether the method completes. `the mint exited 1`
+disappearing is equally consistent with "the mint now succeeds" and with "the mint never returns", and
+the run that produced it had ALREADY been cut without finishing a single pane-bound case — the evidence
+for the stronger claim was absent in the very log that supplied the weaker one.
+
+### D-2734 — `wait` on a backgrounded PIPELINE waits for the WHOLE job, so D-2673's darwin arm could never terminate. D-2679 named the wrong cause, and so did the correction to it
+
+D-2679 said the deadline was the only thing standing between D-2673 and a hang. **It was not, and the
+deadline is irrelevant.** In bash, `wait PID` on a member of a backgrounded pipeline blocks until EVERY
+process in that job has exited — not just the named one. MEASURED, bash 5.2.21:
+
+    a | b &  with b exiting after 1s and a able to exit  ->  wait rc=7 after 1s
+    a | b &  with b exiting after 1s and a blocked        ->  wait NEVER RETURNS
+
+`_auth_spawn_pty_child`'s darwin arm was `cat <in.child | _auth_timeout … &`, and `cat` cannot exit while
+a writer holds `in.child` open — which `_auth_open_pipes` does deliberately on fd 9. So the arm hung by
+construction. MEASURED on the real helper, same mint (`echo line-one; exit 3`), only `CCD_OS` differing:
+
+    linux arm    pump returned 0s   wait rc=3, 0s
+    darwin arm   pump returned 0s   wait NEVER RETURNED
+
+The mint ran, printed, exited 3, and the pump saw its EOF — and the run still never ended, on the SUCCESS
+path, on Linux. Not intermittent, not macOS-specific, not deadline-dependent; D-2661 has nothing to do
+with it.
+
+**Both prior readings of this were wrong, and in opposite directions.** D-2679 blamed the deadline. The
+objection raised against D-2679 — that `wait` is unreachable because `_auth_pump` precedes it — was also
+wrong, or rather half-right: there are TWO sequential gates. A mint that never exits parks the run in
+`_auth_pump` (D-2736); a mint that DOES exit parks it in `wait` (here). Either way it hangs, which is why
+one gate was enough to hide the other. The source comment that read "`$!` after a backgrounded PIPELINE
+is its LAST element … which is the one whose status the callers' `rc` branches read" was true about `$!`
+and invited exactly the wrong conclusion about `wait`.
+
+**Fix:** the mint is no longer in a pipeline. Process substitution hands it the same PIPE that D-2614
+measured BSD `script` accepting, while leaving `wait` answerable by the mint alone.
+
+**CONFIRMED ON macos-latest 2026-09-13** (run 34782240360, both legs). `test-macos`: **8865 passed, 2
+failed, 303/304 files** — and `the mint exited 1`, which appeared **9 times** on the broken tree,
+appears **0 times**. So D-2614 is not merely diagnosed but repaired on the userland that had it, and the
+pane-bound methods pass there for the first time. `probe-macos` ran the whole auth file in **16.6
+seconds**, where the same file was cancelled at 25 minutes two days earlier.
+
+The 2 failures were this branch's own test, not the helper: **BSD `wc -l` PADS its output**, answering
+`"       0"` where GNU answers `"0"`, so a string compare failed on a correct value. Every count in the
+driver now goes through `$(( ))`. Same GNU-vs-BSD class as D-2613's `stat -c %a`, and caught the same
+way — by running it there, not by reading it. Pinned by
+`ccd-account-auth.test.ts`'s "the pane-bound spawn has to END", which drives the darwin arm from Linux by
+assigning `CCD_OS` after sourcing — so the defect is red on an ordinary box instead of waiting on a macOS
+leg that gets cancelled before it reports.
+
+### D-2735 — the copier inherits fd 9 and is therefore its own writer, so it can never see EOF
+
+The shipped comment claimed the copier "blocks reading the FIFO until `_auth_close_pipes` drops fd 9, so
+… the `cat` ends with it". MEASURED on the darwin arm: **1 copier before that line and 1 after.** A
+process substitution inherits this shell's descriptors, so the copier held fd 9 — a WRITE end on the very
+FIFO it was reading — and a reader that is its own writer never reaches EOF, no matter what the parent
+closes.
+
+**Fix:** `exec 7<&- 9<&-` inside the substitution, and `exec cat` so the pid that lingers is the copier
+itself rather than a shell around it. After: 1 before, 0 after. The mint drops the same two descriptors
+on BOTH arms, for the same reason — a mint that outlives the helper would otherwise strand the copier by
+holding `in.child` written-open. MEASURED in the backstop case: copier 1 -> 1 before that change, 1 -> 0
+after. The FIFO stays open for the mint regardless, because THIS shell still holds fd 9, which is what
+`_auth_open_pipes` holds it read-write for.
+
+### D-2736 — `_auth_pump` had no deadline, and the bound D-2679 prescribed is measured NOT to work
+
+`_auth_timeout` bounds the CHILD; nothing bounded the LOOP THAT READS IT. `_auth_pump` leaves only on
+EOF, and EOF needs every writer of `$AUTH_RUN/out` to close — so a child that outlives its deadline
+(D-2661, still undiagnosed) parks the loop forever and `wait` is never reached at all.
+
+D-2679 prescribed "a `wait` that cannot block forever". **Implemented and measured, that leaves the run
+hanging exactly as before**, because control never arrives at `wait`. A bound in the PUMP is the one that
+ends it.
+
+**And it must stamp `expired` itself.** The backstop kills the child, so `wait` reports 143 — and 143 is
+indistinguishable from a mint someone else killed, so `(( rc == 124 ))` is false and the caller would
+`_auth_die "the mint exited 143"` over a state `_auth_setup_token` PROMISES as terminal. Hence
+`AUTH_EXPIRED`, set only by the backstop and read by all three callers beside the existing 124 branch.
+The bound is `CCRC_AUTH_TIMEOUT + CCRC_AUTH_PUMP_GRACE` (default 10s) so the ordinary `timeout` path
+always wins the race and this fires only when that path did not.
+
+**Known limitation, stated rather than papered over:** the backstop kills `AUTH_CHILD`, which on either
+arm is the shell wrapping `_auth_timeout`. Descendants whose own deadline failed can outlive it, orphaned.
+On a real pane `ccd account-pane --cancel` kills the pane and takes the tree; under a harness that kills
+only the helper, it does not.
+
+### D-2737 — the cancellation trap exits without closing the pipes, and `_auth_close_pipes` on an unset run dir spells three ABSOLUTE paths
+
+`_auth_cancelled` published `cancelled` and `exit 0` straight past `_auth_close_pipes`, so every cancelled
+or killed run left three FIFOs under `$REG/.auth/<id>.run/` — inside `$HOME` — plus, on the darwin arm, a
+copier still blocked on one of them. The FIFOs are the worse half: a recursive reader that does not skip
+devices blocks on them for ever (see D-2739).
+
+Making the trap call `_auth_close_pipes` **made a latent hazard reachable**, which is why the guard lands
+in the same entry rather than later. Every pre-existing caller runs after `_auth_open_pipes`, so `AUTH_RUN`
+was always set; the trap can fire BEFORE the pipes exist, and with `AUTH_RUN` empty the `rm -f --` spells
+`/in`, `/out`, `/in.child`. Hence `[[ -n "${AUTH_RUN:-}" ]] || return 0` at the top.
+
+### D-2738 — D-2661's suspected cause is REFUTED: `gtimeout` is present on both macOS legs and has been since e51dda34
+
+D-2661 suspected "a missing `gtimeout` degrading `_plat_timeout` to no deadline", and `ci.yml` carries a
+comment recording that signature. It cannot explain any run on this branch. Measured against the files and
+against the real job's own log: **both** macOS jobs run `brew install bash tmux flock jq coreutils`
+(`ci.yml:185` and `:252`); `_auth_timeout` probes `timeout` then `gtimeout` via `command -v`; the fixture
+spawns the helper with `{ ...process.env, HOME: h.home, … }` and `ghContainedEnv` only PREPENDS to PATH, so
+the runner's PATH is inherited intact; and the job log shows `coreutils 9.11` linked cleanly into
+`/opt/homebrew/bin`, a directory that same log shows already on the default PATH. The mechanism D-2661
+leans on was real ONCE — commit a6090b8f ran the brew line with "DELIBERATELY NO coreutils" — and was
+fixed by **e51dda34 on 2026-08-27**, before coreutils became permanent in both jobs.
+
+**So D-2661 is undiagnosed, not explained — and it is a SEPARATE defect from D-2614.** It was measured on
+the `login` lane, which uses no pipeline and no `script(1)`, so D-2734's fix cannot touch it. D-2736's
+backstop bounds its CONSEQUENCE without diagnosing its cause, which is the honest description of what
+landed.
+
+### D-2739 — the canary test's `grep -rl` over the fixture HOME is unbounded, and is the suspected staller of the 25-minute macOS job
+
+SUSPECTED, NOT PROVEN — the verifier that would have settled it died on a session limit, and it is booked
+at that strength deliberately. What IS measured: `ccd-account-auth.test.ts`'s canary case calls
+`execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8' })` with **no `timeout` option**,
+the only unbounded recursive walk in the suite; the helper's FIFOs live at
+`$HOME/.cc-sessions/.auth/<id>.run/`, inside the tree that grep walks; before D-2737 a killed run left them
+there; and the cancelled job's cleanup reported `Terminate orphan process: pid (38105) (grep)` — a grep
+still alive 23.8 minutes after the last test output. GNU grep 3.11 skips devices under `-r` (measured here,
+returns immediately); **BSD grep is UNMEASURED** and is the prime suspect, with `-r` following symlinks a
+second candidate. D-2737 removes the FIFOs that are the suspected input, and the call is now bounded
+(`timeout: 30_000`) so the same situation reports a failure instead of consuming a 25-minute job
+silently.
+
+**ANSWERED AND CLOSED 2026-09-14, measured on macos-latest (`server/test/platform-hazards.test.ts`):
+BSD `grep -r` BLOCKS on a FIFO with a live writer.** The walk never returned and the harness cut it at
+**20 026 ms**, where GNU returns in **83 ms** over the identical tree. The suspicion was right, and the
+symlink candidate was measured NEGATIVE — BSD `-r` did not leave the tree, so the FIFO is the whole
+story.
+
+**The remedy changed as a result, and the change matters.** A `timeout` on the caller converts a silent
+25-minute wedge into a loud one and still reads no files — it never made the assertion work. The canary
+walk is now `find <home> -type f -exec grep -l …`, which **cannot reach a device at all**; the timeout
+stays as a backstop rather than as the mechanism. The platform fact is pinned so it goes red the day BSD
+grep changes, instead of leaving the remedy silently over-applied.
+
+
+### D-2764 — the deadline shim never escalates to KILL, so a TERM-ignoring child outlives it FOREVER — on every platform. BOOKED, NOT FIXED
+
+`_plat_timeout` (and `_auth_timeout`, pinned byte-for-byte to it) runs `timeout`/`gtimeout` with no
+`-k`. Those send SIGTERM at the deadline and **never** escalate. A child that ignores or blocks TERM is
+therefore never ended, and the "deadline" is a signal rather than a bound.
+
+    child                          Linux                       macOS
+    plain sleeper                  rc 124 @ 2s                 rc 124 @ 2.1s
+    bash blocked in a fg child     rc 124 @ 2s                 -
+    ignores SIGTERM                NEVER RETURNED (cut 25s)    NEVER CUT (40s)
+
+`timeout -k 1 2` on the same child answers **rc 137 at 3 s**, so the remedy is known and one flag wide —
+but the pure-bash fallback arm has the same gap and needs its own, since it `kill -TERM`s and then
+`wait`s forever.
+
+**Deliberately not fixed in the PR that found it.** `_auth_timeout` is pinned byte-for-byte to
+`_plat_timeout`, which lives in four shipped files — `ccd`, `ccrc`, `ccrc-doctor-checks`,
+`ccd-account-auth` — behind ccd's tmux liveness probe, its two `gh pr` queries and the doctor's `gh auth
+status` check. That is deployed code with a wide caller population and an agent-first deploy; it belongs
+in its own change with its own review, not inside a measurement PR. `platform-hazards.test.ts` PINS the
+present behaviour so the fix goes red here and cannot land without someone deliberately inverting it.
+
+### D-2765 — a probe framed a UNIVERSAL defect as a platform one, because only one platform's case was written
+
+The case above was first written as `itDarwin('BSD: it still ends a child that IGNORES SIGTERM')`. It
+red on macOS, and read as "BSD cannot cut a TERM-ignoring child" — a platform finding, which is how it
+was first reported. **The Linux control was never written**, and when it was, Linux behaved identically:
+never returned, cut at 25 s.
+
+This is the same error as the one D-2614 already taught, arriving from the other side.
+`reading-upstream-source-is-not-measuring-the-syscall` was about asserting a platform fact from reading;
+this is about asserting a platform fact from measuring **one** platform. A single-platform measurement
+cannot distinguish "this platform does X" from "everything does X" — only the control can, and the
+control is the cheap half.
+
+**The rule:** a case named for a platform (`itDarwin`/`itLinux`) is making a comparative claim, and owes
+the other platform's case in the same commit. Where the other platform genuinely cannot run it, the name
+must say what was actually measured rather than implying a contrast that was never tested. The file's
+own header already required the answer to travel in the assertion message; this extends it — the
+CONTROL has to exist before the message can be trusted to mean what it says.

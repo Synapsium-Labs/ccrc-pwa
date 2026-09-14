@@ -26,6 +26,7 @@ import { Presence } from '../src/presence.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okAsk, okAsks } from './coordReadHelpers.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'asks-mint-'));
 
@@ -180,7 +181,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0]!.sessionId).toBe('cc-a');
     // And minted, held, addressed to the derived parent.
-    const held = f.coord.asksForParent('coord-1', 'held');
+    const held = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(held).toHaveLength(1);
     expect(held[0]!.childId).toBe('cc-a');
     expect(held[0]!.parentId).toBe('coord-1');
@@ -306,7 +307,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     f.showMenu('cc-b');
     await f.tick();                                      // both mint in the same tick
 
-    const held = f.coord.asksForParent('coord-1', 'held');
+    const held = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(held).toHaveLength(2);
 
     const rows = f.coord.db.prepare(
@@ -376,7 +377,41 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     await expect(f.tick()).resolves.toBeUndefined();      // the tick itself does not throw
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toEqual([]);
+  });
+
+  // D-2545. The hold's FIRST act is `openRunsForSession`, to record the run on
+  // the ask row for provenance. When that read refuses, the mint aborts into
+  // the EXISTING immediate-operator-push fallback — the same place the throw
+  // arm above lands, reached by a typed result instead of `node:sqlite`'s bare
+  // `RangeError`. What must be true afterwards is that NOTHING was minted: no
+  // ask row and no parent mail, so there is nothing orphaned to compensate.
+  it("falls back to an immediate push when the hold's run read REFUSES, minting no row and no mail", async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    // The row a newer build wrote and a rollback left behind. `parentOfSession`
+    // reads only `claimedBy`, so the parent still derives and the lane reaches
+    // `hold` exactly as it would on a healthy box.
+    f.coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?')
+      .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, run.id);
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await expect(f.tick()).resolves.toBeUndefined();      // the tick itself does not throw
+
+    // The operator gets the question, at once — the fail-safe direction.
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    // NOTHING MINTED, for any parent (`askRowCount`'s own reasoning).
+    expect(askRowCount(f)).toBe(0);
+    // …and no nudge mail to the parent either.
+    expect((f.coord.db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(0);
   });
 
   // Fix round 1, item 3a (Important) — proves `recordAlways` on the hold's
@@ -410,7 +445,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(sent).toEqual([]);                              // presence suppresses the push either way
     const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
     expect(recorded).toHaveLength(1);                       // but NOT the record — recordAlways
-    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);   // the hold itself is unaffected
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toHaveLength(1);   // the hold itself is unaffected
   });
 
   // Fix round 1, item 3b (Important) — pins `parent !== r.id`: a session that
@@ -461,7 +496,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     f.showMenu('cc-a');                                     // dialog 1: "Which colour?"
     await f.tick();                                         // mints ask #1, held
 
-    const firstHeld = f.coord.asksForParent('coord-1', 'held');
+    const firstHeld = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(firstHeld).toHaveLength(1);
     const firstAskId = firstHeld[0]!.id;
 
@@ -474,11 +509,11 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     f.showMenu('cc-a', 'Continue?\n❯ 1. Yes\n  2. No\nEnter to select\n');
     await f.tick();                                         // mints ask #2, orphans ask #1
 
-    const nowHeld = f.coord.asksForParent('coord-1', 'held');
+    const nowHeld = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(nowHeld).toHaveLength(1);                         // exactly one survives
     expect(nowHeld[0]!.id).not.toBe(firstAskId);
     expect(nowHeld[0]!.question).toBe('Continue?');
-    expect(f.coord.askById(firstAskId)!.state).toBe('stale');   // the orphan, settled
+    expect(okAsk(f.coord.askById(firstAskId))!.state).toBe('stale');   // the orphan, settled
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);   // still deferred, both times
   });
 
@@ -502,7 +537,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
     f.showMenu('cc-a');
     await f.tick();                                          // mints ask #1, held
-    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toHaveLength(1);
 
     f.coord.staleAsk = () => { throw new Error('boom — simulated coord.db failure'); };
 
@@ -519,7 +554,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     // failed settle of ask #1's orphan (which is left `held`, undead, in
     // coord.db — the acknowledged cost of a guard whose job is surviving the
     // tick, not full correctness under a coord.db fault).
-    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(2);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toHaveLength(2);
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
   });
 
@@ -549,7 +584,7 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
     // ...and the row `insertAsk` committed before the failure is NOT left
     // orphaned in `held` — it was settled to `stale` by the compensation.
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toEqual([]);
     const rows = f.coord.db.prepare("SELECT id, state FROM asks WHERE childId = 'cc-a'").all() as
       { id: number; state: string }[];
     expect(rows).toHaveLength(1);
@@ -584,7 +619,7 @@ describe('the ask instance guard advances under a live dialog', () => {
   };
 
   const heldRow = (f: ReturnType<typeof fixture>) => {
-    const rows = f.coord.asksForParent('coord-1', 'held');
+    const rows = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(rows).toHaveLength(1);
     return rows[0]!;
   };
@@ -643,6 +678,6 @@ describe('the ask instance guard advances under a live dialog', () => {
 
     // The clear branch settled the row `stale`; nothing is held, so there is
     // nothing to advance and the CAS could not have applied anyway.
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toEqual([]);
   });
 });

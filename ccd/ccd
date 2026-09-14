@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=218bb57de25481e12af02ceff73af254111177874ebc9ad5fe1895f9b58ca2ed
+# ccrc:generated 1 sha256=fe5105b72b0881aef1c099fa173187eb3fd8fde8c848a38ebb88d644cc393be6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -857,20 +857,34 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # by having it as HOME (`ccd prefer <id> gpt`).
 # On both dates "an account that is not home-able" meant `gpt` — ccgpt, Claude
 # Code on the ChatGPT-sub Codex backend — by name, which is why so many rules
-# below used to say `gpt` where they meant this. The 272k window and the
-# unofficial-client caveat stand: they are why such a lane is still never a
-# HOME (no project STARTS there by accident), and why the kill-switch below is
-# the brake. It has no Anthropic-style 5h/7d telemetry of its own — ccgpt-usage
-# publishes its weekly figure into cc-limits on a timer, and a 429 writes an
-# exclusion there (see _auto_swap_check) — so an unmeasured one reads as free.
+# below used to say `gpt` where they meant this.
+#
+# SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt2` carry
+# `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
+# HOME (no project STARTS there by accident)", which stood in this paragraph
+# until that date, is simply false about the live roster. The 272k window did
+# not survive contact either: the catalogue advertises 272k, the backend has
+# never accepted a prompt over ~196k, and the ceiling therefore stays at Claude
+# Code's 200k default — a reason to distrust the catalogue, never a reason to
+# keep the lane out of placement.
+#
+# What DOES stand is the telemetry difference, and it is now carried by a field
+# of its own. A Codex lane has no Anthropic-style 5h/7d pair: ccgpt-usage
+# publishes its weekly figure into cc-limits on a timer, a 429 writes an
+# exclusion there (see _auto_swap_check), and an unmeasured one reads as free.
+# That is why `telemetry` — not `homeAble` — is what every backend-shaped
+# question reads: CCRC_ANTHROPIC_BACKEND for "does this lane speak Claude
+# Code's own protocol", CCRC_CODEX_BACKEND for "is Codex's usage story the
+# right one to tell about it".
 #
 # Any lane, home-able or not, is instantly killable: `touch $REG/<account>-disabled`
 # and `_lane_enabled` stops offering it as an automatic destination (`_account_ok`).
-# That mechanism is generic and takes no constant. GPT_DISABLE_FILE below is one
-# INSTANCE of it, spelled out only so `_gpt_status` can name the path in a message
-# an operator reads — see the comment on that function, which records what happened
-# the last time this box held two spellings of the same boolean.
-GPT_DISABLE_FILE="$HOME/.cc-sessions/gpt-disabled"   # touch to remove gpt from rotation instantly
+# That mechanism is generic and takes no constant. It used to have one named
+# INSTANCE, GPT_DISABLE_FILE, spelled out so `_gpt_status` could name the path
+# in a message an operator reads. `_codex_lane_status` serves N lanes and
+# builds `$REG/<lane>-disabled` for whichever one it is describing, so that
+# constant had no reader left and is gone — one spelling of the boolean, which
+# is the state the comment on that function records this box losing once before.
 AUTOCOMPACT_DISABLE_FILE="$HOME/.cc-sessions/autocompact-disabled"  # touch to disable proactive /compact fleet-wide
 CLAUDE_AI_BASE="https://claude.ai/code"   # by-name discovery: pick the session whose name == the id
 mkdir -p "$REG"
@@ -1515,22 +1529,33 @@ _account_measured() {
   done
   return 1
 }
-# Same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one
+# Same file ($REG/gpt-disabled), same semantics, one
 # definition. No production caller left — `_default_pool` used to be it, and now
 # asks `_account_ok` about every rostered account that is not home-able,
 # whichever session is asking (2026-09-07) — so this survives as the NAME of
 # the equivalence, which ccd-account-ok.test.ts pins: the gpt kill-switch is
 # the general per-lane kill-switch, not a second mechanism beside it.
 _gpt_enabled() { _account_ok gpt; }
-_gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
-  [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
-  # Same file `_gpt_enabled`/`_account_ok` check ($REG/gpt-disabled ==
-  # $GPT_DISABLE_FILE), read through the one function now: two readers of the
-  # same boolean used to mean two spellings of the same path that could drift
-  # independently. GPT_DISABLE_FILE itself stays — this message is its only
-  # remaining reader, to name the path for the operator.
-  _lane_enabled gpt || { echo "DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)"; return; }
-  if ! _avail gpt; then
+_codex_lane_status() {   # human-readable state of ONE Codex lane (for `ccd ls`)
+  # PARAMETERISED 2026-09-14, was `_gpt_status` with `gpt` written in five
+  # places. The footer it feeds described one lane by name while the roster had
+  # carried two Codex lanes since 2026-09-10, so `gpt2` — which at the time of
+  # this change was the lane actually holding sessions — had no line at all.
+  #
+  # The prose below is Codex's own usage story ("Codex weekly cap", the 5h
+  # cooldown, ccgpt-usage's JSON shape), which is a fact about THAT backend and
+  # not about "an account that is not home-able". That distinction is why this
+  # is driven by CCRC_CODEX_BACKEND (`telemetry === 'codex'`) and never by the
+  # complement of CCRC_HOME_ABLE or of CCRC_ANTHROPIC_BACKEND: a future lane on
+  # some third backend would satisfy both of those and be told Codex's story.
+  local lane="${1:?_codex_lane_status needs a lane}"
+  [[ -x "$WRAPPER_DIR/$lane" ]] || { echo "not installed"; return; }
+  # Same file `_gpt_enabled`/`_account_ok` check, read through the one function:
+  # two readers of the same boolean used to mean two spellings of the same path
+  # that could drift independently. The path is now built from $REG and the lane
+  # rather than read from a per-lane constant, which is what lets this serve N.
+  _lane_enabled "$lane" || { echo "DISABLED (kill-switch; rm $REG/$lane-disabled to re-enable)"; return; }
+  if ! _avail "$lane"; then
     # TWO different files can land here, and only one of them is a 429:
     #   • the compact exclusion ccd itself writes on a 429 ({"five":100,"seven":0,
     #     "ts":<when the 429 happened>} — see _auto_swap_check). Here `ts` IS the
@@ -1541,10 +1566,10 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
     #     end time is in sevenResetAt — days out, not "~300m of 5h cooldown".
     # Telling them apart by the *presence* of the resetAt KEYS, not their values:
     # ccgpt-usage always emits both (often as null), ccd's printf never emits either.
-    local f="$LIMITS_DIR/gpt.json" ts rem
+    local f="$LIMITS_DIR/$lane.json" ts rem
     if _limit_has_key "$f" fiveResetAt || _limit_has_key "$f" sevenResetAt; then
       local five seven pct label reset msg
-      five=$(_limit_field gpt five); seven=$(_limit_field gpt seven)
+      five=$(_limit_field "$lane" five); seven=$(_limit_field "$lane" seven)
       : "${five:=0}"; : "${seven:=0}"
       if (( seven >= five )); then pct="$seven"; label=weekly; reset=$(_limit_json_num "$f" sevenResetAt)
       else                        pct="$five";  label=5h;     reset=$(_limit_json_num "$f" fiveResetAt); fi
@@ -1553,9 +1578,10 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
       echo "$msg)"
       return
     fi
-    # via _limit_json_num, not a bare grep: gpt.json is the one file written by
-    # python json.dump, so its colons carry a space and a compact pattern reads
-    # nothing — printing "excluded" with no countdown (see _limit_json_num).
+    # via _limit_json_num, not a bare grep: a Codex lane's row is the one file
+    # written by python json.dump, so its colons carry a space and a compact
+    # pattern reads nothing — printing "excluded" with no countdown (see
+    # _limit_json_num).
     ts=$(_limit_json_num "$f" ts 2>/dev/null)
     if [[ -n "$ts" ]]; then
       rem=$(( (18000 - ($(date +%s) - ts)) / 60 )); (( rem < 0 )) && rem=0   # never count down past the window
@@ -1671,6 +1697,34 @@ _is_anthropic_backend() {
   declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 || { _is_home_able "$w"; return $?; }
   for v in "${CCRC_ANTHROPIC_BACKEND[@]}"; do [[ "$w" == "$v" ]] && return 0; done
   return 1
+}
+# THE OTHER NAMED BACKEND. Not the complement of `_is_anthropic_backend`: the
+# roster's `telemetry` field has three values, and a lane whose telemetry is
+# `none` is neither Anthropic nor Codex. Asking "is it Codex" as "is it not
+# Anthropic" would hand Codex's usage prose — weekly caps, ccgpt-usage's JSON,
+# a 5h cooldown countdown — to the first lane added on any third backend, which
+# is the exact mistake `_codex_lane_status`'s header warns about.
+#
+# THE FALLBACK IS `gpt`, NOT `_is_home_able`. Same deploy window as above (a new
+# ccd over an accounts.sh that predates the field), but the honest answer is
+# different: before CCRC_CODEX_BACKEND existed there was exactly one Codex lane
+# and every caller here spelled it `gpt`, so reproducing that is what "behave as
+# this box behaved yesterday" means. Reusing the Anthropic fallback would claim
+# every home-able account speaks Codex.
+_is_codex_backend() {
+  local w="$1" v
+  declare -p CCRC_CODEX_BACKEND >/dev/null 2>&1 || { [[ "$w" == gpt ]]; return $?; }
+  for v in "${CCRC_CODEX_BACKEND[@]}"; do [[ "$w" == "$v" ]] && return 0; done
+  return 1
+}
+# The same membership, enumerated rather than tested, for the one caller that
+# needs to walk the lanes instead of asking about one. `printf '%s\n'` with an
+# EMPTY array prints a blank line rather than nothing, which would feed the
+# reader a lane whose name is the empty string — hence the count guard.
+_codex_lanes() {
+  declare -p CCRC_CODEX_BACKEND >/dev/null 2>&1 || { echo gpt; return 0; }
+  (( ${#CCRC_CODEX_BACKEND[@]} )) || return 0
+  printf '%s\n' "${CCRC_CODEX_BACKEND[@]}"
 }
 # THE ACCOUNT SIDE of the pool rule. `_ccrc_pool` is generated into
 # `~/.ccrc/accounts.sh` (shared/generate.mjs) with one `case` arm per TAGGED
@@ -12679,11 +12733,13 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # non-home-able lane out of every pool unless it was that session's HOME):
   #   - CCRC_HOME_ABLE answers where a session may be PLACED and what it may be
   #     seeded with as HOME (`_ws_least_loaded`, `_ws_seed_home`). A lane absent
-  #     from it is never a placement target and never a default home, so no
-  #     project silently STARTS on the Codex lane with its 272k window.
+  #     from it is never a placement target and never a default home. The
+  #     example this clause used to give — "so no project silently STARTS on
+  #     the Codex lane" — stopped being one on 2026-09-11, when both Codex
+  #     lanes became home-able; the RULE is unchanged, only its illustration.
   #   - the kill-switch answers whether an enabled lane may RECEIVE overflow:
   #     `touch $REG/<w>-disabled` removes it from every pool on the next tick —
-  #     which is what GPT_DISABLE_FILE's own comment has promised since it
+  #     which is what the kill-switch's own comment has promised since it
   #     existed, and was not true between 2026-07-26 and this change.
   # A session that overflows onto such a lane comes back when its home has
   # headroom again AND that home is still servable for the project's pool
@@ -12814,7 +12870,7 @@ _limit_has_key() {   # file key -> success if the key is PRESENT, whatever its v
   # sevenResetAt on every poll and they are frequently null (Codex Pro has no 5h
   # window, and the API omits a reset for a window at 0). _limit_json_num says ""
   # for both "absent" and "null", so only this can tell the python usage shape
-  # from the compact 3-key exclusion ccd writes itself (_gpt_status depends on it).
+  # from the compact 3-key exclusion ccd writes itself (_codex_lane_status depends on it).
   grep -q "\"$2\"[[:space:]]*:" "$1" 2>/dev/null
 }
 
@@ -12914,7 +12970,7 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH
   # Splitting the two is what let this guard tighten without stripping the gpt
   # lane of its only exclusion — measured: with `_avail` still reading this
   # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
-  # "enabled, available" and three _gpt_status assertions went red.
+  # "enabled, available" and three _codex_lane_status assertions went red.
   #
   # A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The guard above
   # is right that one KNOWN half bounds a max() only from below — but that
@@ -13030,7 +13086,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     is only WHICH function it depends on, and that is the whole point: it
   #     frees `_limit_score` to be strict about rank without taking gpt's only
   #     exclusion with it (`{"five": null, "seven": 99}` must stay excluded, and
-  #     _gpt_status's entry guard at ccd:1788 is this function).
+  #     _codex_lane_status's entry guard is this function).
   #
   # An earlier version of this comment claimed the three sites could not be
   # aligned without breaking something. That was true only of the alignment it
@@ -17451,27 +17507,51 @@ cmd_ls() {
   # a row that never had a session at all (§4.4). The column is 13 wide because
   # `never-started` is 13 characters. Nothing parses this output — no server,
   # agent or pwa caller shells `ccd ls`, and `cmd_menu` formats its own list —
-  # so the rename costs no parser. The gpt trailer below is a different matter:
-  # its exact strings are pinned by ccd-limits.test.ts and are not touched here.
+  # so the rename costs no parser. The Codex trailer below is a different
+  # matter: its exact strings are pinned by ccd-limits.test.ts and
+  # ccd-session-state.test.ts, which move with it when it changes.
   printf '%-28s %-12s %-13s %s\n' "ID" "WRAPPER" "STATE" "WORKDIR"
   local f id; shopt -s nullglob
   local files=("$REG"/*.uuid)
   [[ ${#files[@]} -eq 0 ]] && { echo "(no sessions)"; return 0; }
-  local gpt_here=0
+  local -A codex_here=()
   for f in "${files[@]}"; do
     id=$(basename "$f" .uuid); local state; state=$(_session_state "$id")
-    local w; w=$(_reg_get "$id" wrapper); [[ "$w" == gpt ]] && gpt_here=$((gpt_here+1))
+    local w; w=$(_reg_get "$id" wrapper)
+    if _is_codex_backend "$w"; then codex_here["$w"]=$(( ${codex_here["$w"]:-0} + 1 )); fi
     printf '%-28s %-12s %-13s %s\n' "$id" "$w" "$state" "$(_reg_get "$id" workdir)"
   done
-  # The one place a lane is still named, and deliberately: `_gpt_status`'s prose
-  # reads Codex's own telemetry shape (ccgpt-usage's JSON, "Codex weekly cap"),
-  # which is a fact about THAT backend rather than about "an account that is not
-  # home-able" — generalising the wording would print Codex's story for a lane
-  # that has never met Codex. So the footer is skipped entirely when the roster
-  # has no gpt account, instead of being rewritten for accounts it cannot
-  # describe.
-  _is_valid_wrapper gpt \
-    && echo "gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"
+  # ONE LINE PER CODEX LANE, driven by the roster rather than by a name in this
+  # file. The previous version printed a single trailer for `gpt` and called it
+  # "the gpt overflow lane", and by the time it was changed BOTH halves of that
+  # were wrong: `gpt2` had existed since 2026-09-10 and was carrying the
+  # sessions, and on 2026-09-11 both lanes became home-able, so neither is an
+  # overflow lane any more — they are placement targets that a session can be
+  # BORN on, ranked on usage beside every Anthropic lane.
+  #
+  # WHAT IS AND IS NOT SKIPPED, stated as the code behaves rather than as the
+  # first version of this comment wished (corrected 2026-09-14). The trailer is
+  # skipped ENTIRELY only when `_codex_lanes` is empty — a roster with no
+  # `telemetry: "codex"` account. A rostered Codex lane whose wrapper is NOT
+  # installed still gets a line, reading `not installed`; that is
+  # `_codex_lane_status`'s first branch, not a skip, and the old "skip rather
+  # than describe what you cannot" rule did not survive the change.
+  #
+  # `_is_valid_wrapper` below is therefore NOT a wrapper-installation check —
+  # it reads CCRC_ACCOUNTS membership. On the generated path it can never fire,
+  # because CCRC_CODEX_BACKEND is by construction a subset of CCRC_ACCOUNTS. It
+  # earns its place on the FALLBACK path alone: `_codex_lanes` emits `gpt`
+  # unconditionally for a pre-CCRC_CODEX_BACKEND accounts.sh, and without this
+  # line a box whose roster has no gpt account would get a trailer naming one.
+  #
+  # The wording is deliberately the roster's own vocabulary — "codex lane" — and
+  # not a claim about placement: `ccd ls` lists sessions, and whether a lane is
+  # home-able is `_default_pool`'s question, visible in `ccrc account`.
+  local lane
+  while read -r lane; do
+    _is_valid_wrapper "$lane" || continue
+    echo "codex lane $lane: $(_codex_lane_status "$lane")  —  ${codex_here["$lane"]:-0} session(s) currently on it"
+  done < <(_codex_lanes)
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 

@@ -83,10 +83,26 @@ export const DEFAULT_TEST_ROSTER = {
     {
       // `gpt` KEEPS its name through the stage-5 de-brand (D-202): it names
       // OpenAI's backend, not this fleet — and ccd's shipped bash keys its
-      // Codex overflow lane on this literal roster id (`_gpt_enabled() {
-      // _account_ok gpt; }`; `ccd ls` prints its footer only behind
-      // `_is_valid_wrapper gpt`). Rename it here and every gpt-lane test
-      // goes dark: the footer is skipped, not relabelled.
+      // Codex lane on this literal roster id (`_gpt_enabled() { _account_ok
+      // gpt; }`, and `_codex_lanes`' pre-CCRC_CODEX_BACKEND fallback). Rename
+      // it here and every gpt-lane test goes dark.
+      //
+      // `telemetry: 'none'`, and it STAYS that way — reverted 2026-09-14, the
+      // same day it was briefly flipped to `'codex'` to make a `ccd ls` trailer
+      // assertion green. That flip was backwards. `'none'` is not a misstatement
+      // about a Codex lane: it is exactly what `ccrc account declare` and the
+      // adopt path WRITE for an `exec.kind: 'external'` account
+      // (`deploy/account-op.mjs`'s `declaredEntry`, pinned byte-for-byte by
+      // ccrc-account.test.ts, and adopt.test.ts's `expect(gpt.telemetry)
+      // .toBe('none')`). Nothing in this repo ever writes `'codex'`; a roster
+      // only carries it after an operator edits it by hand, which is how the
+      // live fleet's gpt/gpt2 got theirs on 2026-09-11.
+      //
+      // So this row is the shape the PRODUCT can actually produce, and bending
+      // it to the post-edit value left the declare-shaped case guarded by
+      // nothing while costing 11 unrelated tests that count this roster.
+      // Coverage for a `'codex'` lane belongs in a purpose-built roster —
+      // ccd-backend-vs-placement.test.ts has three of them — not here.
       id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
       exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none',
     },

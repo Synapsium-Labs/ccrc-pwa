@@ -19,6 +19,7 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const PROGRAM = 'leverage';
@@ -119,8 +120,8 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     // `resolveCoordinator(null)` (`store.ts:1188-1191`) both read the LOWEST-id
     // claimed row with no state predicate, so a rewrite that spared wave 1
     // would leave both readers answering the corpse and the wedge intact.
-    expect(w.coord.run(w1)!.claimedBy).toBe(HEIR);
-    expect(w.coord.run(w2)!.claimedBy).toBe(HEIR);
+    expect(okRun(w.coord.run(w1))!.claimedBy).toBe(HEIR);
+    expect(okRun(w.coord.run(w2))!.claimedBy).toBe(HEIR);
     const ev = w.coord.runEvents(w1).at(-1)!;
     expect(ev.causedBy).toBe('operator');
     expect(ev.detail).toBe(`reclaim:${DEAD} -> ${HEIR}`);
@@ -168,7 +169,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
     // …and the run did NOT move: a refusal that half-committed would be worse
     // than the wedge it was called to clear.
-    expect(w.coord.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('502 registry-unmeasurable, with its detail, when the registry DIRECTORY will not list', async () => {
@@ -212,7 +213,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     // pane AND from a gone-but-restarting lifecycle, and the sheet must be able
     // to tell the operator which.
     expect(body.detail.length).toBeGreaterThan(0);
-    expect(w.coord.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('501 not-configured on a box that does no coordination at all', async () => {
@@ -241,6 +242,23 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
   });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'a non-canonical id %s answers 400 without reclaiming run 1', async (id) => {
+      const home = mkTmp('ccrc-reclaim-');
+      seed(home, HEIR);
+      const { run, execs } = makeRunner();
+      const w = await openApp(home, run); app = w.app;
+      const runId = openWave(w.coord, 1);
+      expect(runId).toBe(1);
+
+      const res = await post(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(runId))!.claimedBy).toBe(DEAD);
+      expect(execs).toEqual([]);
+    },
+  );
 
   it('a NON-INTEGER id answers 400 before anything is measured — the sweep probe', async () => {
     // `auth-gate.test.ts:93`'s `concrete()` rewrites `:id` to `x` and injects

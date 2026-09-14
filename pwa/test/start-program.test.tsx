@@ -42,7 +42,7 @@ import {
   readyVerdict,
 } from '../../shared/api';
 import type {
-  CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
+  CoordStatus, FleetSession, ProjectReadiness, ProjectRow, ReadinessFacts,
 } from '../../shared/api';
 import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { missingPreconditions } from '../src/fleet/readinessWords';
@@ -64,7 +64,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false, ...over,
 });
 
-const proj = (over: Partial<{ name: string; workdir: string }> = {}): { name: string; workdir: string } => ({
+const proj = (over: Partial<ProjectRow> = {}): ProjectRow => ({
   name: 'ccrc-pwa', workdir: '/home/u/projects/ccrc-pwa', ...over,
 });
 
@@ -265,6 +265,173 @@ describe('StartProgramSheet', () => {
 
     // Named on the confirm button's own label — before any tap on it.
     expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+  });
+
+  // D-2694: `/api/projects` answers placement for THIS project, while
+  // `/api/accounts` answers the historical untagged projection. Once the route
+  // supplies the project-specific answer, every target-bearing part of the
+  // attempt must use it and the global answer becomes irrelevant.
+  it('uses the selected project placement for the label and exact create request', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const createSession = vi.fn(() => new Promise<void>(() => {}));
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /start build9-demo on claude2/i });
+    fireEvent.click(go);
+
+    expect(await screen.findByRole('button', { name: /^starting…$/i })).toBeDisabled();
+    expect(createSession).toHaveBeenCalledWith({
+      wrapper: 'claude2', project: 'ccrc-pwa', workdir: row.workdir,
+    });
+    expect(createSession.mock.calls[0]).toHaveLength(1);
+  });
+
+  it.each([
+    ['pending', () => new Promise<ReturnType<typeof projected>>(() => {})],
+    ['failed', () => Promise.reject(new Error('accounts unavailable'))],
+    ['measured null', () => Promise.resolve({ accounts: [], projected: null, roster: [] })],
+  ])('keeps present project placement authoritative while the global projection is %s', async (_state, answer) => {
+    vi.spyOn(api, 'accounts').mockImplementation(answer as typeof api.accounts);
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /checking placement/i })).toBeNull();
+  });
+
+  it('waits for the route-selected wrapper, never a session on the global projection', async () => {
+    history.pushState(null, '', '/runs');
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const queueKickoff = vi.fn().mockResolvedValue({ queued: true });
+    const store = makeStore();
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo on claude2/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' })] }); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(queueKickoff).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
+    act(() => {
+      store.setState({ sessions: [
+        sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' }),
+        sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' }),
+      ] });
+    });
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledWith(
+      'claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
+  });
+
+  it('still refuses a live-project collision when global placement says none', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
+    const store = makeStore();
+    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/claude2-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it.each([
+    [{ kind: 'none', pool: 'pool-b' } as const, /no eligible account.*pool pool-b/i],
+    [{ kind: 'none', pool: null } as const, /no eligible account/i],
+    [{ kind: 'unmeasurable' } as const, /placement cannot be decided/i],
+  ])('refuses a measured non-projectable placement without using the global target: $0', async (placement, copy) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj({ placement })] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it.each([
+    [undefined, 'older server'],
+    [{ state: 'untagged' } as const, 'measured untagged project'],
+  ])('preserves the global projection when placement is absent for a $1', async (pool, _description) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
+    const row = proj(pool === undefined ? {} : { pool });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+  });
+
+  it.each([
+    [{ state: 'tagged', name: 'pool-b' } as const, /pool pool-b/i],
+    [{ state: 'malformed' } as const, /pool tag is malformed/i],
+    [{ state: 'unreadable' } as const, /pool tag could not be read/i],
+  ])('refuses pool-blind fallback when placement is absent for measured pool state $pool.state', async (pool, copy) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj({ pool })] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it('does not clear a route-target timeout when only the global projection changes', async () => {
+    vi.spyOn(api, 'accounts')
+      .mockResolvedValueOnce(projected('claude'))
+      .mockResolvedValue(projected('claude3'));
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={async () => {}}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: /^start build9-demo on claude2/i }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1); });
+
+      expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses with copy when the projection is null: nothing is placeable (D-284 (was D-B4-11))', async () => {
@@ -612,6 +779,18 @@ describe('StartProgramSheet', () => {
     expect(go).toBeDisabled();
     fireEvent.click(go);
     expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps uppercase letters in the accepted slug vocabulary (D-2508)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={vi.fn().mockResolvedValue(undefined)}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('Build9_Demo');
+
+    expect(screen.queryByText(/only letters, numbers, underscores, and hyphens/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Start Build9_Demo/ })).not.toBeDisabled();
   });
 
   it('keeps the composite kickoff verdict in both the button and handler guards', () => {

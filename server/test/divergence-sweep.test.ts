@@ -18,6 +18,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_CLASSES, corroboration, LC_ACT_UNKNOWN, LIFECYCLE_ACTS } from '../../shared/api.js';
 import type { Divergence } from '../../shared/api.js';
+import { okRuns } from './coordReadHelpers.js';
 
 /** The repo root, for the one source-text assertion below. */
 const ccrcRoot = path.resolve(__dirname, '../..');
@@ -310,6 +311,28 @@ describe('sweepDivergences', () => {
     // worktrees. Fail shut: no census, no frame, and the debounce memory is
     // left standing exactly as `coord.runs()`'s own failure arm leaves it.
     const h = await watcherFixture({ unreadableRegistry: true });
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/quiet-basin');
+    const frames: unknown[] = [];
+    h.bus.on('divergence', (d) => frames.push(d));
+    await sweep(h);
+    jump(10);
+    await sweep(h);
+    expect(frames).toEqual([]);
+  });
+
+  it('an UNREADABLE run row skips the census too — the same direction, one door over (D-2545)', async () => {
+    // `openRunSessionIds`/`openRunIds` are what make a worktree CLAIMED. A
+    // refusal read as an empty run set is the identical fleet-wide false census
+    // the unlistable-registry test above argues about, reached through the
+    // coordination database instead of the registry — so it takes the same
+    // answer: no census this pass, no frame, memory left standing.
+    const h = await watcherFixture();
+    const opened = h.coord!.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' }) as { id: number };
+    h.coord!.setSession(opened.id, 'demo-quiet-basin');
+    h.coord!.db.prepare('UPDATE runs SET wave = ? WHERE id = ?')
+      .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
     h.plantRecord('demo-quiet-basin');
     h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/quiet-basin');
     const frames: unknown[] = [];
