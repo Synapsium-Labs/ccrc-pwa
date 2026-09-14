@@ -64,6 +64,8 @@ Departures from the spec discovered while planning, each minted 2026-09-14 and d
 - **D-2803 (2026-09-14, found executing Task 1)** — **The cap's SQL fragment is the NEGATIVE form over `IDLE_RUN_STATES ∪ TERMINAL_RUN_STATES`, not the positive `IN ACTIVE_RUN_STATES` spec §7.1 wrote.** The spec's own rationale for classifying `unknown` as active is that "an unrecognised row that counts wedges visibly … one that does not count over-dispatches silently" — but `'unknown'` is the JS-side revive artefact for a token this build cannot name (`RunState`'s docstring: NEVER WRITTEN), so a SQL `IN (…,'unknown')` matches the literal word and never a real novel token; the positive form UNDER-counts exactly the row the spec meant to count, and the brief's own Step 6 test (a planted `'x-from-a-newer-build'` state, expected to count) measured it. `capsUsage` therefore reads `state NOT IN ${INACTIVE_RUN_STATES_SQL}` with `INACTIVE_RUN_STATES_SQL` built by `.join` from `[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES]`; every consumer still derives from the three L0 lists, `ACTIVE_RUN_STATES` remains the classification the partition pin and every JS reader use, and `single-definition.test.ts` pins the built fragment. The spec's sentence "positive form is chosen because of the pin" is corrected by this entry, not by editing the spec.
 - **D-2804 (2026-09-14, found executing Task 1)** — **Three PWA comments described the old cap predicate as `('done','failed')` and are swept in Task 1.** `pwa/src/fleet/nestFleet.ts:25`, `pwa/src/fleet/runWords.ts:83`, `pwa/src/screens/RunsScreen.tsx:8` each paraphrased `capsUsage`'s negative-form literal; Task 1 changes that predicate, so the sentences became false the moment it landed, and the new single-definition scan caught them as copies. They are rewritten to name the L0 lists. Outside Task 1's files table; recorded because the scan's authority over prose is the point of the scan.
 
+- **D-2805 (2026-09-14, found executing Task 2)** — **The re-entry cap check is not inlined in the advance route; both routes read the cap through one `capsMeasured(coord)` helper in `dispatch.ts`.** Task 2 Step 3 said "insert" the check inline in `routes.ts`. `coord-caps-route.test.ts` ("…and the usage half is read in exactly one place, so a rebuild cannot be faithful") pins that `routes.ts` spells `.capsUsage(` exactly once, on the premise that "the usage reading exists for this answer alone" — a premise spec §7.2 pin 2 ends, since the advance route now needs the same numbers for a refusal. Weakening the pin would give up the guard on the caps view for a route that does not build it; inlining trips it. So the read and the concurrency decision move into `dispatch.ts` as `capsMeasured(coord): { caps, usage, overConcurrency }`, `dispatchRun` consumes it for BOTH its cap refusals (one read, where before it read inline), and the advance route consumes `overConcurrency` — `routes.ts` keeps its single `.capsUsage(` (the caps view), the refusal's arithmetic is spelled once, and the pin stands untouched. Found by the Task 2 re-review; the first review had missed the pin and the first implementer had cited the wrong test for it.
+
 
 ---
 
@@ -375,7 +377,8 @@ Replace `<N>` with the Step 1 count.
 
 **Files:**
 - Modify: `server/src/coord/routes.ts:1568-1589` (the advance handler, between the transition check and `verifyDone`), `:34` (import)
-- Test: `server/test/run-routes.test.ts` (inside `describe('POST /api/runs/:id/advance (review findings 1/15)', …)`, `:2640+`)
+- Modify (D-2805): `server/src/coord/dispatch.ts` — `capsMeasured(coord)` beside `dispatchRun`, and `dispatchRun`'s own cap block reads through it
+- Test: `server/test/run-routes.test.ts` (inside `describe('POST /api/runs/:id/advance (review findings 1/15)', …)`, `:2640+`); `server/test/coord-caps-route.test.ts` stays green untouched
 
 **Interfaces:**
 - Consumes: `IDLE_RUN_STATES` (Task 1); `coord.caps()`, `coord.capsUsage()` (`store.ts:2416`, `:2463`); the advance route's `reject: { code, … }` envelope (`routes.ts:1569`).
@@ -428,22 +431,68 @@ Add to the advance describe in `run-routes.test.ts` (after the `'refuses an out-
 Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts -t "re-entering|does NOT cap-check"`
 Expected: the re-entry test FAILS (200, the run moved to `working`); the second PASSES already (it is the control that the check must not break).
 
-- [ ] **Step 3: Add the check**
+- [ ] **Step 3: Add the check — through ONE measured read (D-2805)**
 
-In `routes.ts`, import `IDLE_RUN_STATES` from `shared/api.js` (the import at `:34` already names `RUN_TRANSITIONS`; add it there). Then in the advance handler, AFTER the `not-dispatched` check (`:1571-1573`) and BEFORE the `if (to === 'awaiting-review' || to === 'merging')` block (`:1577`), insert:
+(a) In `server/src/coord/dispatch.ts`, directly ABOVE `export async function dispatchRun(`, add:
+```ts
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): {
+  caps: CoordCaps; usage: CoordCapsUsage;
+  overConcurrency: { limit: number; running: number } | null;
+} {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
+```
+Import `CoordCaps` and `CoordCapsUsage` types from `shared/api.js` on `dispatch.ts`'s existing import line. Then make `dispatchRun`'s own cap block (`:276-285`, the `// 2: caps.` block) READ THROUGH IT — replace
+```ts
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  if (usage.running >= caps.maxConcurrentWorkers) {
+    return { ok: false, kind: 'refused', code: 'cap-concurrency',
+      limit: caps.maxConcurrentWorkers, running: usage.running };
+  }
+  if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
+```
+with
+```ts
+  const { caps, usage, overConcurrency } = capsMeasured(coord);
+  if (overConcurrency !== null) {
+    return { ok: false, kind: 'refused', code: 'cap-concurrency', ...overConcurrency };
+  }
+  if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
+```
+(the `cap-daily` arm below is unchanged and still reads the same `caps`/`usage` — one read, as before).
+
+(b) In `routes.ts`, import `IDLE_RUN_STATES` from `shared/api.js` (the import at `:34` already names `RUN_TRANSITIONS`; add it there) and `capsMeasured` from `./dispatch.js` (the import that already names `dispatchRun`). Then in the advance handler, AFTER the `not-dispatched` check (`:1571-1573`) and BEFORE the `if (to === 'awaiting-review' || to === 'merging')` block (`:1577`), insert:
 ```ts
     // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
     // `capsUsage().running`, so the one legal edge back INTO an active state
     // — `awaiting-review`/`merging` -> `working`, a review sending work back
     // or a lost merge race — must take the cap check dispatch takes, or the
     // exclusion is a bypass. `dispatched -> working` is not checked: that run
-    // is already counted. The refusal carries the numbers, as dispatch's does.
+    // is already counted. The numbers come from `capsMeasured` (D-2805), the
+    // one reader both routes share; this file's own `.capsUsage(` stays the
+    // caps view's alone, as `coord-caps-route.test.ts` pins.
     if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
-      const caps = coord.caps();
-      const usage = coord.capsUsage();
-      if (usage.running >= caps.maxConcurrentWorkers) {
-        return reply.code(409).send({ ok: false,
-          reject: { code: 'cap-concurrency', limit: caps.maxConcurrentWorkers, running: usage.running } });
+      const { overConcurrency } = capsMeasured(coord);
+      if (overConcurrency !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency', ...overConcurrency } });
       }
     }
 ```
@@ -452,13 +501,13 @@ Amend the route's docstring (`:1521-1525`, "Moving BACKWARD to `'working'` … r
 - [ ] **Step 4: Run to verify both pass, then measure the mutant**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts -t "re-entering|does NOT cap-check"` → PASS.
-Mutant: comment out the whole inserted `if` block, re-run → the re-entry test FAILS (200). Restore exactly. Second mutant: change `includes(run.state)` to `true` (cap-check every `working` target) → the control test FAILS (409 on `dispatched -> working`). Restore.
+Mutant: comment out the whole inserted `if` block in `routes.ts`, re-run → the re-entry test FAILS (200). Restore exactly. Second mutant: change `includes(run.state)` to `true` (cap-check every `working` target) → the control test FAILS (409 on `dispatched -> working`). Restore. Third mutant: in `capsMeasured` change `>=` to `>` → the re-entry test FAILS (200 at limit) AND `run-routes.test.ts`'s existing dispatch cap test at `:814` FAILS — one arithmetic, two consumers, both red. Restore.
 
 - [ ] **Step 5: Run the route suite and commit**
 
-Run: `cd server && ./node_modules/.bin/tsc -p tsconfig.json --noEmit && ./node_modules/.bin/vitest run test/run-routes.test.ts test/coord-caps-route.test.ts`
+Run: `cd server && ./node_modules/.bin/tsc -p tsconfig.json --noEmit && ./node_modules/.bin/vitest run test/run-routes.test.ts test/coord-caps-route.test.ts test/dispatch-hold-order.test.ts test/dispatch-mutex-gate.test.ts test/dispatch-adopt.test.ts`
 ```bash
-git add server/src/coord/routes.ts server/test/run-routes.test.ts
+git add server/src/coord/routes.ts server/src/coord/dispatch.ts server/test/run-routes.test.ts
 git commit -F - <<'MSG'
 feat(coord): advance -> working from an idle state takes the cap check
 
@@ -466,7 +515,8 @@ awaiting-review/merging -> working is a legal edge; Task 1 removed those
 states from `running`, so re-entering must be cap-checked or the exclusion is
 a bypass (design 2026-09-14 §7.2). Refused `cap-concurrency` with the numbers,
 the same shape as dispatch; dispatched -> working is not checked, that run
-already counts.
+already counts. Both routes read the cap through capsMeasured() in
+dispatch.ts (D-2805) — routes.ts keeps its single .capsUsage(, the caps view.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
