@@ -559,6 +559,26 @@ export interface TaskProgress {
   active: string | null; // activeForm of the first in-progress task, else null
 }
 
+/** What a session was measured running, from its usage sidecar
+ *  (`~/.cc-sessions/usage/<ccd-id>.json`, written by the statusline hook on
+ *  every render — routing spec 2026-09-14 §6). `ts` is the hook's clock in
+ *  epoch SECONDS; `stale` is the server's verdict against `USAGE_FRESH_S`.
+ *  `class` is one of `shared/models.ts`'s `CLASSES` or null, derived from
+ *  `model` by `familyClassOf` on the SERVER and never carried by the hook; it
+ *  is spelled `string` here because this file imports nothing (one pinned
+ *  import line) and a second copy of the class list is what
+ *  `single-definition.test.ts` forbids — a consumer compares by string.
+ *  Additive on the wire: an older server omits the whole field. */
+export interface SessionUsage {
+  readonly ts: number;
+  readonly model: string | null;
+  readonly class: string | null;
+  readonly effort: string | null;
+  readonly ctxPct: number | null;
+  readonly cost: number | null;
+  readonly stale: boolean;
+}
+
 /** Where a workspace's pull request is, as ccrc last managed to find out.
  *
  *  `unchecked` is a FIRST-CLASS state, not a synonym for "no PR": keying the
