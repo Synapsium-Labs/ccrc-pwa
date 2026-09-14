@@ -13,6 +13,10 @@ describe('run-state classification (spec §7.1)', () => {
     ACTIVE_RUN_STATES, IDLE_RUN_STATES, TERMINAL_RUN_STATES,
   };
 
+  it('RUN_STATES is the whole RunState — the same keys the transition table is compiled against', () => {
+    expect([...RUN_STATES].sort()).toEqual((Object.keys(RUN_TRANSITIONS) as RunState[]).sort());
+  });
+
   it('places every RunState in exactly one list', () => {
     for (const s of RUN_STATES) {
       const homes = Object.entries(lists).filter(([, l]) => l.includes(s)).map(([n]) => n);

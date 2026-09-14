@@ -443,6 +443,22 @@ describe('CoordStore: caps', () => {
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
   });
 
+  it('does not count a run advanced to `dispatched` with no `dispatchedAt` — D-13\'s clause, now that `planned` is excluded by state too (spec §7.1 review, Important 1)', () => {
+    // Before design 2026-09-14 §7.1 this exact shape WAS D-13's whole proof:
+    // a `planned` row (NULL `dispatchedAt`) counted under the old predicate
+    // unless `dispatchedAt IS NOT NULL` excluded it. Now `planned` is ALSO
+    // excluded by state (`planned` is in `IDLE_RUN_STATES`), so every other
+    // caps assertion in the tree survives a mutant that deletes the
+    // `dispatchedAt IS NOT NULL` clause — `advance()` is public and does not
+    // require `markDispatched`, so a run can reach `dispatched` STATE with
+    // no dispatch timestamp at all, and only this clause still excludes it.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+  });
+
   it('stops counting a run the moment it reaches an IDLE state, and counts it again at working (spec §7.1)', () => {
     const s = store();
     const now = 1_000_000_000_000;

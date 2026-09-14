@@ -415,8 +415,9 @@ const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
- *  names this fragment and never the literal pair (D-2800; pinned by
- *  `single-definition.test.ts`). */
+ *  names this fragment and never the literal pair (D-2800), except the
+ *  strands query, which binds the same L0 constant as bound placeholders
+ *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
 
 /** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
