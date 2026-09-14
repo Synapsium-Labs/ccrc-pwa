@@ -531,17 +531,32 @@ describe('the card from the graph (spec §3.2)', () => {
     // is "no reader can ever observe a half-written stage", and the reader is
     // the hook's reacquired-lock `mv` — which renames the stage onto canonical
     // WITHOUT reading it, so a truncated stage would publish a truncated
-    // canonical artifact. To observe the defect behaviourally a fixture would
-    // have to kill the helper inside `writeFileSync`, BETWEEN two `write(2)`
-    // calls — and there are never two. MEASURED with
+    // canonical artifact.
+    //
+    // WHAT IS UNBUILDABLE IS NARROWER THAN THIS COMMENT ONCE CLAIMED (r3
+    // B-M4). §5's row prescribes the kill window as "SIGKILL between its
+    // `.part` write and rename", and THAT FIXTURE EXISTS AND IS GREEN —
+    // `server/test/session-hook.test.ts`, "STAGE COMPLETENESS: a helper killed
+    // between its `.part` write and its rename publishes nothing", landed in
+    // round 1 and asserted below by name so it cannot be deleted as
+    // impossible. What no fixture can reach is only the NARROWER intra-
+    // `writeFileSync` truncation: a kill BETWEEN two `write(2)` calls — and
+    // there are never two. MEASURED with
     // `strace -f -e trace=write` over a `writeFileSync` of 4 KiB, 64 KiB,
     // 256 KiB and 1 MiB: exactly ONE `write(2)` at every size, so the window
     // does not exist at any payload this helper produces, not merely at
     // fixture sizes. Consistent with that, a mutant that writes the target
     // directly and then renames it onto itself leaves every assertion in this
-    // file GREEN. A green mutation means AMBIGUOUS, not untested — so the
-    // discipline is pinned where it is decidable, in the source, and the
+    // file GREEN. A green mutation means AMBIGUOUS, not untested — so that
+    // residual is pinned where it is decidable, in the source, and the
     // substitution is recorded as D-2802 beside its two siblings.
+    //
+    // THE CROSS-REFERENCE IS A MECHANISM, NOT A SENTENCE: deleting the effect
+    // fixture named above reds THIS test, whose comment is the one that used
+    // to say no such fixture could exist.
+    const hookTests = fs.readFileSync(path.resolve(__dirname, 'session-hook.test.ts'), 'utf8');
+    expect(hookTests, 'the §5 row`s EFFECT fixture is still in the tree — only the intra-write window is unbuildable')
+      .toContain('STAGE COMPLETENESS: a helper killed between its `.part` write and its rename publishes nothing');
     const src = fs.readFileSync(HELPER, 'utf8');
     const start = src.indexOf('function writeAtomic(target, text) {');
     expect(start, 'writeAtomic exists').toBeGreaterThan(0);
