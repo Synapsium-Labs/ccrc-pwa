@@ -4081,6 +4081,53 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     }, 60_000);
   }
 
+
+  it('PostCompact is INERT with no `find` — and that guard is LIVE again, because settlement measures the set\'s age', () => {
+    // The guard at the head of `_hook_compact_post` was guarding a dependency
+    // the function did not use: `find` appeared nowhere in its body, which is
+    // the corroborating trace that §3.0's age trigger had been dropped rather
+    // than deferred. With the age measurement built, the guard has a subject
+    // again — and, unlike the `touch` and `mktemp` guards beside it, this one
+    // is mutation-effective: deleting it does not make the arm fall back to
+    // safety, it makes the arm read EVERY set as aged (a `find` that answers
+    // nothing reads aged) and commit a `scope:null` line for a set it could
+    // have attributed in full.
+    const { tree, transcript } = cycle({ serve: true });
+    const bytes = fs.readFileSync(setFile());
+    const r = runFull(postCompact(tree, transcript, SUMMARY), { PATH: minimalPath(['find']) });
+    expect(r, 'the arm says nothing at all').toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(journalFile()), 'and commits NOTHING — never a null-scope line it cannot vouch for').toBe(false);
+    expect(fs.readFileSync(setFile()), 'canonical is byte-identical').toEqual(bytes);
+    expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken').toEqual([]);
+  }, 60_000);
+
+  it('the two guards beside it are ARGUED, not pinnable by behaviour — and the reason is measured', () => {
+    // MEASURED on this box, in a throwaway copy: deleting `command -v touch`
+    // or `command -v mktemp` from `_hook_compact_post` leaves the whole
+    // session-hook suite GREEN, including the two absence legs above, because
+    // every mechanism downstream of them already fails safely. With `mktemp`
+    // gone `_hook_lock_acquire` refuses with rc 2 before anything is claimed;
+    // with `touch` gone the claim is taken and the failed-touch branch restores
+    // canonical by no-clobber `link` — same inode, same bytes, same mtime — and
+    // returns without committing. The end states are indistinguishable from the
+    // guards firing, so no fixture can tell them apart.
+    //
+    // KEPT ANYWAY, and pinned HERE by source, for the reason the `[[ -f "$set"
+    // && -r "$set" ]]` guard in `_hook_compact_card_locked` is kept: this file
+    // declares two userlands, and "the fallback happens to be safe" is a
+    // property of THIS box's bash and coreutils, not of every `sh` a fleet box
+    // might run. A source pin is what a derived, environment-dependent guard
+    // can honestly carry; a behaviour assertion here would pin shape while
+    // claiming effect.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post, 'the touch guard is present').toContain('command -v touch  >/dev/null 2>&1 || return 0');
+    expect(post, 'and the mktemp guard').toContain('command -v mktemp >/dev/null 2>&1 || return 0');
+    // …and the find guard has a SUBJECT, which is what makes it different from
+    // the two above: the settlement really does run `find` on the set.
+    expect(post, 'the find guard is present').toContain('command -v find   >/dev/null 2>&1 || return 0');
+    expect(post, 'and the age measurement it guards').toMatch(/find "\$set" -mmin "-\$\(\( COMPACT_CARD_MAX_AGE \/ 60 \)\)"/);
+  });
   it('the acquire is INERT with no `link` — the lock-open alias is how it opens canonical safely', () => {
     // `_hook_lock_acquire`'s own `command -v link` guard, which no fixture
     // reached either. Without it the arm would fall through to a direct open of
