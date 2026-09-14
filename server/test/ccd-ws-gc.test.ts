@@ -1019,9 +1019,15 @@ describe('ws-gc --prune', () => {
     // the six ordering assertions below would ever run. Measured: without this
     // capture the suite is `1 failed | 68 passed` with
     // `rm: cannot remove '…/demo-quiet-mesa.reaping': Is a directory`.
+    //
+    // 3 AND NOT MERELY NONZERO. The purge answers with THREE distinct nonzero
+    // conditions and this is the third — the emit has already gone, the row is
+    // destroyed, and one unlink was refused — which is the opposite of the 1 a
+    // pre-emit lock refusal returns. Asserting `nonzero` here would leave the
+    // fixture green on the very collapse the split exists to end.
     const wedged = h.sh('_reg_purge demo-quiet-mesa; echo "rc=$?"');
-    expect(wedged, 'a purge whose unlink was refused must not report success')
-      .toMatch(/(^|\n)rc=1$/);
+    expect(wedged, 'a refused unlink is the POST-EMIT condition, status 3')
+      .toMatch(/(^|\n)rc=3$/);
 
     expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.reaping')),
       'the fixture only means anything if rm -f really refused it').toBe(true);

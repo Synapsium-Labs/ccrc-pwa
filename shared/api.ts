@@ -5548,7 +5548,8 @@ export type LcRefusalToken =
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
-  | 'purge-refused';           // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-incomplete';        // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -5588,6 +5589,14 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // the verb is the whole remedy.
   'purge-refused':
     'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
+  // D-2605, and the WHOLE POINT is that it is not the sentence above. A single
+  // token for both conditions told an operator to wait for a compaction that
+  // was not running and promised a row that no longer existed. Here the purge
+  // ran to its end: re-running the verb finds nothing to do and will not clear
+  // what is left, so the remedy is a hand and not a retry. The journal row's
+  // `detail` names the pathname; this sentence must not pretend to know it.
+  'purge-incomplete':
+    'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

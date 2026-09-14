@@ -392,6 +392,17 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
     // emit-before-loop and no trailing `||`/`&&` — both of which stay GREEN
     // under a silently inserted conditional guard. Nothing but the header
     // comment and THIS acquisition may stand here, so a third statement reds.
+    //
+    // THE ONE ADDITION (D-2605): `REG_PURGE_UNREMOVED=""`, the unconditional
+    // clearing of the status-3 out-parameter. The property this scan defends is
+    // that NOTHING HERE MAY GATE THE PURGE, and a bare assignment to a global
+    // with no test, no `||`, no `&&` and no control flow cannot: whatever it is
+    // set to, the next line still runs. It is admitted by its exact literal
+    // text rather than by a widened shape — `REG_PURGE_UNREMOVED=$(…)` or a
+    // conditional form still reds here — so this is one named statement, not a
+    // hole. It must stay INSIDE the function: `ccd` is sourced by these suites
+    // and a shell may purge twice, and a file-scope initialiser would let the
+    // first run's pathname be read as the second's.
     const stmts = head.split('\n')
       .slice(1)                                   // the function's own `_reg_purge() {` line
       .map((l) => l.trim())
@@ -399,7 +410,7 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
     expect(stmts.length, `only the acquisition may stand here, found:\n${stmts.join('\n')}`).toBeGreaterThan(0);
     for (const st of stmts) {
       expect(st, `unexpected statement before the emit: ${st}`).toMatch(
-        /^(local _pg_fd|_compact_lock_acquire|if \(\( _pg_rc == 2 \)\)|if \[ -e "\$REG\/\$1\.generation"|elif \(\( _pg_rc != 0 \)\)|else$|_pg_fd="\$COMPACT_LOCK_FD"|fi$|return [12];?$)/);
+        /^(local _pg_fd|REG_PURGE_UNREMOVED=""$|_compact_lock_acquire|if \(\( _pg_rc == 2 \)\)|if \[ -e "\$REG\/\$1\.generation"|elif \(\( _pg_rc != 0 \)\)|else$|_pg_fd="\$COMPACT_LOCK_FD"|fi$|return [12];?$)/);
     }
   });
 
@@ -487,6 +498,67 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
     } finally { release(); }
   }, 30_000);
 
+  // ── D-2605: THE THIRD STATUS, AND IT IS THE OPPOSITE OF THE FIRST TWO ────
+  // `flock` PRESENT, the lock UNCONTENDED, and one registry field `rm -f` will
+  // not take. Before the split this produced the most confidently false record
+  // in the file: `outcome:"refused"`, `refusal:"purge-refused"`, detail "the
+  // compaction lock was unavailable; the registry row is untouched" — emitted
+  // after the row had been irreversibly destroyed, with the lock held and the
+  // purge-done fact already on disk. Every clause was wrong, and no assertion
+  // in the suite could see it because no fixture drove a partial removal
+  // through a real caller.
+  const WEDGE = 'wedge';   // a dot-free suffix, so the purge's own loop takes it
+  it('the DEAD-REG arm FAILS, not declines, when the purge RAN and left residue', () => {
+    const id = seed('demo-quiet-basin');
+    // A DIRECTORY at a dot-free registry suffix: `rm -f` refuses it (measured,
+    // `rm: cannot remove …: Is a directory`, exit 1) while every sibling field
+    // goes. No lock is held and none is shimmed away — this is the condition
+    // the two "nothing happened" statuses are NOT.
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', `${id}.${WEDGE}`));
+    const out = h.sh(`_ws_gc_prune_row dead-reg demo quiet-basin /nowhere 0; echo "DECLINED=$GC_DECLINED RECLAIMED=$GC_RECLAIMED"`);
+    // Not `reclaimed` — a wedge is not a success — and not the word `declined`
+    // on its own row either, because the row IS gone.
+    expect(out, 'the row says what happened').toContain('incomplete');
+    expect(out).toContain(`${id}.${WEDGE}`);
+    expect(out, 'and it counts where the operator will notice it').toContain('DECLINED=1 RECLAIMED=0');
+
+    const intents = eventsOf(h.home, 'destroy').filter((e) => e['outcome'] === 'intent');
+    expect(intents, 'the arm minted its intent before it learned').toHaveLength(1);
+    const tx = intents[0]!['tx'] as string;
+    const terminal = eventsOf(h.home, 'destroy').filter((e) => e['tx'] === tx && e['outcome'] !== 'intent');
+    // EXACTLY ONE terminal fact, and it is `failed` — `refused` is defined in
+    // this file as "before anything irreversible", which this is not.
+    expect(terminal.map((e) => e['outcome'])).toEqual(['failed']);
+    expect(terminal[0]!['refusal']).toBe('purge-incomplete');
+    // THE THREE FALSE CLAUSES, each asserted away.
+    const detail = String(terminal[0]!['detail'] ?? '');
+    expect(detail, 'the lock was HELD — blaming it is a fabricated cause').not.toContain('compactions.lock');
+    expect(detail, 'the row was destroyed — "untouched" is the reverse of the truth').not.toContain('untouched');
+    expect(detail, 'and it names what a hand has to remove').toContain(`${id}.${WEDGE}`);
+    // The purge-done fact IS on disk — the emit is unconditional and precedes
+    // every unlink — and the row really did go.
+    expect(eventsOf(h.home, 'purge'), 'the purge fact was journaled').toHaveLength(1);
+    expect(h.reg(id, 'uuid'), 'the row was destroyed, which is why this is not a refusal').toBeNull();
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.${WEDGE}`)), 'and the wedge stands').toBe(true);
+  }, 30_000);
+
+  it('ws-rm FAILS with the incomplete token too, and its message does not prescribe a retry', () => {
+    // The same condition through a POST-ACTION caller, where the two statuses
+    // were previously indistinguishable in the operator-facing sentence.
+    wsRow('demo-still-river');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', `demo-still-river.${WEDGE}`));
+    h.sh(`${RM_STUB} cmd_ws_rm demo-still-river 2>/dev/null || true`);
+    const outs = eventsOf(h.home, 'destroy');
+    expect(outs.map((e) => e['outcome']), 'intent, then exactly one terminal').toEqual(['intent', 'failed']);
+    expect(outs[1]!['refusal']).toBe('purge-incomplete');
+    const detail = String(outs[1]!['detail'] ?? '');
+    expect(detail).toContain(`demo-still-river.${WEDGE}`);
+    expect(detail, 'there is no compaction to wait for').not.toContain('once the compaction settles');
+    expect(detail, 'the purge is not the thing that failed').not.toContain('could not be purged');
+    expect(detail, 'it says so positively, so the reader is not left to infer it').toContain('WAS purged');
+    expect(h.reg('demo-still-river', 'uuid')).toBeNull();
+  }, 30_000);
+
   it('ws-rm and forget FAIL rather than decline — the act is already done, and the message says what stands', async () => {
     for (const [verb, act] of [['cmd_ws_rm', 'destroy'], ['cmd_forget', 'forget']] as const) {
       const id = seed('demo-quiet-basin');
@@ -500,9 +572,17 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
         const body = src.slice(src.indexOf(`${verb}() {`));
         const end = body.indexOf('\n}\n');
         const fn = body.slice(0, end);
-        expect(fn, `${verb} reads the purge's status`).toMatch(/if ! _reg_purge/);
+        // THE VALUE, NOT THE BOOLEAN (D-2605). `if ! _reg_purge` is exactly the
+        // shape that collapsed a pre-emit lock refusal and a post-emit removal
+        // failure into one message, so the pin is now its ABSENCE plus the
+        // capture that replaced it.
+        expect(fn, `${verb} reads the purge's status`).toMatch(/_reg_purge "\$id" \|\| _\w+_prc=\$\?/);
+        expect(fn, `${verb} must not collapse the three conditions back to a boolean`)
+          .not.toMatch(/if ! _reg_purge/);
         expect(fn, `${verb} reports it as a FAILURE, not a decline`).toContain(`_lc_fail ${act}`);
         expect(fn).toContain('purge-refused');
+        expect(fn, 'and the post-emit condition has its own token').toContain('purge-incomplete');
+        expect(fn, 'which is branched on by VALUE').toMatch(/\(\( _\w+_prc == 3 \)\); then/);
         expect(fn, 'and names what still stands').toContain('still stand');
         expect(fn, 'a refusal is never reported as success').toMatch(/return 1/);
       } finally { release(); }

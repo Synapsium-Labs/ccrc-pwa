@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3d276dcb52e949b0bab06a8896d8968b810fb239b7ac12f202116a78760abbe2
+# ccrc:generated 1 sha256=65f5a3978e05a5f882673d79019b7519c7eaf1200f85ad8313e7fdafe2a7b9a1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1923,6 +1923,29 @@ _reg_generation_init() {   # <id> -> 0 the row carries a valid generation; 1 ref
   _reg_generation_read "$1"      # EEXIST reclassifies: read back whoever won
 }
 
+# ONE RECORDER for every tracked unlink in `_reg_purge` below, so its STATUS
+# and the pathname it blames can never disagree. A site that set `_pg_urc`
+# without appending the path — or appended without setting it — would hand the
+# caller either a failure it cannot describe or a description of a failure the
+# caller never hears about, and describing a failure the caller cannot see is
+# the fabricated-cause defect this whole seam exists to remove.
+#
+# `_pg_urc` is `_reg_purge`'s own `local`, reached here through bash's dynamic
+# scope. That is why this function has exactly one caller and is defined
+# immediately beside it: a second caller would be assigning into whatever
+# `_pg_urc` happened to be in scope, which is not a mechanism.
+#
+# THE SEPARATOR IS PROSE, NOT A GRAMMAR. `$REG/<id>.<suffix>` and
+# `$REG/.<id>.<suffix>` are the only two shapes that reach here — ids are
+# `<project>-<slug>` and both loops filter on a dot-free or private-family
+# suffix — so no pathname carries a comma today, but nothing DEPENDS on that:
+# the value is a sentence for a human and for the journal's `detail`, and
+# nothing parses it back into a list.
+_reg_purge_unremoved() {   # path — record one refused unlink AND the status it implies
+  _pg_urc=3
+  REG_PURGE_UNREMOVED="${REG_PURGE_UNREMOVED:+$REG_PURGE_UNREMOVED, }$1"
+}
+
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -2031,7 +2054,30 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # generations and is minted even by a purge against a never-existed id, so it
   # proves history rather than a live regime, and gating on it would wedge a
   # genuinely flock-less box fleet-wide.
+  # ── THREE NONZERO STATUSES, BECAUSE THERE ARE THREE CONDITIONS ───────────
+  # A caller that cannot tell them apart has to guess, and every caller guessed
+  # the same wrong one: that a nonzero meant the lock. Measured on this tree
+  # before the split — a dead-reg row plus ONE un-removable field made
+  # `_ws_gc_prune_row` journal `outcome:"refused"`, `refusal:"purge-refused"`,
+  # `detail:"…compactions.lock was unavailable; the registry row is untouched"`
+  # while the lock had been HELD, the row was destroyed, `uuid`/`project`/
+  # `workspace`/`branch`/`workdir`/`generation` were all gone and a `purge`
+  # done-fact was already on disk. Every clause of that record was false.
+  #
+  #   1  PRE-EMIT LOCK REFUSAL.        Nothing deleted, no purge fact.
+  #   2  MECHANISM ABSENT + a live generation. Nothing deleted, no purge fact.
+  #   3  POST-EMIT REMOVAL FAILURE.    The row IS destroyed, the purge fact IS
+  #      journaled, and `REG_PURGE_UNREMOVED` names what still stands.
+  #
+  # 1 and 2 are the two halves of "nothing happened"; 3 is the opposite of
+  # both, and it is the one a caller must not report as a refusal — `_lc_fail`'s
+  # own rule is that a refusal precedes anything irreversible and a failure
+  # follows it, and by the time any `rm -f` can fail the emit has already gone.
   local _pg_fd="" _pg_rc=0 _pg_urc=0
+  # CLEARED ON ENTRY, unconditionally. `ccd` sources itself into its tests and
+  # a shell may purge twice; a stale pathname from the previous call read as
+  # this one's would be exactly the fabricated fact the split exists to end.
+  REG_PURGE_UNREMOVED=""
   _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; _pg_rc=$?
   if (( _pg_rc == 2 )); then
     # MECHANISM ABSENT. Fail open only on a generation-ABSENT row.
@@ -2072,13 +2118,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     # suffix like any other field, so without this arm the loop deletes it in
     # ordinary glob order and "generation last" is a no-op comment.
     [[ "$suffix" == archived || "$suffix" == reaping || "$suffix" == generation ]] && continue
-    # A REMOVAL FAILURE IS ITS OWN CONDITION (spec §3.4). Every unlink from here
-    # down is tracked and the function returns nonzero if any of them failed —
-    # the EMIT above stays unconditional and unmoved, so the purge-done fact is
-    # already on disk by the time any of this can fail, and such a run reports
-    # the fact WITH a failure status: the row and its generation may still be
-    # standing. The four callers already branch on the status.
-    rm -f "$f" || _pg_urc=1
+    # A REMOVAL FAILURE IS ITS OWN CONDITION (spec §3.4), AND ITS OWN STATUS.
+    # Every unlink from here down is tracked and the function returns 3 — never
+    # the 1 a pre-emit lock refusal returns — if any of them failed. The EMIT
+    # above stays unconditional and unmoved, so the purge-done fact is already
+    # on disk by the time any of this can fail, and such a run reports the fact
+    # WITH a failure status and the un-removable pathname in
+    # `REG_PURGE_UNREMOVED`: the row may be destroyed and something beside it
+    # may still be standing, which is neither of the two "nothing happened"
+    # conditions. The four callers branch on the value, not on the boolean.
+    rm -f "$f" || _reg_purge_unremoved "$f"
   done
   # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
   # session-status file the Claude Code hooks write on every tool call) is an
@@ -2091,14 +2140,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # produced by a field name instead of a project directory name. Removed
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
-  rm -f "$REG/$id.hookstate.json" || _pg_urc=1
-  rm -f "$REG/$id.reaping" || _pg_urc=1
+  rm -f "$REG/$id.hookstate.json" || _reg_purge_unremoved "$REG/$id.hookstate.json"
+  rm -f "$REG/$id.reaping" || _reg_purge_unremoved "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
   # marker, because `reaping` standing beside a missing `archived` is precisely
   # the wedge this ordering exists to prevent. It is also what makes the order
   # observable to a test — nothing else about two adjacent unlinks is.
-  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived" || _pg_urc=1
+  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived" || _reg_purge_unremoved "$REG/$id.archived"
   # THE DOT-LEADING PRIVATE COMPACTION FAMILIES, which the loop above cannot
   # see (its glob is `"$REG/$id".*` — id, then a dot) and which would otherwise
   # hold the slug for ever under the widened `_ws_slug_free`. The permanent
@@ -2108,13 +2157,13 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$pf" ]] || continue
     psuffix="${pf#"$REG/.$id."}"
     _ws_private_family "$psuffix" || continue
-    rm -f "$pf" || _pg_urc=1
+    rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
   # GENERATION LAST, after the archived/reaping tail and after every private
   # family — and OUTSIDE the loop above, which skips it. It is the row's
   # authorization: while it stands, a hook holding it can still take the lock,
   # so it is the last thing to go.
-  rm -f "$REG/$id.generation" || _pg_urc=1
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -5251,15 +5300,29 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     echo "warn: no worktree record for $workdir; registry says branch '$reg_branch', which still exists — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
   fi
 
-  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
-  # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
-  # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
-  # refusal precedes anything irreversible, a failure follows it. Reporting it
-  # as a suppressed success is the exact false success `_reg_purge`'s own
-  # "never claims success" rule forbids, and reporting it as a bare decline
-  # would say nothing was touched, which is false. The message names WHAT
-  # COMPLETED and that the registry row and its generation still stand.
-  if ! _reg_purge "$id"; then                                              # finding F3
+  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS — THE VALUE ─────────
+  # It reached here AFTER irreversible action, so both nonzero conditions are a
+  # FAILURE, not a refusal — that is `_lc_fail`'s documented distinction from
+  # `_lc_refuse`: a refusal precedes anything irreversible, a failure follows
+  # it. Reporting either as a suppressed success is the exact false success
+  # `_reg_purge`'s own "never claims success" rule forbids.
+  #
+  # BUT THEY ARE TWO DIFFERENT FAILURES, and a boolean `if !` told the operator
+  # the same story for both. 1/2 means the purge never started: the row stands
+  # whole and re-running is the entire remedy. 3 means it ran and did not
+  # finish: the row is GONE, the purge fact is in this journal, and something
+  # `rm -f` would not take is still on disk — a message telling that operator
+  # to wait for a compaction to settle prescribes a wait for a compaction that
+  # is not running and promises state that no longer exists.
+  local _rm_prc=0
+  _reg_purge "$id" || _rm_prc=$?                                           # finding F3
+  if (( _rm_prc == 3 )); then
+    _lc_fail destroy "$id" "$lctx" purge-incomplete \
+      "the workspace was torn down and the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd ws-rm $id\` will not take it, remove it by hand" \
+      verb ws-rm dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: torn down and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _rm_prc != 0 )); then
     _lc_fail destroy "$id" "$lctx" purge-refused \
       "the workspace was torn down, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd ws-rm $id\` once the compaction settles" \
       verb ws-rm dec.reason "$reason"
@@ -11544,7 +11607,18 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # `_lc_refuse` "EMITS, THEN DIES. Never returns." So this branch answers
   # CONTENTION only, never mechanism absence, and that is exactly why it must
   # not be folded into the mechanism-absence ruling's two-caller list.
-  if ! _reg_purge "$id"; then                                              # (i) LAST, finding F3
+  # THE VALUE, not the boolean (D-2605): 3 is a purge that RAN and left
+  # residue, and it is the opposite of the 1 this branch used to assume. See
+  # `cmd_ws_rm`'s note for the argument; the disposition is the same here.
+  local _rt_prc=0
+  _reg_purge "$id" || _rt_prc=$?                                           # (i) LAST, finding F3
+  if (( _rt_prc == 3 )); then
+    _lc_fail reap "$id" "$lctx" purge-incomplete \
+      "the reap completed — worktree, branch and clips are gone — and the registry row WAS purged, this journal's own purge fact being the record of it, but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running will not take it, remove it by hand" \
+      verb ws-reap meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: reaped and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _rt_prc != 0 )); then
     _lc_fail reap "$id" "$lctx" purge-refused \
       "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run once the compaction settles" \
       verb ws-reap meas.branch "$branch"
@@ -11692,6 +11766,16 @@ _ws_line_safe() { printf '%s' "${1//[[:cntrl:]]/?}"; }
 _gc_row()       { printf '  %-10s %s\n' "$1" "$(_ws_line_safe "$2")"; }
 _gc_reclaimed() { GC_RECLAIMED=$(( GC_RECLAIMED + 1 )); _gc_row reclaimed "$1"; }
 _gc_declined()  { GC_DECLINED=$((  GC_DECLINED  + 1 )); _gc_row declined  "$1"; }
+# A THIRD LABEL, AND DELIBERATELY NOT A THIRD COUNTER (D-2605). `_reg_purge`
+# status 3 — the row destroyed, the purge fact journaled, something beside it
+# un-removable — is neither of the two words above: `reclaimed` would count a
+# wedge as a success and `declined` would say nothing was removed, which is
+# false. So the ROW gets its own label, where the operator reads what happened,
+# and the TALLY borrows `GC_DECLINED`, because the footer's job is to say
+# whether any row needs reading and an incomplete purge is emphatically one
+# that does. Rule (2) above is kept: exactly one increment per announced
+# action, arithmetic over events rather than `grep -c` over rendered text.
+_gc_incomplete() { GC_DECLINED=$(( GC_DECLINED + 1 )); _gc_row incomplete "$1"; }
 
 # WHY the last `_ws_gc_dirty` said "do not touch". Round-3 verification P2: the
 # refusal below is right and stays, but the function is a BOOLEAN and its two
@@ -12066,7 +12150,25 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       # `_lc_refuse_return`, carrying that same minted `$lctx`, beside it: no
       # `_lc_done destroy`, no `_gc_reclaimed`, and the sweep CONTINUES to the
       # next row, which is why the emitter returns rather than dying.
-      if ! _reg_purge "$project-$slug"; then                              # finding F3
+      #
+      # AND IT MAY ONLY DECLINE FOR 1 OR 2 (D-2605). Status 3 is a purge that
+      # already ran: the `_lc_done purge` fact is on disk and the row's fields
+      # are gone, so `_lc_refuse_return` — whose whole meaning is "before
+      # anything irreversible" — would emit `outcome:"refused"` about an act
+      # that was completed and irreversible, with a detail claiming the row is
+      # untouched. That is the reverse of the truth and it was measured on this
+      # tree: one un-removable field under a HELD lock produced exactly that
+      # record. A status-3 row therefore gets `_lc_fail destroy`, the word for
+      # an act that started and broke.
+      local _pr_prc=0
+      _reg_purge "$project-$slug" || _pr_prc=$?                            # finding F3
+      if (( _pr_prc == 3 )); then
+        _lc_fail destroy "$project-$slug" "$lctx" purge-incomplete \
+          "the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands" \
+          verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg \
+          meas.unremoved "$REG_PURGE_UNREMOVED"
+        _gc_incomplete "dead registry entry $project-$slug — the row is gone, but $REG_PURGE_UNREMOVED could not be removed and needs a hand"
+      elif (( _pr_prc != 0 )); then
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
           "$REG/.$project-$slug.compactions.lock was unavailable; the registry row is untouched" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
@@ -16054,7 +16156,16 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # "never claims success" rule forbids, and reporting it as a bare decline
   # would say nothing was touched, which is false. The message names WHAT
   # COMPLETED and that the registry row and its generation still stand.
-  if ! _reg_purge "$id"; then
+  # THE VALUE, not the boolean (D-2605) — see `cmd_ws_rm`'s note.
+  local _fg_prc=0
+  _reg_purge "$id" || _fg_prc=$?
+  if (( _fg_prc == 3 )); then
+    _lc_fail forget "$id" "$lctx" purge-incomplete \
+      "the session was unsupervised, its pane killed and the registry row purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd forget $id\` will not take it, remove it by hand" \
+      verb forget dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: unsupervised, killed and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _fg_prc != 0 )); then
     _lc_fail forget "$id" "$lctx" purge-refused \
       "the session was unsupervised and its pane killed, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd forget $id\` once the compaction settles" \
       verb forget dec.reason "$reason"
