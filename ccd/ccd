@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f6ded90d18109c55177bb40e182429cd1516ac702b2e2d89716ee5622c01fb0e
+# ccrc:generated 1 sha256=3d276dcb52e949b0bab06a8896d8968b810fb239b7ac12f202116a78760abbe2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2031,7 +2031,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # generations and is minted even by a purge against a never-existed id, so it
   # proves history rather than a live regime, and gating on it would wedge a
   # genuinely flock-less box fleet-wide.
-  local _pg_fd="" _pg_rc=0
+  local _pg_fd="" _pg_rc=0 _pg_urc=0
   _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; _pg_rc=$?
   if (( _pg_rc == 2 )); then
     # MECHANISM ABSENT. Fail open only on a generation-ABSENT row.
@@ -2072,7 +2072,13 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     # suffix like any other field, so without this arm the loop deletes it in
     # ordinary glob order and "generation last" is a no-op comment.
     [[ "$suffix" == archived || "$suffix" == reaping || "$suffix" == generation ]] && continue
-    rm -f "$f"
+    # A REMOVAL FAILURE IS ITS OWN CONDITION (spec §3.4). Every unlink from here
+    # down is tracked and the function returns nonzero if any of them failed —
+    # the EMIT above stays unconditional and unmoved, so the purge-done fact is
+    # already on disk by the time any of this can fail, and such a run reports
+    # the fact WITH a failure status: the row and its generation may still be
+    # standing. The four callers already branch on the status.
+    rm -f "$f" || _pg_urc=1
   done
   # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
   # session-status file the Claude Code hooks write on every tool call) is an
@@ -2085,14 +2091,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # produced by a field name instead of a project directory name. Removed
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
-  rm -f "$REG/$id.hookstate.json"
-  rm -f "$REG/$id.reaping"
+  rm -f "$REG/$id.hookstate.json" || _pg_urc=1
+  rm -f "$REG/$id.reaping" || _pg_urc=1
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
   # marker, because `reaping` standing beside a missing `archived` is precisely
   # the wedge this ordering exists to prevent. It is also what makes the order
   # observable to a test — nothing else about two adjacent unlinks is.
-  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
+  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived" || _pg_urc=1
   # THE DOT-LEADING PRIVATE COMPACTION FAMILIES, which the loop above cannot
   # see (its glob is `"$REG/$id".*` — id, then a dot) and which would otherwise
   # hold the slug for ever under the widened `_ws_slug_free`. The permanent
@@ -2102,15 +2108,15 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$pf" ]] || continue
     psuffix="${pf#"$REG/.$id."}"
     _ws_private_family "$psuffix" || continue
-    rm -f "$pf"
+    rm -f "$pf" || _pg_urc=1
   done
   # GENERATION LAST, after the archived/reaping tail and after every private
   # family — and OUTSIDE the loop above, which skips it. It is the row's
   # authorization: while it stands, a hook holding it can still take the lock,
   # so it is the last thing to go.
-  rm -f "$REG/$id.generation"
+  rm -f "$REG/$id.generation" || _pg_urc=1
   _compact_lock_release "$_pg_fd"
-  return 0
+  return "$_pg_urc"
 }
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
   # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
@@ -14366,15 +14372,31 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # The lock is CLOSED before the setup hook and before `_spawn_start`, which
   # takes its own — it guards the residue check and the generation mint, and
   # nothing else.
-  local gfd=""
-  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT" \
-    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry"
-  gfd="$COMPACT_LOCK_FD"
-  if ! _reg_generation_init "$id"; then
-    _compact_lock_release "$gfd"
-    die "$REG/$id.generation is present and invalid — refusing to start on it; inspect it by hand"
+  #
+  # …AND A MISS IS TWO CONDITIONS, not one. `_compact_lock_acquire` answers rc 2
+  # for MECHANISM ABSENCE and rc 1 for a refusal, deliberately, because §3.4's
+  # platform outcome gives them opposite dispositions here: row creation is NOT
+  # gated on the mechanism at all — it skips generation initialization and
+  # CONTINUES — since gating pre-existing registry work on a mechanism it never
+  # required would import a new failure mode into unrelated code. `cmd_start`
+  # has no `command -v flock` probe of its own, so a bare `||` caught both and
+  # `ccd start` was impossible on a flock-less userland, told to retry a 5 s
+  # timeout that had not happened. The retryable message belongs to rc 1 alone;
+  # no binary arrives because you ran the verb again. `_spawn_start` and
+  # `_reg_purge` already branch this way; `cmd_ws_add` is the deliberate
+  # opposite and dies, because it MINTS the generation.
+  local gfd="" _cs_rc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _cs_rc=$?
+  if (( _cs_rc == 1 )); then
+    die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry"
+  elif (( _cs_rc == 0 )); then
+    gfd="$COMPACT_LOCK_FD"
+    if ! _reg_generation_init "$id"; then
+      _compact_lock_release "$gfd"
+      die "$REG/$id.generation is present and invalid — refusing to start on it; inspect it by hand"
+    fi
+    _compact_lock_release "$gfd"; gfd=""
   fi
-  _compact_lock_release "$gfd"; gfd=""
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$wrapper"
   [[ -n "$project" ]] && _reg_set "$id" project "$project"

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { CCD, makeCcdHarness, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -56,6 +56,45 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
     expect.soft(m['archivedReason']).toBe('merged:#42');
   });
 
+
+  it('a removal failure AFTER the emit returns NONZERO, with the purge-done fact already on disk', () => {
+    // §3.4: "the unlink loop runs strictly AFTER the emit, so by the time any
+    // `rm -f` can fail the purge-done fact is already journaled; such a run
+    // returns NONZERO with the fact on disk and registry/generation possibly
+    // still standing, and its three post-action callers report `_lc_fail`."
+    // The emit stays unconditional and unmoved; only the STATUS is new.
+    //
+    // `rm` is shadowed rather than the directory made read-only, and that is
+    // forced: `_compact_lock_acquire` must LINK a fresh lock-open alias into
+    // `$REG` before it can hold anything, so a read-only `$REG` refuses the
+    // acquire and `_reg_purge` returns 1 before the emit — the wrong condition
+    // entirely. The shadow fails only this row's DIRECT children of `$REG`, so
+    // the lifecycle journal one directory down still records the fact.
+    const id = seed();
+    const RM = `rm() { local a; for a in "$@"; do case "$a" in`
+      + ` "$REG"/*/*) continue ;; "$REG"/${id}.*|"$REG"/.${id}.*) return 1 ;;`
+      + ` esac; done; command rm "$@"; };`;
+    const out = h.sh(`${RM} _reg_purge ${id}; echo "rc=$?"`);
+    expect(out, 'a purge that could not unlink is not a success').not.toContain('rc=0');
+    expect(out).toMatch(/rc=[1-9]/);
+    // THE FACT IS STILL THERE — the emit is not gated on the unlinks, and this
+    // is the half that must NOT change: a silent destruction has to defeat two
+    // independent emit sites, and a removal failure is not a licence to lose
+    // the record of what was about to be destroyed.
+    const purges = eventsOf(h.home, 'purge');
+    expect(purges, 'exactly one purge-done, journaled before the loop').toHaveLength(1);
+    expect(measOf(purges[0]!)['project']).toBe('demo');
+    // …and the row is still standing, which is exactly why the status matters.
+    expect(h.reg(id, 'uuid'), 'nothing was actually removed').not.toBeNull();
+  });
+
+  it('CONTROL: the same purge with a working `rm` returns ZERO and takes the row', () => {
+    const id = seed();
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"`);
+    expect(out, 'so the nonzero above is the failed unlink and not the purge').toContain('rc=0');
+    expect(h.reg(id, 'uuid')).toBeNull();
+    expect(eventsOf(h.home, 'purge')).toHaveLength(1);
+  });
   it('THE MUTANT: an emit moved after the loop reads a stripped registry', () => {
     // Mutant: move the `_lc_done purge …` line from above `local id="$1"` to
     // below the loop's closing `done` -> this fails with
@@ -491,9 +530,30 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
       // `_spawn_start`'s contended miss, and deliberately so.
       expect(acquire, `${verb}: the acquire precedes every _reg_set`).toBeLessThan(firstSet);
       const miss = body.slice(acquire, firstSet);
-      expect(miss, 'and a miss dies retryably, naming the lock').toMatch(/\|\| die "could not take .*compactions\.lock/);
+      expect(miss, 'and a miss dies retryably, naming the lock').toMatch(/die "could not take .*compactions\.lock/);
       expect(miss).toContain('nothing was');
       expect(miss).toContain('retry');
+      // WHICH MISS, though, is not the same question for the two verbs, and
+      // §3.4's platform outcome requires them to differ. `ws-add` MINTS the
+      // generation, so it dies on the acquire itself (and on a flock-less box
+      // its own `command -v flock` gate has already died, earlier). Row
+      // creation is NOT gated on the mechanism at any value: rc 2 skips
+      // generation initialization and CONTINUES, so `cmd_start`'s retryable
+      // message — which names a 5 s timeout and prescribes a retry — is on the
+      // rc-1 arm ALONE. A bare `||` here caught both, and told an operator on a
+      // userland with no `flock` to keep re-running a verb that can never
+      // succeed. The behaviour is leg (a2) of the mechanism-absence matrix;
+      // this is the source half that says the two arms are distinguishable.
+      if (verb === 'cmd_start') {
+        expect(miss, 'cmd_start captures the status').toContain('_compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _cs_rc=$?');
+        expect(miss, 'and the retryable die is the rc-1 arm alone')
+          .toMatch(/\(\( _cs_rc == 1 \)\); then\n\s*die "could not take/);
+        expect(miss, 'so no bare `|| die` catches mechanism absence with it')
+          .not.toMatch(/\|\| die "could not take/);
+      } else {
+        expect(miss, 'ws-add dies on the acquire itself, both conditions alike')
+          .toMatch(/\|\| die "could not take/);
+      }
     }
   });
 
@@ -749,6 +809,50 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       'and nothing was written for the row it refused to create').toEqual([]);
   });
 
+
+  /** (a2) ROW CREATION CONTINUES. §3.4's platform-outcome paragraph rules row
+   *  creation and `_spawn_start` NOT gated on the mechanism — they skip
+   *  generation initialization and carry on — because "gating pre-existing
+   *  registry work on a mechanism it never required would be this design
+   *  importing a new failure mode into unrelated code". `cmd_start` carries no
+   *  `command -v flock` probe of its own (the five shipped probes guard
+   *  `_lc_rotate`, `cmd_ws_add`, `cmd_ws_restore`, `cmd_ws_reap` and
+   *  `_tmux_new_session`), so its bare `|| die` caught rc 2 as well as rc 1 and
+   *  `ccd start` became impossible on the second declared userland — with a
+   *  message naming a 5 s timeout and prescribing a retry that can never work
+   *  for a permanently absent binary. `ws-add` is the deliberate opposite, and
+   *  leg (a) above is why: it MINTS the generation, and a row minted
+   *  unserialised is the race the lock exists to exclude. */
+  it('(a2) cmd_start COMPLETES and writes its row WITHOUT a generation — and mints one when flock is there', () => {
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    const START = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { return 1; };`;
+    const gen = (id: string): string => path.join(h.home, '.cc-sessions', `${id}.generation`);
+
+    const r = spawnSync('bash', ['-c', `source "${CCD}"; ${NOFLOCK} ${START} cmd_start claude demo`], {
+      encoding: 'utf8', cwd: h.home, timeout: 30_000,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+    });
+    expect(r.status, `a flock-less box must still start a session\n${r.stderr}`).toBe(0);
+    expect(r.stderr, 'and it must not name the lock at all').not.toContain('compactions.lock');
+    // THE ROW IS WHOLE. `die` fired BEFORE the first `_reg_set`, so the old
+    // behaviour left no `.uuid` either — an empty registry, not a partial row.
+    expect(h.reg('claude-demo', 'uuid'), 'the row was written').not.toBeNull();
+    expect(h.reg('claude-demo', 'wrapper')).toBe('claude');
+    expect(fs.existsSync(gen('claude-demo')),
+      'and carries NO generation: nothing minted it, and nothing pretends one exists').toBe(false);
+
+    // THE CONTROL, in its own harness: with the mechanism present the same call
+    // DOES mint one — so the absence above is the shim and not the fixture.
+    h.cleanup();
+    h = makeCcdHarness('ccrc-lc-purge-');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    const r2 = spawnSync('bash', ['-c', `source "${CCD}"; ${START} cmd_start claude demo`], {
+      encoding: 'utf8', cwd: h.home, timeout: 30_000,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+    });
+    expect(r2.status, `${r2.stderr}`).toBe(0);
+    expect(fs.existsSync(gen('claude-demo')), 'flock present ⇒ the generation is minted').toBe(true);
+  }, 90_000);
   /** EACH VERB GETS THE ROW SHAPE IT WILL ACT ON, which is not one shape:
    *  `cmd_forget` refuses a row carrying `.workspace` outright, and `cmd_ws_rm`
    *  needs a real worktree. A single fixture for all three would pass leg (c)
