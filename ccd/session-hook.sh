@@ -1014,7 +1014,7 @@ _hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST refer
 _hook_compact_pre() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
   local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
-  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead=""
+  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
   local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
@@ -1047,7 +1047,7 @@ _hook_compact_pre() {
   # a young PostCompact claim, which is the same evidence one settlement step
   # later — a compaction whose set has already been claimed is still in flight.
   if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then
-    CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""
+    CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
   fi
   [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
   # THE SWEEP — EXACT FAMILY, age-gated, under this held lock. A hook killed
@@ -1070,10 +1070,20 @@ _hook_compact_pre() {
   nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
   # `at` is the epoch-ms measurement. The nonce is the collision-resistant slot
   # identity, preserved in the set head and passed to the helper/card line 1.
+  # `overlap` IS THE ONLY CHANNEL §3.0 GIVES POSTCOMPACT to tell an
+  # overlap-DEGRADED set from a genuinely ambiguous verdict: the branch above
+  # writes the same `scope` for both, and the two prescribe different records
+  # (a forced one may attribute nothing at all). It is published HERE and only
+  # here. The Task-1–8 helper rewrites the set WITHOUT this member, which §3.0
+  # rules legacy-compatible ordinary/false — and that is sound rather than
+  # merely tolerated, because a `true` value never reaches the helper at all:
+  # the ambiguous return below sits between this publication and the helper
+  # fork, so every set the helper rewrites had `overlap:false`.
   doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
-      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" --arg nonce "$nonce" \
+      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" --arg nonce "$nonce" --arg ovl "$ovl" \
       --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
-      '{v:1, at:$at, nonce:$nonce, scope:$scope, agent:(if $agent=="" then null else $agent end),
+      '{v:1, at:$at, nonce:$nonce, scope:$scope, overlap:($ovl == "true"),
+        agent:(if $agent=="" then null else $agent end),
         transcript:(if $t=="" then null else $t end),
         parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
         liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
@@ -1172,6 +1182,7 @@ _hook_compact_post() {
   local set="$REG/$id.compactset" journal="$REG/$id.compactions"
   local summary="" trig="" lockfd="" claim="" snap="" stage="" jfd="" claimfd=""
   local present=0 meas="" rec="" nonce="" served="false" tries=0 head="" old=""
+  local aged=0 norm=""
   summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
   [[ -n "$summary" ]] || return 0
   trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
@@ -1198,6 +1209,20 @@ _hook_compact_post() {
     # this name, and the claim is this compaction's private copy of canonical.
     link "$set" "$claim" 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
     [[ "$claim" -ef "$set" ]] || { rm -f "$claim" 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    # THE ORIGINAL AGE, MEASURED HERE AND NOWHERE LATER (spec §3.0's fourth
+    # normalisation trigger). It has to be read before the `touch` below,
+    # because HARD LINKS SHARE MTIME: after that stamp the claim — and the
+    # inode canonical used to name — both read young, and the pre-settlement
+    # age is unrecoverable. This is the measurement `command -v find` above is
+    # the guard for; without it that guard guards nothing.
+    #
+    # An aged set is still CLAIMED and still consumed. Age gates only what may
+    # be ATTRIBUTED: a PreCompact that went inert for one of its documented
+    # silent reasons leaves a PREVIOUS compaction's set standing, and copying
+    # its transcript, agent and cwd onto this compaction's line is a wrong
+    # record — worse than a missing one. A `find` that answers nothing, for any
+    # reason, reads AGED, which is the direction that attributes less.
+    [ -n "$(find "$set" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || aged=1
     # UNLINK CANONICAL BEFORE TOUCHING THE CLAIM, and the order is the whole
     # point: HARD LINKS SHARE MTIME (measured), so a `touch` taken while both
     # names still point at one inode would age canonical too, and a sibling's
@@ -1239,7 +1264,19 @@ _hook_compact_post() {
     if ! { ( umask 077; set -C; : > "$snap" ); } 2>/dev/null || [[ ! -f "$snap" || -L "$snap" ]]; then
       { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0
     fi
-    { cat <&"$claimfd" > "$snap"; } 2>/dev/null || { rm -f "$snap" 2>/dev/null; snap=""; }
+    # A FAILED COPY TAKES THE SAME DISPOSITION AS A FAILED SNAPSHOT CREATION
+    # eight lines above — return WITHOUT committing, leaving the verified claim
+    # as residue. The alternative this replaces cleared `$snap` and fell
+    # through, which reached the no-set record from a compaction that HAD a
+    # set and then discarded the claim holding the only surviving copy of those
+    # bytes (canonical is already unlinked here). That gave §3.4's absent
+    # branch a SECOND meaning, and an adapter may not narrow a distinction it
+    # received: the no-set branch is entered from the PATHNAME test alone.
+    if ! { cat <&"$claimfd" > "$snap"; } 2>/dev/null; then
+      { exec {claimfd}<&-; } 2>/dev/null || true
+      rm -f "$snap" 2>/dev/null || true      # this process's own, and only it
+      _hook_lock_release "$lockfd"; return 0
+    fi
     { exec {claimfd}<&-; } 2>/dev/null || true
   fi
   _hook_lock_release "$lockfd"; lockfd=""
@@ -1248,7 +1285,35 @@ _hook_compact_post() {
   # `measure` reads the summary from a PIPE: under `set -uo pipefail` a failed
   # `jq` fails the pipeline and this arm stops, so a zero is never recorded for
   # a summary that was never read.
+  #
+  # ── §3.0 NORMALISATION, DECIDED ONCE, BEFORE `measure` IS CALLED ───────
+  # `norm` empty means the claim is ordinary and provenance-ELIGIBLE and is
+  # passed with `--set`; otherwise it holds the ONE `scope` the normalized
+  # record commits, and `measure` runs WITHOUT `--set` so `cited`, `setSize`
+  # and all six provenance fields are null either way. The three tests are in
+  # §3.0's own precedence order and AGE IS LAST AND WINS — stated in prose
+  # there precisely because JOURNAL_RECORD_PRED accepts both spellings, so the
+  # predicate is not the mechanism that decides it.
+  #
+  # THE GRAMMAR IS NOT RE-SPELLED HERE. `NORMAL_PROVENANCE` already carries
+  # §3.0's four-row table plus the per-field shapes; the set document uses the
+  # same member names and lacks only `trigger`, which the record takes from
+  # THIS payload — so the check is that definition applied to the claim with
+  # this run's trigger spliced in. A jq that fails for any reason (a malformed
+  # document, unparseable bytes) leaves `norm` set, which is the direction that
+  # attributes nothing.
   if [[ -n "$snap" ]]; then
+    if (( aged )); then
+      norm="null"
+    elif jq -e '.overlap == true' "$snap" >/dev/null 2>&1; then
+      norm="ambiguous"
+    elif ! jq -e --arg trig "$trig" "$JOURNAL_RECORD_PRED_DEFS"'
+            (.overlap == null or .overlap == false)
+            and (. + {trigger: $trig} | NORMAL_PROVENANCE)' "$snap" >/dev/null 2>&1; then
+      norm="null"
+    fi
+  fi
+  if [[ -n "$snap" && -z "$norm" ]]; then
     meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
              --set "$snap" --trigger "$trig" 2>/dev/null) || meas=""
   else
@@ -1281,14 +1346,21 @@ _hook_compact_post() {
   # provenance fields copied from the set, and with `served` overridden by the
   # marker. Without a set every one of the six is null, which is §3.0's
   # normalized no-set grammar and NOT the same answer as `"main"`.
-  if [[ -n "$snap" ]]; then
+  if [[ -n "$snap" && -z "$norm" ]]; then
     rec=$(jq -cn --argjson m "$meas" --slurpfile s "$snap" --argjson sv "$served" \
       '$s[0] as $set | $m + {served: $sv,
         cwd: $set.cwd, built: $set.built, agent: $set.agent,
         transcript: $set.transcript, parentLive: $set.parentLive, liveAgents: $set.liveAgents}' 2>/dev/null) || rec=""
   else
-    rec=$(jq -cn --argjson m "$meas" \
-      '$m + {served: false, cwd: null, built: null, agent: null,
+    # ONE SPELLING FOR BOTH NO-`--set` POPULATIONS — the genuinely absent
+    # canonical set (`snap` empty, `norm` empty, `served` still its false
+    # initialiser) and a normalized claim (`norm` set, `served` MARKER-derived,
+    # exactly as §3.0 requires of every normalization case). `cited`/`setSize`
+    # are NOT overridden: `measure` without `--set` already answers null for
+    # both, and overriding them here would hide a helper that did not.
+    rec=$(jq -cn --argjson m "$meas" --argjson sv "$served" --arg norm "$norm" \
+      '$m + {served: $sv, scope: (if $norm == "ambiguous" then "ambiguous" else null end),
+             cwd: null, built: null, agent: null,
              transcript: null, parentLive: null, liveAgents: null}' 2>/dev/null) || rec=""
   fi
   [[ -n "$rec" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }

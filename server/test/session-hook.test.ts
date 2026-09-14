@@ -2415,6 +2415,22 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(readSet().scope).toBe('main');
   });
 
+  it('the published set SAYS whether the verdict was overlap-forced — `overlap` is false on an ordinary one and true on a degraded one', () => {
+    // This tree carries NO graph, so `_hook_gate_tree` refuses and PreCompact
+    // returns before the helper fork — which makes the jq publication itself
+    // observable, the one place the `false` arm of this member can be read.
+    const tree = path.join(home, 'tree'); gitTree(tree, 1);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false });
+    run(preCompact(tree, transcript, 'auto'));
+    // Scope alone cannot tell these apart: a measured ambiguous verdict and a
+    // forced one both read "ambiguous", and §3.0 prescribes different records
+    // for them. This member is the only channel that distinguishes them.
+    expect(readSet(), 'the forced verdict says WHY').toMatchObject({ scope: 'ambiguous', overlap: true });
+    expect(readSet().liveAgents, 'while the liveness under it is still the MAIN measurement').toBe(0);
+  });
+
   it('sweeps this id\'s AGED EXACT FAMILIES — and the two legacy grammars of the transition — never a coincidental `*compact*.tmp` match', () => {
     const tree = path.join(home, 'tree'); gitTree(tree, 1);
     const { transcript } = plantSession({ lines: workLines(tree) });
@@ -3711,6 +3727,155 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(j[0]!['cited'], 'and cited is null, never 0').toBeNull();
     expect(j[0]!['setSize']).toBeNull();
     expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken at all').toEqual([]);
+  });
+
+  /** §3.0's CLAIMED-OVERLAP NORMALISATION, end to end. The forced `ambiguous`
+   *  verdict is not a measured one: `_hook_compact_scope` answered `main` here
+   *  (auto trigger, no live subagent, so `liveAgents` is 0 and `parentLive` is
+   *  null), and only the overlap `find` degraded the scope — leaving a set
+   *  whose five provenance members still describe a MAIN compaction while its
+   *  `scope` says ambiguous. Copied onto a record verbatim that tuple matches
+   *  no row of NORMAL_PROVENANCE's grammar (the ambiguous row wants
+   *  `parentLive:true, liveAgents:1` or `parentLive:null, liveAgents>=2`), so
+   *  `JOURNAL_RECORD_PRED` refused the record and this compaction's line went
+   *  missing altogether — silently, in the design's sole measurement sink. */
+  it('an OVERLAP-FORCED ambiguous set commits ONE line, normalised to scope ambiguous with every provenance field null', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().scope, 'the FIRST verdict is an ordinary main one').toBe('main');
+    // ABSENT, not `false`: this tree carries a graph, so the helper ran and
+    // rewrote the set without the member — which §3.0 rules legacy-compatible
+    // ordinary/false. That is sound and not merely tolerated, because a `true`
+    // value can never reach the helper: PreCompact's ambiguous return sits
+    // between the jq publication and the helper fork.
+    expect('overlap' in readSet(), 'the helper rewrote the ordinary set without it').toBe(false);
+    run(preCompact(tree, transcript, 'auto'));            // the first set is still unconsumed
+    // `overlap` is the ONLY channel §3.0 gives PostCompact to tell an
+    // overlap-degraded set from a genuinely ambiguous verdict — the two are
+    // indistinguishable by scope alone.
+    expect(readSet(), 'the set says WHY it is ambiguous').toMatchObject({ scope: 'ambiguous', overlap: true });
+    expect(readSet().liveAgents, 'and its liveness is still the MAIN measurement').toBe(0);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'exactly one journal line — the record is committed, not refused').toHaveLength(1);
+    expect(j[0]!['scope'], 'normalised to the honest ambiguous scope, not to null').toBe('ambiguous');
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} cannot be attributed after a symmetric degradation`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'measure ran WITHOUT --set').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    // The predicate that refused the un-normalised record accepts this one.
+    expect(Object.keys(j[0]!).sort()).toEqual(['agent', 'at', 'built', 'chars', 'cited', 'cwd', 'fences',
+      'filesChars', 'liveAgents', 'parentLive', 'scope', 'served', 'setSize', 'steered', 'transcript', 'trigger']);
+  });
+
+  it('THE CASCADE: two back-to-back overlapped compactions commit TWO lines, not zero', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // Before the normalisation each refused record left its claim behind, and
+    // that retained young claim is exactly what the overlap `find` scans — so
+    // the NEXT PreCompact was ambiguous too and every compaction of this row
+    // inside the window went unrecorded, for ever.
+    for (let i = 0; i < 2; i++) {
+      run(preCompact(tree, transcript, 'auto'));
+      run(preCompact(tree, transcript, 'auto'));
+      expect(readSet().overlap, `cycle ${i} really overlapped`).toBe(true);
+      run(postCompact(tree, transcript, SUMMARY));
+    }
+    expect(journal(), 'both compactions are on the record').toHaveLength(2);
+    expect(journal().map((r) => r['scope'])).toEqual(['ambiguous', 'ambiguous']);
+    expect(reg().filter((n) => n.includes('compactpost')), 'and no claim accumulated').toEqual([]);
+  });
+
+  /** §3.0's FOURTH normalisation trigger. Reachable whenever PreCompact goes
+   *  inert for one of its documented silent reasons while a previous
+   *  compaction's set still stands: PostCompact then claims the OLD set and,
+   *  un-normalised, writes the PREVIOUS compaction's transcript, agent and cwd
+   *  onto THIS one's line — a wrong record, which is worse than a missing one.
+   *  Age gates only what may be ATTRIBUTED; the claim itself is still taken. */
+  it('an ORIGINALLY AGED canonical set is provenance-INELIGIBLE: scope null, six nulls, and the claim still consumed', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;   // past COMPACT_CARD_MAX_AGE
+    fs.utimesSync(setFile(), old, old);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'the aged set is still settled and still recorded').toHaveLength(1);
+    expect(j[0]!['scope'], 'null — NOT the set\'s own "main"').toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} is not this compaction's to claim`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'measure ran WITHOUT --set').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    // AGE NEVER GATES THE CLAIM. The set is consumed exactly as an eligible one
+    // is, and the nonce it carried still owns the marker lookup — which is why
+    // `served` survives the normalisation while provenance does not.
+    expect(fs.existsSync(setFile()), 'canonical was claimed and unlinked').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed, not retained').toEqual([]);
+    expect(j[0]!['served'], '`served` is still marker-derived').toBe(true);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and the marker is consumed').toEqual([]);
+  });
+
+  it('CONTROL: the same cycle WITHOUT ageing attributes the set in full', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    expect(j[0]!['scope'], 'so the null above is the AGE and not the fixture').toBe('main');
+    expect(j[0]!['cwd']).toBe(tree);
+    expect(j[0]!['transcript']).toBe(transcript);
+  });
+
+  it('PRECEDENCE: an aged set that ALSO carries overlap:true commits scope null — age is evaluated last and wins', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    run(preCompact(tree, transcript, 'auto'));
+    expect(readSet().overlap, 'both triggers are live on this one claim').toBe(true);
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(setFile(), old, old);
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    // §3.0 states the precedence once, in prose, precisely because
+    // JOURNAL_RECORD_PRED accepts BOTH spellings — the predicate cannot decide
+    // it. What the order CANNOT change is the rest of the line: both triggers
+    // run `measure` without `--set`, so every other member is null either way.
+    expect(j[0]!['scope'], 'the aged trigger wins over the overlap trigger').toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents', 'cited', 'setSize']) {
+      expect(j[0]![k], `${k} is null under BOTH triggers, so the order cannot reach it`).toBeNull();
+    }
+  });
+
+  /** §3.4's absent-canonical branch has exactly ONE meaning — "nothing was ever
+   *  published for this compaction" — and it is entered from the PATHNAME test
+   *  alone. A failed snapshot copy used to reach the same record shape from a
+   *  compaction that HAD a set, and then discarded the claim holding the only
+   *  surviving copy of those bytes: canonical is already unlinked by then. */
+  it('A FAILED SNAPSHOT COPY commits NOTHING and retains the verified claim', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // `cat` fails its SECOND no-operand invocation. The first is the hook's own
+    // `payload=$(cat)`; the second is `cat <&"$claimfd" > "$snap"`. Every
+    // invocation WITH operands is the real `cat`, so nothing else in the run
+    // is disturbed.
+    const counter = path.join(home, 'catcount');
+    stub('cat', [
+      `C=${sh(counter)}`,
+      'if [ "$#" -eq 0 ]; then',
+      `  n=0; [ -f "$C" ] && n=$(${sh(realTool('cat'))} "$C")`,
+      '  n=$((n+1)); printf %s "$n" > "$C"',
+      '  [ "$n" -eq 2 ] && exit 1',
+      'fi',
+      `exec ${sh(realTool('cat'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(counter, 'utf8'), 'the stub really reached the snapshot copy').toBe('2');
+    expect(fs.existsSync(journalFile()), 'no record at all — a falsified one is worse than none').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')),
+      'the claim is RETAINED: it holds the only copy of these bytes').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactions-snapshot')),
+      'only this process\'s own snapshot goes').toEqual([]);
+    expect(fs.existsSync(setFile()), 'canonical was legitimately claimed, so it stays gone').toBe(false);
   });
 
   it('APPENDS: a second compaction adds one line and leaves the first byte-identical', () => {
