@@ -3562,15 +3562,174 @@ describe('the compaction card — the two documents say what the code does (spec
     // the next round deletes the record of the correction.
     const quoted = 'This invariants section said the opposite ("may not emit its terminal fact until completed") for three rounds.\n';
     expect(scan([['spec', quoted], ['plan', '']], P1).live, 'quoted history is exempt').toEqual([]);
-    // AND THE CONTAINMENT HALF IS REAL: the same quotation in a paragraph with
-    // NO retraction marker is a live claim again.
+    // THE MARKER HALF IS REAL: the same quotation in a paragraph with NO
+    // retraction marker is a live claim again.
     const noMarker = 'The rule is ("may not emit its terminal fact until completed") and that is all.\n';
     expect(scan([['spec', noMarker], ['plan', '']], P1).live.length,
       'a marker-less paragraph is not exempt, however it is punctuated').toBeGreaterThan(0);
+    // AND SO IS THE CONTAINMENT HALF, which needs its OWN fixture: a paragraph
+    // that DOES carry a retraction marker, with the match sitting OUTSIDE any
+    // quotation. Measured on the real corpus, deleting the containment
+    // requirement changes nothing — every allow-listed match there happens to
+    // be quoted anyway — so without this the half would be unpinned, and a
+    // green deletion means AMBIGUOUS rather than untested. Under the rule this
+    // is a LIVE claim: retracting something else in the same paragraph does
+    // not license asserting this.
+    const markerButUnquoted = 'The old wording is retracted. The purge may not emit its terminal fact until completed.\n';
+    expect(scan([['spec', markerButUnquoted], ['plan', '']], P1).live.length,
+      'a retraction marker does not license an UNQUOTED claim beside it').toBeGreaterThan(0);
   });
 
   it('CONTROL: pattern 2 reds on the restored rule and not on this document\'s quotation of it', () => {
     const restored = 'On such a box `_reg_purge` and its four callers keep working exactly as they do today.\n';
     expect(scan([['spec', restored], ['plan', '']], P2).live.length).toBeGreaterThan(0);
+  });
+});
+
+// ── D-2605: PostCompact — settle, measure, commit ONE journal line (§3.4) ─
+describe('the compaction card — PostCompact settlement and the journal (spec §3.4)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+  const journal = (): Array<Record<string, unknown>> =>
+    fs.readFileSync(journalFile(), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
+  const SUMMARY = [
+    '1. Task', 'did a thing', '',
+    '3. Files and Code Sections:', '- server/src/pane/statusline.ts was edited', '',
+    '4. Errors and fixes', 'none', '',
+  ].join('\n');
+
+  /** A full PreCompact → serve → PostCompact cycle against a real tree. */
+  const cycle = (opts: { serve?: boolean; trigger?: 'auto' | 'manual' } = {}): { tree: string; transcript: string } => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, opts.trigger ?? 'manual'));
+    if (opts.serve) run(compactStart(tree, transcript));
+    return { tree, transcript };
+  };
+
+  it('commits EXACTLY ONE sixteen-key line, and consumes the claim, the snapshot and the marker', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const setBytes = fs.readFileSync(setFile(), 'utf8');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'exactly one line').toHaveLength(1);
+    // THE SIXTEEN KEYS, and `sorted ===` rather than a presence check: an extra
+    // key is as much a defect as a missing one, and there is NO `n` — D-2605
+    // removes the persisted ordinal.
+    expect(Object.keys(j[0]!).sort()).toEqual(['agent', 'at', 'built', 'chars', 'cited', 'cwd', 'fences',
+      'filesChars', 'liveAgents', 'parentLive', 'scope', 'served', 'setSize', 'steered', 'transcript', 'trigger']);
+    expect(j[0]).toMatchObject({ trigger: 'manual', scope: 'main', steered: false, served: true });
+    // PROVENANCE IS COPIED FROM THE SET, not re-derived.
+    expect(j[0]!['cwd']).toBe(tree);
+    expect(j[0]!['transcript']).toBe(transcript);
+    expect(j[0]!['parentLive']).toBeNull();
+    expect(j[0]!['liveAgents']).toBeNull();
+    // The canonical set is CONSUMED by the claim, and nothing private survives.
+    expect(fs.existsSync(setFile()), 'canonical was claimed and unlinked').toBe(false);
+    expect(setBytes.length, 'the fixture really had a set').toBeGreaterThan(0);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed').toEqual([]);
+    expect(reg().filter((n) => n.includes('compactions-snapshot'))).toEqual([]);
+    expect(reg().filter((n) => n.includes('compactions-stage'))).toEqual([]);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and so is the marker').toEqual([]);
+    expect(fs.existsSync(lockFile()), 'the permanent lock is NEVER consumed').toBe(true);
+  });
+
+  it('`served` is MARKER-DERIVED: the same cycle WITHOUT a serve commits served:false', () => {
+    const { tree, transcript } = cycle({ serve: false });
+    run(postCompact(tree, transcript, SUMMARY));
+    const j = journal();
+    expect(j).toHaveLength(1);
+    // It is not copied from a set — the set has no `served` member at all any
+    // more — so a card that was mined but never reached the model reads false,
+    // which is what makes `cited` interpretable only where `served` is true.
+    expect(j[0]!['served']).toBe(false);
+  });
+
+  it('a GENUINELY ABSENT canonical set commits one line with scope:null and all six provenance fields null', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // No PreCompact at all — every pre-upgrade row, and every PreCompact that
+    // went inert for one of its documented silent reasons. Under option A this
+    // branch's premise has exactly one meaning: nothing was ever published.
+    expect(fs.existsSync(setFile())).toBe(false);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    const j = journal();
+    expect(j, 'the absent branch still commits, and commits ONCE').toHaveLength(1);
+    // `null` is NOT `"main"`, and it is not the link-failure branch either:
+    // "no set" and "the main thread" are different answers.
+    expect(j[0]!['scope']).toBeNull();
+    for (const k of ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents']) {
+      expect(j[0]![k], `${k} is null without a set`).toBeNull();
+    }
+    expect(j[0]!['cited'], 'and cited is null, never 0').toBeNull();
+    expect(j[0]!['setSize']).toBeNull();
+    expect(reg().filter((n) => n.includes('compactpost')), 'no claim was taken at all').toEqual([]);
+  });
+
+  it('APPENDS: a second compaction adds one line and leaves the first byte-identical', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    run(postCompact(tree, transcript, SUMMARY));
+    const first = fs.readFileSync(journalFile(), 'utf8');
+    run(preCompact(tree, transcript));
+    run(compactStart(tree, transcript));
+    run(postCompact(tree, transcript, SUMMARY));
+    const after = fs.readFileSync(journalFile(), 'utf8');
+    expect(after.startsWith(first), 'the old bytes are still the exact prefix').toBe(true);
+    expect(journal()).toHaveLength(2);
+    expect(after.endsWith('\n'), 'the file ends in exactly one LF').toBe(true);
+  });
+
+  it('THE PARAMETERIZED WAIT: the final transaction waits COMPACT_LOCK_WAIT, and still lands', async () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // Hold the mutex for 3 s — longer than COMPACT_LOCK_WAIT_SERVE (2 s) and
+    // shorter than COMPACT_LOCK_WAIT (5 s). The settlement acquisition waits
+    // its own bound first, then the final transaction waits again; both use
+    // the 5 s bound, so the line still lands. Passing the 2 s human-facing
+    // bound at either call site instead loses the record.
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    const holder = spawn('bash', ['-c',
+      'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 3', '_', lockFile()]);
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
+      holder.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
+      holder.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    try {
+      expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+      expect(journal(), 'exactly one journal line still lands').toHaveLength(1);
+    } finally { holder.kill('SIGKILL'); }
+  }, 40_000);
+
+  it('NO UNLOCKED CLEANUP: a helper that says nothing usable leaves the claim and the marker as residue', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    // The helper answers garbage, so the shape gate refuses and no record is
+    // committed. The verified claim is the ONLY copy of this compaction's set
+    // — canonical is already unlinked — so discarding it because the
+    // measurement failed would destroy the evidence the retry needs.
+    stub('node', 'echo not-json\nexit 0');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(journalFile()), 'no journal line').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is RETAINED as recovery residue').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactserved')), 'and so is the marker').toHaveLength(1);
+    expect(reg().filter((n) => n.includes('compactions-snapshot')), 'only this process\'s own snapshot goes').toEqual([]);
+  });
+
+  it('the record and every physical line pass ONE predicate, and a mutant record commits nothing', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // The sixteen keys are spelled ONCE, as a sorted-equality rather than a
+    // presence test, and `\z` is jq/Oniguruma's — the bash arms in this file
+    // must use `$`, because POSIX ERE reads `\z` as a literal z.
+    expect(src).toContain('def JOURNAL_RECORD_PRED:');
+    expect(src.match(/\(keys \| sort\) == \["agent", "at", "built"/g)).toHaveLength(1);
+    expect(src, 'no persisted ordinal').not.toMatch(/"n",|, "n"/);
+    expect(src).toContain('test("^[A-Za-z0-9_-]+\\\\z")');
+    // BOTH gates run: the merged object, then the whole staged file.
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED');
+    expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED');
+    // NO `printf >>` PATH EXISTS to canonical: the only way in is the stage
+    // rename, under the retained FD and the validated lock.
+    expect(post).toContain('mv -f "$stage" "$journal"');
+    expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
   });
 });

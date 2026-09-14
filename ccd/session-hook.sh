@@ -1097,6 +1097,228 @@ _hook_compact_pre() {
   return 0
 }
 
+# ── PostCompact (spec §3.4): SETTLE, MEASURE, COMMIT ONE JOURNAL LINE ─────
+# The compaction's sole authoritative measurement, and the one phase whose lock
+# miss loses something UNRECOVERABLE rather than something a later aged sweep
+# repairs — which is why it takes the same COMPACT_LOCK_WAIT settlement uses
+# rather than a shorter bound of its own.
+#
+# THE TWO BRANCHES ARE DISTINGUISHED BY A PATHNAME TEST, NOT BY A `link`
+# RETURN CODE. A genuinely absent canonical set and a present-but-unlinkable
+# one both surface as a failing `link` in bash, and folding them together
+# silently unmeasures whichever population is absent. Under option A that test
+# now has exactly ONE meaning, too: every canonical existence transition and
+# every existence test happens inside a held stable-lock section, and no
+# PreCompact-side rollback survives to compose with, so "absent under this
+# lock" means nothing was ever published for this compaction.
+_hook_compact_post() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local set="$REG/$id.compactset" journal="$REG/$id.compactions"
+  local summary="" trig="" lockfd="" claim="" snap="" stage="" jfd="" claimfd=""
+  local present=0 meas="" rec="" nonce="" served="false" tries=0 head="" old=""
+  summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
+  [[ -n "$summary" ]] || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  [[ "$trig" == manual || "$trig" == auto ]] || trig="auto"
+  command -v find   >/dev/null 2>&1 || return 0
+  command -v touch  >/dev/null 2>&1 || return 0
+  command -v mktemp >/dev/null 2>&1 || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+
+  # ── SETTLEMENT, under the row's mutex ──────────────────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  if [ -e "$set" ] || [ -L "$set" ]; then present=1; fi
+  if (( present )); then
+    if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then _hook_lock_release "$lockfd"; return 0; fi
+    while (( tries < 8 )); do
+      claim="$REG/.$id.compactpost.$$.$RANDOM.$RANDOM.claim"
+      [ -e "$claim" ] || [ -L "$claim" ] || break
+      claim=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$claim" ]] || { _hook_lock_release "$lockfd"; return 0; }
+    # NEVER PRECREATED: `link` is the create, so exactly one process can win
+    # this name, and the claim is this compaction's private copy of canonical.
+    link "$set" "$claim" 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    [[ "$claim" -ef "$set" ]] || { rm -f "$claim" 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    # UNLINK CANONICAL BEFORE TOUCHING THE CLAIM, and the order is the whole
+    # point: HARD LINKS SHARE MTIME (measured), so a `touch` taken while both
+    # names still point at one inode would age canonical too, and a sibling's
+    # overlap check would then read this settled compaction as still in flight.
+    if ! rm -f "$set" 2>/dev/null; then
+      # Only the VERIFIED claim goes; canonical's bytes and mtime are untouched.
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    if ! touch "$claim" 2>/dev/null; then
+      # RESTORE canonical only by no-clobber `link`, and only onto an absent
+      # pathname. If the restore collides, fails, or cannot be proved, the
+      # occupant is never overwritten and the only verified copy of these bytes
+      # is never discarded — the claim is RETAINED as exact recovery residue.
+      if link "$claim" "$set" 2>/dev/null && [[ "$claim" -ef "$set" ]]; then
+        rm -f "$claim" 2>/dev/null || true
+      fi
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # THE RETAINED CLAIM FD. From here the helper's input is this descriptor's
+    # own bytes — an FD-derived private snapshot — never canonical and never a
+    # reopened claim pathname.
+    { exec {claimfd}<"$claim"; } 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    # A PRIVATE EXCLUSIVE FILE, created by a no-clobber redirection — NOT an
+    # `mktemp` row. The §3.4 table reserves `mktemp` for the three families
+    # whose name must be unguessable (the lock init source, the marker source,
+    # the generation source); this one is already private by construction, its
+    # name carrying this process's pid and two `$RANDOM` components, and it
+    # takes no `XXXXXX` template. (Measured: spelling it as `mktemp` with this
+    # name fails outright — mktemp requires at least three trailing `X`s — and
+    # the arm silently committed nothing.)
+    tries=0; snap=""
+    while (( tries < 8 )); do
+      snap="$REG/.$id.compactions-snapshot.$$.$RANDOM.$RANDOM.tmp"
+      [ -e "$snap" ] || [ -L "$snap" ] || break
+      snap=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$snap" ]] || { { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    if ! { ( umask 077; set -C; : > "$snap" ); } 2>/dev/null || [[ ! -f "$snap" || -L "$snap" ]]; then
+      { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0
+    fi
+    { cat <&"$claimfd" > "$snap"; } 2>/dev/null || { rm -f "$snap" 2>/dev/null; snap=""; }
+    { exec {claimfd}<&-; } 2>/dev/null || true
+  fi
+  _hook_lock_release "$lockfd"; lockfd=""
+
+  # ── MEASURE, outside the lock, with the lock descriptor already closed ──
+  # `measure` reads the summary from a PIPE: under `set -uo pipefail` a failed
+  # `jq` fails the pipeline and this arm stops, so a zero is never recorded for
+  # a summary that was never read.
+  if [[ -n "$snap" ]]; then
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --set "$snap" --trigger "$trig" 2>/dev/null) || meas=""
+  else
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --trigger "$trig" 2>/dev/null) || meas=""
+  fi
+  # EXACTLY ONE DOCUMENT, and a cheap shape gate BEFORE the strictly stronger
+  # record predicate below — `jq -ce -s` over the helper's raw stdout.
+  if ! printf '%s' "$meas" | jq -ce -s "length == 1 and (.[0] | $COMPACT_SHAPE_PRED)" >/dev/null 2>&1; then
+    _hook_compact_post_abandon "$claim" "$snap"; return 0
+  fi
+
+  # ── THE FINAL TRANSACTION, under a reacquired lock ──────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || { _hook_compact_post_abandon "" "$snap"; return 0; }
+  lockfd="$HOOK_LOCK_FD"
+  # `served` IS MARKER-DERIVED, never copied from a set: looked up here, under
+  # the final lock, from the separately validated safe nonce this claim
+  # carries. An unsafe or missing nonce forms no marker path and reads false.
+  if [[ -n "$snap" ]]; then
+    IFS= read -r -N 4096 head 2>/dev/null < "$snap"
+    if [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]]; then
+      nonce="${BASH_REMATCH[1]}"
+      if [[ "$nonce" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] \
+         && [ -e "$REG/.$id.compactserved.$nonce" ]; then served="true"; fi
+    fi
+  fi
+  # THE SIXTEEN-KEY RECORD: the helper's measurement ENRICHED with the six
+  # provenance fields copied from the set, and with `served` overridden by the
+  # marker. Without a set every one of the six is null, which is §3.0's
+  # normalized no-set grammar and NOT the same answer as `"main"`.
+  if [[ -n "$snap" ]]; then
+    rec=$(jq -cn --argjson m "$meas" --slurpfile s "$snap" --argjson sv "$served" \
+      '$s[0] as $set | $m + {served: $sv,
+        cwd: $set.cwd, built: $set.built, agent: $set.agent,
+        transcript: $set.transcript, parentLive: $set.parentLive, liveAgents: $set.liveAgents}' 2>/dev/null) || rec=""
+  else
+    rec=$(jq -cn --argjson m "$meas" \
+      '$m + {served: false, cwd: null, built: null, agent: null,
+             transcript: null, parentLive: null, liveAgents: null}' 2>/dev/null) || rec=""
+  fi
+  [[ -n "$rec" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  printf '%s' "$rec" | jq -ce "$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED" >/dev/null 2>&1 \
+    || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+
+  # THE STAGE: a never-precreated exact table name, validated as this writer's
+  # own regular non-symlink file.
+  tries=0; stage=""
+  while (( tries < 8 )); do
+    stage="$REG/.$id.compactions-stage.$$.$RANDOM.$RANDOM.tmp"
+    [ -e "$stage" ] || [ -L "$stage" ] || break
+    stage=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  if ! { ( umask 077; set -C; : > "$stage" ); } 2>/dev/null; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0
+  fi
+  # VALIDATED AS THIS WRITER'S OWN regular non-symlink file before a byte of
+  # the old journal is copied into it.
+  [[ -f "$stage" && ! -L "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  old=""
+  if [ -e "$journal" ] || [ -L "$journal" ]; then
+    [[ -f "$journal" && ! -L "$journal" && -r "$journal" ]] \
+      || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { exec {jfd}<"$journal"; } 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { cat <&"$jfd" > "$stage"; } 2>/dev/null \
+      || { { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    # `$( )` STRIPS EVERY TRAILING NEWLINE (measured), and a journal always ends
+    # in one — so a bare `old=$(cat …)` loses exactly the byte that makes the
+    # length equality below exact, and the SECOND record of a session's life is
+    # refused while the first commits. The `printf x` sentinel plus `${old%x}`
+    # is what keeps the prefix byte-exact.
+    old=$(cat "$stage" 2>/dev/null; printf x) || old="x"
+    old="${old%x}"
+  fi
+  { printf '%s\n' "$rec" >> "$stage"; } 2>/dev/null \
+    || { [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # THE RAW VALIDATOR over the WHOLE stage, plus exactly one additional line
+  # byte-equal to the object — so a commit that appended twice, or appended
+  # something the predicate would not accept, never reaches canonical.
+  if ! jq -ce -R -s --arg rec "$rec" --arg old "$old" \
+        "$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED" < "$stage" >/dev/null 2>&1; then
+    [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  # THE FD COMPARE-AND-SWAP: an initially PRESENT journal must still be the same
+  # retained regular FD, and an initially ABSENT one must still be absent.
+  if [[ -n "$jfd" ]]; then
+    if ! _hook_lock_same "$jfd" "$journal"; then
+      { exec {jfd}<&-; } 2>/dev/null
+      _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+    fi
+    { exec {jfd}<&-; } 2>/dev/null || true
+  elif [ -e "$journal" ] || [ -L "$journal" ]; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  mv -f "$stage" "$journal" 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # COMMITTED. Claim and marker cleanup happens ONLY here, under the
+  # successfully reacquired and validated lock — never on a failure path.
+  [[ -z "$claim" ]] || rm -f "$claim" 2>/dev/null || true
+  [[ -z "$snap" ]]  || rm -f "$snap"  2>/dev/null || true
+  [[ -z "$nonce" ]] || rm -f "$REG/.$id.compactserved.$nonce" 2>/dev/null || true
+  _hook_lock_release "$lockfd"
+  return 0
+}
+
+# NO UNLOCKED CLEANUP. When the final lock is not safely held, the verified
+# claim and the exact marker are LEFT as residue for a later aged recovery
+# under a validated lock — discarding the only verified copy of a compaction's
+# set because this process could not take a lock is the one thing this arm may
+# not do. Only this process's own snapshot goes, and only because nothing else
+# can ever read it.
+_hook_compact_post_abandon() {   # <claim> <snapshot>
+  [[ -z "${2-}" ]] || rm -f "$2" 2>/dev/null || true
+  return 0
+}
+
+# The final lock IS held here, so this path may consume this process's own
+# stage and snapshot — but it still leaves the claim and the marker, because a
+# noncommit means the measurement has not been recorded and the evidence must
+# outlive the attempt.
+_hook_compact_post_fail() {   # <lockfd> <claim> <snapshot> [<stage>]
+  [[ -z "${4-}" ]] || rm -f "$4" 2>/dev/null || true
+  [[ -z "${3-}" ]] || rm -f "$3" 2>/dev/null || true
+  _hook_lock_release "${1-}"
+  return 0
+}
+
 # ── SessionStart(compact) (spec §3.3): SERVE THE CARD ONCE, TO ITS SET ────
 # This arm cannot tell which context it serves (§3.0: the compactor has been
 # silent for ≥79 s by now) and NEVER resolves. It serves the card iff the card
@@ -1481,6 +1703,89 @@ COMPACT_LOCK_WAIT=5
 # 2 s is 63x the worst held-section p95, so an ordinary uncontended serve
 # never approaches it and a miss here really is contention.
 COMPACT_LOCK_WAIT_SERVE=2
+# ── THE JOURNAL RECORD PREDICATE (spec §3.4, "Journal contract") ─────────
+# ONE predicate gates BOTH the merged record before it is staged and every
+# physical line of the staged file, so a line that reaches `$REG/<id>.compactions`
+# has passed the same test twice — once as an object and once as bytes.
+#
+# SIXTEEN KEYS, and `(keys|sort) == [...]` rather than a presence check: an
+# extra key is as much a defect as a missing one, and there is NO `n` — D-2605
+# removes the persisted ordinal, a reader derives it from committed physical
+# JSONL position.
+#
+# `\z`, NOT `$`, AND ONLY HERE. These anchors run in jq's Oniguruma, where `\z`
+# is end-of-string; jq's `$` would accept a trailing LF. The bash arms in this
+# file must use `$` instead, because POSIX ERE has no `\z` and `regcomp` reads
+# it as a literal `z` — the two engines take opposite spellings and neither may
+# borrow the other's (spec §3.4, "Which regex engine anchors what").
+#
+# Every integer requirement spells `floor == .` explicitly: jq has one number
+# type, so `1.0` and `1` compare equal and a bare `type == "number"` would admit
+# a fractional count.
+JOURNAL_RECORD_PRED_DEFS='
+def NONNEG_INT: type == "number" and . >= 0 and floor == .;
+def NONEMPTY_STRING: type == "string" and length > 0;
+def SAFE_AGENT: type == "string" and length >= 1 and length <= 128
+  and test("^[A-Za-z0-9_-]+\\z");
+def BUILT: type == "string" and test("^[0-9a-f]{7,40}\\z");
+def NULL_PROVENANCE:
+  . as $o | $o.cwd == null and $o.built == null and $o.agent == null
+  and $o.transcript == null and $o.parentLive == null and $o.liveAgents == null;
+def NORMAL_PROVENANCE:
+  . as $o
+  | (($o.cwd == null) or ($o.cwd | NONEMPTY_STRING))
+    and ($o.built == null or (($o.built | BUILT) and $o.cwd != null))
+    and ($o.agent == null or ($o.agent | SAFE_AGENT))
+    and ($o.transcript == null or ($o.transcript | NONEMPTY_STRING))
+    and ($o.parentLive == null or ($o.parentLive | type == "boolean"))
+    and ($o.liveAgents == null or ($o.liveAgents | NONNEG_INT))
+    and (
+      (($o.trigger == "manual" and $o.scope == "main")
+       and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+       and $o.parentLive == null and $o.liveAgents == null)
+      or (($o.trigger == "auto" and $o.scope == "main")
+          and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == null and $o.liveAgents == 0)
+      or (($o.trigger == "auto" and $o.scope == "subagent")
+          and ($o.agent | SAFE_AGENT) and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == false and $o.liveAgents == 1)
+      or (($o.trigger == "auto" and $o.scope == "ambiguous")
+          and $o.agent == null and $o.transcript == null
+          and (($o.parentLive == true and $o.liveAgents == 1)
+               or ($o.parentLive == null and ($o.liveAgents | NONNEG_INT) and $o.liveAgents >= 2)))
+    );
+def JOURNAL_RECORD_PRED:
+  type == "object"
+  and ((keys | sort) == ["agent", "at", "built", "chars", "cited", "cwd", "fences", "filesChars",
+                          "liveAgents", "parentLive", "scope", "served", "setSize", "steered",
+                          "transcript", "trigger"])
+  and (.at | NONNEG_INT) and (.chars | NONNEG_INT) and (.fences | NONNEG_INT)
+  and (. as $o | ($o.filesChars == null or (($o.filesChars | NONNEG_INT) and $o.filesChars <= $o.chars)))
+  and (. as $o | (($o.cited == null and $o.setSize == null)
+       or (($o.cited | NONNEG_INT) and ($o.setSize | NONNEG_INT) and $o.cited <= $o.setSize)))
+  and (.trigger == "auto" or .trigger == "manual")
+  and (.scope == "main" or .scope == "subagent" or .scope == "ambiguous" or .scope == null)
+  and (.steered | type == "boolean") and (.served | type == "boolean")
+  and (NORMAL_PROVENANCE
+       or (NULL_PROVENANCE and (.scope == null or .scope == "ambiguous")
+           and .cited == null and .setSize == null));
+'
+# THE RAW BYTES of the staged file, read with `-R -s` so the predicate sees the
+# whole thing as ONE string and can say something about its physical shape:
+# every line is a complete JSON object the record predicate accepts, the file
+# ends in exactly one LF, the pre-append bytes are still its exact prefix, and
+# the ONLY thing added is this record plus one LF — a length equality, which is
+# what makes "exactly one additional line" exact rather than approximate.
+JOURNAL_STAGE_PRED='
+. as $raw
+| ($raw | endswith("\n"))
+  and ($raw | startswith($old))
+  and (($raw | length) == (($old | length) + ($rec | length) + 1))
+  and (($raw | split("\n"))[0:-1] as $lines
+       | ($lines | length) > 0
+         and all($lines[]; (length > 0) and ((fromjson? // false) | JOURNAL_RECORD_PRED))
+         and ($lines[-1] == $rec))
+'
 # ONE SPELLING of the shape a `compaction` object must have (spec §3.4, "shape
 # gates, both directions"). WHAT IT IS FOR, restated against the shipped code:
 # it is a CHEAP SHAPE SANITY GATE on the helper's raw stdout — `jq -ce -s`,
@@ -1999,8 +2304,10 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
-# PreCompact's card work runs LAST, after the `working` stamp is on disk: the
-# helper it will call (Task 6) has one locally resolved deadline, and the
-# state write must never wait on it. Nothing below prints.
-if [[ "$event" == PreCompact ]]; then _hook_compact_pre || true; fi
+# The two compaction arms run LAST, after the `working`/`done` stamp is on
+# disk: each calls the helper under one locally resolved deadline, and the
+# state write must never wait on either. Nothing below prints — PostCompact's
+# whole output is a journal line on disk, and this file's contract is silence.
+if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
+if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0
