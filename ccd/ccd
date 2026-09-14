@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=958e0d6426f9872030c57d9a9ceb916d75e4b632fd5bdc14bd04a70779efbad6
+# ccrc:generated 1 sha256=78ce0d4a44eef9fba452e9090280bbf2f8d88ec27d7b64f32c0eb6304e122a2c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17517,11 +17517,23 @@ cmd_ls() {
   # overflow lane any more — they are placement targets that a session can be
   # BORN on, ranked on usage beside every Anthropic lane.
   #
-  # Skipped entirely when the roster has no Codex account (`_codex_lanes` is
-  # empty), and per-lane when a rostered one has no wrapper installed, which is
-  # the old "skip rather than describe what you cannot" rule kept intact. The
-  # wording is deliberately the roster's own vocabulary — "codex lane" — and not
-  # a claim about placement: `ccd ls` lists sessions, and whether a lane is
+  # WHAT IS AND IS NOT SKIPPED, stated as the code behaves rather than as the
+  # first version of this comment wished (corrected 2026-09-14). The trailer is
+  # skipped ENTIRELY only when `_codex_lanes` is empty — a roster with no
+  # `telemetry: "codex"` account. A rostered Codex lane whose wrapper is NOT
+  # installed still gets a line, reading `not installed`; that is
+  # `_codex_lane_status`'s first branch, not a skip, and the old "skip rather
+  # than describe what you cannot" rule did not survive the change.
+  #
+  # `_is_valid_wrapper` below is therefore NOT a wrapper-installation check —
+  # it reads CCRC_ACCOUNTS membership. On the generated path it can never fire,
+  # because CCRC_CODEX_BACKEND is by construction a subset of CCRC_ACCOUNTS. It
+  # earns its place on the FALLBACK path alone: `_codex_lanes` emits `gpt`
+  # unconditionally for a pre-CCRC_CODEX_BACKEND accounts.sh, and without this
+  # line a box whose roster has no gpt account would get a trailer naming one.
+  #
+  # The wording is deliberately the roster's own vocabulary — "codex lane" — and
+  # not a claim about placement: `ccd ls` lists sessions, and whether a lane is
   # home-able is `_default_pool`'s question, visible in `ccrc account`.
   local lane
   while read -r lane; do
