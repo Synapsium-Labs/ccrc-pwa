@@ -3793,6 +3793,64 @@ describe('the compaction card — the two documents say what the code does (spec
     expect(r.live, 'live claims').toEqual([]);
   });
 
+  // PATTERN 3 — D-2756's withdrawal (fix round 2, A-I4). Round 1 rewrote §3.1
+  // item 5 to say the redundant-canonical-alias unlink "is WITHDRAWN" and left
+  // THREE other sentences asserting it as built behaviour, two of them inside
+  // the paragraph the spec itself nominates as the authority the fork-multiset
+  // pin is written against — so a reader rebuilding that pin was instructed to
+  // expect a child that does not exist, and the pin is red on a correct tree.
+  // P1's and P2's quotation rule does not fit here: a withdrawal is normally
+  // stated in PROSE, not quoted, so demanding a quotation would force every
+  // correct retraction into scare quotes. THE RULE INSTEAD IS CITATION: every
+  // mention of this unlink must carry `D-2756` in its own paragraph — the
+  // number that withdrew it. A restored live claim does not cite the
+  // withdrawal, which is precisely what made the three survivors survivors.
+  const P3 = /unlinks? only the redundant canonical alias|redundant-canonical-alias unlink/gi;
+
+  /** The citation-scoped variant of `scan`. Same paragraph normalisation, so
+   *  the join stays load-bearing for the same reason. */
+  const scanCited = (corpus: Array<readonly [string, string]>):
+    { raw: number; cited: number; live: string[] } => {
+    let raw = 0; let cited = 0; const live: string[] = [];
+    for (const [label, text] of corpus) {
+      for (const p of paragraphs(text)) {
+        for (const m of p.matchAll(P3)) {
+          raw++;
+          if (/D-2756/.test(p)) cited++;
+          else live.push(`${label}: ${m[0].slice(0, 120)}`);
+        }
+      }
+    }
+    return { raw, cited, live };
+  };
+
+  it('every mention of the WITHDRAWN redundant-canonical-alias unlink cites its withdrawal', () => {
+    const r = scanCited(realCorpus());
+    // NON-VACUITY: if RAW drops to zero the corpus is broken or the phrase was
+    // deleted outright, and the scan proves nothing about a restoration.
+    expect(r.raw, 'the raw match set').toBeGreaterThan(4);
+    expect(r.cited, 'each one carries D-2756 in its own paragraph').toBe(r.raw);
+    expect(r.live, 'live claims of a withdrawn behaviour').toEqual([]);
+  });
+
+  it('CONTROL: re-inserting any of the three survivors reds it', () => {
+    // The three sentences as they actually stood at c80e6b02, verbatim.
+    const survivors = [
+      'PreCompact final-rechecks it, unlinks only the redundant canonical alias, and leaves that claim and its marker untouched before it publishes its successor.',
+      "and step 6's conditional redundant-canonical-alias unlink (§3.1 item 5, an `rm`).",
+      'the redundant-canonical-alias unlink only on an `-ef` match.',
+    ];
+    for (const sentence of survivors) {
+      const r = scanCited([['spec', `${sentence}\n`], ['plan', '']]);
+      expect(r.raw, `the pattern finds it: ${sentence.slice(0, 40)}`).toBeGreaterThan(0);
+      expect(r.live.length, `and it is LIVE: ${sentence.slice(0, 40)}`).toBeGreaterThan(0);
+    }
+    // …and the same sentence in a paragraph that cites the withdrawal is
+    // history, not a claim — or the next round deletes the record.
+    const withCitation = `${survivors[0]!} That clause is WITHDRAWN (D-2756).\n`;
+    expect(scanCited([['spec', withCitation], ['plan', '']]).live, 'a cited retraction is exempt').toEqual([]);
+  });
+
   it('the pre-gate four-caller rule stands only as a quotation of what it replaced', () => {
     const r = scan(realCorpus(), P2);
     expect(r.raw).toBe(1);

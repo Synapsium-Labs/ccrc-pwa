@@ -381,8 +381,10 @@ removes the canonical card. While the predecessor is still canonical, the symmet
 implemented may also replace it; once PostCompact's successful under-lock hard link has published a private
 claim, its identity controls recovery too. Under the same stable lock, PreCompact scans only exact-this-session
 claim names and uses `-ef` against canonical. A same-inode pair is the predecessor's already-settled alias:
-PreCompact final-rechecks it, unlinks only the redundant canonical alias, and leaves that claim and its marker
-untouched before it publishes its successor. Otherwise, after PostCompact has unlinked canonical and touched its new claim,
+PreCompact final-rechecks it and leaves that claim and its marker
+untouched before it publishes its successor — the unlink this sentence used to require of it is WITHDRAWN
+(D-2756, §3.1 item 5); MEASURED, `_hook_compact_pre` runs no `-ef` test at all, the only two in
+`ccd/session-hook.sh` being PostCompact's own claim-identity proofs. Otherwise, after PostCompact has unlinked canonical and touched its new claim,
 no later PreCompact may rewrite, relabel or delete that claimed predecessor. It can say only that overlap
 was observed and degrade its own card/set. A failed compaction followed within the window can therefore cost the
 successor its card, but cannot falsify the predecessor after settlement.
@@ -683,9 +685,12 @@ publishes it, plus the failure-path `rm -f` on either arm (`:781`, `:782`; the `
 is a builtin and forks nothing). ADDED BY TASK 9 in the same section, and so not measurable on the shipped
 file: step 5's generation-read hard-link alias and its alias-unlink (`link` then `rm`; §3.4, "Generation:
 immutable row authorization" — measured, `type -t link` and `type -t rm` both answer `file`, so each is a
-fork), and step 6's conditional redundant-canonical-alias unlink (§3.1 item 5, an `rm`). Item 5's young-claim
-scan forks iff Task 9 spells it with `find` rather than a bash glob; this document does not fix that choice,
-which is one more reason a prose list cannot be the authority for the built arm. **Task 9's own
+fork). Step 6's conditional redundant-canonical-alias unlink used to be listed here as a third added child
+and is NOT: it is WITHDRAWN (D-2756, §3.1 item 5), so an expected multiset containing it is red on a correct
+tree — which is exactly what happened, this paragraph being the one the fork-multiset pin is written
+against. Item 5's young-claim scan forks iff Task 9 spells it with `find` rather than a bash glob; this
+document does not fix that choice, which is one more reason a prose list cannot be the authority for the
+built arm. **Task 9's own
 instrumentation is that authority, and it lives in Plan A, Task 9 Step 1 item 2** — the source-order pins
 below, whose pin (b) asserts that the measured child multiset between the acquire and the release equals
 the list as built, run with `strace -f -e trace=clone,clone3,fork,vfork,execve` over `_hook_compact_pre`
@@ -734,7 +739,8 @@ two sentences on. Both required scenarios below are publishing runs, so the subs
 CONDITIONAL members are named with the branch that produces each, and are asserted only in a run that takes
 it: the ambiguous-card `rm -f "$cardf"` (`:865`) fires only when `CS_SCOPE` is `ambiguous`, and that arm
 releases at step 8 and never opens the second section; `_hook_write_atomic`'s failure-path `rm -f`
-(`:781`, `:782`) only on a write failure; the redundant-canonical-alias unlink only on an `-ef` match.
+(`:781`, `:782`) only on a write failure. The redundant-canonical-alias unlink is NOT a member — it is
+WITHDRAWN (D-2756, §3.1 item 5) and `_hook_compact_pre` performs no `-ef` test to condition it on.
 Assert at least the ordinary non-ambiguous run and the ambiguous run, each against its own expected
 multiset, so adding or deleting a child in either branch reds exactly one of them; a single expected list
 naming every conditional member is red on a correct tree, which is the weakening this pin exists to prevent. **Both pins live in Task 9's own test list**
