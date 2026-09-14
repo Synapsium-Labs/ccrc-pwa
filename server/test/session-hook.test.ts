@@ -3446,3 +3446,131 @@ describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', 
     expect(block).toContain('already journaled');
   });
 });
+
+// ── D-2605: the DOCUMENTATION-CONSISTENCY scan (spec §3.4, round 11) ──────
+// It sits beside `_reg_purge`'s source-order pin because that pin stays GREEN
+// under the prose regression, and that is exactly why the prose regression
+// survived three rounds: `_reg_purge` emits its terminal fact EARLY — capture
+// under lock, emit, then delete — while four sentences across the two
+// documents said the opposite. An implementer obeying the prose would gate the
+// emit on the unlink loop, which is the mutant `ccd-lifecycle-purge.test.ts`
+// exists to red.
+describe('the compaction card — the two documents say what the code does (spec §3.4)', () => {
+  const DOCS = path.resolve(__dirname, '../../docs/superpowers');
+  const CORPUS = [
+    ['spec', path.join(DOCS, 'specs/2026-09-09-graphify-compaction-card-design.md')],
+    ['plan', path.join(DOCS, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+  ] as const;
+
+  // PATTERN 1 — the purge-emit regression, in the three shapes the four
+  // retracted sentences take. PATTERN 2 — the pre-gate four-caller rule.
+  const P1 = /may not emit .{0,40}until completed|removal failure[^.]*no purge-done|mutation failure[^|]*no purge-done/gi;
+  const P2 = /_reg_purge[^.]{0,80}four callers[^.]{0,60}keep working/gi;
+  // THE ALLOW-LIST, ONE RULE, STATED AS A MECHANISM. Quotations exist in order
+  // to retract the phrasing they quote; a scan that reds on the RECORD of a
+  // correction teaches the next round to delete that record, and those
+  // deletions are what kept this regression alive.
+  const MARKERS = /declines to restore|superseded|said the opposite|retract/i;
+
+  /** PARAGRAPH-JOINED, and the join is load-bearing rather than cosmetic: a
+   *  line-scoped grammar never crosses a hard-wrapped quotation, which made the
+   *  round-10 guard simultaneously RED on a correct tree and VACUOUS against a
+   *  restored sentence that happens to wrap at this corpus's ~110-column
+   *  width. §6's own retraction quotation is wrapped mid-phrase and is the
+   *  control that proves it. */
+  const paragraphs = (text: string): string[] =>
+    text.split(/\n\s*\n/)
+      .map((p) => p.split('\n').map((l) => l.trim()).filter((l) => l !== '').join(' '))
+      .filter((p) => p !== '');
+
+  /** Backtick- or quote-delimited spans of a JOINED paragraph. The containment
+   *  half of the rule is what stops an alternation running from inside one
+   *  quotation, across prose, into another — which is what both of round 10's
+   *  own live matches did. */
+  const quotedSpans = (p: string): Array<[number, number]> => {
+    const spans: Array<[number, number]> = [];
+    for (const re of [/`[^`]*`/g, /"[^"]*"/g, /“[^”]*”/g]) {
+      for (const m of p.matchAll(re)) spans.push([m.index!, m.index! + m[0].length]);
+    }
+    return spans;
+  };
+
+  const scan = (corpus: Array<readonly [string, string]>, pat: RegExp):
+    { raw: number; allowed: number; live: string[] } => {
+    let raw = 0; let allowed = 0; const live: string[] = [];
+    for (const [label, text] of corpus) {
+      for (const p of paragraphs(text)) {
+        const spans = quotedSpans(p);
+        for (const m of p.matchAll(pat)) {
+          raw++;
+          const [a, b] = [m.index!, m.index! + m[0].length];
+          if (spans.some(([s, e]) => s <= a && b <= e) && MARKERS.test(p)) allowed++;
+          else live.push(`${label}: ${m[0].slice(0, 120)}`);
+        }
+      }
+    }
+    return { raw, allowed, live };
+  };
+
+  const realCorpus = (): Array<readonly [string, string]> =>
+    CORPUS.map(([l, f]) => [l, fs.readFileSync(f, 'utf8')] as const);
+
+  it('no retracted purge-emit sentence stands as a LIVE claim in either document', () => {
+    const r = scan(realCorpus(), P1);
+    // NON-VACUITY, MANDATORY, and all three numbers are asserted: if RAW drops
+    // the join or the corpus is broken and the scan proves nothing; if LIVE
+    // rises a retracted sentence has come back as a live claim. Measured on
+    // this tree — one in the spec (§6's WRAPPED retraction quotation, which a
+    // line-scoped grammar finds ZERO times), three in the plan's own scan
+    // paragraph, and two in the D-2605 ledger entry.
+    expect(r.raw, 'the raw match set').toBe(6);
+    expect(r.allowed, 'all of them allow-listed as quoted history').toBe(6);
+    expect(r.live, 'live claims').toEqual([]);
+  });
+
+  it('the pre-gate four-caller rule stands only as a quotation of what it replaced', () => {
+    const r = scan(realCorpus(), P2);
+    expect(r.raw).toBe(1);
+    expect(r.allowed).toBe(1);
+    expect(r.live).toEqual([]);
+  });
+
+  it('CONTROL: the JOIN is load-bearing — a WRAPPED restoration reds, and a line-scoped grammar does not see it', () => {
+    // The restoration, as §6 would carry it: hard-wrapped mid-phrase, and NOT
+    // inside a quotation — a live claim.
+    // ONE alternative only, and it is the wrap-crossing one. A fixture whose
+    // second line independently matched `removal failure … no purge-done`
+    // would be seen by a line-scoped grammar too — for a different reason —
+    // and the control would prove nothing about the join. (Measured: that was
+    // this control's own first draft, and it failed here.)
+    const wrapped = 'The purge may not emit its terminal fact\nuntil completed.\n';
+    const mutated: Array<readonly [string, string]> = [['spec', wrapped], ['plan', '']];
+    expect(scan(mutated, P1).live.length, 'the joined scan sees the wrapped sentence').toBeGreaterThan(0);
+    // AND THE CONTROL ON THE CONTROL: a line-scoped grammar stays GREEN on the
+    // very same input, which is what makes the normalisation the mechanism
+    // rather than a formatting preference.
+    const lineScoped = wrapped.split('\n').filter((l) => P1.test(l));
+    P1.lastIndex = 0;
+    expect(lineScoped, 'a line-scoped grammar never crosses the wrap').toEqual([]);
+  });
+
+  it('CONTROL: an UNWRAPPED restoration reds too, and a quotation of it does not', () => {
+    const oneLine = 'The purge may not emit its terminal fact until completed.\n';
+    expect(scan([['spec', oneLine], ['plan', '']], P1).live.length).toBeGreaterThan(0);
+    // The SAME sentence inside a quotation, in a paragraph carrying a
+    // retraction marker, is history rather than a claim — and must not red, or
+    // the next round deletes the record of the correction.
+    const quoted = 'This invariants section said the opposite ("may not emit its terminal fact until completed") for three rounds.\n';
+    expect(scan([['spec', quoted], ['plan', '']], P1).live, 'quoted history is exempt').toEqual([]);
+    // AND THE CONTAINMENT HALF IS REAL: the same quotation in a paragraph with
+    // NO retraction marker is a live claim again.
+    const noMarker = 'The rule is ("may not emit its terminal fact until completed") and that is all.\n';
+    expect(scan([['spec', noMarker], ['plan', '']], P1).live.length,
+      'a marker-less paragraph is not exempt, however it is punctuated').toBeGreaterThan(0);
+  });
+
+  it('CONTROL: pattern 2 reds on the restored rule and not on this document\'s quotation of it', () => {
+    const restored = 'On such a box `_reg_purge` and its four callers keep working exactly as they do today.\n';
+    expect(scan([['spec', restored], ['plan', '']], P2).live.length).toBeGreaterThan(0);
+  });
+});
