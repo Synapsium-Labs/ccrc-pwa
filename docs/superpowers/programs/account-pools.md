@@ -6906,3 +6906,22 @@ derived from `RUN_TRANSITIONS` that counted `unknown` as terminal; the L0 pair r
 Tasks 1–2 alone (the cap classification and the re-entry check) would have freed runs 39 and 40's
 slots and let run 47 dispatch. Run 47 is still `planned`, still `cap-concurrency 7/7` at the last
 retry (15:29 UTC). Execution mode is the operator's call; nothing here changes account-pools' state.
+
+---
+
+## 2026-09-14 23:3x UTC — review runs EXECUTED: PR #108 open, 39 commits, whole-branch review clean
+
+`feat/review-runs` (off `spec/review-runs`, merged with `origin/main` 4e38e2fc) — fourteen tasks, each reviewed at task
+scope (fix loops on 1, 2, 3, 4, 5, 7, 10, 11; none past round 2), then a whole-branch review that found one Critical the
+task reviews could not see: the coordinator skill's send-back arm transcribed the SPEC's own error ("re-dispatch the worker")
+into a call `dispatchRun` refuses — only `planned` has a `dispatched` edge. Fixed by mail (`fix-round`), pinned, minted as
+**D-2824**; the spec §4/§6 carry the correction inline. Deviations minted in execution: D-2803, D-2804, D-2805, D-2807,
+D-2812, D-2824 (plus the seven planned, D-2794..D-2800). Final tree `fe737d75`: server 308 files / 9364 tests, agent 18 /
+294, pwa 84 / 2493, tsc clean ×3, deviation-refs green.
+
+**PR #108** — https://github.com/Synapsium-Labs/ccrc-pwa/pull/108 — body hand-written; it supersedes #103 (the spec+plan
+docs PR), whose commits it contains. **Deploy SERVER FIRST** for this branch (the plan's Task 14 says why: the agent lane
+carries clause 12, whose server half must exist); the cap change frees idle slots at the server's first boot.
+
+Run 47 (wave 6/6) is still `planned`, still `cap-concurrency 7/7` at the last retry — the very block this branch removes.
+Once #108 deploys, the two `bug-fix-waves` runs at `awaiting-review` stop counting and wave 6 can dispatch.
