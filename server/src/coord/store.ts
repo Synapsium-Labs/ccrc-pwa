@@ -24,7 +24,7 @@ import {
   isPositiveDecimalSafeInteger,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
+  IDLE_RUN_STATES, RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -40,12 +40,6 @@ import {
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
 export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
-
-/** The run states nothing can leave — DERIVED from `RUN_TRANSITIONS` (a state
- *  with no outgoing edge IS terminal), never a second hand-written list of the
- *  same two words. Adding a terminal state to the table is enough. */
-const TERMINAL_RUN_STATES: readonly RunState[] =
-  (Object.keys(RUN_TRANSITIONS) as RunState[]).filter((s) => RUN_TRANSITIONS[s].length === 0);
 
 /**
  * A run row as the STORE reads it: `RunSummary` (the wire shape) plus
@@ -413,6 +407,18 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 
+/** The cap's predicate, NEGATIVE over everything that is not active — the idle
+ *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
+ *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
+ *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
+/** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
+ *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
+ *  names this fragment and never the literal pair (D-2800; pinned by
+ *  `single-definition.test.ts`). */
+const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+
 /** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
  *  `SetWorkItemResult`'s reason. `'absent'` and `'terminal'` are kept apart
  *  because the first says this transaction has already lost the row it just
@@ -535,7 +541,7 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
 const ABANDONED_PARK_SQL =
   "(d.state = 'rejected' " +
   `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  "AND COALESCE(rr.state, '') NOT IN ('done','failed'))";
+  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL})`;
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -898,11 +904,15 @@ export class CoordStore {
    * the program, and those are not the same question.
    *
    * SO THIS `WHERE` CARRIES NO STATE PREDICATE AT ALL, and the omission is a
-   * decision rather than an oversight (D-1135): this file holds two disagreeing
-   * answers to "terminal" — `TERMINAL_RUN_STATES` is DERIVED from
-   * `RUN_TRANSITIONS` and yields three words, while eight SQL predicates here
-   * hand-write two — and a method that needed the word would have to pick one.
-   * Ruling R1 means this one does not, so it does not inherit the disagreement.
+   * decision rather than an oversight (D-1135): this file used to hold two
+   * disagreeing answers to "terminal" — a private derivation from
+   * `RUN_TRANSITIONS` that yielded three words, while eight SQL predicates
+   * here hand-wrote two — and a method that needed the word would have had to
+   * pick one. Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is
+   * L0's own pair (`shared/api.ts`), imported rather than derived, and it
+   * agrees with the hand-written predicates by construction. Ruling R1 means
+   * this method still carries no state predicate at all, so it does not
+   * inherit whatever `TERMINAL_RUN_STATES` names.
    *
    * A row whose `claimedBy` IS NULL STAYS NULL. `reconstruct` mints rebuilt runs
    * that way because it cannot know who will resume the program, and D-12's
@@ -1469,7 +1479,7 @@ export class CoordStore {
     }
     const now = Date.now();
     this.db.prepare(
-      "UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ('done','failed') THEN ? ELSE closedAt END " +
+      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END ` +
       'WHERE id = ?',
     ).run(to, to, now, runId);
     this.db.prepare(
@@ -1824,6 +1834,7 @@ export class CoordStore {
    * on a per-row one.
    */
   strandedClear(sessionId: string): boolean {
+    // D-2794: the pair is L0's; an `unknown` row is LIVE here, as everywhere.
     const row = this.db.prepare(
       'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +
       `WHERE r.sessionId = ? AND e.detail = ? AND r.state NOT IN (${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ` +
@@ -1947,7 +1958,7 @@ export class CoordStore {
    * DOM list, plus a per-row `unreadMailCount` subquery apiece.
    *
    * The clamp is asymmetric ON PURPOSE: an ACTIVE run (`state NOT IN
-   * ('done','failed')`) is never dropped by it, however old — the live
+   * TERMINAL_RUN_STATES_SQL`) is never dropped by it, however old — the live
    * board's whole job is showing every run still moving, and a program that
    * has been open for a year is exactly the one an operator most needs to
    * see, not the one to hide behind a LIMIT. Only the FINISHED half — which
@@ -1962,14 +1973,14 @@ export class CoordStore {
     if (!opts.includeClosed) {
       return this.hydrateRuns(this.db.prepare(
         `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
-        "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
+        `WHERE r.state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY r.id`,
       ).all() as unknown as RunRowDb[]);
     }
     const n = clampMailLimit(opts.closedLimit ?? 500);
     return this.hydrateRuns(this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
-      "WHERE r.state NOT IN ('done','failed') OR r.id IN " +
-      "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
+      `WHERE r.state NOT IN ${TERMINAL_RUN_STATES_SQL} OR r.id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ` +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[]);
   }
@@ -2009,7 +2020,7 @@ export class CoordStore {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText FROM runs ' +
-      "WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ? ORDER BY id",
+      `WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ? ORDER BY id`,
     ).all(sessionId, excludeRunId ?? -1) as unknown as
       { idText: string; program: string; waveText: string; waveOfText: string | null }[];
     const siblings: OpenSibling[] = [];
@@ -2053,7 +2064,7 @@ export class CoordStore {
   openCoordinatorIds(): string[] {
     return (this.db.prepare(
       'SELECT DISTINCT claimedBy FROM runs ' +
-      "WHERE claimedBy IS NOT NULL AND state NOT IN ('done','failed')",
+      `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
@@ -2101,12 +2112,16 @@ export class CoordStore {
    *  answered to know whether the run it just closed was the LAST one: zero
    *  remaining means nothing under this program can dispatch, mail, or hold
    *  a workspace open any more, so `resolveCoordinator`'s "exactly one
-   *  active program" guard (D-26) must stop counting it. Mirrors
-   *  `capsUsage().running`'s own `state NOT IN ('done','failed')` predicate,
-   *  scoped to one program instead of the whole fleet. */
+   *  active program" guard (D-26) must stop counting it. NOT the same
+   *  question `capsUsage().running` asks since design 2026-09-14 §7.1 (as
+   *  corrected by D-2803): that one now names `INACTIVE_RUN_STATES_SQL`
+   *  (idle ∪ terminal, dispatched/working/unknown sessions only survive it),
+   *  while this one still names `TERMINAL_RUN_STATES_SQL`'s complement
+   *  (every non-terminal state, IDLE included) — a program with every run
+   *  parked at `awaiting-review` is still open, and must stay so. */
   programOpenRunCount(program: string): number {
     return (this.db.prepare(
-      "SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ('done','failed')",
+      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).get(program) as { c: number }).c;
   }
 
@@ -2462,8 +2477,8 @@ export class CoordStore {
    */
   capsUsage(now: number = Date.now()): { running: number; dispatchedIn24h: number } {
     // `dispatchedAt IS NOT NULL` (deviation D-13, found in Task 3 review):
-    // `state NOT IN ('done','failed')` alone also matched `planned` — the
-    // state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
+    // a bare "state is not terminal" predicate alone also matched `planned` —
+    // the state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
     // deliberately leaves a run in, with no session and no workspace. Three
     // botched dispatches on one program would otherwise pin `running` at the
     // default `maxConcurrentWorkers` forever. In normal dispatch flow
@@ -2473,8 +2488,17 @@ export class CoordStore {
     // other writer, and for the same reason — it too holds a live session,
     // just one the database lost track of rather than one `markDispatched`
     // just minted.
+    //
+    // Since design 2026-09-14 §7.1 (as corrected by D-2803) the predicate
+    // excludes the IDLE and TERMINAL lists — `state NOT IN idle ∪ terminal`
+    // — so a run at `awaiting-review`, `merging` or `closing` stops counting
+    // the moment it gets there: the session beneath those states is idle by
+    // contract, and an idle worker holding a fleet slot is what blocked
+    // wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at
+    // awaiting-review). D-13's principle is kept and sharpened: this names
+    // the runs whose session is WORKING.
     const running = (this.db.prepare(
-      "SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')",
+      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
     ).get() as { c: number }).c;
     const dispatchedIn24h = (this.db.prepare(
       'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
@@ -4366,18 +4390,19 @@ export class CoordStore {
    *  derived answer follows a handover for free while a stored id would name
    *  a corpse.
    *
-   *  `state NOT IN ('done','failed')` is COPIED from `openRunsForSession`
-   *  (`:1560`) and `openCoordinatorIds` (`:1575-1581`), never
-   *  `TERMINAL_RUN_STATES`: that constant is derived from `RUN_TRANSITIONS`,
-   *  which gives `'unknown'` an empty outgoing-edge list and so calls it
-   *  terminal — but every shipped session-keyed query in this file counts an
-   *  `'unknown'` row (a token a newer build wrote and this one degrades on
-   *  read) as OPEN. `openCoordinatorIds`'s own docstring rules on exactly this
-   *  divergence and says it "stays latent only while new predicates copy the
-   *  SQL spelling instead of re-deriving one" — this is that copy, not a
-   *  fresh derivation, so it agrees with `close.ts`'s `survivorOf` (built on
-   *  `openRunsForSession`) on which run of a session is open, including on an
-   *  `'unknown'` row.
+   *  `state NOT IN ${TERMINAL_RUN_STATES_SQL}` used to be COPIED, hand-written,
+   *  from `openRunsForSession` (`:1560`) and `openCoordinatorIds`
+   *  (`:1575-1581`), deliberately never the OLD `TERMINAL_RUN_STATES`: that
+   *  constant used to be derived from `RUN_TRANSITIONS`, which gives
+   *  `'unknown'` an empty outgoing-edge list and so called it terminal — but
+   *  every shipped session-keyed query in this file counts an `'unknown'` row
+   *  (a token a newer build wrote and this one degrades on read) as OPEN.
+   *  Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is L0's own
+   *  pair (`shared/api.ts`) and does NOT call `'unknown'` terminal either, so
+   *  the divergence this paragraph used to warn about is gone: this query now
+   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `close.ts`'s
+   *  `survivorOf` (built on `openRunsForSession`) on which run of a session is
+   *  open, including on an `'unknown'` row.
    *
    *  ORDER BY id DESC is a CONVENTION, not a guarantee: nothing in the schema
    *  forbids two open runs naming one sessionId, and the coordinator protocol
@@ -4388,7 +4413,7 @@ export class CoordStore {
    *  ASC (fix round 1, finding 2). */
   parentOfSession(childId: string): string | null {
     const row = this.db.prepare(
-      "SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ('done','failed') " +
+      `SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
       'ORDER BY id DESC LIMIT 1',
     ).get(childId) as { claimedBy: string | null } | undefined;
     return row?.claimedBy ?? null;

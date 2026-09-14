@@ -3747,6 +3747,40 @@ export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = 
   unknown:           [],
 });
 
+/**
+ * THE PARTITION OF `RunState` THE DISPATCH CAP READS (design 2026-09-14 §7.1).
+ * Three lists, spelled ONCE, and `run-states.test.ts` pins that every
+ * `RunState` sits in exactly one of them — so a future state cannot be
+ * silently UNCOUNTED, which is the dangerous direction for a cap (an
+ * uncounted busy session over-dispatches the fleet without a word).
+ *
+ * ACTIVE = a dispatched session is doing work: `dispatched`, `working`. Both
+ * kinds of run (`RunKind`) are busy in exactly these two. `unknown` is here
+ * for the cap's own safe direction: a row whose state this build cannot name
+ * COUNTS, wedging visibly and fixably, rather than not counting and
+ * over-dispatching silently — and that is today's behaviour too, since
+ * `unknown` was never among the terminal pair.
+ *
+ * IDLE = the coordinator's states: the session beneath them is idle by
+ * contract (a worker stops pushing at `wave-done`, worker skill clause 9), so
+ * it holds a workspace but not a fleet slot. `planned` has never been
+ * dispatched (D-13's own narrowing, kept); `awaiting-review`, `merging` and
+ * `closing` are waits on the coordinator, not on the worker — run 43 sat at
+ * `merging` for hours on 2026-09-14 with its worker idle throughout.
+ *
+ * TERMINAL = the pair nothing leaves. `store.ts` builds its SQL fragments
+ * from these by `.join`, the `TERMINAL_DELIVERY_SQL` idiom, and
+ * `single-definition.test.ts` refuses a second hand-written copy of either
+ * list anywhere under the four roots. `unknown` is NOT terminal: it has no
+ * outgoing edge in `RUN_TRANSITIONS` because nothing may transition a state
+ * this build cannot name — not because such a row is finished (D-2794).
+ */
+export const ACTIVE_RUN_STATES = ['dispatched', 'working', 'unknown'] as const satisfies
+  readonly RunState[];
+export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closing'] as const satisfies
+  readonly RunState[];
+export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
+
 /** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
 export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
 const WORK_ITEM_STATES: readonly WorkItemState[] =

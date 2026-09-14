@@ -816,10 +816,14 @@ describe('POST /api/runs/:id/dispatch', () => {
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     // A run already counted as running — `dispatchedAt` set directly, the
-    // same bypass `coord-store.test.ts` uses for `capsUsage` fixtures.
+    // same bypass `coord-store.test.ts` uses for `capsUsage` fixtures. Since
+    // design 2026-09-14 §7.1 the cap reads `state`, not just `dispatchedAt`,
+    // so the blocker must also be advanced to `dispatched` — mirroring
+    // `dispatchRun`'s real pairing of the two writes in one transaction.
     const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
       wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
     w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
+    expect(w.coord.advance(blocker.id, 'dispatched', 'coordinator').ok).toBe(true);
     w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
 
     const opened = (await postOpen(app)).json() as { id: number };

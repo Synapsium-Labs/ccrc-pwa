@@ -466,7 +466,10 @@ describe('Build 7 nouns', () => {
     // The premise, established rather than assumed: this needle really is the
     // clause, and it really is distinct from the twelve `runs`-row predicates in
     // the same file (those read `r.state`/`state`, never the mail join's `rr`).
-    const CLAUSE = "COALESCE(rr.state, '') NOT IN ('done','failed')";
+    // Since design 2026-09-14 §7.1 (D-2794/D-2800) the run-state half is no
+    // longer a hand-written pair but L0's `TERMINAL_RUN_STATES_SQL` — updated
+    // here rather than left pinning the literal the sweep just retired.
+    const CLAUSE = "COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL}";
     expect(store, 'the abandonment clause is not in store.ts at all').toContain(CLAUSE);
     expect(store.split(CLAUSE).length - 1,
       'the abandonment run-state clause is written more than once').toBe(1);
@@ -664,6 +667,44 @@ describe('Build 7 nouns', () => {
     const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
     expect(strip).toMatch(
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
+  });
+
+  it('spells the run-state lists ONCE — ACTIVE_RUN_STATES / TERMINAL_RUN_STATES, never a hand-written SQL list (D-2800)', () => {
+    expect(ALL.map(rel)).not.toContain('server/test/single-definition.test.ts');
+
+    // Adjacent quoted pairs/triples of the two lists, in either order, with any
+    // spacing — the shapes a copy actually takes in SQL or JS.
+    const TERMINAL_PAIR = /\(\s*'(done|failed)'\s*,\s*'(done|failed)'\s*\)/;
+    const ACTIVE_LIST = /\(\s*'(dispatched|working|unknown)'\s*,\s*'(dispatched|working|unknown)'\s*(?:,\s*'(dispatched|working|unknown)'\s*)?\)/;
+    expect(TERMINAL_PAIR.test("NOT IN ('done','failed')")).toBe(true);
+    expect(TERMINAL_PAIR.test("IN ( 'failed', 'done' )")).toBe(true);
+    expect(ACTIVE_LIST.test("IN ('dispatched','working','unknown')")).toBe(true);
+    expect(ACTIVE_LIST.test("IN ('queued','delivered')")).toBe(false);
+
+    const holders = ALL.filter((f) => {
+      const t = readFileSync(f, 'utf8');
+      return TERMINAL_PAIR.test(t) || ACTIVE_LIST.test(t);
+    }).map(rel).sort();
+    // `schema.ts` is exempt for FROZEN migration strings only; nothing else may hold the literal.
+    expect(holders.filter((h) => h !== 'server/src/coord/schema.ts'),
+      'a hand-written SQL list of the run-state pair/triple').toEqual([]);
+
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(/export const ACTIVE_RUN_STATES = \['dispatched', 'working', 'unknown'\] as const/);
+    expect(api).toMatch(/export const TERMINAL_RUN_STATES = \['done', 'failed'\] as const/);
+    for (const name of ['ACTIVE_RUN_STATES', 'IDLE_RUN_STATES', 'TERMINAL_RUN_STATES']) {
+      const defs = ALL.filter((f) =>
+        new RegExp(`^\\s*(?:export )?const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
+      expect(defs, name).toEqual(['shared/api.ts']);
+    }
+
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(/const INACTIVE_RUN_STATES_SQL =\s*\n?\s*`\('\$\{\[\.\.\.IDLE_RUN_STATES, \.\.\.TERMINAL_RUN_STATES\]\.join\("','"\)\}'\)`/);
+    expect(store).toMatch(/const TERMINAL_RUN_STATES_SQL =\s*\n?\s*`\('\$\{TERMINAL_RUN_STATES\.join\("','"\)\}'\)`/);
+    expect(store, 'capsUsage no longer reads the inactive fragment')
+      .toMatch(/dispatchedAt IS NOT NULL AND state NOT IN \$\{INACTIVE_RUN_STATES_SQL\}/);
+    // The sweep's floor: at least six `TERMINAL_RUN_STATES_SQL` consumers in store.ts (measured in Task 1 step 1).
+    expect((store.match(/\$\{TERMINAL_RUN_STATES_SQL\}/g) ?? []).length).toBeGreaterThanOrEqual(6);
   });
 
   // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts

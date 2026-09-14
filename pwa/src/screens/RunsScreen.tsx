@@ -5,9 +5,10 @@
 // round 1, task 5, findings 1 and 3). The live `{type:'runs'}` frame
 // (`/ws/fleet`) is ACTIVE-ONLY by construction: `watch.ts`'s `emitRuns` calls
 // `coord.runs()` with no options, and `CoordStore.runs()` defaults to
-// `WHERE state NOT IN ('done','failed')`. It can never carry a finished run,
-// so it is trusted for the ACTIVE half only — the instant it has said
-// anything at all, including an honestly empty `[]` (`runsFrameSeen`,
+// excluding `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair). It
+// can never carry a finished run, so it is trusted for the ACTIVE half only —
+// the instant it has said anything at all, including an honestly empty `[]`
+// (`runsFrameSeen`,
 // `stores/fleet.ts`), because an empty array from a frame that DID arrive is
 // a true empty roster, not silence.
 //

@@ -415,22 +415,72 @@ describe('CoordStore: caps', () => {
     const b = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     s.markDispatched(b.id, 'ccrc-pwa-still-fen', 'still-fen', 'ws/still-fen', true, now - 25 * 3600_000);
+    // `markDispatched` alone does not advance `state` (design 2026-09-14
+    // §7.1; see its own docstring) — `dispatchRun` is the real caller and
+    // always pairs it with `advance(..., 'dispatched', ...)` in the same
+    // transaction. Mirrored here so this fixture matches production instead
+    // of resting on `state` staying `planned`.
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.advance(b.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 2, dispatchedIn24h: 1 });
     expect(s.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 12 });
   });
 
   it('does not count a `planned` run that never dispatched — a botched dispatch must not wedge the cap (D-13)', () => {
-    // capsUsage review: `state NOT IN ('done','failed')` alone also matched
-    // `planned` — the state `openRun` writes and Task 9's `ambiguous-dispatch`
-    // refusal deliberately leaves a run in, with no session and no workspace.
-    // Before this fix three botched dispatches on one program would pin
-    // `running` at the default `maxConcurrentWorkers` forever.
+    // capsUsage review: a bare "state is not terminal" predicate alone also
+    // matched `planned` — the state `openRun` writes and Task 9's
+    // `ambiguous-dispatch` refusal deliberately leaves a run in, with no
+    // session and no workspace. Before this fix three botched dispatches on
+    // one program would pin `running` at the default `maxConcurrentWorkers`
+    // forever.
     const s = store();
     const now = 1_000_000_000_000;
     openRun(s);                                                   // never dispatched
     const dispatched = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(dispatched.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // See the previous test's comment: mirror `dispatchRun`'s pairing.
+    expect(s.advance(dispatched.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
+  });
+
+  it('stops counting a run the moment it reaches an IDLE state, and counts it again at working (spec §7.1)', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // `markDispatched` itself does not advance `state` (it stamps
+    // `dispatchedAt`/`workspace`/`branch`/`sessionId` only, per its own
+    // docstring); the real dispatch commit is `dispatchRun`, which calls
+    // `markDispatched` and `advanceInner(..., 'dispatched', ...)` together.
+    // Mirrored here explicitly, matching every other `advance(id,
+    // 'dispatched', ...)` call site in this file.
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(1);                 // dispatched: active
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(1);                 // working: active
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);                 // the worker is idle by contract
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true); // a send-back
+    expect(s.capsUsage(now).running).toBe(1);
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.advance(a.id, 'merging', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);                 // merging: the coordinator's wait
+    expect(s.advance(a.id, 'closing', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+    expect(s.advance(a.id, 'done', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+    // `dispatchedIn24h` is untouched by state: one dispatch happened.
+    expect(s.capsUsage(now).dispatchedIn24h).toBe(1);
+  });
+
+  it('still counts an `unknown`-state row — a state this build cannot name must wedge, not over-dispatch', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // The one way such a row exists: written by a newer build. Planted raw.
+    s.db.prepare("UPDATE runs SET state = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(s.capsUsage(now).running).toBe(1);
   });
 
   it('excludes a dispatch exactly 24h old — the window is `>`, not `>=` (D-59)', () => {
@@ -442,6 +492,8 @@ describe('CoordStore: caps', () => {
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
     s.markDispatched(a.id, 'ccrc-pwa-boundary', 'boundary', 'ws/boundary', false, now - 24 * 3600_000);
+    // See the caps describe's first test comment: mirror `dispatchRun`'s pairing.
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 0 });
   });
 });

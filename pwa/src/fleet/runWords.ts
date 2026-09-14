@@ -79,9 +79,10 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
- *  own source, `watch.ts`'s `emitRuns`) draws the SAME line on `state NOT IN
- *  ('done','failed')`, so this is not a new definition, it is the existing
- *  one restated where the client can use it. `closedAt` is written by
+ *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding
+ *  `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair), so this is
+ *  not a new definition, it is the existing one restated where the client
+ *  can use it. `closedAt` is written by
  *  exactly one path (`advanceInner`, `store.ts`) and `CoordStore.reconstruct`
  *  — the disaster-recovery rebuild `server/test/reconstruction-drill.test.ts`
  *  pins as one of the twelve facts the drill CANNOT recover — never sets it,
