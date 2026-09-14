@@ -165,6 +165,14 @@ function idArray(ids) {
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
+ * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
+ * backend memberships, and they are deliberately not each other's complement:
+ * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
+ * reads the first for the four things that only work against Claude Code's own
+ * protocol (`--remote-control`, spawn-effort injection, the cross-backend
+ * sanitiser, the 429 exclusion writer) and the second for the one thing that
+ * speaks Codex's usage vocabulary (`_codex_lane_status`, the `ccd ls` trailer).
+ *
  * ── `_ccrc_pool` ──
  *
  * The account half of project pools. Emitted ALWAYS, even when no account is
@@ -210,6 +218,14 @@ export function generateAccountsSh(roster) {
   // the moment a Codex lane becomes placeable those four start lying. Emit the
   // backend answer separately so each site can ask the question it means.
   const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
+  // The same split, read from the other side. `ccd ls` tells a Codex lane's
+  // usage story in Codex's own vocabulary — weekly caps, ccgpt-usage's JSON
+  // shape, a 5h cooldown — and needs to know WHICH lanes that story is true
+  // of. It cannot ask "not home-able" (both Codex lanes are home-able as of
+  // 2026-09-11) and it cannot ask "not Anthropic" (`telemetry` has a third
+  // value, `none`, and a lane on some future backend would answer yes). So the
+  // positive membership is emitted, exactly as the Anthropic one is.
+  const codexIds = roster.accounts.filter((a) => a.telemetry === 'codex').map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -265,6 +281,7 @@ CCRC_ACCOUNTS=${idArray(ids)}
 CCRC_HOME_ABLE=${idArray(homeAbleIds)}
 CCRC_MEASURED=${idArray(measuredIds)}
 CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
+CCRC_CODEX_BACKEND=${idArray(codexIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in
