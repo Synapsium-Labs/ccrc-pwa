@@ -132,8 +132,9 @@ are spec §9's corrected acceptance list.
   (house rule).
 - **Wave 2's two execution-time findings outside its plan's scope:** D-2732, taken from account-pools by offer and FIXED
   in wave 2 — both scanners' ledger-base chain fell through to a fossil local `main`, silently; fixed by dropping the
-  `'main'` candidate, printing the resolved base, and asserting `origin/main` is an ancestor of it (the
-  `is-ancestor <base> HEAD` direction was considered and rejected as inert). D-2733, RECORD-ONLY and not fixed —
+  `'main'` candidate from BOTH chains and correcting both refusal messages, and `deviation-refs` additionally prints
+  the resolved base and asserts `origin/main` is an ancestor of it (the `is-ancestor <base> HEAD` direction was
+  considered and rejected as inert and hostile). D-2733, RECORD-ONLY and not fixed —
   `test-macos` red on main, two defects separated by their durations; and `server/vitest.config.ts`'s "failing a genuinely
   hung child in well under a minute" is false for every synchronous spawn, where `testTimeout` is a post-hoc label
   (measured three ways). The config sentence is flagged to the operator for whoever owns the suite.
