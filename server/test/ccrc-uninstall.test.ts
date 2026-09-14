@@ -205,7 +205,7 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-reviewer-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');

@@ -160,7 +160,7 @@ export const TREE_FILES = [
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the
   // installed package at run time, never vendored (spec §B).

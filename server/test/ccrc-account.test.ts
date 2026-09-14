@@ -321,7 +321,7 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
 });
 
 /** A roster on the fixture box, plus the accounts.sh projection ccd and the
- *  four installers read. Written through the real generator so the fixture can
+ *  five installers read. Written through the real generator so the fixture can
  *  never disagree with what a deployed box would have. */
 function seedBoxRoster(home: string, roster: unknown): void {
   mkdirSync(join(home, '.ccrc'), { recursive: true });
@@ -2774,7 +2774,7 @@ const settingsAt = (home: string, suffix: string): Record<string, unknown> =>
 const STANDS = 'STANDS-MARKER-4a91c2 the caller says this much.';
 
 describe('ccrc account add: the new home, provisioned', () => {
-  it('creates the config dir, writes the managed env block, and runs the four installers', () => {
+  it('creates the config dir, writes the managed env block, and runs the five installers', () => {
     const home = box('ccrc-account-prov-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);

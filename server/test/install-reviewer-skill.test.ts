@@ -155,6 +155,18 @@ describe('the deploy ships the reviewer skill too — the fleet lane, in order',
   const REVIEWER_RUN = 'bash ~/.cc-sessions/install-reviewer-skill.sh';
 
   it('installs the skill in the agent arm, after the coordinator AND worker installers have run', () => {
+    // ANCHORED ON THE RUN LINES, and each anchor's EXISTENCE asserted before
+    // any ordering is asked of it — both rules the coordinator suite paid for
+    // by measurement (its Task 8 sweep: a bare `indexOf` matched a comment that
+    // merely NAMED the other installer, and `indexOf` returning -1 for a
+    // deleted invocation made `-1 < <any index>` a green ordering assertion
+    // over an arm that ran nothing at all).
+    //
+    // WHY THIS ORDER IS A RULE AND NOT A HABIT: this skill's SKILL.md carries
+    // no references/ of its own and sends a live reviewer to the coordinator's
+    // installed tree by relative path (`../ccrc-coordinator/references/…`).
+    // Shipping it before that lane puts a skill on the box naming reference
+    // files nothing there provides yet.
     expect(agentArm).toContain(COORD_RUN);
     expect(agentArm).toContain(WORKER_RUN);
     expect(agentArm).toContain(REVIEWER_RUN);
@@ -163,6 +175,19 @@ describe('the deploy ships the reviewer skill too — the fleet lane, in order',
   });
 
   it('rsyncs the skill tree with --delete, after the coordinator lane', () => {
+    // Located by the FIRST line in the arm that spells this skill's directory
+    // with a trailing slash — which is why neither this block's own comment
+    // nor any comment above it may carry that spelling (deploy.sh says so at
+    // all three skill lanes). A comment that did would shadow the real
+    // invocation, and this assertion would then be measuring prose.
+    //
+    // Each anchor's EXISTENCE is asserted BEFORE any indexOf is asked of it —
+    // the worker suite's own measured lesson: `indexOf` returning -1 for a
+    // deleted invocation makes `-1 < <any index>` a green ordering assertion
+    // over an arm that ran nothing at all.
+    expect(agentArm).toContain(COORD_RUN);
+    expect(agentArm).toContain(WORKER_RUN);
+    expect(agentArm).toContain(REVIEWER_RUN);
     const lines = agentArm.split('\n');
     const idx = lines.findIndex((l) => l.includes('reviewer-skill/'));
     expect(idx, 'no line in the agent arm ships the reviewer skill tree').toBeGreaterThan(-1);

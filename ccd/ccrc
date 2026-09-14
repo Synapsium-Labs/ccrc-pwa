@@ -5468,7 +5468,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # either would publish a write that did not happen; appending nothing would hide a step
   # that RAN. So the key's vocabulary carries both words and the array's length never changes.
   #
-  # The four installer tokens below mean something weaker on purpose — "ran and
+  # The five installer tokens below mean something weaker on purpose — "ran and
   # returned 0" — because each is a separate process converging a home and this verb
   # cannot see what it wrote. The merge is this verb's OWN write, so it can say which.
   if [ -n "$ACCT_SETTINGS_WRITTEN" ]; then
@@ -5582,7 +5582,7 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
 # supplies. The costs are asymmetric: one inert file against unmeasured work.
 #
 # NOTHING AFTER THE ROSTER ENTRY ROLLS BACK. `_inst_accounts_sh`, `cmd_wrappers`, the
-# config dir and the four installers are roster-driven CONVERGERS — `ccrc install`'s
+# config dir and the five installers are roster-driven CONVERGERS — `ccrc install`'s
 # own spine — so a failure among them leaves a lane rostered and not yet converged,
 # and the cure is to converge again. Un-writing an operator's roster entry to tidy up
 # a failed chmod would be the destructive act, on the one file this CLI calls theirs.
@@ -9331,7 +9331,7 @@ _inst_atomic() {   # <src> <dest> <mode>
 # contract for that shape, and it keeps the three properties the file-level
 # helper's callers already depend on:
 #
-#   1. IT COMPARES FIRST. `diff -r -q` is the identical check both skill
+#   1. IT COMPARES FIRST. `diff -r -q` is the identical check all three skill
 #      installers make before they touch a converged home, so "nothing to do"
 #      costs one walk and rewrites nothing — the measurement an operator uses to
 #      see what a run actually did (`_inst_accounts_sh`'s rule, applied to a
@@ -9356,7 +9356,7 @@ _inst_tree_copy() {   # <src-dir> <dest-dir>
   if [ -d "$dest" ] && diff -r -q "$src" "$dest" >/dev/null 2>&1; then
     return 0
   fi
-  # `.tmp.$$` and `.old.$$` are the two skill installers' own staging names, and
+  # `.tmp.$$` and `.old.$$` are the three skill installers' own staging names, and
   # `.tmp.` is the spelling `_inst_atomic`'s stray sweep and the test suite's
   # both already look for.
   tmp="$dest.tmp.$$"
@@ -10309,17 +10309,18 @@ _inst_hooks() {
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
 }
 
-# ── _inst_skills — the two skills, placed and then INSTALLED ──────────────
+# ── _inst_skills — the three skills, placed and then INSTALLED ────────────
 # THE ASYMMETRY THIS STEP CLOSES. `deploy/deploy.sh agent <host>` has shipped
 # the coordinator skill to the fleet host since Build 7, and now ships the
-# worker skill beside it — while a box that installed ITSELF got NEITHER,
-# because no step of this verb had ever heard of a skill. That gap is not
-# cosmetic. Both installers exist because skills resolve per
-# `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap while its id does
-# not: a coordinator (or a worker) is placed with no pinned account, so it has
-# to find its skill in EVERY rostered home. On a self-installed box it found one
-# in none of them, and the failure is silent — the model does not announce that
-# it has no protocol, it improvises one.
+# worker and reviewer skills beside it — while a box that installed ITSELF
+# got NONE OF THEM, because no step of this verb had ever heard of a skill.
+# That gap is not cosmetic. All three installers exist because skills
+# resolve per `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap
+# while its id does not: a coordinator (or a worker, or a reviewer) is
+# placed with no pinned account, so it has to find its skill in EVERY
+# rostered home. On a self-installed box it found one in none of them, and
+# the failure is silent — the model does not announce that it has no
+# protocol, it improvises one.
 #
 # TWO HALVES PER SKILL, IN DEPLOY'S OWN ORDER. The TREE is placed under
 # `~/.cc-sessions/<name>` — the same path `deploy.sh` rsyncs it to, which is

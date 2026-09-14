@@ -648,8 +648,8 @@ function pathWithout(home: string, missing: string): string {
   // missing those is a fixture about six absences at once, and the point of
   // this helper is to model exactly one.
   //
-  // `diff` joins the list in worker-skill Task 4: BOTH skill installers refuse
-  // by name without it ("refusing rather than rewriting blind"), and
+  // `diff` joins the list in worker-skill Task 4: all three skill installers
+  // refuse by name without it ("refusing rather than rewriting blind"), and
   // `_inst_tree_copy`'s convergence check is a `diff -r -q` too. Without this
   // link, `pathWithout(home, 'git')` — a fixture about ONE absence, which runs
   // the whole verb through to the wrappers step — would instead die at the
@@ -1880,7 +1880,7 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_graphify_engine',
       '_inst_hooks',
       // Worker-skill Task 4. Beside `_inst_hooks` and after it, in deploy.sh's
-      // own order (`install-session-hooks.sh`, then the two skill installers):
+      // own order (`install-session-hooks.sh`, then the three skill installers):
       // both steps run an INSTALLED converge script over the config dirs
       // `_inst_dirs` has just created, and neither reads what the other wrote.
       // What IS load-bearing is that it follows `_inst_dirs` — the skill
