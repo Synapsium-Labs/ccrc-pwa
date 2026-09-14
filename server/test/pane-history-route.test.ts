@@ -226,10 +226,26 @@ describe('the shipped comments say what F1 measured', () => {
    *  F1 was written to close, one token-size larger. The third case below
    *  applies that pointer and asserts it does NOT satisfy this demand.
    *
-   *  WHAT THIS DOES NOT CLAIM: that no pointer can ever satisfy it. One that
-   *  quotes the whole operation would, and no regex closes that. The demand is
-   *  that the sentence state the measurement, and the proof is that the pointer
-   *  shape which actually happened here does not. */
+   *  WHAT THIS GUARD CATCHES, stated flatly, because three rounds have each
+   *  found this block claiming more than it does — and the third round's
+   *  instance landed inside the comment written to fix the second's. It catches
+   *  the two literal historical spellings of the claim (`FALSIFIED`) and the
+   *  pointer-instead-of-measurement shape (`MEASUREMENT`, which is a token-ORDER
+   *  check: it needs no sentence and reads no grammar). Every TOKEN of both is
+   *  pinned by a fixture below, one fixture per token, and those fixtures are
+   *  the whole of what the pair is worth. The character BUDGETS between the
+   *  tokens are NOT pinned — widening one leaves every fixture's verdict
+   *  unchanged — so that is the part of this regex a change can loosen without
+   *  reding anything, and it is said here rather than left to be found.
+   *
+   *  WHAT IT DOES NOT CATCH is a paraphrase, and cannot. Seven escape today,
+   *  including "tmux 3.4 never reflows a stored line" — this tree writes
+   *  "tmux 3.4" in two of the scanned files, so that spelling is inviting — and
+   *  "tmux leaves a stored line at the width it was written at", which is this
+   *  branch's own paraphrase of the claim it refutes. A regex over prose cannot
+   *  be made complete, and a fourth widening would buy a fifth instance of this
+   *  comment being wrong. So: no widening. A reviewer reading a new reflow claim
+   *  is still the only thing that catches a new way of saying it. */
   const MEASUREMENT =
     /resize-window[\s\S]{0,80}\b43\b[\s\S]{0,160}\b1853\b[\s\S]{0,200}\bhistory_size\b[\s\S]{0,60}\b9460\b/i;
 
@@ -237,10 +253,12 @@ describe('the shipped comments say what F1 measured', () => {
   // (`PR_REASONS = Object.keys(PR_REASON_MAP)`, never a second hand-kept copy).
   // The literal that stood here held two files, then three, and still could not
   // see `shared/api.ts` — which reasons about reflow at length, is L0 and
-  // bundled into the PWA, and was edited by the very round that widened the
-  // literal. Fixing the instance and leaving the rule is how a scan goes stale
-  // the next time somebody writes the word. A file is in scope the moment it
-  // starts reasoning about reflow, and nobody has to remember to add it.
+  // bundled into the PWA, and which this branch went on to edit twice
+  // (`2e14ffbb`, `0d1728bf`) with the widened literal, landed one commit
+  // earlier in `ff924f7e`, never reaching it. Fixing the instance and leaving
+  // the rule is how a scan goes stale the next time somebody writes the word.
+  // A file is in scope the moment it starts reasoning about reflow, and nobody
+  // has to remember to add it.
   const ROOTS = ['server/src', 'pwa/src', 'shared', 'agent/src'];
   const SKIP = new Set(['node_modules', 'dist', 'coverage']);
   const walk = (rel: string): string[] =>
@@ -248,7 +266,13 @@ describe('the shipped comments say what F1 measured', () => {
       e.isDirectory()
         ? (SKIP.has(e.name) ? [] : walk(`${rel}/${e.name}`))
         : (/\.(ts|tsx|js|jsx|mjs|css)$/.test(e.name) ? [`${rel}/${e.name}`] : []));
-  const SCANNED = ROOTS.flatMap(walk).filter((rel) => /reflow/i.test(read(rel)));
+  // NAMED ONE BY ONE because the walk filters on extension and `ccd` has none.
+  // It is the tmux driver — the likeliest future home of a claim about what a
+  // resize does to stored history — and a scan of every file that reasons about
+  // tmux, minus the file that DRIVES tmux, is the shape of an oversight.
+  const EXTRA = ['ccd/ccd'];
+  const SCANNED = [...ROOTS.flatMap(walk), ...EXTRA]
+    .filter((rel) => /reflow/i.test(read(rel)));
 
   // The files that are supposed to CARRY the measurement, as opposed to merely
   // saying the word. This stays a short explicit list on purpose: a stylesheet
@@ -278,13 +302,38 @@ describe('the shipped comments say what F1 measured', () => {
       .toBeGreaterThan(MEASURED.length);
   });
 
+  it('every shipped source root stays in scope — including the ones with nothing to find yet', () => {
+    // THE CLAIM THIS REPLACES WAS FALSE. The round that derived `SOURCES` said
+    // "dropping a root reds"; measured, removing `agent/src` was GREEN, because
+    // nothing under it matches /reflow/i and the reach test above is satisfied
+    // by files under the other three. A root with nothing to find is exactly
+    // the one a later narrowing takes out unnoticed, so the list is asserted
+    // whole — and each entry is asserted to be a real directory with sources in
+    // it, so a rename reds too rather than silently scanning nothing.
+    expect(ROOTS, 'a source root left the scan').toEqual([
+      'server/src', 'pwa/src', 'shared', 'agent/src',
+    ]);
+    expect(EXTRA, 'the tmux driver left the scan').toEqual(['ccd/ccd']);
+    for (const rel of ROOTS) {
+      expect(walk(rel).length, `${rel} is not a source root this tree has`).toBeGreaterThan(0);
+    }
+    for (const rel of EXTRA) {
+      expect(read(rel).length, `${rel} is not a file this tree has`).toBeGreaterThan(0);
+    }
+  });
+
   it('the flatten sees through BOTH comment syntaxes — `//` and JSDoc', () => {
     // Fixtures, not shipped files: the point is what the helper can see, and a
     // shipped file that happens not to carry the claim proves nothing about it.
     const lineWrapped = '  // a note about how tmux never\n  // reflows a stored line\n';
     const jsdocWrapped = '  /**\n   * a note about how tmux never\n   * reflows a stored line\n   */\n';
     const blockNoLeader = '  /*\n  a note about how tmux never\n  reflows a stored line\n  */\n';
-    for (const [name, text] of Object.entries({ lineWrapped, jsdocWrapped, blockNoLeader })) {
+    // BOTH VOICES. Every fixture above says "never", so deleting the `does not`
+    // half of FALSIFIED's alternation left all 21 tests green — measured. An
+    // unpinned clause is a clause somebody can drop.
+    const otherVoice = '  // a note about how tmux does not\n  // reflow a stored line\n';
+    for (const [name, text] of Object.entries({
+      lineWrapped, jsdocWrapped, blockNoLeader, otherVoice })) {
       expect(FALSIFIED.test(flatten(text)), `${name}: the claim escaped the flatten`).toBe(true);
     }
     // ...and the control, so the matcher is not simply matching everything.
@@ -329,6 +378,25 @@ describe('the shipped comments say what F1 measured', () => {
       .toBe(true);
     expect(MEASUREMENT.test(flatten(pointed)), 'a pointer carrying both numbers still passes')
       .toBe(false);
+
+    // AND EVERY TOKEN OF THE DEMAND IS EXERCISED, one fixture each. Loosening
+    // the regex to /resize-window[\s\S]{0,2000}9460/i left all 21 tests green,
+    // and so did dropping the `1853` clause alone — the pair above rejects both
+    // loosened forms for the WRONG reason (no `resize-window` at all), which is
+    // how four clauses came to be carried by nothing. Each fixture below states
+    // the measurement with exactly one token missing, so the mutant that drops
+    // that token is the mutant it reds.
+    const missingOne: Record<string, string> = {
+      'the operation': ' The pin narrows to 43 columns: 1853 stored lines took `history_size` to 9460, per F1. ',
+      'the width it resized to': ' `resize-window` ran; 1853 stored lines took `history_size` to 9460. ',
+      'the count before': ' `resize-window -x 43` on a 220-column pane took `history_size` to 9460. ',
+      'the quantity measured': ' `resize-window -x 43` on a pane holding 1853 lines: 9460 after. ',
+      'the count after': ' `resize-window -x 43` on a pane holding 1853 lines took `history_size` up. ',
+    };
+    for (const [what, text] of Object.entries(missingOne)) {
+      expect(MEASUREMENT.test(flatten(text)),
+        `${what} dropped out of the demand — the regex stopped reading it`).toBe(false);
+    }
   });
 
   it('the -J note counts rows DOWN, not up — joining cannot render more rows', () => {
