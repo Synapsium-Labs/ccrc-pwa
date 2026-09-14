@@ -25,6 +25,11 @@ export interface SettleItemsDeps { coord: CoordStore }
 export type SettleItemsOutcome =
   | { ok: true; id: number; items: RunItemTally }
   | { ok: false; kind: 'unknown-run' }
+  /** D-2545. The run row is THERE and this process cannot represent its
+   *  integers — separate from `unknown-run` because the coordinator's next
+   *  move differs: one means the id is wrong, the other means this box cannot
+   *  answer and nothing was settled. */
+  | { ok: false; kind: 'run-unreadable'; detail: string }
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'unknown-item' | 'item-terminal'>;
@@ -32,7 +37,9 @@ export type SettleItemsOutcome =
 
 export function settleItems(deps: SettleItemsDeps, id: number, body: unknown): SettleItemsOutcome {
   const coord = deps.coord;
-  if (!coord.run(id)) return { ok: false, kind: 'unknown-run' };
+  const read = coord.run(id);
+  if (!read.ok) return { ok: false, kind: 'run-unreadable', detail: read.detail };
+  if (read.run === null) return { ok: false, kind: 'unknown-run' };
 
   const b = (body ?? {}) as { items?: unknown };
   // An EMPTY batch is a bad request, not a no-op success: at dispatch `[]` is

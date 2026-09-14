@@ -18,7 +18,26 @@ import { substrateFault, type FleetSession } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
-import { api, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+
+/**
+ * D-2731. The hold route is the one caller here whose refusal carries a sentence
+ * the operator can ACT on: `oversize` arrives with `limit` and a `detail` saying
+ * the reason is written verbatim and refused rather than shortened.
+ * `apiErrorText` has no entry for `oversize` — and must not grow one, since the
+ * kickoff translator already owns that slug with a different sentence — so
+ * without this reader the toast read `Couldn't hold — oversize`, which narrows a
+ * distinction the server took care to send. Surface-local for exactly that
+ * reason: the same slug means two things at two seams.
+ */
+const holdErrorText = (err: unknown): string => {
+  const body: unknown = err instanceof ApiError ? err.body : null;
+  if (body !== null && typeof body === 'object') {
+    const { error, detail } = body as { error?: unknown; detail?: unknown };
+    if (error === 'oversize' && typeof detail === 'string') return detail;
+  }
+  return apiErrorText(err);
+};
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { SwapSheet } from './SwapSheet';
@@ -222,7 +241,7 @@ export function SessionActionsSheet({
       setHoldReason('');
       onClose();
     } catch (err) {
-      toast(`Couldn't hold — ${apiErrorText(err)}`, 'error');
+      toast(`Couldn't hold — ${holdErrorText(err)}`, 'error');
     } finally {
       setHoldBusy(false);
     }

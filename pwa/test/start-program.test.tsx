@@ -781,6 +781,18 @@ describe('StartProgramSheet', () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it('keeps uppercase letters in the accepted slug vocabulary (D-2508)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={vi.fn().mockResolvedValue(undefined)}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('Build9_Demo');
+
+    expect(screen.queryByText(/only letters, numbers, underscores, and hyphens/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Start Build9_Demo/ })).not.toBeDisabled();
+  });
+
   it('keeps the composite kickoff verdict in both the button and handler guards', () => {
     // A disabled button never invokes `start()`, so behavior tests alone cannot
     // kill removal of its defensive return. Pin both independent call sites in

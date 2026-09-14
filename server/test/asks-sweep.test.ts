@@ -34,6 +34,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { askKey } from '../src/askkey.js';
+import { okAsk, okAsks } from './coordReadHelpers.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -170,7 +171,7 @@ async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId
   f.writeAsk(childId, oneQuestion);
   f.showMenu(childId);
   await f.tick();                                           // mints, holds
-  const held = f.coord.asksForParent(parentId, 'held');
+  const held = okAsks(f.coord.asksForParent(parentId, 'held'));
   expect(held).toHaveLength(1);
   return held[0]!.id;
 }
@@ -198,7 +199,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
       { action: `ask:${key}:0`, title: 'Red' },
       { action: `ask:${key}:1`, title: 'Blue' },
     ]);
-    expect(f.coord.askById(askId)!.state).toBe('released');
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
   });
 
   it('never holds while $REG/asks-disabled is present', async () => {
@@ -228,7 +229,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     await f.tick();                                          // eligible, has a parent — but disabled
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);   // pushed immediately
-    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    expect(okAsks(f.coord.asksForParent('coord-1', 'held'))).toEqual([]);
   });
 
   // The fail-shut arm, isolated: rather than driving the whole mint pipeline
@@ -264,7 +265,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0);
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
-    const askAt = f.coord.askById(askId)!.askAt;
+    const askAt = okAsk(f.coord.askById(askId))!.askAt;
     expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
 
     at(T0 + ASK_GRACE_MS + 1);
@@ -281,7 +282,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     await f.w.sweepAsks();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect(f.coord.askById(askId)!.state).toBe('released');
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
   });
 
   // RULING F9, branch 2: the row was settled by someone else — an explicit
@@ -303,7 +304,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
     expect(heldMap(f.w).has('cc-a')).toBe(false);
-    expect(f.coord.askById(askId)!.state).toBe('released');      // untouched, not rewritten
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
     // ('held'/'unknown'), which warns.
     expect(warn).not.toHaveBeenCalled();
@@ -326,7 +327,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
     expect(heldMap(f.w).has('cc-a')).toBe(false);
-    expect(f.coord.askById(askId)).toBeNull();
+    expect(okAsk(f.coord.askById(askId))).toBeNull();
 
     // And it does not repeat — the entry is truly gone, not merely silent
     // this one sweep.
@@ -344,7 +345,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0);
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
-    const askAt = f.coord.askById(askId)!.askAt;
+    const askAt = okAsk(f.coord.askById(askId))!.askAt;
     expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
 
     at(T0 + ASK_GRACE_MS + 1);
@@ -372,7 +373,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0);
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
-    const askAt = f.coord.askById(askId)!.askAt;
+    const askAt = okAsk(f.coord.askById(askId))!.askAt;
     expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);
 
     at(T0 + ASK_GRACE_MS + 1);
@@ -385,7 +386,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const fired = sent.filter((p) => p.tag === askTag('cc-a'));
     expect(fired).toHaveLength(1);
     expect(heldMap(f.w).has('cc-a')).toBe(false);
-    expect(f.coord.askById(askId)!.state).toBe('answering');        // row untouched — the map is what's bounded
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('answering');        // row untouched — the map is what's bounded
 
     // And it does not repeat.
     at(T0 + ASK_GRACE_MS + 1 + ASK_ANSWERING_MAX_MS + 1 + ASK_SWEEP_MS + 1);
@@ -406,7 +407,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0);
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
-    const askAt = f.coord.askById(askId)!.askAt;
+    const askAt = okAsk(f.coord.askById(askId))!.askAt;
     expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);
 
     at(T0 + ASK_GRACE_MS + 1);
@@ -434,7 +435,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect(f.coord.askById(askId)!.state).toBe('released');
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('released');
   });
 
   // Fix round 1, item 2: an 'unknown' (out-of-vocabulary) state token reads
@@ -477,7 +478,7 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
     f.showMenu('cc-a', BARE_PROMPT);                      // operator hit escape
     await f.tick();
 
-    expect(f.coord.askById(askId)!.state).toBe('stale');
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('stale');
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     // Nothing to notify about — a cleared dialog is a question that no
     // longer exists.
@@ -500,7 +501,7 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
 
     f.showMenu('cc-a', BARE_PROMPT);                      // the first dialog clears
     await f.tick();
-    expect(f.coord.askById(staleId)!.state).toBe('stale');
+    expect(okAsk(f.coord.askById(staleId))!.state).toBe('stale');
     expect(heldMap(f.w).has('cc-a')).toBe(false);
 
     // A DIFFERENT dialog appears later, on the same session — no shared
@@ -512,10 +513,10 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
     f.showMenu('cc-a', OTHER_MENU_PANE);
     await f.tick();
 
-    const held = f.coord.asksForParent('coord-1', 'held');
+    const held = okAsks(f.coord.asksForParent('coord-1', 'held'));
     expect(held).toHaveLength(1);                          // exactly one held row survives
     expect(held[0]!.id).not.toBe(staleId);
-    expect(f.coord.askById(staleId)!.state).toBe('stale');  // the old row, untouched since
+    expect(okAsk(f.coord.askById(staleId))!.state).toBe('stale');  // the old row, untouched since
   });
 
   // WHOLE-BRANCH REVIEW, F2(a) — the same stranding, END TO END rather than
@@ -533,14 +534,14 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
     at(T0);
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
-    const askAt = f.coord.askById(askId)!.askAt;
+    const askAt = okAsk(f.coord.askById(askId))!.askAt;
     expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
     expect(heldMap(f.w).has('cc-a')).toBe(true);
 
     f.showMenu('cc-a', BARE_PROMPT);                       // the pane is gone
     await f.tick();
 
-    expect(f.coord.askById(askId)!.state).toBe('stale');
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('stale');
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     // Still nothing to notify about: a cleared dialog is a question that no
     // longer exists, whoever was mid-answer when it went.
@@ -569,6 +570,6 @@ describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
 
     expect(warn).toHaveBeenCalled();
     expect(heldMap(f.w).has('cc-a')).toBe(false);           // dropped unconditionally, despite the throw
-    expect(f.coord.askById(askId)!.state).toBe('held');     // the CAS never actually ran
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('held');     // the CAS never actually ran
   });
 });
