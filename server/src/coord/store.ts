@@ -25,7 +25,7 @@ import {
   isPositiveDecimalSafeInteger,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -1474,6 +1474,10 @@ export class CoordStore {
    * validated against the registry: it is attribution, not authentication
    * (spec:26-30), and pretending otherwise in a column comment would be the
    * kind of claim this repo has already had to retract elsewhere.
+   *
+   * The table consulted is the run's KIND's (`transitionsFor`, design
+   * 2026-09-14 §5.2) — this is the LAST gate; the routes' checks are the
+   * first, and both read one table.
    */
   advance(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
     return tx(this.db, () => this.advanceInner(runId, to, causedBy, detail));
@@ -1487,11 +1491,12 @@ export class CoordStore {
    *  atomicity across more than one state write must call THIS, inside its
    *  own single `tx()`, never the public `advance` twice. */
   private advanceInner(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
-    const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
-      { state: string } | undefined;
+    const row = this.db.prepare('SELECT state, kind FROM runs WHERE id = ?').get(runId) as
+      { state: string; kind: string } | undefined;
     if (!row) return { ok: false as const, error: 'unknown-run' as const };
     const from = isRunState(row.state) ? row.state : 'unknown';
-    if (!(RUN_TRANSITIONS[from] as readonly string[]).includes(to)) {
+    const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+    if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
       return { ok: false as const, error: 'bad-transition' as const, from, to };
     }
     const now = Date.now();

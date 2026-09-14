@@ -15,7 +15,7 @@ import {
   releaseIsSafe,
   type HoldReasonVerdict,
 } from './rundefs.js';
-import { RUN_TRANSITIONS, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
+import { transitionsFor, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4). Same model as
@@ -173,7 +173,7 @@ export async function closeRun(
      * inside one function. That is the price of the property.
      */
     const target: RunState = run.state === 'planned' ? 'failed' : 'closing';
-    if (!RUN_TRANSITIONS[run.state].includes(target)) {
+    if (!transitionsFor(run.kind)[run.state].includes(target)) {
       return { ok: false, kind: 'bad-transition', from: run.state, to: target };
     }
     // The fleet act, AHEAD of the commit (D-48), and only when there is
@@ -244,7 +244,7 @@ export async function closeRun(
   // always going to be refused — trading one wedge for another.
   // `advance()` below still re-checks the live row and is still the only
   // WRITER of `state`.
-  if (!RUN_TRANSITIONS[run.state].includes('closing')) {
+  if (!transitionsFor(run.kind)[run.state].includes('closing')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
   }
 

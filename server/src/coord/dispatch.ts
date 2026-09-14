@@ -19,7 +19,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict, transitionsFor,
   type CoordCaps, type CoordCapsUsage, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readWorkerSkillState } from '../skillstate.js';
@@ -211,7 +211,7 @@ export async function dispatchRun(
   // this only answers the question early enough that `ccd ensure`/`/clear`/
   // `ws-add`/`ws-hold` never fire for a transition that was always going to
   // be refused.
-  if (run.state !== 'planned') {
+  if (!transitionsFor(run.kind)[run.state].includes('dispatched')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
   }
 

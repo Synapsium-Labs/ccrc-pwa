@@ -3,8 +3,12 @@
 // direction for a cap is UNDER-counting (it over-dispatches silently), so this
 // suite pins the partition rather than trusting a negative-form SQL predicate.
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ACTIVE_RUN_STATES, IDLE_RUN_STATES, TERMINAL_RUN_STATES, RUN_STATES, RUN_TRANSITIONS,
+  REVIEW_RUN_TRANSITIONS, transitionsFor, RUN_KINDS,
   type RunState,
 } from '../../shared/api.js';
 
@@ -47,5 +51,42 @@ describe('run-state classification (spec §7.1)', () => {
   it('names the two states a dispatched session is actually busy in, and only those', () => {
     expect([...ACTIVE_RUN_STATES].filter((s) => s !== 'unknown').sort()).toEqual(['dispatched', 'working']);
     expect([...IDLE_RUN_STATES].sort()).toEqual(['awaiting-review', 'closing', 'merging', 'planned']);
+  });
+});
+
+describe('transitions by kind (spec §5.2)', () => {
+  it('a review run goes planned -> dispatched -> working -> done | failed and nowhere else', () => {
+    expect(REVIEW_RUN_TRANSITIONS).toEqual({
+      planned: ['dispatched', 'failed'],
+      dispatched: ['working', 'failed'],
+      working: ['done', 'failed'],
+      'awaiting-review': [], merging: [], closing: [],
+      done: [], failed: [], unknown: [],
+    });
+  });
+  it('transitionsFor names the two tables and an empty one for unknown', () => {
+    expect(transitionsFor('work')).toBe(RUN_TRANSITIONS);
+    expect(transitionsFor('review')).toBe(REVIEW_RUN_TRANSITIONS);
+    for (const s of RUN_STATES) expect(transitionsFor('unknown')[s]).toEqual([]);
+  });
+  it('every RunKind has a table whose keys are exactly RUN_STATES', () => {
+    for (const k of RUN_KINDS) {
+      expect(Object.keys(transitionsFor(k)).sort()).toEqual([...RUN_STATES].sort());
+    }
+  });
+  it('a review run never reaches awaiting-review, merging or closing from any state', () => {
+    for (const s of RUN_STATES) {
+      for (const bad of ['awaiting-review', 'merging', 'closing'] as const) {
+        expect(REVIEW_RUN_TRANSITIONS[s], `${s} -> ${bad}`).not.toContain(bad);
+      }
+    }
+  });
+  it('nothing under server/src indexes a transition table directly — transitionsFor is the one reader', () => {
+    const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.name.startsWith('__') ? [] : e.isDirectory() ? walk(path.join(d, e.name))
+        : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []);
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
+    const offenders = walk(root).filter((f) => /\b(RUN_TRANSITIONS|REVIEW_RUN_TRANSITIONS)\[/.test(readFileSync(f, 'utf8')));
+    expect(offenders.map((f) => path.relative(root, f))).toEqual([]);
   });
 });

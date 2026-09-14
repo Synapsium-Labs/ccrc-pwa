@@ -3025,4 +3025,26 @@ describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
     s.db.prepare("UPDATE runs SET kind = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
     expect(okRun(s.run(a.id))!.kind).toBe('unknown');
   });
+
+  it('advances a review run working -> done directly, and refuses the work-only states (spec §5.2)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'awaiting-review', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'awaiting-review' });
+    expect(s.advance(r.id, 'closing', 'test').ok).toBe(false);
+    expect(s.advance(r.id, 'done', 'test').ok).toBe(true);
+    expect(okRun(s.run(r.id))!.closedAt).not.toBeNull();
+  });
+
+  it('refuses every advance on a run whose kind this build cannot name (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-newer' WHERE id = ?").run(a.id);
+    expect(s.advance(a.id, 'dispatched', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
+  });
 });

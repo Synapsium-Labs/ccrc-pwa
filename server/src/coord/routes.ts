@@ -31,7 +31,7 @@ import {
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS, IDLE_RUN_STATES,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
@@ -1566,7 +1566,7 @@ export function registerCoordRoutes(
     }
     const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
+    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
     }
     if (run.sessionId === null) {

@@ -3795,6 +3795,45 @@ export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closin
   readonly RunState[];
 export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
 
+/**
+ * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
+ * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
+ * or release-with-ceremony, and reusing those states would make the table lie
+ * about what a row is doing. `failed` is reachable from every non-terminal
+ * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close route
+ * skips the `closing` hop for this kind (`viaClosing: false`, the same skip
+ * the abandon-of-a-planned-run already takes).
+ *
+ * Every state is a key so the two tables have one shape and one reader; the
+ * three work-only states are dead ends here, never reached.
+ */
+export const REVIEW_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned:           ['dispatched', 'failed'],
+  dispatched:        ['working', 'failed'],
+  working:           ['done', 'failed'],
+  'awaiting-review': [],
+  merging:           [],
+  closing:           [],
+  done:              [],
+  failed:            [],
+  unknown:           [],
+});
+
+/** No edges at all — what a run of a kind this build cannot name may do (D-2795). */
+export const NO_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned: [], dispatched: [], working: [], 'awaiting-review': [], merging: [], closing: [],
+  done: [], failed: [], unknown: [],
+});
+
+/**
+ * THE ONE READER of the transition tables. Every route and the store's own
+ * `advanceInner` consult this by the run's kind; nothing indexes
+ * `RUN_TRANSITIONS` or `REVIEW_RUN_TRANSITIONS` directly outside this file
+ * (pinned by `run-states.test.ts`'s source scan).
+ */
+export const transitionsFor = (kind: RunKind): Readonly<Record<RunState, readonly RunState[]>> =>
+  kind === 'work' ? RUN_TRANSITIONS : kind === 'review' ? REVIEW_RUN_TRANSITIONS : NO_RUN_TRANSITIONS;
+
 /** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
 export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
 const WORK_ITEM_STATES: readonly WorkItemState[] =
