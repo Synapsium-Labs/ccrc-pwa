@@ -1020,11 +1020,17 @@ _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 other
 _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
-  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
-  # the acquire as a boolean (`|| return 0`) and ccd's five read the VALUE with
-  # two of them — `cmd_start` and `_spawn_start` — falling through an unknown
-  # code into a silent continue, so a third numeric status would be a distinct
-  # refusal nobody distinguishes. The condition is carried in a named
+  # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
+  # the acquire as a boolean (`|| return 0`) and ccd's five read the VALUE, with
+  # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
+  # which holds two of them — falling through an unknown code into a silent
+  # continue, so a third numeric status would be a distinct refusal nobody
+  # distinguishes. (SIX and “two of ccd's five” is what stood here for several
+  # rounds, and both were wrong by census: §3.1 gives PreCompact two acquires,
+  # §3.3 SessionStart one and §3.4 PostCompact two, which is five, and the two
+  # fall-through FUNCTIONS own three SITES between them. A scan in
+  # `session-hook.test.ts` now counts both files and reads the numerals out of
+  # this sentence and the spec's, so neither can drift from the code again.) The condition is carried in a named
   # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
   # carry theirs, and cleared on entry so a stale one is never read as this
   # call's.

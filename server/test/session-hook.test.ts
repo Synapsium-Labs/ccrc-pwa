@@ -3732,6 +3732,60 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
   // first. A bare count goes green on a guard moved to the wrong place, and a
   // "the guard appears somewhere in the section" rule survives deleting every
   // call but one.
+  // ── The acquire-site census, as a mechanism (r3 A-M1) ────────────────
+  // "Every one of this file's six acquire sites" was written in three places
+  // at once — the hook's comment, the spec, and D-2793's ledger entry — and
+  // there are FIVE. The ARGUMENT those sentences carry is sound and unchanged;
+  // only the count was wrong, in a task whose own scope included correcting
+  // falsified comments. A numeral about the code is a claim about the code, so
+  // it is counted rather than trusted.
+  it('THE ACQUIRE-SITE CENSUS: the numerals in the prose are the numbers in the source', () => {
+    const hookSrc = fs.readFileSync(HOOK, 'utf8');
+    const ccdSrc = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccd'), 'utf8');
+    const specSrc = fs.readFileSync(path.resolve(__dirname,
+      '../../docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md'), 'utf8');
+    // CALL SITES, not the definition: the trailing quote is what separates
+    // `_hook_lock_acquire "` from the `_hook_lock_acquire() {` header.
+    const count = (src: string, needle: string): number => src.split(needle).length - 1;
+    const hookSites = count(hookSrc, '_hook_lock_acquire "');
+    const ccdSites = count(ccdSrc, '_compact_lock_acquire "');
+    // THE FALL-THROUGH PAIR'S SITES, counted in their own bodies rather than
+    // assumed to be one each — which is the half the old prose got wrong.
+    const bodyOf = (name: string): string => {
+      const from = ccdSrc.indexOf(`${name}() {`);
+      expect(from, `${name} is in ccd`).toBeGreaterThan(-1);
+      const end = ccdSrc.indexOf('\n}\n', from);
+      expect(end, `${name}'s body ends`).toBeGreaterThan(from);
+      return ccdSrc.slice(from, end);
+    };
+    const fallThroughSites = count(bodyOf('cmd_start'), '_compact_lock_acquire "')
+      + count(bodyOf('_spawn_start'), '_compact_lock_acquire "');
+    // NON-VACUITY: a scan that counted zero would satisfy every equality below
+    // by making the prose say "zero", which is the one reading that is never
+    // right here.
+    expect(hookSites, 'the hook has acquire sites at all').toBeGreaterThan(0);
+    expect(ccdSites, 'and so does ccd').toBeGreaterThan(0);
+    expect(fallThroughSites, 'and the fall-through pair holds some of them').toBeGreaterThan(0);
+
+    const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const w = (n: number): string => {
+      expect(n, 'the census is inside the spelled-numeral range').toBeLessThan(WORD.length);
+      return WORD[n]!;
+    };
+    // THE HOOK'S OWN SENTENCE.
+    expect(hookSrc, `the hook's comment must say ${w(hookSites)} acquire sites`)
+      .toContain(`this file's ${w(hookSites)} acquire sites`);
+    expect(hookSrc, `and that ccd's ${w(ccdSites)} read the VALUE`)
+      .toContain(`ccd's ${w(ccdSites)} read the VALUE`);
+    expect(hookSrc, `and that the fall-through pair spans ${w(fallThroughSites)} of them`)
+      .toContain(`across ${w(fallThroughSites)} of those sites`);
+    // THE SPEC'S, which repeats the same two claims and drifted with it.
+    expect(specSrc, `the spec must say all ${w(hookSites)} hook acquire sites`)
+      .toContain(`all ${w(hookSites)} hook acquire sites`);
+    expect(specSrc, `and ${w(fallThroughSites)} of its ${w(ccdSites)} sites`)
+      .toContain(`across ${w(fallThroughSites)} of its ${w(ccdSites)} sites`);
+  });
+
   it('ITEM 3, EVERY SITE: each canonical mutation in a held section is preceded by its own re-check', () => {
     const src = fs.readFileSync(HOOK, 'utf8').split('\n');
     const lineOf = (needle: string): number => {
