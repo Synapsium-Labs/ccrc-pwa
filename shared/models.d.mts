@@ -46,13 +46,8 @@ export declare function familyClassOf(anthropicModelId: string): ModelClass | nu
 // `shared/models.ts`'s exactly", above), so the departure is in WHICH FILE the
 // wave touched, never in the rule.
 //
-// D-TBD-family-tokens-ambient: the ledger number for this departure was not
-// minted. The final fix wave that wrote this sentence is forbidden from
-// allocating (`POST /api/ledger/deviations` MINTS, and a number written
-// without being ISSUED seals its own band for ever), so it is reported to the
-// orchestrator to allocate with the rest of the slice's numbers and spell in
-// here at that point. A `D-TBD-<slug>` is the shape CLAUDE.md prescribes for
-// exactly this, and it is deliberately not a number.
+// D-2787 (2026-09-14): the departure is recorded in the routing slice 0 plan's
+// Deviations section (docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md).
 export declare const FAMILY_TOKENS: readonly (readonly [string, ModelClass])[];
 export declare function classOfModel(reg: Registry, modelId: string): ModelClass | null;
 export declare const UNAVAILABLE_PREFIX: string;

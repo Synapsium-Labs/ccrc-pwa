@@ -1937,7 +1937,7 @@ export class CoordStore {
     const wallMs = dispatchedAt !== null && closedAt !== null ? closedAt - dispatchedAt : null;
     let holdMs = 0;
     let swaps = 0;
-    // TRUE UNTIL THE WINDOW IS ACTUALLY SCANNED (R7-1, D-TBD-run-signals-unscanned).
+    // TRUE UNTIL THE WINDOW IS ACTUALLY SCANNED (R7-1, D-2785).
     // `holdMs: 0, swaps: 0, excludedUnmeasured: false` is an affirmative claim
     // that the lifecycle window WAS read and held nothing — and the three
     // conditions below reach the `return` without reading a single row: a run

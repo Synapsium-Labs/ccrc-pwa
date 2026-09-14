@@ -1803,7 +1803,77 @@ git commit -m "docs(research): sidecar coverage measured on the live fleet (rout
 
 ## Deviations found
 
-Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`) and defined in the same act. A session that cannot reach the allocator writes `D-TBD-<slug>` here and reports it (worker clause 11). None yet.
+Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`) and defined in the same act. A session that cannot reach the allocator writes `D-TBD-<slug>` here and reports it (worker clause 11).
+
+- **D-2783 (2026-09-14)** — **`_usage_purge` also reaps the sidecar's leaked per-PID tmp files.** Task 1's block writes
+  through `usage/.<id>.<pid>.tmp` then `mv` (the PID keeps parallel subagent renders in the shared
+  `<id>.agents/` dir from colliding); a render killed between `printf` and `mv` leaves that dotfile and
+  nothing reaped it — Task 2's brief listed exact names only. Task 2 now also runs
+  `rm -f -- "$REG/usage/.$1."*.tmp` (prefix-safe: the dot after the id is literal), pinned by a test that
+  keeps `.demo-ab.123.tmp` while reaping `.demo-a.123.tmp`. Ruling R4.
+- **D-2784 (2026-09-14)** — **`sweepUsage` re-derives `stale` on an unreadable carry.** Task 4's brief said
+  "keep the previous reading on `unreadable`"; the implementation copied the `SessionUsage` object whole,
+  so the `stale` verdict — the server's per-sweep computation against `USAGE_FRESH_S`, not a sidecar
+  field — was frozen and could read `false` indefinitely for a session whose sidecar kept answering
+  `unreadable` (a per-path EACCES, a whitelist refusal, a remote timeout all map there). The carry now
+  keeps the measured fields and re-derives `stale` from `ts` against the sweep's `nowS`; a test carries an
+  over-age reading and reads `stale: true`; `FleetSession.usage`'s docstring says what the producer does.
+  Ruling R5.
+- **D-2785 (2026-09-14)** — **`runSignals` names an unmeasurable window instead of reporting zero.** Task 5's
+  verbatim code (a) answered `holdMs: 0, swaps: 0, excludedUnmeasured: false` for a reconstructed run
+  with no `run_events` — a window never scanned reported as measured-and-empty, CLAUDE.md's overloaded
+  null; (b) swallowed a second `hold` while one was open and dropped NULL-`at` rows for hold/release/swap
+  with no flag, while flagging their siblings; (c) restated `RunHealth.doneRejects` as `closeRefusals`
+  with a second hand-written query nothing pinned to the first. Now `excludedUnmeasured` is `true`
+  whenever the lifecycle window could not be scanned or a row shape could not be paired, and both
+  wire fields derive from one private count; the fix wave chose that an OPEN run counts as UNSCANNED
+  (`excludedUnmeasured: true` until the window is actually read), recorded in `store.ts`, the store test
+  and the `RunSignals` docstring. Ruling R7.
+- **D-2786 (2026-09-14)** — **The transcript scanner's brief-mandated code miscounted, mispriced, over-reaped
+  and could abort.** Four measured defects in Task 6's verbatim code: `carriedAcrossDirs` counted duplicate
+  LINES (one carried record streamed as three lines read 3); an unpriced class priced at 0.0 USD so
+  `fableShare.estimate` read 1.0 for an account half on a non-Anthropic model — and Task 7's runner
+  hands every roster lane's dir to `--dirs`; `reap_orphans` reaped a sidecar whose `ts` was unreadable
+  as if it were old, on the tool's only write path; the usage coercion sat outside the per-line guard,
+  so one malformed value aborted the whole run. Now: one credit per carried id; `api_usd` answers `None`
+  and every sum adds priced records only, `fableShare` carries `unpricedRecords` + `unpricedClasses`
+  and `basis` says the exclusion, `estimate` is `null` on a zero priced denominator; an unreadable
+  `ts` is never reapable and is counted (`orphansSkippedUnreadable`); coercion failures cost one
+  `parseErrors`. Ruling R8.
+- **D-2787 (2026-09-14)** — **`shared/models.d.mts` declares `FAMILY_TOKENS`.** Task 6's file list named
+  `models.mjs`, `models.ts`, the scanner and its test; the hand-written `.d.mts` twin is a fourth file,
+  and `typecheck-tests` reds without the declaration because NodeNext prefers the sibling `.d.mts`
+  over inferring from the untyped `.mjs`. The departure is in WHICH FILE the wave touched, never in
+  the rule (the names and the shape are `shared/models.ts`'s exactly).
+- **D-2788 (2026-09-14)** — **Every `ccd/ccd` edit re-stamps its provenance marker — the plan never said so.**
+  Task 2 shipped `ccd/ccd` with a stale line-2 marker (`ownership.test.ts` red: `ccrc-edited` against its
+  own bytes — the verdict that tells the installer NOT to replace a hand-edited ccd on a box). The
+  controller re-stamped in `a8cc7b42` with the command `ownership.test.ts` documents; every later
+  dispatch that touches `ccd/ccd` (slice 1 Tasks 2, 3, 4, 6, 8) carries the step. Ruling R6.
+- **D-2789 (2026-09-14)** — **`deploy/deploy.sh`'s agent lane ships the sweep.** Task 7's brief listed the
+  `ccrc install` arms and the pinned-list suites but not `deploy/deploy.sh`, whose agent lane is a
+  hand-kept list and never runs `ccrc install` on the box — so Task 8's sanctioned deploy would have
+  reported success with no runner, scanner, units or timer on the fleet host. Fix round 1 added the five
+  arms inside the `agent` branch before the restart, pinned by `usage-sweep-deploy-ship.test.ts`. The same
+  task extended `ccrc-uninstall.test.ts`'s `plantInstalledBox` fixture and its assertion arrays beyond the
+  brief's "Test" listing so the new uninstall arms have coverage at all.
+- **D-2790 (2026-09-14)** — **Order: the whole-branch review ran before Task 8, and its base is the plan commit.**
+  The plan put the PR and the agent-first deploy in Task 8 with the final review implicitly after; the
+  controller ran the review and its single fix wave first so the fleet never runs code the branch
+  review has not passed (ruling R9), over `f727420e..HEAD` — the docs-only commits before it were
+  reviewed by their own workflow before commit (ruling R10).
+- **D-2791 (2026-09-14)** — **The statusline hook's tmux call is bounded.** Task 1's mandated block ran
+  `tmux display-message -p '#S'` unguarded on EVERY render of every session — the first tmux call the
+  hook ever made — while its own comment promised it could never cost the status bar; a tmux server the
+  client cannot reach (this fleet's measured `substrate` failure class) would stall the render and
+  blind the status line the server reads back. Now `timeout 2 tmux …`; `session-hook.sh`'s same idiom
+  runs per hook event, not per render, and is left alone. Whole-branch review finding #4.
+- **D-2792 (2026-09-14)** — **The scanner's whole per-line body sits inside the guard.** After D-2786 the
+  timestamp slice, the `message`/`usage` access and the id hash still sat outside the per-line guard, so
+  one line whose `message` is not an object aborted the pass (measured: `AttributeError` at
+  `ccd-usage-sweep.py:135`, exit 1, no output — and deterministic, so every 30-minute pass would die the
+  same way with no ccrc surface reporting it). The guard now covers the body; such a line costs one
+  `parseErrors`. Ruling R11, applied in Task 8 before the deploy.
 
 ## Self-review against the spec
 
