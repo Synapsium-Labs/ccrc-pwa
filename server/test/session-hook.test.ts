@@ -5055,22 +5055,23 @@ describe('the compaction card — every canonical write is on the list (spec §5
    *  branches (§5's own "either factoring is permitted" point) and a bare
    *  seventeen-site list could not say which.
    *
-   *  TWO ENTRIES DEPART FROM §5's SIXTEEN, both measured, both recorded in this
-   *  task's report rather than guessed:
+   *  TWO ENTRIES DEPARTED FROM §5's SIXTEEN, both measured, and fix round 1
+   *  closed both IN THE SPEC rather than in the list:
    *
-   *  - Entry (2), §3.1 item 5's redundant-canonical-alias unlink, has ZERO
-   *    sites: it is NOT BUILT on this tree. Measured — `_hook_compact_pre`
-   *    carries no `-ef` test against `$set` at all (the file's only two are
-   *    `_hook_compact_post`'s claim-identity proofs), so §5's sixteen-entry
-   *    EQUALITY is red on a correct tree in that direction. The entry stays,
-   *    with its count at 0, so that building it reds HERE — with a message
-   *    naming the count — rather than silently passing.  (D-TBD-precompact-
-   *    redundant-alias-unbuilt.)
-   *  - Entry (17) is on NO §5 entry and IS produced by the filter:
-   *    `_reg_generation_read`'s `link "$p" "$al"`, the ccd-side twin of entry
-   *    (16)'s hook-side generation-read alias, a `link` whose SOURCE names
-   *    canonical. §5 enumerated the hook's and not ccd's.  (D-TBD-ccd-
-   *    generation-read-alias-unlisted.)
+   *  - Entry (2), §3.1 item 5's redundant-canonical-alias unlink, had ZERO
+   *    sites: it was NOT BUILT on this tree. Ruled, and the SPEC dropped the
+   *    step (D-2756) — measured, it changes nothing it could change, because
+   *    the overlap `find`'s claim clause already decides the verdict and the
+   *    unconditional initial publication's `mv -f` already replaces the
+   *    directory entry. §5 withdraws the entry and retains its ID rather than
+   *    renumbering, so citations to (3)–(16) stay true; this list simply does
+   *    not carry it, and the equality is over (1) and (3)–(17).
+   *  - Entry (17) was on NO §5 entry and IS produced by the filter:
+   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd:1870`), the
+   *    ccd-side twin of entry (16)'s hook-side generation-read alias, a `link`
+   *    whose SOURCE names canonical. §5 enumerated the hook's and not ccd's;
+   *    fix round 1 ADDED it there (D-2757), so the list below is now the
+   *    spec's own.
    *
    *  Named for completeness and EXCLUDED BY THE FILTER — each appears on no
    *  entry, and a scan producing any of them is over-broad: the exact-family
@@ -5084,7 +5085,6 @@ describe('the compaction card — every canonical write is on the list (spec §5
    *  its argv at all — option A's load-bearing property. */
   const ALLOW: Array<{ id: number; file: string; fn: string; cmd: string; needle: string; count: number; where: string }> = [
     { id: 1, file: 'hook', fn: '_hook_compact_pre', cmd: 'rm', needle: 'rm -f "$cardf"', count: 1, where: 'PreCompact step 6, ambiguous-card removal, FIRST held lock' },
-    { id: 2, file: 'hook', fn: '_hook_compact_pre', cmd: 'rm', needle: 'rm -f "$set"', count: 0, where: 'PreCompact step 6, §3.1 item 5 redundant-canonical-alias unlink — NOT BUILT' },
     { id: 3, file: 'hook', fn: '_hook_compact_pre', cmd: '_hook_write_atomic', needle: '_hook_write_atomic "$set"', count: 1, where: 'PreCompact step 7, initial publication, FIRST held lock' },
     { id: 4, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$cardstage" "$cardf"', count: 1, where: 'PreCompact step 13, card-stage rename, SECOND held lock' },
     { id: 5, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$setstage" "$set"', count: 2, where: 'PreCompact step 13, set-stage rename (rc 0 arm and rc 3 arm), SECOND held lock' },
@@ -5297,17 +5297,16 @@ _hook_compact_rollback_set() {
       const without = ALLOW.filter((x) => x.id !== e.id);
       const orphaned = sites.filter((s) =>
         without.filter((x) => x.file === s.file && x.fn === s.fn && x.cmd === s.cmd && s.text.includes(x.needle)).length === 0);
-      // Entry 2 is the ONE entry whose deletion changes nothing, because it has
-      // ZERO sites: §3.1 item 5's redundant-canonical-alias unlink is not built
-      // on this tree. That is the measured reason §5's sixteen-entry EQUALITY
-      // cannot stand as written, and it is recorded here rather than papered
-      // over by a weaker two-inclusion form.
-      if (e.count === 0) { expect(orphaned, `entry ${e.id} has no sites`).toEqual([]); continue; }
+      // EVERY entry now has sites, which is the state §5 could not reach while
+      // it required the §3.1 item 5 unlink: that step is WITHDRAWN (D-2756),
+      // and the count-0 arm this loop used to need went with it.
       expect(orphaned.length, `deleting entry ${e.id} orphans its sites`).toBe(e.count);
     }
-    expect(ALLOW.filter((e) => e.count === 0).map((e) => e.id), 'exactly one entry is unbuilt').toEqual([2]);
-    // The absence, measured rather than asserted: the file's only `-ef` tests
-    // against the canonical set are PostCompact's two claim-identity proofs.
+    expect(ALLOW.filter((e) => e.count === 0).map((e) => e.id), 'no entry is unbuilt').toEqual([]);
+    // THE WITHDRAWAL, measured rather than asserted: the file's only `-ef` tests
+    // against the canonical set are PostCompact's two claim-identity proofs, so
+    // an implementer who built the dropped step would produce a site on no
+    // entry and red the equality above — which is the direction that matters.
     const hookSrc = fs.readFileSync(HOOK, 'utf8');
     const pre = hookSrc.slice(hookSrc.indexOf('_hook_compact_pre() {'), hookSrc.indexOf('_hook_compact_post() {'));
     expect(pre.includes('-ef "$set"'), '_hook_compact_pre runs no -ef identity test against canonical').toBe(false);
