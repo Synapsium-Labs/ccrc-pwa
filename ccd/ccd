@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fe5105b72b0881aef1c099fa173187eb3fd8fde8c848a38ebb88d644cc393be6
+# ccrc:generated 1 sha256=090a76544f9bf8cc805d8d719a6ed5501a33d58646effe6b3c1b092616bbb11b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1067,6 +1067,25 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # on no wire. It is a post-mortem breadcrumb standing beside
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
+# ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
+# Seven ordinary registry fields per session, written by `cmd_route` and by ccd
+# itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
+# are a byte channel into an argv and a pane — any session on the box can write
+# them (one UNIX user; attribution, not authentication) — so every value is
+# validated BY SHAPE at the read, against these closed vocabularies, and the
+# failure direction is stated: an unrecognised value behaves as ABSENT and
+# leaves a `swap.log` note naming the field and the byte COUNT, never the bytes.
+# `subagent` has no list here on purpose: it is validated against
+# `CCRC_SUBAGENT_CLASSES`, the roster projection of `shared/models.mjs`'s
+# `SUBAGENT_CLASSES`, so this file never holds a third spelling of that list.
+# `inert` is a comma list of FIELD NAMES a lane could not apply (`effort`,
+# `workflow`), never a value.
+ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
+ROUTE_CLASSES="fable opus sonnet haiku default"
+ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
+ROUTE_WORKFLOWS="on off"
+ROUTE_INERTABLE="effort workflow"
+ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse notes for one id+field
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -14128,6 +14147,71 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
 # one point. The slug is what a future reader greps for; the detail is what tells them how bad it
 # was. Where two conditions need different remedies they get different SLUGS, not one slug with
 # two details — the field is what a reader has once the log line is floored away.
+_route_word_in() {   # word list — 0 iff word is one of the space-separated list
+  local w="$1" x
+  for x in $2; do [[ "$x" == "$w" ]] && return 0; done
+  return 1
+}
+_route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
+  # no field at all is a pre-slice-1 session and gets today's behaviour).
+  local f
+  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  return 1
+}
+_route_valid() {   # field value — 0 iff value is in the field's closed vocabulary
+  local f="$1" v="$2" x
+  case "$f" in
+    class)    _route_word_in "$v" "$ROUTE_CLASSES" ;;
+    effort)   _route_word_in "$v" "$ROUTE_EFFORTS" ;;
+    subagent) declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 \
+                && _route_word_in "$v" "${CCRC_SUBAGENT_CLASSES[*]}" ;;
+    workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
+    compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
+    degraded) _route_word_in "$v" "fable opus sonnet haiku" ;;
+    inert)    [[ "$v" =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+              for x in ${v//,/ }; do _route_word_in "$x" "$ROUTE_INERTABLE" || return 1; done ;;
+    *)        return 1 ;;
+  esac
+}
+_route_note_floored() {   # id marker — 0 iff a note under this marker was written inside the floor
+  local id="$1" m="$2" now nts
+  now=$(date +%s)
+  nts=$(_reg_get "$id" "$m" 2>/dev/null)
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$ROUTE_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" "$m" "$now"
+  return 1
+}
+_route_reject_note() {   # id field len — journal an unrecognised value: the FIELD and the
+  # byte COUNT, never the bytes (they are the untrusted input). Floored PER FIELD
+  # through `routenote<field>` (a dotless suffix, so `_reg_purge` reaps it): two
+  # invalid fields read alternately each get their own line per window, which
+  # a single shared marker would flap on (the `_compact_note` reason-change
+  # shape ccd measured and removed).
+  local id="$1" f="$2" len="$3"
+  _route_note_floored "$id" "routenote$f" && return 0
+  echo "$(date '+%F %T') route-reject $id: field $f holds an unrecognised value ($len bytes) — treated as absent" >> "$REG/swap.log"
+  return 0
+}
+_route_pair_note() {   # id — the haiku+effort PAIR: both values are valid, the pairing is not
+  _route_note_floored "$1" routenotepair && return 0
+  echo "$(date '+%F %T') route-refuse $1: class haiku takes no effort level — the effort field is ignored" >> "$REG/swap.log"
+  return 0
+}
+_route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
+  local id="$1" f="$2" v
+  v=$(_reg_get "$id" "$f") || return 0
+  if _route_valid "$f" "$v"; then printf '%s' "$v"; else _route_reject_note "$id" "$f" "${#v}"; fi
+  return 0
+}
+_route_effort_for() {   # id class -> stdout the effort to apply. Haiku 4.5 takes no effort
+  # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
+  # refused here with its own note and nothing is typed.
+  local id="$1" cls="$2" e
+  e=$(_route_get "$id" effort)
+  if [[ "$cls" == haiku && -n "$e" ]]; then _route_pair_note "$id"; e=""; fi
+  printf '%s' "$e"
+  return 0
+}
 _compact_note() {   # id reason [detail] — record why the compactor declined this tick.
   local id="$1" reason="$2" detail="${3:-}" rec prev nts now
   now=$(date +%s)

@@ -1555,29 +1555,37 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the four class names are enumerated only where a walk needs the sequence', () => {
-    // A file may list all four ONLY if it walks them in order. SIX print,
-    // and FIVE of them walk it: the TypeScript source, its bare-`node` twin,
-    // the materialiser, the verbs' node half, and `ccd/ccrc` (whose bash walk
-    // is what answers a class typo at exit 2).
+    // A file may list all four ONLY if it walks them in order. SEVEN print,
+    // and SIX of them walk it: the TypeScript source, its bare-`node` twin,
+    // the materialiser, the verbs' node half, `ccd/ccrc` (whose bash walk
+    // is what answers a class typo at exit 2), and — since the routing
+    // record (routing spec 2026-09-14 §5.1) — `ccd/ccd`: `ROUTE_CLASSES`
+    // (the `class` field's closed vocabulary, `fable opus sonnet haiku
+    // default`) and the `degraded` arm of `_route_valid` (`fable opus sonnet
+    // haiku`, no `default` — a session cannot degrade TO "no override") each
+    // walk the four class names through `_route_word_in`'s `for x in $2`
+    // loop, the same shape as `ccd/ccrc`'s own bash holder above and needed
+    // for the identical reason: a shape check run in bash needs the
+    // vocabulary IN bash, not just in the TypeScript definition the PWA and
+    // node tooling read.
     //
-    // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
+    // The seventh, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
     // file — the spec names it three times as the CURRENT hardcoded picker
     // this design will eventually replace: §1 calls it out by path and line
     // range ("The PWA picker is a hardcoded table keyed on the wrapper
     // string"), §8 describes what it becomes ("Session picker … becomes
     // data: rows are the four classes …", Plan 3a), and §13.4's migration
     // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
-    // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
+    // fallback." So it is a real, spec-acknowledged holder TODAY, and
     // Plan 3a is the task that removes it — when that lands, this row comes
-    // OUT of the list below rather than staying as a permanent exception, and
-    // the list shrinks back to five.
+    // OUT of the list below rather than staying as a permanent exception.
     //
     // Until then it matches through the QUOTED-literal arm — its `/model
     // <alias>` rows quote the same four words as Claude Code CLI
     // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
     // contains `'opus'`), not as a classification walk — so tightening the
     // bare-word arm (the fix for a match found in PROSE) cannot exclude it
-    // without also excluding the five real holders, which reach the quoted
+    // without also excluding the other real holders, which reach the quoted
     // arm the same way. Named here rather than carved out of the corpus, per
     // the same rule this file's header states for every other scan: the list
     // is what the scan actually finds, honestly reconciled, not narrowed to
@@ -1587,6 +1595,7 @@ describe('the model files, and who reads each one', () => {
         new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
     const holders = MODELS_CORPUS.filter((f) => enumerates(codeOf(f))).map(rel).sort();
     expect(holders).toEqual([
+      'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
