@@ -16,7 +16,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { CCD, makeCcdHarness, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
-import { eventsOf, measOf, lcDir, readJournal } from './lifecycleHelpers.js';
+import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-purge-'); });
@@ -384,28 +384,13 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   }, 30_000);
 });
 
-const lockOf = (id: string): string => path.join(h.home, '.cc-sessions', `.${id}.compactions.lock`);
-
-/** Hold the row's mutex from a REAL process, resolving only once the child
- *  reports it HAS it — so the caller under test races a genuinely held lock
- *  rather than a hoped-for one.
- *
- *  MODULE SCOPE, not inside one describe: the one-terminal-fact guard below
- *  drives the same four callers against the same held lock, and a second copy
- *  of a fixture whose whole job is to make a race deterministic is exactly the
- *  drift this repo's single-definition doctrine exists to refuse. */
-const hold = async (id: string, secs: number): Promise<() => void> => {
-  fs.mkdirSync(path.dirname(lockOf(id)), { recursive: true });
-  fs.closeSync(fs.openSync(lockOf(id), 'a'));
-  const child = spawn('bash', ['-c',
-    `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep ${secs}`, '_', lockOf(id)]);
-  await new Promise<void>((res, rej) => {
-    const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
-    child.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
-    child.on('error', (e) => { clearTimeout(t); rej(e); });
-  });
-  return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
-};
+/** The row mutex and the real process that holds it live in
+ *  `lifecycleHelpers.ts`: two test files now drive a caller against a genuinely
+ *  held lock (this one, and `ccd-ws-reap.test.ts`'s reap-tail leg), and a
+ *  second copy of a fixture whose whole job is to make a race deterministic is
+ *  exactly the drift this repo's single-definition doctrine refuses. */
+const lockOf = (id: string): string => compactLockPath(h.home, id);
+const hold = (id: string, secs: number): Promise<() => void> => holdCompactLock(h.home, id, secs);
 
 // ── D-2605: the four callers, each answering for what it actually did ─────
 describe('the purge callers read its status (spec §3.4, "Locked purge and honest callers")', () => {

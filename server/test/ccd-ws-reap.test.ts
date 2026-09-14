@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CCD, WS_ADD } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { eventsOf, holdCompactLock } from './lifecycleHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -2669,4 +2670,57 @@ describe('a branch another checkout is standing on', () => {
     expect(out.reaped).toBe('demo-quiet-basin');
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
   }, 30000);
+});
+
+// ── D-2605: the reap tail answers for a purge it could not take ───────────
+// `_ws_reap_tail` is the branch `_ws_reap_locked` reaches last, and it is
+// POST-ACTION by construction: worktree, branch and clips are already gone when
+// `_reg_purge` runs. So a refusal there is a FAILURE, never a refusal, and the
+// message names what completed and what still stands.
+//
+// THERE IS NO NEGATIVE FIXTURE HERE, AND THAT IS BY DESIGN, NOT AN OMISSION.
+// The other governed condition — the lock MECHANISM being absent — cannot
+// reach this branch at all: `cmd_ws_reap` dies at its own `command -v flock`
+// gate long before the tail runs, and `_lc_refuse` "EMITS, THEN DIES. Never
+// returns." So on a flock-less box this branch is unreachable, a leg asserting
+// a third `_lc_fail` in the mechanism-absence matrix is UNSATISFIABLE, and the
+// only condition this branch ever answers is CONTENTION — which is exactly
+// what the positive fixture below produces, with a real holder on the real
+// mutex for longer than `COMPACT_LOCK_WAIT`.
+describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () => {
+  it('reaps everything, then FAILS with purge-refused — no done, and the registry row STANDS', async () => {
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    // 20 s, against `COMPACT_LOCK_WAIT`'s 5 s: the reap does real git work
+    // before step (i), so the hold has to outlast the whole verb rather than
+    // just the acquire.
+    const release = await holdCompactLock(h.home, 'demo-quiet-basin', 20);
+    try {
+      const r = reap(tok);
+      // The verb returns non-zero — a reap that could not purge is not a
+      // success — and says so where an operator sees it.
+      expect(r.code, 'a reap whose purge was refused is not a success').not.toBe(0);
+      expect(r.stderr).toContain('reaped, registry NOT purged');
+
+      const reaps = eventsOf(h.home, 'reap');
+      const outcomes = reaps.map((e) => String(e['outcome']));
+      expect(outcomes, 'the tail closed its transaction with a FAILURE').toContain('failed');
+      expect(outcomes, 'and never with a done').not.toContain('done');
+      const failed = reaps.find((e) => e['outcome'] === 'failed')!;
+      expect(failed['refusal']).toBe('purge-refused');
+      expect(String(failed['detail'])).toContain('still stand');
+      expect(String(failed['tx'] ?? ''), 'a MINTED, non-empty tx').not.toBe('');
+
+      // WHAT THE MESSAGE PROMISES IS TRUE: the row and its authorization are
+      // both still there, so the re-run the message names can work.
+      expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry row still stands').not.toBeNull();
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation')),
+        'and so does its generation').toBe(true);
+      // AND THE REAP ITSELF REALLY RAN — without this the assertions above are
+      // satisfied by a verb that refused early and destroyed nothing, which is
+      // a different test.
+      expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+      expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+    } finally { release(); }
+  }, 60000);
 });
