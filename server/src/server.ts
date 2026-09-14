@@ -1491,6 +1491,33 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const q = req.query as { cols?: string; rows?: string };
     const cols = dim(q.cols, 80);
     const rows = dim(q.rows, 24);
+    // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
+    //
+    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // tmux's own default is `latest` too — so the window follows whichever
+    // client most recently typed. A phone's pty client is a full tmux client
+    // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
+    // stored lines to the new width, and everything past `history-limit` is
+    // shed on the next scrolled line and never comes back (F1).
+    //
+    // `resize-window` latches `window-size manual` (F3), so issuing it here —
+    // at the grid ccd spawned with — means the client that attaches an instant
+    // later cannot move the window at all. MEASURED end to end on one session
+    // (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column attach
+    // left 1046 logical of 1203 — 157 destroyed; pinned first, the window read
+    // `manual`, stayed 220 throughout, and the history was untouched.
+    //
+    // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
+    // nothing, `resizeWindow` answers a boolean this route has no branch for,
+    // and a tmux that cannot be reached is a session the attach below will fail
+    // on anyway. What it must not be is LATER than the attach.
+    //
+    // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
+    // for every drawer, so a second drawer closing restores nothing anyone was
+    // depending on, and the close handler's own 220x50 becomes a no-op rather
+    // than the defect PR #96's handoff was built to cure. The deliberate
+    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    void deps.tmux.resizeWindow(id, 220, 50);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
