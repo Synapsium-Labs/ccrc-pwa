@@ -20,7 +20,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, checkReentryCapConcurrency } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -31,7 +31,7 @@ import {
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS, IDLE_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
@@ -1523,6 +1523,7 @@ export function registerCoordRoutes(
    * both as "the ordinary case, not a failure") re-measures NOTHING, the
    * same D-49 reasoning close's own abandon path already uses: retreating to
    * `working` asserts no new claim of doneness for the server to check.
+   * It does take the CAP check when it comes from an idle state (design 2026-09-14 §7.2) — retreating asserts no doneness, but it does re-occupy a fleet slot.
    */
   app.post('/api/runs/:id/advance', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1570,6 +1571,20 @@ export function registerCoordRoutes(
     }
     if (run.sessionId === null) {
       return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
+    }
+
+    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
+    // `capsUsage().running`, so the one legal edge back INTO an active state
+    // — `awaiting-review`/`merging` -> `working`, a review sending work back
+    // or a lost merge race — must take the cap check dispatch takes, or the
+    // exclusion is a bypass. `dispatched -> working` is not checked: that run
+    // is already counted. The refusal carries the numbers, as dispatch's does.
+    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
+      const capCheck = checkReentryCapConcurrency(coord);
+      if (!capCheck.ok) {
+        return reply.code(409).send({ ok: false,
+          reject: { code: capCheck.code, limit: capCheck.limit, running: capCheck.running } });
+      }
     }
 
     // Forward motion toward a review claim re-measures; retreating to

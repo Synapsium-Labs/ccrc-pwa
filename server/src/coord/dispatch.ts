@@ -795,3 +795,20 @@ export async function dispatchRun(
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
     adopted, spawnState: adoptedSpawn, skillState };
 }
+
+/**
+ * Check if re-entering working from an idle state would exceed the cap.
+ * Used by advance handler (spec 2026-09-14 §7.2) to refuse sends-back
+ * when the fleet is at capacity.
+ */
+export function checkReentryCapConcurrency(coord: CoordStore):
+  | { ok: true }
+  | { ok: false; code: 'cap-concurrency'; limit: number; running: number } {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  if (usage.running >= caps.maxConcurrentWorkers) {
+    return { ok: false, code: 'cap-concurrency',
+      limit: caps.maxConcurrentWorkers, running: usage.running };
+  }
+  return { ok: true };
+}

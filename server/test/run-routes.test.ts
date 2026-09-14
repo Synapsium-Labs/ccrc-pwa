@@ -2685,6 +2685,44 @@ describe('POST /api/runs/:id/advance (review findings 1/15)', () => {
     expect(res.json()).toMatchObject({ ok: false, reject: { code: 'bad-transition' } });
   });
 
+  it('re-entering `working` from awaiting-review takes the cap check — a send-back on a full fleet is refused honestly (spec §7.2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-reentry'] });
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // running = 1 (dispatched)
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(0);              // Task 1: idle leaves the count
+    // Another programme takes the one slot.
+    const blocker = w.coord.openRun({ program: 'other', title: 'Other', project: PROJECT,
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-other' }) as { id: number };
+    w.coord.markDispatched(blocker.id, 'demo-blocker', 'blocker', 'ws/blocker', false);
+    expect(w.coord.advance(blocker.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(1);
+
+    const res = await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
+    // The run did not move.
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('awaiting-review');
+  });
+
+  it('does NOT cap-check dispatched -> working: a run already counted may always start working', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-start'] });
+    const w = await openApp(home, run); app = w.app;
+    w.coord.setCaps({ maxConcurrentWorkers: 1, maxSessionsPerDay: 12 });
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // running = 1 = the cap, and it is THIS run
+    const res = await postAdvance(app, opened.id,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(opened.id))!.state).toBe('working');
+  });
+
   it('dispatched -> working never re-measures (no pr-state call) and needs no real fingerprint', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-adv2'] });
