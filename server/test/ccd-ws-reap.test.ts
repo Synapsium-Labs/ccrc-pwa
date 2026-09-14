@@ -5,7 +5,7 @@ import path from 'node:path';
 import { CCD, WS_ADD } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
-import { eventsOf, holdCompactLock } from './lifecycleHelpers.js';
+import { eventsOf, refusalsOf, holdCompactLock } from './lifecycleHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -364,6 +364,14 @@ describe('refusals are answers', () => {
     expect(fs.existsSync(wt), 'and nothing is destroyed').toBe(true);
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
     expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+    // D-2605, leg (b) of §5's mechanism-absence matrix: AND NO `purge` FACT.
+    // `_reg_purge` is the one function every destruction path terminates in and
+    // the one that journals unconditionally, so "nothing was destroyed" and
+    // "nothing journalled a destruction" are two different claims — a verb that
+    // refused after reaching the purge would satisfy the first and not this.
+    expect(eventsOf(h.home, 'purge'), 'the verb never reached the purge at all').toEqual([]);
+    expect(refusalsOf(h.home).filter((r) => r.act === 'reap').map((r) => r.token),
+      'and it refused by NAME, with the mechanism-absence token').toEqual(['flock-unavailable']);
   }, 30000);
 
   it('refuses rather than writing a tombstone it cannot quote', () => {

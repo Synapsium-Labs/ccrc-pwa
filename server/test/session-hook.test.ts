@@ -4381,3 +4381,51 @@ _hook_compact_rollback_set() {
     expect([...hookSrc.matchAll(/-ef "\$set"/g)], 'the two that exist are PostCompact\'s').toHaveLength(2);
   });
 });
+
+// ── D-2605: leg (e) of the mechanism-absence matrix — the OTHER two arms ──
+// The landed PreCompact leg covers one arm of three. §5's row says "the three
+// hook arms publish NOTHING", and the two that were uncovered are the ones
+// whose failure would be least visible: a SessionStart that served a card it
+// could not claim, and a PostCompact that committed a journal line for a
+// settlement it could not serialise. There is no unlocked fallback anywhere —
+// that is §10's forbidden second concurrency regime — so absence of the
+// mechanism makes each arm INERT, not degraded.
+describe('the compaction card — mechanism absence, the serve and settle arms (spec §4, §5)', () => {
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions')).sort();
+  const SUMMARY = [
+    '1. Task', 'did a thing', '',
+    '3. Files and Code Sections:', '- server/src/pane/statusline.ts was edited', '',
+    '4. Errors and fixes', 'none', '',
+  ].join('\n');
+
+  it('(e) with no flock, SessionStart(compact) serves nothing and PostCompact commits nothing', () => {
+    // PreCompact runs with the mechanism PRESENT, so there is a real card, a
+    // real canonical set and a real permanent lock for the two inert arms to
+    // fail to touch. Without that the assertions below would be satisfied by a
+    // fixture that never had anything to publish.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const setBytes = fs.readFileSync(setFile());
+    const cardBytes = fs.readFileSync(cardFile());
+    expect(setBytes.length, 'the fixture really published a set').toBeGreaterThan(0);
+    expect(cardBytes.length, 'and a card').toBeGreaterThan(0);
+    const before = reg();
+
+    const noflock = minimalPath(['flock']);
+    const serve = runFull(compactStart(tree, transcript), { PATH: noflock });
+    expect(serve.stderr, 'silent on stderr, as on every path').toBe('');
+    expect(serve.stdout, 'no card is served without the mutex').not.toContain('graphify card —');
+    const settle = runFull(postCompact(tree, transcript, SUMMARY), { PATH: noflock });
+    expect(settle, 'and the settlement is silent too').toEqual({ stdout: '', stderr: '' });
+
+    // NOTHING PUBLISHED, NOTHING CONSUMED, NOTHING STAGED. The name list is
+    // compared whole rather than by a handful of `existsSync` calls, so a
+    // stage, a claim or a marker the arms should never have created shows up
+    // as a diff instead of slipping past an enumeration nobody updated.
+    expect(reg(), 'no stage, claim, marker or journal appears').toEqual(before);
+    expect(fs.existsSync(journalFile()), 'and no journal line is committed').toBe(false);
+    expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical').toEqual(setBytes);
+    expect(fs.readFileSync(cardFile()), 'and so is the card it could not claim').toEqual(cardBytes);
+  });
+});

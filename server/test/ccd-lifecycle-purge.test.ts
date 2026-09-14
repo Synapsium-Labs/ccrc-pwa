@@ -392,6 +392,32 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
 const lockOf = (id: string): string => compactLockPath(h.home, id);
 const hold = (id: string, secs: number): Promise<() => void> => holdCompactLock(h.home, id, secs);
 
+/** A real worktree on a real branch, so `git worktree remove` and
+ *  `git branch -d` both answer for real rather than through a stub. Module
+ *  scope: the one-terminal-fact guard and the mechanism-absence matrix both
+ *  need a workspace row a destructive verb will actually accept. */
+const wsRow = (id = 'demo-still-river'): { main: string; wt: string } => {
+  const main = h.makeRepo('demo');
+  h.git(main, 'commit', '--allow-empty', '-m', 'base');
+  const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  h.git(main, 'worktree', 'add', '-b', 'ws/still-river', wt);
+  h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
+    _reg_set ${id} workspace still-river; _reg_set ${id} branch ws/still-river
+    _reg_set ${id} workdir ${wt}`);
+  return { main, wt };
+};
+/** A dead WRAPPER session - uuid, project, workdir, wrapper and NO
+ *  `.workspace`. `cmd_forget` refuses a workspace outright (`is-a-workspace`),
+ *  so this is the only row shape that verb will act on. */
+const wrapperRow = (id = 'claude-corp-demo'): string => {
+  h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
+    _reg_set ${id} workdir /data/projects/demo; _reg_set ${id} wrapper claude-corp`);
+  return id;
+};
+const RM_STUB = '_ws_unsupervise() { :; }; _tmux() { echo t; }; tmux() { :; };';
+const FORGET_STUB = '_ws_unsupervise() { :; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
+
 // ── D-2605: the four callers, each answering for what it actually did ─────
 describe('the purge callers read its status (spec §3.4, "Locked purge and honest callers")', () => {
   it('the DEAD-REG arm DECLINES: one refused fact for its own tx, no done, no reclaimed, and the row STANDS', async () => {
@@ -552,22 +578,6 @@ describe('one terminal fact per minted transaction (spec §3.4)', () => {
     expect(breaches(h.home), `${label}: one terminal fact per minted tx`).toEqual([]);
   };
 
-  /** A real worktree on a real branch, so `git worktree remove` and
-   *  `git branch -d` both answer for real rather than through a stub. */
-  const wsRow = (id = 'demo-still-river'): { main: string; wt: string } => {
-    const main = h.makeRepo('demo');
-    h.git(main, 'commit', '--allow-empty', '-m', 'base');
-    const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
-    fs.mkdirSync(path.dirname(wt), { recursive: true });
-    h.git(main, 'worktree', 'add', '-b', 'ws/still-river', wt);
-    h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
-      _reg_set ${id} workspace still-river; _reg_set ${id} branch ws/still-river
-      _reg_set ${id} workdir ${wt}`);
-    return { main, wt };
-  };
-  const RM_STUB = '_ws_unsupervise() { :; }; _tmux() { echo t; }; tmux() { :; };';
-  const FORGET_STUB = '_ws_unsupervise() { :; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
-
   it('ws-rm closes its transaction once — on the completed path AND on the purge-refused one', async () => {
     wsRow();
     h.sh(`${RM_STUB} cmd_ws_rm demo-still-river 2>/dev/null || true`);
@@ -673,4 +683,151 @@ describe('one terminal fact per minted transaction (spec §3.4)', () => {
     expect(widened.some((b) => b.startsWith('restore demo-still-river ')),
       'a ""-admitting guard reds on the correct shipped tree').toBe(true);
   }, 60_000);
+});
+
+// ── D-2605: the lock MECHANISM being absent is its own condition (§4, §5) ──
+// `flock(1)` is util-linux. A box without it has no serialisation at all — not
+// weaker serialisation — so the three regimes answer differently and the matrix
+// below is the whole ruling in executable form:
+//   (a) `ws-add` REFUSES: row creation is what MINTS the generation, and a row
+//       minted unserialised is the race the lock exists to exclude.
+//   (b) `ws-reap` REFUSES (pinned in `ccd-ws-reap.test.ts`, which also asserts
+//       the purge fact is absent).
+//   (c) `ws-rm`, `forget` and `ws-gc --prune` COMPLETE on a generation-ABSENT
+//       row: absence proves no hook on that row ever received one, so no hook
+//       arm ever ran the lifecycle and there is nothing to race.
+//   (d1) `ws-rm` and `forget` REFUSE on a generation-PRESENT row, each with
+//       exactly one named `_lc_fail` and no `_lc_done purge`.
+//   (d2) `ws-gc --prune` on the SAME row DECLINES — asserted POSITIVELY and
+//       the false success NEGATIVELY, or the shipped status-blind arm passes.
+//   (f) `_ws_slug_free` answers consistently with whichever of those happened.
+//
+// ABSENCE IS SHIMMED AT THE QUESTION, NEVER BY EMPTYING PATH: ccd asks it with
+// `command -v flock`, and every stub in these suites spells its own passthrough
+// `command git`/`command find`, so an emptied PATH would break them for a
+// different reason. The idiom is `ccd-ws-reap.test.ts`'s own.
+describe('the lock mechanism is absent (spec §4, §5)', () => {
+  const NOFLOCK = 'command() { [[ "${1-}" == -v && "${2-}" == flock ]] && return 1;'
+    + ' builtin command "$@"; };';
+  /** A dead-registry row shaped exactly as `ws-gc`'s scan finds one. */
+  const deadRow = (id = 'demo-quiet-basin'): string => {
+    h.sh(`_reg_set ${id} uuid 72be9ee2-0000-4bcc-b60b-0cfc0dc3d199
+      _reg_set ${id} project demo; _reg_set ${id} workspace quiet-basin
+      _reg_set ${id} branch ws/quiet-basin; _reg_set ${id} workdir /gone`);
+    return id;
+  };
+  const plantGeneration = (id: string): void =>
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.generation`),
+      '0189abcd-1234-5678-9abc-0123456789ab');
+  const purges = (): number => eventsOf(h.home, 'purge').length;
+
+  it('CONTROL: the shim makes the QUESTION fail while a real `flock -w 1` still answers 0', () => {
+    // THE WHOLE MECHANISM-ABSENCE RULING RESTS ON WHICH PROBE ANSWERED, and
+    // this is what proves the two probes are different here. `command -v`
+    // absence and a contended `flock -w` both spell their failure `1`, so a
+    // guard that established absence by ATTEMPTING AN ACQUIRE would conclude
+    // "mechanism present" inside this very fixture — and decide the opposite
+    // way on a generation-present row. (A genuinely missing binary invoked as
+    // a command answers 127, a third value neither condition names.)
+    const id = deadRow();
+    const out = h.sh(`${NOFLOCK} `
+      + `command -v flock >/dev/null 2>&1; echo "askrc=$?"; `
+      + `: > "$REG/.${id}.probe.lock"; `
+      + `exec 9<>"$REG/.${id}.probe.lock"; flock -w 1 9; echo "acqrc=$?"`);
+    expect(out).toContain('askrc=1');
+    expect(out, 'the real flock is still on PATH and uncontended').toContain('acqrc=0');
+  });
+
+  it('(a) ws-add REFUSES, and creates no registry field', () => {
+    h.makeRepo('demo');
+    let code = 0; let stderr = '';
+    try { h.sh(`${NOFLOCK} ( CCD_WS_SLUG=quiet-basin cmd_ws_add demo )`); }
+    catch (e) { const x = e as { status?: number; stderr?: Buffer }; code = x.status ?? 1; stderr = String(x.stderr ?? ''); }
+    expect(code, 'a refusal is not a success').not.toBe(0);
+    expect(stderr).toContain('refusing to create a workspace unserialised');
+    expect(fs.readdirSync(path.join(h.home, '.cc-sessions')).filter((n) => n.startsWith('demo-')),
+      'and nothing was written for the row it refused to create').toEqual([]);
+  });
+
+  /** EACH VERB GETS THE ROW SHAPE IT WILL ACT ON, which is not one shape:
+   *  `cmd_forget` refuses a row carrying `.workspace` outright, and `cmd_ws_rm`
+   *  needs a real worktree. A single fixture for all three would pass leg (c)
+   *  for the wrong reason — the verb refusing early, before `_reg_purge` is
+   *  ever reached — which is the failure mode §5's own ws-add leg records. */
+  const LEGS = [
+    { verb: 'ws-rm', act: 'destroy', id: 'demo-still-river', slug: ['demo', 'still-river'] as const,
+      plant: (): void => { wsRow(); },
+      run: (): void => { h.sh(`${NOFLOCK} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`); } },
+    { verb: 'forget', act: 'forget', id: 'claude-corp-demo', slug: null,
+      plant: (): void => { wrapperRow(); },
+      run: (): void => { h.sh(`${NOFLOCK} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`); } },
+    { verb: 'ws-gc --prune', act: 'destroy', id: 'demo-quiet-basin', slug: ['demo', 'quiet-basin'] as const,
+      plant: (): void => { deadRow(); },
+      run: (): void => { h.sh(`${NOFLOCK} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`); } },
+  ] as const;
+
+  it('(c) ws-rm, forget and ws-gc --prune COMPLETE on a generation-ABSENT row', () => {
+    // Each in its own harness: three independent verbs answering the same
+    // question, and sharing one registry would let the first one's purge decide
+    // the next one's answer.
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${leg.id}.generation`)),
+        `${leg.verb}: the row carries NO generation — that is the fixture`).toBe(false);
+      leg.run();
+      expect(purges(), `${leg.verb}: exactly one purge-done, so the purge really ran`).toBe(1);
+      expect(h.reg(leg.id, 'uuid'), `${leg.verb}: and the row is gone`).toBeNull();
+      // (f) the slug answers consistently with that.
+      if (leg.slug) {
+        expect(h.sh(`_ws_slug_free ${leg.slug[0]} ${leg.slug[1]}; echo "free=$?"`)).toContain('free=0');
+      }
+    }
+  }, 120_000);
+
+  it('(d1) ws-rm and forget REFUSE on a generation-PRESENT row, with ONE named _lc_fail and no purge-done', () => {
+    for (const leg of LEGS.filter((l) => l.verb !== 'ws-gc --prune')) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      leg.run();
+      const fails = eventsOf(h.home, leg.act).filter((e) => e['outcome'] === 'failed');
+      expect(fails, `${leg.verb}: exactly one failure`).toHaveLength(1);
+      expect(fails[0]!['refusal']).toBe('purge-refused');
+      expect(purges(), `${leg.verb}: and NO purge-done`).toBe(0);
+      expect(h.reg(leg.id, 'uuid'), `${leg.verb}: the row still stands`).not.toBeNull();
+      // (f) and the slug says so.
+      if (leg.slug) {
+        expect(h.sh(`_ws_slug_free ${leg.slug[0]} ${leg.slug[1]}; echo "free=$?"`)).toContain('free=1');
+      }
+    }
+  }, 120_000);
+
+  it('(d2) ws-gc --prune on the SAME row DECLINES — positively, and the false success negatively', () => {
+    // THE SHIPPED STATUS-BLIND ARM PASSES A BARE "emits neither `_lc_fail` nor
+    // `_lc_done purge`", which is exactly the false-success implementation this
+    // leg exists to forbid — so the decline is asserted POSITIVELY (a
+    // `declined` row, one `refused` fact for the minted tx) and the success
+    // NEGATIVELY (no `_lc_done destroy`, no `reclaimed`, the row still there).
+    const id = deadRow();
+    plantGeneration(id);
+    const out = h.sh(`${NOFLOCK} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0; `
+      + 'echo "DECLINED=$GC_DECLINED RECLAIMED=$GC_RECLAIMED"');
+    expect(out).toContain('declined');
+    expect(out).toContain(id);
+    expect(out, 'a decline, never a reclaim').toContain('DECLINED=1 RECLAIMED=0');
+
+    const destroys = eventsOf(h.home, 'destroy');
+    const intent = destroys.find((e) => e['outcome'] === 'intent');
+    expect(intent, 'the arm minted its intent before it learned').toBeTruthy();
+    const tx = String(intent!['tx']);
+    expect(tx).not.toBe('');
+    const terminal = destroys.filter((e) => e['tx'] === tx && e['outcome'] !== 'intent');
+    expect(terminal.map((e) => e['outcome']), 'exactly one, and it is the refusal').toEqual(['refused']);
+    expect(purges(), 'no purge-done').toBe(0);
+    expect(h.reg(id, 'uuid'), 'the row stands').not.toBeNull();
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.generation`)),
+      'and so does its authorization').toBe(true);
+    expect(h.sh(`_ws_slug_free demo quiet-basin; echo "free=$?"`)).toContain('free=1');
+  }, 30_000);
 });
