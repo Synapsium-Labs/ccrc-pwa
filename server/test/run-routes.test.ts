@@ -19,7 +19,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
 import { HOLD_REASON_MAX_CHARS, holdReason, holdReasonVerdict } from '../src/coord/rundefs.js';
-import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { REVIEWER_KICKOFF_PREFIX, WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import {
   MAIL_BODY_MAX_BYTES,
   PROGRAM_SLUG_MAX_CHARS,
@@ -80,6 +80,11 @@ interface RunnerConfig {
   /** ids `ws-add` fabricates in the registry, simulating what ccd's own
    *  `cmd_ws_add` does — default one, for the ordinary wave-1 case. */
   wsAddCreates?: string[];
+  /** Per-call override: the n-th `ws-add` seeds the n-th list here, falling
+   *  back to `wsAddCreates` once exhausted — for a fixture that dispatches
+   *  TWO fresh spawns (a work run then its reviewer) and needs the registry
+   *  diff to see exactly one NEW row on each `ws-add`, not the same id twice. */
+  wsAddCreatesPerCall?: string[][];
   /** Verbs that fail (`code: 1`) rather than succeed. */
   fail?: ReadonlySet<string>;
   prState?: { code: number; stdout: string; stderr: string };
@@ -95,13 +100,14 @@ interface RunnerConfig {
 function makeRunner(home: string, cfg: RunnerConfig = {}): { run: Runner; calls: string[][] } {
   const calls: string[][] = [];
   let capIdx = 0;
+  let wsAddCalls = 0;
   const panes = cfg.panes ?? CLEAR_PANES;
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
     if (cfg.fail?.has(verb)) return { code: 1, stdout: '', stderr: `${verb} failed` };
     if (verb === 'ws-add') {
-      const ids = cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
+      const ids = cfg.wsAddCreatesPerCall?.[wsAddCalls++] ?? cfg.wsAddCreates ?? [`${PROJECT}-fresh`];
       for (const id of ids) seed(home, id);
       // A DECOY sentence, deliberately wrong: proves the route learns the id
       // from the registry diff, never from parsing this text.
@@ -3518,7 +3524,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
   /** A work run positioned at awaiting-review through the store — the route's
    *  verifyDone is Task 7's concern, not this describe's. */
   const workAtReview = async (home: string) => {
-    const { run } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const { run } = makeRunner(home, { wsAddCreatesPerCall: [['demo-w1'], ['demo-r1']] });
     const w = await openApp(home, run); app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };
     await postDispatch(app, opened.id);
@@ -3529,6 +3535,25 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
   const REVIEW = (workId: number, over: Record<string, unknown> = {}) =>
     ({ program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: workId,
        claimedBy: CLAIMED_BY, ...over });
+
+  it('dispatches a review run with the REVIEWER kickoff prefix, and a work run with the worker one', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const before = w.coord.dueDeliveries(Date.now(), 60_000).length;
+    const res = await postDispatch(app, r.id, { brief: 'review wave 1 of build4' });
+    expect(res.statusCode).toBe(200);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.length).toBe(before + 1);
+    const env = due[due.length - 1]!.envelope;
+    expect(env).toContain(`\n--\n${REVIEWER_KICKOFF_PREFIX}review wave 1 of build4\n`);
+    expect(env).not.toContain(WORKER_KICKOFF_PREFIX);
+    // The work run's own brief (from workAtReview's dispatch) still carries the worker prefix.
+    expect(due[0]!.envelope).toContain(WORKER_KICKOFF_PREFIX);
+    // The preflight asked about the REVIEWER skill: the event names it.
+    const ev = w.coord.db.prepare("SELECT detail FROM run_events WHERE runId = ? AND detail LIKE 'skill-preflight:%'").all(r.id) as { detail: string }[];
+    expect(ev.length).toBe(1);
+  });
 
   it('opens a review run that derives project, wave and waveOf from the run it reviews', async () => {
     const home = mkTmp('ccrc-runs-');

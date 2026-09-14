@@ -20,9 +20,10 @@ import {
 } from './rundefs.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict, transitionsFor,
-  type CoordCaps, type CoordCapsUsage, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  type CoordCaps, type CoordCapsUsage, type RunKind, type RunRefuseCode, type RunState, type SkillState,
+  type SpawnVerdict,
 } from '../../../shared/api.js';
-import { readWorkerSkillState } from '../skillstate.js';
+import { readSkillState, skillDirFor } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -39,6 +40,17 @@ import { readWorkerSkillState } from '../skillstate.js';
 // `name:`, so a rename cannot leave every worker being sent after a ghost.
 export const WORKER_KICKOFF_PREFIX =
   "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+// The reviewer's half of the same pair (design 2026-09-14 §8): one sentence,
+// one skill name, bound to `ccd/reviewer-skill/SKILL.md`'s frontmatter by
+// `reviewer-skill.test.ts` exactly as the worker's is.
+export const REVIEWER_KICKOFF_PREFIX =
+  "Run the ccrc-reviewer skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+/** Which standing protocol a brief of this kind invokes. `unknown` never
+ *  reaches here — dispatch refuses it at the transition precondition. */
+export const kickoffPrefixFor = (kind: RunKind): string =>
+  kind === 'review' ? REVIEWER_KICKOFF_PREFIX : WORKER_KICKOFF_PREFIX;
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -225,7 +237,8 @@ export async function dispatchRun(
   // THE MAIL, composed once: the standing protocol by name, then the wave's
   // own brief. Composed HERE, before the cap below, because the cap must
   // measure what is actually queued — see that check's own comment.
-  const body = WORKER_KICKOFF_PREFIX + brief;
+  const prefix = kickoffPrefixFor(run.kind);
+  const body = prefix + brief;
   // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
   // its own `body`, applied to the mail this dispatch will queue —
   // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
@@ -246,7 +259,7 @@ export async function dispatchRun(
   if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
       detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
-        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
+        `${Buffer.byteLength(prefix, 'utf8')} bytes exceeds the ` +
         `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }
 
@@ -777,8 +790,13 @@ export async function dispatchRun(
   // it written only for absent/unmeasurable, the ABSENCE of a row would mean
   // either `present` or "an older build with no preflight" — a second
   // overloaded null, one layer down from the one this field deletes.
-  const skillState = await readWorkerSkillState(
-    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  // Which skill directory: BY KIND. The cast is sound because the transition
+  // precondition above (`:190`, Task 4) already refused a `kind:'unknown'`
+  // row before this function ever reaches an irreversible act — `unknown`
+  // never lands here, so the narrower union is not a lie.
+  const skillState = await readSkillState(
+    deps.io, wrapper === null ? undefined : deps.configDir(wrapper),
+    skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

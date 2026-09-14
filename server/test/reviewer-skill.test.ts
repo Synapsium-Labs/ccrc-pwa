@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { REVIEWER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/reviewer-skill');
@@ -116,5 +117,16 @@ describe('the reviewer skill: its contract', () => {
     expect(skill).toContain('review-done');
     expect(skill).toContain('stale-review');
     expect(skill).toContain('report-unreadable');
+  });
+});
+
+describe('the reviewer skill: the name dispatch invokes', () => {
+  const SKILL_NAME = ((): string => {
+    const m = /^name:\s*(\S+)\s*$/m.exec(frontmatter);
+    if (!m) throw new Error('the reviewer skill declares no `name:`');
+    return m[1]!;
+  })();
+  it('is the name the reviewer kickoff prefix tells every reviewer to run', () => {
+    expect(REVIEWER_KICKOFF_PREFIX).toContain(`the ${SKILL_NAME} skill`);
   });
 });
