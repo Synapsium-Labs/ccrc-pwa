@@ -11,6 +11,7 @@ import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
+import { readUsageMeasured } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
@@ -22,7 +23,7 @@ import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent,
-  ProjectPoolsWire, PrState, RunSummary, SessionStatus, TaskProgress,
+  ProjectPoolsWire, PrState, RunSummary, SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -64,6 +65,12 @@ const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detect
  *  own stream reads its list every tick, so the screen you're looking at stays
  *  live regardless. */
 const TASK_SWEEP_MS = 10_000;
+
+/** The usage sidecar lane's own clock (routing slice 0) — same shape as
+ *  `TASK_SWEEP_MS`: a sidecar is fresh for `USAGE_FRESH_S` (30 minutes), so
+ *  re-reading it every 2 s tick would buy nothing for the cost of one agent
+ *  round trip per session in remote mode. */
+const USAGE_SWEEP_MS = 60_000;
 
 /** The sixth lane (the fifth is hook-state sweeping, which rides the 2 s tick).
  *  Naming does NOT ride that tick: a title that appears ten seconds late costs
@@ -443,6 +450,10 @@ export class FleetWatcher {
    *  local JSON read per session, cheap enough not to need its own slower
    *  clock the way task/PR sweeps do. */
   private hookStates = new Map<string, HookState>();
+  /** The usage sidecar lane (routing slice 0) — rebuilt on its own
+   *  `USAGE_SWEEP_MS` clock, not every tick; see `sweepUsage`. */
+  private usage = new Map<string, SessionUsage>();
+  private lastUsageSweep = 0;
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
@@ -844,6 +855,7 @@ export class FleetWatcher {
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
       await this.sweepHookStates(records);
+      await this.sweepUsage(records);
       const pending = await this.detectDialogs(this.primed, records);
       await this.sweepTasks();
       // NEVER awaited: it shells out over the network and `gh` has no
@@ -903,7 +915,7 @@ export class FleetWatcher {
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
       // than computed a second, independent way off `records` — see that
       // derivation's own comment (blocking review finding 4).
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord);
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -1491,6 +1503,29 @@ export class FleetWatcher {
     );
     this.hookStates = next;
   }
+
+  /** The usage lane (routing slice 0). ON ITS OWN CLOCK — at most once per
+   *  USAGE_SWEEP_MS, the `TASK_SWEEP_MS` shape — because the reader treats a
+   *  sidecar as fresh for USAGE_FRESH_S and one agent round-trip per session
+   *  per 2-second tick would buy nothing. Rebuilt from the current listing so
+   *  a purged row ages out; a row whose read came back UNREADABLE this sweep
+   *  keeps its previous reading (a transient read failure is not a change of
+   *  fact — `readUsageMeasured` tells it from absent, which drops the row). */
+  private async sweepUsage(records: SessionRecord[]): Promise<void> {
+    const now = Date.now();
+    if (this.lastUsageSweep !== 0 && now - this.lastUsageSweep < USAGE_SWEEP_MS) return;
+    this.lastUsageSweep = now;
+    const nowS = Math.floor(now / 1000);
+    const next = new Map<string, SessionUsage>();
+    await Promise.all(records.map(async (r) => {
+      const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
+      if (read.kind === 'reading') next.set(r.id, read.usage);
+      else if (read.kind === 'unreadable') { const prev = this.usage.get(r.id); if (prev) next.set(r.id, prev); }
+    }));
+    this.usage = next;
+  }
+
+  currentUsage(): Map<string, SessionUsage> { return this.usage; }
 
   /**
    * Refresh every session's plan progress, at most once per TASK_SWEEP_MS. The

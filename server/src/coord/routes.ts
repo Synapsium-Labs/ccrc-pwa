@@ -2114,7 +2114,7 @@ export function registerCoordRoutes(
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord);
+      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -2296,7 +2296,7 @@ export function registerCoordRoutes(
         // rule (no:<reason> -> null, never a silent send) has one spelling.
         const names = await deps.io.readdir(deps.cfg.registryDir);
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord);
+          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

@@ -343,6 +343,10 @@ export interface FleetSession {
    *  today after a failed spawn yesterday, and showing one as the other would be
    *  an adapter narrowing a distinction it received. */
   readonly spawnState: SpawnVerdict | null;
+  /** The usage sidecar reading (routing spec 2026-09-14 §6), or null when
+   *  none was read this sweep — absent, unreadable and malformed all fold to
+   *  null here, by `server/src/usage.ts`'s documented `readUsage` collapse. */
+  readonly usage: SessionUsage | null;
 }
 
 /**
@@ -2498,6 +2502,19 @@ const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
   return v as IdentityField[];
 };
 
+/** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
+ *  membership is not re-checked here because this file imports no class list. */
+function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
+  const raw = o[key];
+  if (raw === undefined || raw === null) return null;
+  const u = asObj(raw, key);
+  return {
+    ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
+    effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
+    stale: optBool(u, 'stale', false),
+  };
+}
+
 /** One persisted session in today's shape, or null if it cannot be one. */
 export function reviveFleetSession(raw: unknown): FleetSession | null {
   try {
@@ -2644,6 +2661,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // makes a surface ignorable.
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
+      usage: reviveUsage(o, 'usage'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server

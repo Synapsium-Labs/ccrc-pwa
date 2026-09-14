@@ -7,7 +7,7 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
 import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
@@ -386,6 +386,10 @@ export async function assembleFleet(
    * `coord` is actually passed.
    */
   coord?: CoordStore,
+  /** Fresh per-session usage readings (routing slice 0, the watcher's usage
+   *  lane), same pattern as `hookStates`: absent on a cold start and in every
+   *  older test, which is why the field defaults to null. */
+  usageReadings?: Map<string, SessionUsage>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
@@ -562,6 +566,7 @@ export async function assembleFleet(
       // statusline (dead pane, pre-first-capture, or a build with no ▓
       // segment at all), and a measured 0 must ride through unchanged.
       ctxPct: sl?.ctxPct ?? null,
+      usage: usageReadings?.get(r.id) ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
