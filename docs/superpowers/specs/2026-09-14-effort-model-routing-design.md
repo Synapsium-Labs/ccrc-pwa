@@ -1,6 +1,6 @@
 # Effort, model and orchestration routing — design
 
-Status: DRAFT v3, 2026-09-14. v1 was written from a six-section brainstorm approved section by
+Status: APPROVED 2026-09-14 (v3 plus the two plan-time probes in §3, §5.4, §6, §7 and §9). v1 was written from a six-section brainstorm approved section by
 section on 2026-09-13/14; v2 folded in a four-lens adversarial review (66 findings); v3 folds in a
 second two-lens pass on v2 (35 findings). Research base:
 `2026-09-13-effort-model-orchestration-research.md` (same directory). Deviation numbers are minted
@@ -92,9 +92,11 @@ are their own setting (`enableWorkflows` / `disableWorkflows`, toggled from `/co
 `ultracode` is a shorthand that sets both `xhigh` and standing workflow orchestration for the
 session, and is refused unless dynamic workflows are enabled ("Ultracode needs dynamic workflows
 enabled"). Workflow mode at another effort is workflows enabled plus that effort, under the
-Workflow tool's standard opt-in rule. **Haiku 4.5 accepts no effort level** (its catalogue entry
-lacks the `effort` capability and the client hard-codes it as unsupported); a Haiku cell names no
-effort.
+Workflow tool's standard opt-in rule. **Haiku 4.5 accepts no effort level** (the served catalogue, version 346
+fetched 2026-09-14, gives it `thinking.type: none` and no `runtime.effort_levels`, and the client
+hard-codes it as unsupported); a Haiku cell names no effort. The same catalogue lists `low medium
+high xhigh max` with a `high` default for Fable 5.1, Opus 5 and Sonnet 5, which is the effort
+vocabulary §5.1 validates against.
 
 | Work shape | Main loop | Subagents | Workflow mode | Why |
 |---|---|---|---|---|
@@ -348,12 +350,15 @@ those three and emitted only when one is present). The per-class buckets (`seven
 `seven_day_sonnet`, `model_scoped[]` with a server-supplied label such as "Fable") belong to
 Claude Code's `get_usage` structured-data control request, an experimental SDK surface. The
 Remote-Control REPL bridge knows the subtype but answers "get_usage is not supported in this
-context (onGetUsage callback not registered)", so the bridge is not the channel. Slice 0's first
-work item tries the channels that can register the callback (a headless client attached to the
-lane's credentials, or the SDK path) and names the one that works. If one does, ccd persists the
-buckets into `~/.cc-limits/<account>.json` additively. If none does, the Fable share is estimated
-from the offline sweep's per-account Fable token totals joined to the weekly window, labelled as
-an estimate, and Opus and Sonnet serviceability fall back to the single `seven_day` figure.
+context (onGetUsage callback not registered)", so the bridge is not the channel. Probed at plan
+time (2026-09-14, research note §6): a headless stream-json client answers the request
+(`subtype: success`) but returns `rate_limits_available: false` and `rate_limits: null` under
+every credential shape tried, including the lane's own config dir with its token after a real
+turn. No channel delivers the buckets on this fleet today, so slice 0 persists none. The Fable
+share is estimated from the offline sweep's per-account Fable token totals joined to the weekly
+window, labelled as an estimate, and Opus and Sonnet serviceability use the single `seven_day`
+figure. The probe procedure lives in the research note and is re-run by hand when the fleet's
+Claude Code version changes; a release that starts answering is a slice-3 change, not a redesign.
 
 Placement for fresh spawns applies the same clause. The predicate is defined once in `shared/`
 (L0, imports nothing) with a bash mirror in ccd and a parity test, the way `shared/poolrule.ts`
@@ -415,8 +420,8 @@ and is the strategy holding the gate while moving speed and spend.
   the model does not support the requested level (Claude Code silently rewrites `max` and `xhigh`
   down to `high`, and emits no effort block for a model with no effort support), and a settings or
   organisation `maxEffortLevel` clamp.
-- **Per-class buckets**, if a channel registers `get_usage` (§5.4), persisted into the limits file
-  additively; otherwise the sweep's estimate.
+- **Per-class buckets**: none reachable today (§5.4, probed 2026-09-14); the sweep's per-account
+  Fable share estimate stands in, labelled as an estimate wherever it is shown.
 - **Offline accounting sweep** on the fleet box: the de-duplicating transcript scan (global dedupe
   by message id across config dirs; 85% of raw lines were duplicates) as a scheduled read-only job,
   owned like the graph sweep, emitting per session, model, effort and agent token totals. Joined to
@@ -451,7 +456,7 @@ Fable session placeable.
 
 | Slice | Lands | Behaviour change | Gate |
 |---|---|---|---|
-| 0 | sidecar write keyed by ccd id with `ts`, the agents subdirectory and the reaper; the `model.id` confirmation; the `get_usage` channel probe and, if a channel works, per-class buckets into the limits file; server reader and wire fields; the sweep as a scheduled job; speed and quality signals from run events | none | seven days of sidecar data on every Anthropic lane |
+| 0 | sidecar write keyed by ccd id with `ts`, the agents subdirectory and the reaper; the `model.id` confirmation; the per-account Fable share estimate from the sweep (the `get_usage` channel was probed at plan time and carries no buckets, §5.4); server reader and wire fields; the sweep as a scheduled job; speed and quality signals from run events | none | seven days of sidecar data on every Anthropic lane |
 | 1 | the seven routing fields with shape validation; settle reads them; `--model` on both relaunch argvs; subagent env; the routing verb and `route` lifecycle act; the `route-v1` caps token and verb list entry; the measurements: does a plain `/effort <level>` or `/model` persist to the lane and does `/effort auto` delete the saved level, can the session-only form be driven by keystroke, does `--settings` set ultracode and workflows and is `enableWorkflows` readable back, does a keystroke survive a settle on a pinned lane, is an effort change cache-safe on Opus 5 | none without fields; swap continuity with them | a swap measured carrying every field |
 | 2 | coordinator clauses 12 and 13; `routing-matrix.md` and `review-panel.md` in `REQUIRED_REFS` and the parity tests; worker clauses; the routing sentence in the brief; the `suite:` and `failure:` body lines and the server's body parser; the workflow model/effort policy | in-session subagent routing by convention; the held-out panel runs on every handoff review | skill tests pin the clauses; sidecar shows subagent class shifting |
 | 3 | serviceability clause in swap and placement with rc 5, shared definition, bash mirror, parity test; the Fable ceiling; `degraded` | Fable-class sessions are placed and swapped by their share, or by the estimate | a Fable session measured surviving a swap without touching credits |
@@ -497,11 +502,13 @@ Each is measured red before and green after, not asserted in a comment.
 - Fable's own bucket may be unreachable; then the share is an estimate and the design says so.
 - Coordinators on Fable · ultracode are few but expensive per turn; the idle drop is what keeps
   that bounded, and it depends on the coordinator using it.
-- The effort cost indices, `per_turn_effort` and Haiku's lack of an `effort` capability are model
-  catalogue rows, not binary behaviour: 2.1.270 ships a compiled seed and also fetches a published
-  catalogue (`downloads.claude.ai/model-catalog/v1`) whose served list can replace the seed without
-  a release. The plan pins these by reading the served catalogue at plan time and re-reads them
-  when a discrepancy shows in the sweep, never by constant.
+- The effort cost indices and `per_turn_effort` are compiled-seed rows in the 2.1.270 binary, not
+  binary behaviour and not served-catalogue rows: the served catalogue
+  (`downloads.claude.ai/model-catalog/v1/catalog.json`, version 346 read 2026-09-14) carries
+  per-model `effort_levels`, `default_effort` and `thinking.type`, which confirm §5.1's
+  vocabularies and Haiku's lack of effort, but no cost index. A release can change the seed
+  without notice; the plan re-reads the seed with `strings` when the sweep shows a discrepancy,
+  never pins by constant.
 
 ## 10. Operator rulings recorded in this design
 
@@ -514,9 +521,9 @@ Each is measured red before and green after, not asserted in a comment.
 - 2026-09-14: measurement is continuous; ten waves per shape is a proposal threshold, not a gate.
 - 2026-09-14: judging between two routings is done by a panel of agents, never a single one.
 
-Open: correcting the Fable sentence in `~/.claude/fable-orchestration-policy.md` (it says Fable
-bills usage credits; on Max it is included up to 50% of the weekly limit) so every session's
-context agrees with the coordinator default.
+Closed 2026-09-14: the operator confirmed "Fable does NOT use usage credits. We're on the max
+plan", and the Fable sentences in `~/.claude/fable-orchestration-policy.md` were rewritten to the
+Max wording the same day, so every session's context agrees with the coordinator default.
 
 ## 11. Seams (verified 2026-09-13/14; cite by symbol, lines drift)
 
