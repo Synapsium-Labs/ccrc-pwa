@@ -2155,6 +2155,17 @@ _reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
     meas.project "$(_reg_get "$1" project)"
   _reg_set "$1" started 1
 }
+_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by
+  # the ccd id, so a REUSED id must never inherit a dead session's reading. Exact
+  # names, never a glob: `_reg_purge's own unanchored-glob hazard (an id that is
+  # a prefix of another) applies to this directory too. Always 0 — a purge that
+  # cannot remove a sidecar is not a reason to stop purging the row.
+  rm -f -- "$REG/usage/$1.json" 2>/dev/null
+  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null
+  [[ -d "$REG/usage/$1.agents" ]] && rm -rf -- "$REG/usage/$1.agents" 2>/dev/null
+  return 0
+}
+
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -2295,6 +2306,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
   rm -f "$REG/$id.hookstate.json"
+  _usage_purge "$id"
   rm -f "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
