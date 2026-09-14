@@ -2030,7 +2030,7 @@ export class CoordStore {
    * "no exclusion" call and the excluding call are ONE query, not two.
    */
   openRunsForSession(sessionId: string, excludeRunId?: number): OpenSiblingsResult {
-    // Three of the four columns are CAST to TEXT and proven, for
+    // Four of the five columns are CAST to TEXT and proven, for
     // `RUN_ROW_COLUMNS`'s reason (D-2545) — this read's three consumers are all
     // DESTRUCTIVE decision points, so an unrepresentable row here must refuse
     // in words rather than throw out of a sweep or a fleet act.
@@ -2189,7 +2189,7 @@ export class CoordStore {
    *  column goes through its guard here, never a cast, so this is also the
    *  one place that rule could be forgotten for a future column.
    *
-   *  It takes a MEASURED row rather than a raw one (D-2545) so that the three
+   *  It takes a MEASURED row rather than a raw one (D-2545) so that the four
    *  persisted integers cannot arrive here unproven: the proof is a
    *  precondition of the type, not a step a future caller could skip. */
   private hydrateRun(m: MeasuredRunRow, health: RunHealth): RunRow {
@@ -4442,7 +4442,7 @@ export class CoordStore {
 
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID
    *  DOMAIN (`isPositiveDecimalSafeInteger`) — are CAST to TEXT and proven,
-   *  exactly as `RUN_ROW_COLUMNS` does for its three.
+   *  exactly as `RUN_ROW_COLUMNS` does for its four.
    *
    *  THE BOUNDARY, said out loud because the next reader will ask: the four
    *  epoch-millisecond columns (`at`, `askAt`, `answeredAt`, `releasedAt`) are

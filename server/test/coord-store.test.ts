@@ -225,28 +225,41 @@ describe('CoordStore: runs', () => {
     /** Plant a `runs` row whose named column is wider than the JavaScript safe
      *  domain — the idiom `rejects an unsafe persisted id on an idempotent
      *  retry` above already uses, generalised over which column carries it. */
-    const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf',
+    const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf' | 'reviews',
                          over: { sessionId?: string } = {}): void => {
       const now = Date.now();
       s.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
       ).run('wide', 'Wide', now, 'active', null);
-      s.db.prepare(
-        'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(
-        column === 'id' ? UNSAFE : 7,
-        'wide',
-        column === 'wave' ? UNSAFE : 1,
-        column === 'waveOf' ? UNSAFE : 5,
-        'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
-      );
+      // `runs.reviews REFERENCES runs(id)` (migration 11): an UNSAFE value can
+      // never reference a real row, so with FK enforcement on this INSERT
+      // would be refused by SQLite itself before the store's own proof ever
+      // runs. Disabled for this one planted row only — the exact shape a row
+      // written before the column existed, or by anything outside this store,
+      // could already carry on disk; re-enabled immediately after.
+      s.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        s.db.prepare(
+          'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt, reviews) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(
+          column === 'id' ? UNSAFE : 7,
+          'wide',
+          column === 'wave' ? UNSAFE : 1,
+          column === 'waveOf' ? UNSAFE : 5,
+          'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
+          column === 'reviews' ? UNSAFE : null,
+        );
+      } finally {
+        s.db.exec('PRAGMA foreign_keys = ON');
+      }
     };
 
     it.each([
       ['id', 'run id is not a positive safe integer'],
       ['wave', 'run wave is not a positive safe integer'],
       ['waveOf', 'run waveOf is not a positive safe integer'],
+      ['reviews', 'run reviews is not a positive safe integer'],
     ] as const)('run() refuses an unrepresentable %s, naming the COLUMN and no value', (column, detail) => {
       const s = store();
       plantUnsafe(s, column);
@@ -2997,7 +3010,7 @@ describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
   it('persists kind review and the reviewed id, and hydrates both', () => {
     const s = store();
     const w = openRun(s) as { id: number };
-    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 5,
       claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
     expect(r.id).not.toBe(w.id);   // the dup arm keys on kind too
     const row = okRun(s.run(r.id))!;
