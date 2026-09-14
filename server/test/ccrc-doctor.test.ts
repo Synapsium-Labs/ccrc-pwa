@@ -6233,6 +6233,42 @@ describe('ccrc doctor: accounts', () => {
     writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
   }
 
+  const ROUTING_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'gpt', label: 'gpt', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
+  ] };
+  const routingBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    seedAccountsSh(home, ROUTING_ROSTER);
+    return home;
+  };
+
+  it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
+    const home = routingBox('ccrc-doctor-routing-pass-');
+    writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+    writeSettingsEnv(home, '.gpt-cfg', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });   // a non-Anthropic lane is not this check's subject
+    const line = lineFor(runDoctor(home).stdout, 'routing');
+    expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
+  });
+  it('routing: FAILS naming the lane whose settings.json sets CLAUDE_CODE_SUBAGENT_MODEL', () => {
+    const home = routingBox('ccrc-doctor-routing-fail-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^FAIL routing: /);
+    expect(line).toContain('claude');
+    expect(out).toContain('remedy: remove the key');
+  });
+  it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL too', () => {
+    const home = routingBox('ccrc-doctor-routing-effort-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^FAIL routing: /);
+  });
+  it('routing: a box with no projection PASSES vacuously and says so — never a SKIP, which the healthy fixture\'s counts forbid', () => {
+    const home = healthy('ccrc-doctor-routing-noroster-');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^PASS routing: 0 Anthropic lane\(s\).*no roster projection/);
+  });
+
   const COMPATIBLE: RosterEntry = {
     id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
     exec: {

@@ -196,6 +196,7 @@ CCRC_DOCTOR_CHECKS=(
   build
   fleet
   memory
+  routing
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -4314,4 +4315,48 @@ _check_memory() {
     _dr_pass memory "one memory store per project; every agent home converged"
   fi
   return "$rc"
+}
+
+_check_routing() {
+  # Routing spec 2026-09-14 §5.2 / §8: on an Anthropic lane the subagent floor
+  # rides the spawn PROCESS ENV (`CLAUDE_CODE_SUBAGENT_MODEL`, composed by ccd
+  # from the routing record), which a `settings.json` env key would override
+  # silently; and CLAUDE_CODE_EFFORT_LEVEL overrides every effort control and
+  # must appear nowhere. A text scan, like `_check_memory`: presence is the
+  # fact. A box with no projection or no Anthropic lane has nothing that could
+  # contradict the rule and PASSES vacuously, in those words — not a SKIP: the
+  # doctor's own healthy fixture has no projection, and a check that skips
+  # there is a check that cannot be counted.
+  local sh="$HOME/.ccrc/accounts.sh" raw="" bad="" unread="" a d f line n=0
+  if [ ! -r "$sh" ]; then
+    _dr_pass routing "0 Anthropic lane(s): no roster projection at \$HOME/.ccrc/accounts.sh, so no settings.json can override the routing record's spawn env (the wrappers check owns the roster's health)"
+    return 0
+  fi
+  raw="$( . "$sh" 2>/dev/null && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 \
+        && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )" || raw=""
+  if [ -z "$raw" ]; then
+    _dr_pass routing "0 Anthropic lane(s): the roster declares no Anthropic-backend account, so no settings.json can override the routing record's spawn env"
+    return 0
+  fi
+  while IFS=$'\t' read -r a d; do
+    [ -n "$a" ] || continue
+    n=$((n + 1)); f="$d/settings.json"
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || { unread="${unread:+$unread }$a"; continue; }
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        *CLAUDE_CODE_SUBAGENT_MODEL*|*CLAUDE_CODE_EFFORT_LEVEL*) bad="${bad:+$bad }$a"; break ;;
+      esac
+    done < "$f"
+  done <<<"$raw"
+  if [ -n "$bad" ]; then
+    _dr_fail routing "an Anthropic lane's settings.json names CLAUDE_CODE_SUBAGENT_MODEL or CLAUDE_CODE_EFFORT_LEVEL, which would override the routing record's spawn env: $bad" \
+      "remove the key from that lane's settings.json — the routing record (ccd route) is the one writer of the subagent floor, and the effort override must not exist"
+    return 1
+  fi
+  if [ -n "$unread" ]; then
+    _dr_warn routing "could not read settings.json for: $unread" "chmod u+r <home>/settings.json, or check by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    return 2
+  fi
+  _dr_pass routing "$n Anthropic lane(s): no settings.json overrides the routing record's spawn env"
 }
