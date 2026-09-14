@@ -173,7 +173,10 @@ export async function closeRun(
      * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
      * inside one function. That is the price of the property.
      */
-    const target: RunState = run.state === 'planned' ? 'failed' : 'closing';
+    // D-2807: a review run has no `closing` (REVIEW_RUN_TRANSITIONS); the
+    // operator's ungated valve must still reach it, so it fails directly — its
+    // own machine's terminal hop.
+    const target: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';
     if (!transitionsFor(run.kind)[run.state].includes(target)) {
       return { ok: false, kind: 'bad-transition', from: run.state, to: target };
     }

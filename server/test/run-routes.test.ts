@@ -3706,6 +3706,13 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });
     expect(okRun(w.coord.run(reviewId))!.state).toBe('working');
     expect(calls).toEqual([]);                                            // no fleet act on a refusal
+    // The refusal is RECORDED and MAILED BACK, the same two acts the work
+    // path's `stale-tip` close makes (`:1707-1709`) — audited once, told once.
+    expect(w.coord.rejections().filter((r) => r.runId === reviewId).map((r) => r.code))
+      .toEqual(['stale-review']);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.some((d) => d.toId === 'demo-r1'
+      && d.envelope.includes('review-done-rejected') && d.envelope.includes('stale-review'))).toBe(true);
   });
 
   it('refuses report-unreadable when the report is not there', async () => {
@@ -3729,7 +3736,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
   it.each([
     ['final', { fingerprint: { reviewedTip: TIPW, report: '/r' }, final: true }],
     ['archive', { fingerprint: { reviewedTip: TIPW, report: '/r' }, archive: true }],
-    ['a work fingerprint', { fingerprint: { branchTip: TIPW, handoffCommit: TIPW, prNumber: null, prPhase: 'none' }, final: true }],
+    ['a work fingerprint', { fingerprint: { branchTip: TIPW, handoffCommit: TIPW, prNumber: null, prPhase: 'none' } }],
     ['a relative report path', { fingerprint: { reviewedTip: TIPW, report: 'report.md' } }],
     ['a short tip', { fingerprint: { reviewedTip: 'abc', report: '/r' } }],
   ])('refuses %s on a review close as bad-request', async (_what, body) => {
@@ -3738,5 +3745,22 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     const res = await postClose(app, reviewId, body);
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('the UNGATED abandon valve reaches a working review run: failed directly, no closing hop (D-2807)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home);
+    // No token and no payload: `POST /api/runs/:id/abandon` is ungated (D-282)
+    // and constructs `{intent:'abandon'}` itself (D-280).
+    const res = await app.inject({ method: 'POST', url: `/api/runs/${reviewId}/abandon` });
+    // BODY FIRST, then the status: without D-2807 this route answers
+    // `bad-transition` working->closing, and asserting the body first is what
+    // puts that refusal in the failure output rather than a bare status diff.
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'failed', released: true });
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expect(calls.map((c) => c[0])).toEqual(['ws-release']);
+    const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
+    expect(events.map((e) => e.toState)).not.toContain('closing');
   });
 });
