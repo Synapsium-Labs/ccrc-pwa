@@ -266,20 +266,62 @@ describe('a partially purged registry never frees the slug', () => {
   it('refuses a slug still holding a dot-leading private compaction family — for THAT id only', () => {
     const REG = path.join(home, '.cc-sessions');
     fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock-open.1.2.3'), '');
-    // A SECOND LIVE ID sharing the prefix: an exact `.<id>.` strip cannot
-    // reach it, where a substring match would — the nested-id hazard the
-    // dot-free check was already built to avoid, in its mirror.
+    // A SECOND LIVE ID sharing the prefix. THE COMMENT THAT STOOD HERE claimed
+    // this pair measured the nested-id hazard, and MEASURED it does not: with
+    // `demo-quiet-mesa-b.uuid` present, `quiet-mesa-b` is TAKEN by the DOT-FREE
+    // loop's own `.uuid` test, which returns before the dot-leading loop is
+    // entered at all — the verdict is byte-identical with the `.<id>.` anchor
+    // and without it. (Control, measured: delete that `.uuid` and the ORIGINAL
+    // answers FREE.) It is kept because it is a real property of the pair —
+    // a live neighbour holds its own slug — and the anchoring is measured
+    // below, where only the dot-leading loop can answer.
     fs.writeFileSync(path.join(REG, 'demo-quiet-mesa-b.uuid'), 'x');
     expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
       'the dot-leading family holds the slug').toBe('TAKEN');
     expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
-      'the neighbour answers only for itself').toBe('TAKEN');
+      'a live neighbour holds its own slug — by its .uuid, not by this family').toBe('TAKEN');
     expect(sh('_ws_slug_free demo quiet-lake && echo FREE || echo TAKEN'),
       'and an unrelated slug is free').toBe('FREE');
     // EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON `_ws_slug_residue`
     // CAN NAME. The two are pinned as a PAIR, so reverting either alone reds.
     expect(sh('_ws_slug_residue demo quiet-mesa'))
       .toBe('.demo-quiet-mesa.compactions.lock-open.1.2.3');
+  });
+
+  it('…and the anchoring is measured in the direction only the dot-leading loop can answer', () => {
+    // THE LEG THE ANCHOR ACTUALLY NEEDS, and it is the mirror of the one above:
+    // the residue is planted under the LONGER id and NEITHER id gets a dot-free
+    // field, so the dot-free loop cannot answer for either and only the
+    // `.<id>.` strip decides. On the shipped exact anchor `quiet-mesa` is FREE
+    // with empty residue; with the anchor widened to an unanchored
+    // `"$REG/.$id"*` glob it reads TAKEN and reports a PHANTOM residue that
+    // belongs to another id — `_ws_slug_new` would then skip that slug for
+    // ever and `cmd_ws_add` refuse it.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'a NEIGHBOUR id\'s private family is not this slug\'s residue').toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa'),
+      'and nothing is named for it').toBe('');
+    // NON-VACUITY: the file really is there, and it really does hold its OWN
+    // slug — so the FREE above is the anchor and not a missing fixture.
+    expect(fs.existsSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'))).toBe(true);
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'the id it does belong to is held').toBe('TAKEN');
+    expect(sh('_ws_slug_residue demo quiet-mesa-b'))
+      .toBe('.demo-quiet-mesa-b.compactions.lock-open.1.2.3');
+  });
+
+  it('a DOTTED nested id\'s private family does not hold this slug either', () => {
+    // The other nested shape, and the one `_reg_purge`'s own header measures:
+    // project DIRECTORY names may hold dots, so `demo-quiet-mesa.x-y` is a
+    // legal id whose dot-leading families share this id's `.<id>.` prefix
+    // exactly. Only the SUFFIX rule — a private family name has no further dot
+    // before its own grammar — keeps it out.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.x-y.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
   });
 
   it('the PERMANENT lock is the sole exclusion: it never holds a slug, and never appears as residue', () => {
@@ -1384,8 +1426,8 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
    *  which is what makes an unlisted member visible as a count mismatch rather
    *  than as prose nobody re-reads. */
   const DISPOSITION: Array<{ file: string; grammar: string; count: number; what: string }> = [
-    { file: 'ccd-workspaces.test.ts', grammar: 'residue', count: 5,
-      what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, and the comment that states the pair rule' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'residue', count: 8,
+      what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, the comment that states the pair rule, and — fix round 2, B-I3 — THREE more on the two NESTED-ID legs that measure the `.<id>.` anchoring in the direction only the dot-leading loop can answer: a hyphen-neighbour id holding its own family (this slug FREE, its residue empty; the neighbour TAKEN and named), and a DOTTED nested id (`demo-quiet-mesa.x-y`) whose family shares this id\'s exact `.<id>.` prefix' },
     { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
       what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
     { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
