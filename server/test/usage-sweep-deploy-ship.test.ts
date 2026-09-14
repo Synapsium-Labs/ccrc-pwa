@@ -132,7 +132,11 @@ describe('the sweep unit is budgeted from the first measured passes (routing sli
     const prose = unit('ccd-usage-sweep.service');
     expect(prose, 'the service no longer states the measured cold-pass wall clock')
       .toContain('12m46s');
-    expect(prose, 'the service no longer states the measured peak RSS')
+    // "peak" is systemd's `memory peak` — the cgroup's high-water
+    // memory.current, page cache included — not RSS. Naming it right matters:
+    // the third pass reported 2.2G against a 2G MemoryMax without being killed,
+    // which only makes sense for a figure that counts reclaimable cache.
+    expect(prose, 'the service no longer states the measured peak memory')
       .toContain('1.9G');
     expect(prose, 'the service no longer states the corpus the two numbers were measured over')
       .toContain('48.3 GB');

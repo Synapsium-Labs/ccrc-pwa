@@ -7,17 +7,20 @@ ExecStart=%h/.local/bin/ccd-usage-sweep
 # unit — "well under a minute", "well under 1G" — were extrapolated from a
 # 30-day single-lane survey and were both wrong). The seven-day corpus here is
 # 32563 transcript files / 48.3 GB (45.0 GiB), which does not fit the box's page
-# cache, so every pass re-reads most of it from disk. The first three passes:
-#   cold (first after the deploy): 12m46s wall, 3m15s CPU, 1.9G peak
-#   warm (18 minutes later):        7m07s wall, 3m39s CPU
-#   warm (again):                   7m48s wall, 3m45s CPU, 2.2G peak
+# cache, so every pass re-reads most of it from disk. The first four passes:
+#   cold (first after the deploy): 12m46s wall, 3m15s CPU, 1.9G peak  [2G cap]
+#   warm (18 minutes later):        7m07s wall, 3m39s CPU             [2G cap]
+#   warm (again):                   7m48s wall, 3m45s CPU, 2.2G peak  [2G cap]
+#   warm, first under this budget:  7m27s wall, 3m48s CPU, 2.4G peak  [3G cap]
 # The third pass is why these two keys moved. It peaked ABOVE the MemoryMax=2G
 # it was running under — the cgroup survived it only because most of that peak
 # is reclaimable page cache, which is luck, not headroom — and the cold pass
 # spent 766s of a 900s TimeoutStartSec, so one busier day of transcripts
-# SIGTERMs a pass mid-write. 1800s and 3G are ~2.3x and ~1.4x the measured
-# worst case. A pass past this timeout is wedged, not slow. Making the scanner
-# incremental (so a pass costs the delta, not the corpus) is a later slice's
-# change; until then the honest fix is to budget for what a pass costs.
+# SIGTERMs a pass mid-write. A pass past this timeout is wedged, not slow.
+# WATCH THE PEAK: it has risen 1.9G -> 2.2G -> 2.4G across the first four passes
+# as the window filled, so 3G is roughly 0.6G of headroom, not a comfortable
+# multiple. The fix when it runs out is NOT another gigabyte: it is making the
+# scanner incremental, so a pass costs the delta rather than the whole corpus
+# (a later slice's change). Until then the honest budget is what a pass costs.
 TimeoutStartSec=1800
 MemoryMax=3G
