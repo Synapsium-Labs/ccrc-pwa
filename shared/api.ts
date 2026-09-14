@@ -6818,8 +6818,10 @@ export type PaneProbe =
  * then overrode it in its own must-not-re-decide note; the contradiction landed
  * here. (Its deviation number is recorded in the commit that corrected this
  * paragraph, and not inline: this wave's plan is not a file in this tree, so a
- * D-ref here would name a number no plan HERE defines — which
- * `deviation-refs.test.ts` refuses, by design, until the entry lands.) If a
+ * D-ref here would name a number no plan HERE defines. That reds
+ * `deviation-refs.test.ts`'s floor-seed assertion — the one comparing
+ * `floorFromScan` over the tracked tree against the high-water DEFINED in this
+ * tree's plans — and not an orphan-ref scan, which that suite does not have.) If a
  * later wave does want the probe's reason on the wire, that is a deliberate
  * widening of this type — not something to infer from this paragraph.
  */

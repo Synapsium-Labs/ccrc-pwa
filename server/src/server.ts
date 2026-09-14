@@ -1500,9 +1500,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // data-loss defect: tmux 3.4 does not collect history during a reflow, and
     // the narrow-then-wide round trip was measured LOSSLESS even at 3.7x the
     // limit (1452 stored / 1502 logical at 220, out to 43 where `history_size`
-    // reads 7463, and back to 220 byte-identical). So the pin wins the race
-    // essentially always, and losing it costs a few milliseconds of clipped
-    // view rather than a line of history.
+    // reads 7463, and back to 220 byte-identical).
+    //
+    // THAT ROUND TRIP WAS MEASURED WITH NO OUTPUT IN FLIGHT, and the condition
+    // is load-bearing: the first paragraph above is the counterexample. A line
+    // that lands WHILE the window sits at 43 is written into a history already
+    // reflowed past `history-limit`, and the overflow it sheds is gone. So what
+    // losing the race costs is bounded by what the pane emits during a transient
+    // measured at 0.47 ms and 4.28 ms — usually nothing, and never nothing by
+    // guarantee. The pin is what keeps that window from being the whole session,
+    // which is why it is issued here rather than dropped.
     //
     // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
     // nothing, `resizeWindow` answers a boolean this route has no branch for,

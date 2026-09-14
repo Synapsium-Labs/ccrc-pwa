@@ -18,7 +18,7 @@ import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const ID = 'claude-a-MekWarLive';
@@ -170,7 +170,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     expect(res.json()).toMatchObject({ ok: true, scrollback: 0, alternate: true });
   });
 
-  it('an unmeasurable probe OMITS both fields — absence is not zero', async () => {
+  it('an unmeasurable probe OMITS all three measured fields — absence is not zero', async () => {
     // The whole point of the pair. A tmux that cannot answer must leave a
     // reader with the behaviour the drawer shipped with; reporting zero here
     // would make every unreachable pane claim it has no history.
@@ -194,42 +194,141 @@ describe('GET /api/sessions/:id/pane/history', () => {
 describe('the shipped comments say what F1 measured', () => {
   const root = path.resolve(__dirname, '../..');
   const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
-  // `server.ts` is in this list because THIS WAVE gave it a reflow claim of its
-  // own — the latch block argues from what a resize does to stored history — and
-  // a two-file frozen literal could not see it. A file that reasons about reflow
-  // and is outside the scan is exactly the shape the scan exists to catch.
-  const SOURCES = [
+
+  /** The comment body, as a scanner should see it: every comment continuation
+   *  marker dropped and all runs of whitespace flattened, so a claim does not
+   *  escape by being wrapped. At 80 columns "tmux never\n// reflows" is the
+   *  NORMAL shape in this tree, and a raw-byte scan reads that as two unrelated
+   *  fragments.
+   *
+   *  JSDOC IS THAT SAME HOLE IN A SECOND SYNTAX, and the earlier version of this
+   *  helper stripped only `//`. A ` * ` leader is left sitting mid-sentence by a
+   *  whitespace flatten, so the wrapped claim survives as `tmux never * reflows`
+   *  and the scan reads past it — measured, and the file it mattered for is
+   *  `TerminalDrawer.tsx`, which carries F1's correction in exactly that block.
+   *  Both syntaxes are pinned below against FIXTURES rather than against a
+   *  shipped file, because a scanner proved only by the files it currently
+   *  passes is a scanner proved by nothing. */
+  const flatten = (text: string): string =>
+    text.replace(/^[ \t]*(?:\/\/|\/\*\*?|\*\/|\*) ?/gm, ' ').replace(/\s+/g, ' ');
+  const prose = (rel: string): string => flatten(read(rel));
+
+  /** The claim F1 falsified, in the voices a comment can carry it in. */
+  const FALSIFIED = /tmux (never|does not) reflow/i;
+
+  /** F1's measurement in its OWN TERMS — the operation, the width it resized
+   *  to, the stored count before, the quantity that moved, and the count after.
+   *
+   *  THE NUMBERS ALONE ARE NOT THE DEMAND, and that is the whole point of this
+   *  regex. The previous version asked for `1853 ... 9460` and nothing else;
+   *  measured, deleting the correction outright and leaving `See F1 (1853 ->
+   *  9460).` behind passed all eighteen tests — which is the exact failure mode
+   *  F1 was written to close, one token-size larger. The third case below
+   *  applies that pointer and asserts it does NOT satisfy this demand.
+   *
+   *  WHAT THIS DOES NOT CLAIM: that no pointer can ever satisfy it. One that
+   *  quotes the whole operation would, and no regex closes that. The demand is
+   *  that the sentence state the measurement, and the proof is that the pointer
+   *  shape which actually happened here does not. */
+  const MEASUREMENT =
+    /resize-window[\s\S]{0,80}\b43\b[\s\S]{0,160}\b1853\b[\s\S]{0,200}\bhistory_size\b[\s\S]{0,60}\b9460\b/i;
+
+  // DERIVED, NOT ENUMERATED — this repo's own single-source-of-truth rule
+  // (`PR_REASONS = Object.keys(PR_REASON_MAP)`, never a second hand-kept copy).
+  // The literal that stood here held two files, then three, and still could not
+  // see `shared/api.ts` — which reasons about reflow at length, is L0 and
+  // bundled into the PWA, and was edited by the very round that widened the
+  // literal. Fixing the instance and leaving the rule is how a scan goes stale
+  // the next time somebody writes the word. A file is in scope the moment it
+  // starts reasoning about reflow, and nobody has to remember to add it.
+  const ROOTS = ['server/src', 'pwa/src', 'shared', 'agent/src'];
+  const SKIP = new Set(['node_modules', 'dist', 'coverage']);
+  const walk = (rel: string): string[] =>
+    readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? (SKIP.has(e.name) ? [] : walk(`${rel}/${e.name}`))
+        : (/\.(ts|tsx|js|jsx|mjs|css)$/.test(e.name) ? [`${rel}/${e.name}`] : []));
+  const SCANNED = ROOTS.flatMap(walk).filter((rel) => /reflow/i.test(read(rel)));
+
+  // The files that are supposed to CARRY the measurement, as opposed to merely
+  // saying the word. This stays a short explicit list on purpose: a stylesheet
+  // that mentions layout reflow owes nobody F1's numbers.
+  const MEASURED = [
     'server/src/exec.ts',
     'server/src/server.ts',
     'pwa/src/session/TerminalDrawer.tsx',
   ] as const;
 
-  /** The comment body, as a scanner should see it: `//` markers dropped and all
-   *  runs of whitespace flattened, so a claim does not escape by being wrapped.
-   *  At 80 columns "tmux never\n// reflows" is the NORMAL shape in this tree, and
-   *  a raw-byte scan reads that as two unrelated fragments. */
-  const prose = (rel: string): string =>
-    read(rel).replace(/^[ \t]*\/\/ ?/gm, ' ').replace(/\s+/g, ' ');
-
   it('no shipped comment claims tmux never reflows a stored line (F1)', () => {
-    const offenders = SOURCES.filter((rel) => /tmux (never|does not) reflow/i.test(prose(rel)));
-    expect(offenders, 'a shipped comment still asserts what F1 falsified').toEqual([]);
+    expect(SCANNED.filter((rel) => FALSIFIED.test(prose(rel))),
+      'a shipped comment still asserts what F1 falsified').toEqual([]);
   });
 
-  it('the scan is looking at something — each file carries F1 ITSELF, not just the word', () => {
+  it('the scan reaches every file that reasons about reflow, not a list somebody kept', () => {
+    // Guards the derivation itself. A broken walk — a renamed root, a filter
+    // that drops an extension — would leave the scan above green and blind,
+    // and green is exactly how a blind scan looks. `shared/api.ts` is named
+    // here as a POSITIVE CONTROL, not as the census: it is the file the frozen
+    // literal missed, it lives under a root none of the measured three do, and
+    // if the walk stops reaching it this reds.
+    for (const rel of [...MEASURED, 'shared/api.ts']) {
+      expect(SCANNED, `${rel} reasons about reflow and the scan cannot see it`).toContain(rel);
+    }
+    expect(SCANNED.length, 'the walk found nothing — it is not looking at this tree')
+      .toBeGreaterThan(MEASURED.length);
+  });
+
+  it('the flatten sees through BOTH comment syntaxes — `//` and JSDoc', () => {
+    // Fixtures, not shipped files: the point is what the helper can see, and a
+    // shipped file that happens not to carry the claim proves nothing about it.
+    const lineWrapped = '  // a note about how tmux never\n  // reflows a stored line\n';
+    const jsdocWrapped = '  /**\n   * a note about how tmux never\n   * reflows a stored line\n   */\n';
+    const blockNoLeader = '  /*\n  a note about how tmux never\n  reflows a stored line\n  */\n';
+    for (const [name, text] of Object.entries({ lineWrapped, jsdocWrapped, blockNoLeader })) {
+      expect(FALSIFIED.test(flatten(text)), `${name}: the claim escaped the flatten`).toBe(true);
+    }
+    // ...and the control, so the matcher is not simply matching everything.
+    expect(FALSIFIED.test(flatten('  /**\n   * tmux reflows stored lines on a\n   * resize.\n   */\n')),
+      'the offender regex matches a comment that says the opposite').toBe(false);
+  });
+
+  it('each file that carries F1 states the MEASUREMENT, not a pointer to it', () => {
     // SUBSTANCE, NOT THE WORD, and the difference is not academic: the PWA-side
     // correction was deleted wholesale by a later task, leaving one dangling
     // cross-reference to a note that no longer existed — and the single word
-    // `reflow` inside that broken pointer was all it took to keep this assertion
-    // green while the fact it guards was gone. F1's own numbers cannot be left
-    // behind by a pointer, so they are what the anti-vacuity check demands.
-    for (const rel of SOURCES) {
+    // `reflow` inside that broken pointer was all it took to keep this
+    // assertion green while the fact it guards was gone.
+    //
+    // ALL THREE IN ONE RUN. The loop used to bail on the first miss, so a round
+    // that broke two files learned about one of them.
+    const missing = MEASURED.filter((rel) => !MEASUREMENT.test(prose(rel)));
+    expect(missing,
+      "these files no longer state F1's measurement in its own terms " +
+      '(`resize-window -x 43` ... 1853 ... `history_size` ... 9460). If F1 was ' +
+      're-measured, update this expectation and the comments together.')
+      .toEqual([]);
+    for (const rel of MEASURED) {
       expect(read(rel).length, `${rel} is empty or missing`).toBeGreaterThan(1000);
-      expect(prose(rel), `${rel} no longer says a resize reflows stored history`)
-        .toMatch(/reflow/i);
-      expect(prose(rel), `${rel} lost F1's measurement — a pointer is standing in for the fact`)
-        .toMatch(/1853[\s\S]{0,400}9460/);
     }
+  });
+
+  it('a pointer standing in for the measurement does NOT satisfy the demand', () => {
+    // The case the previous demand had no proof against, written out. Both
+    // halves matter: the real sentence passes, and the pointer that replaced it
+    // in the measured failure does not. Without this pair the stronger regex
+    // would be one more assertion about itself.
+    const stated =
+      ' AND THE WIDTH THIS DIVIDES BY IS THE READER OWN. That is FALSE and F1 measured it' +
+      ' false on a private tmux 3.4 socket: `resize-window -x 43` on a 220-column pane' +
+      ' holding 1853 stored lines took `history_size` to 9460, and at `history-limit 2000`' +
+      ' the next output shed the overflow permanently. ';
+    const pointed =
+      ' AND THE WIDTH THIS DIVIDES BY IS THE READER OWN. A resize reflows stored history;' +
+      ' See F1 (1853 -> 9460). ';
+    expect(MEASUREMENT.test(flatten(stated)), 'the stated measurement no longer satisfies its own demand')
+      .toBe(true);
+    expect(MEASUREMENT.test(flatten(pointed)), 'a pointer carrying both numbers still passes')
+      .toBe(false);
   });
 
   it('the -J note counts rows DOWN, not up — joining cannot render more rows', () => {

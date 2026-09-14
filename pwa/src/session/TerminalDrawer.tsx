@@ -381,8 +381,10 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
       // xterm clamps: `history-term-viewport.test.tsx` (spec §11 ruling 11). An
       // earlier version of this comment said a behavioural proof was "its own
       // work" and still to come; it arrived in this same branch. Crediting `n`
-      // reds three of its four cases, crediting a constant reds two, and the
-      // partially-clamped case — asked for 10, moved 2 — reds either way.
+      // reds three of its four cases and crediting the constant ZERO reds two
+      // — the word `constant` alone was wrong, because a non-zero constant (5)
+      // reds all four — and the partially-clamped case, asked for 10 and moved
+      // 2, reds either way.
       const before = term.buffer.active.viewportY;
       term.scrollLines(n);
       lag.scrolled(term.buffer.active.viewportY - before, px);

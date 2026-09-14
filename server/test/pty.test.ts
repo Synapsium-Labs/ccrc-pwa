@@ -138,6 +138,17 @@ describe('pty drawer bridge', () => {
     // into the route's `resize` arm left EVERY test in this repo green, while
     // the phone narrowed the window on every rotation and F14's loss returned
     // through the half nobody pinned.
+    //
+    // TWO FRAMES, AND THE FIRST ONE CHANGES THE WIDTH. A single frame at the
+    // attach width pins only the mutation that refits unconditionally: with
+    // `{cols: 43}` alone — the same cols the socket attached with — a refit
+    // written `if (m.cols !== cols)`, `if (m.cols > 100)`, `if (m.rows > 24)`
+    // or "skip the first frame" all stayed GREEN against the whole server
+    // suite (measured). `120x40` is a rotation: it changes the width, clears
+    // any plausible threshold, and is not the first thing the route sees by
+    // the time the second frame lands. All four of those refits red on it.
+    ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+    await vi.waitFor(() => expect(stub.resized).toContainEqual({ cols: 120, rows: 40 }), wait);
     ws.send(JSON.stringify({ type: 'resize', cols: 43, rows: 20 }));
     await vi.waitFor(() => expect(stub.resized).toContainEqual({ cols: 43, rows: 20 }), wait);
     expect(log.filter((l) => l.startsWith('tmux resize-window')),

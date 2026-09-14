@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, historyFailureSentence, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import type { PaneHistoryReply } from '../../shared/api';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -1877,15 +1878,22 @@ describe('a failed read says why, in a sentence', () => {
   it('every declared wire token gets a sentence — including the one nobody routed', () => {
     // `bad-session-id` is a member of PaneHistoryReply's own error union and had
     // no branch, so the fallthrough put the raw token on the glass:
-    // `no history · bad-session-id`. Reachable from a hand-typed SPA URL. The
-    // union is the source of truth, so the test walks it rather than naming the
-    // three somebody happened to remember.
+    // `no history · bad-session-id`. Reachable from a hand-typed SPA URL.
+    //
+    // THE COMPILER IS WHAT MAKES THIS EXHAUSTIVE, not the loop. An earlier
+    // version of this test said it "walks the union" and then named three
+    // tokens in a `Record<string, string>` — measured, widening the union with a
+    // fourth token and routing nothing left all 80 tests and `tsc` green, so
+    // F8's whole defect class could recur unseen. Keying the record off the
+    // union makes the missing token a TS2741 at this literal, which
+    // `typecheck-tests.test.ts` is the gate for. (vitest's own typecheck mode
+    // does NOT see it — the gate has to be the repo's.)
     //
     // EACH ONE'S OWN SENTENCE, not merely "not the token": the fallthrough below
     // makes ANY slug readable, so asserting readability alone would pass with
     // every dedicated branch deleted — measured, it did. What is pinned here is
     // that each declared token gets the sentence written FOR it.
-    const said: Record<string, string> = {
+    const said: Record<Extract<PaneHistoryReply, { ok: false }>['error'], string> = {
       'gone': 'this session is gone — there is no pane to read',
       'unmeasured': 'could not read this pane',
       'bad-session-id': 'that is not a session id this box will read',
