@@ -121,7 +121,13 @@ describe('ccrc-adopt: the measured five-account box', () => {
     const home = freshBox();
     const roster = parseRoster(JSON.parse(runAdopt(home)));
     expect(roster.upstreamId).toBe('claude');
-    expect(roster.byId.get('claude2')!.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    // `provider: 'anthropic'` is the parser's default for a generated entry
+    // that names none, which is every entry `ccrc-adopt` writes — it classifies
+    // by wrapper SHAPE and has no way to know what a launcher talks to. The
+    // roster it produces is legal and parses; `parseRoster` warns once per boot
+    // naming the accounts, which is the operator's cue to state the provider.
+    expect(roster.byId.get('claude2')!.exec).toEqual(
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
     expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
   });
 
@@ -156,9 +162,9 @@ describe('ccrc-adopt: the measured five-account box', () => {
     expect(roster.accounts.map((a) => a.id).sort()).toEqual(
       ['claude', 'claude-corp', 'claude-dev0', 'claude2', 'gpt'].sort(),
     );
-    expect(roster.byId.get('claude-corp')!.exec).toEqual({ kind: 'generated' });
+    expect(roster.byId.get('claude-corp')!.exec).toEqual({ kind: 'generated', provider: 'anthropic' });
     expect(roster.byId.get('claude-dev0')!.exec).toEqual({
-      kind: 'generated', secretsFile: '.cc-secrets/claude-dev0-oauth.env',
+      kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude-dev0-oauth.env',
     });
   });
 
@@ -587,7 +593,8 @@ describe('ccrc-adopt: an upstream that is a launcher script, not the binary itse
     expect(roster.byId.get('claude')!.exec.kind).toBe('upstream');
     // The rest of the box still classifies exactly as it did with a binary
     // there — the gate is the only thing that changed.
-    expect(roster.byId.get('claude2')!.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    expect(roster.byId.get('claude2')!.exec).toEqual(
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
     expect(roster.byId.get('gpt')!.exec.kind).toBe('external');
   });
 

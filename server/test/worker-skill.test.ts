@@ -15,7 +15,9 @@
 // own census pins all three of ITS verbs to SKILL.md's clause 3), so pointing
 // at them licenses nothing this file cannot see.
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
@@ -266,7 +268,7 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:160-176`), the park is gated on `d.deliveredAt === null`
+    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
     // (`:2042`), and a delivered row that is merely never acked parks on
     // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
     //
@@ -394,5 +396,171 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
     // what this clause shipped as before the fix.
     expect(clause, 'clause 12 lists the card words but attaches no rule to them')
       .toMatch(/LEAD to verify/);
+  });
+});
+
+// ── cross-repo wave 2: the plan may be somewhere else (spec §3 F3) ───────────
+//
+// Clause 6 says "the plan file it names" and has always meant a file in this
+// workspace, because until now there was no other kind. A programme homed in
+// another repo makes that assumption load-bearing and wrong: the path is
+// absolute, the repo is not this one, and the two things a worker must NOT do
+// there (write to the plan, commit against it) are exactly the two an
+// unqualified "your requirements are the plan" invites.
+//
+// Sentence literals, the CONTRACT's own mechanism: a paraphrase fails as a
+// deletion does. Kept OUT of the CONTRACT array on purpose — these are
+// guidance, not the thirteen, and adding one there would red the count pins for a
+// change that adds no clause.
+describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
+  // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
+  // already names on its own `flat` helper (`coordinator-skill.test.ts`'s
+  // `const flat = (s: string) => s.replace(/\s+/g, ' ')`): this prose wraps at
+  // 80 columns, so a raw `toContain` would pin the wrap point rather than the
+  // sentence. Kept per-file on purpose, defined again just below — it touches
+  // nothing shared, so a copy costs one helper and an import would cost a
+  // seam.
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+  const FOREIGN: readonly (readonly [string, string])[] = [
+    ['the plan may be outside this workspace',
+      'the plan file your brief names can sit OUTSIDE this workspace'],
+    ['homeRepoRoot is the absolute repository root',
+      '`homeRepoRoot`, the absolute path to the home repository root'],
+    ['planRepoPath is tracked and repository-relative',
+      '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
+    ['planSha is a full immutable identifier',
+      '`planSha`, a full 40-hex commit SHA'],
+    ['read the named plan Git object exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['producer evidence is conditional on a real dependency',
+      'Only a wave that depends on a producer interface carries a producer contract'],
+    ['a no-dependency foreign wave carries no producer contract',
+      'A foreign-plan wave with no producer-interface dependency requires none of those producer fields and no excerpt.'],
+    ['producerRepoRoot is the absolute producer repository root',
+      '`producerRepoRoot`, the absolute path to the producer repository root'],
+    ['producerSourceRepoPath is repository-relative',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['producerSha is the exact merged producer identifier',
+      '`producerSha`, the exact full merged producer SHA'],
+    ['read the named producer Git object exactly',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['an unresolved plan object fails closed',
+      'If the repository, commit, or path cannot be resolved, report and stop.'],
+    ['an unresolved producer object fails closed',
+      'If that producer repository, commit, or path cannot be resolved, report and stop under the same immutable-read rule above.'],
+
+    ['ledgerAbsPath does not double as a plan coordinate',
+      '`ledgerAbsPath` is only the absolute programme-ledger path'],
+    ['commit only on this workspace branch, in this repository',
+      "commit only on this workspace's own branch in THIS repository"],
+    ['the contract excerpt is inlined in the brief, and is the authority',
+      'the contract excerpt INLINED in the brief, verbatim from that merged file'],
+    ['the producer blob proves provenance without replacing shape authority',
+      'The producer blob at `producerSha` proves the excerpt\'s provenance'],
+    ['the named plan blob controls wave requirements',
+      'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
+    ['the current checkout cannot override the dispatch',
+      'The current checkout\'s plan is not authoritative for this dispatched wave.'],
+    ['a reply may arrive addressed to the role',
+      'A reply may arrive addressed to the ROLE `worker`'],
+  ];
+
+  it('carries the section at all', () => {
+    expect(skill).toContain('## The plan the brief names may live in another repository');
+  });
+
+  it.each(FOREIGN)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  it('resolves producer provenance through its own repository, not the consumer cwd', () => {
+    const sectionStart = skill.indexOf('## The plan the brief names may live in another repository');
+    const sectionEnd = skill.indexOf('\n## ', sectionStart + 1);
+    const section = skill.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
+    const command = section.match(/^git -C "\$producerRepoRoot" show "\$producerSha:\$producerSourceRepoPath"$/m)?.[0];
+    expect(command, 'the documented producer read is missing').toBeDefined();
+
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'ccrc-producer-read-'));
+    const producer = path.join(fixture, 'producer');
+    const consumer = path.join(fixture, 'consumer');
+    try {
+      for (const repo of [producer, consumer]) {
+        mkdirSync(repo);
+        execFileSync('git', ['init', '--quiet'], { cwd: repo });
+        execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: repo });
+        execFileSync('git', ['config', 'user.email', 'fixture@example.invalid'], { cwd: repo });
+      }
+      const sourcePath = 'src/interface.txt';
+      mkdirSync(path.join(producer, 'src'));
+      writeFileSync(path.join(producer, sourcePath), 'producer interface\n');
+      execFileSync('git', ['add', sourcePath], { cwd: producer });
+      execFileSync('git', ['commit', '--quiet', '-m', 'fixture producer'], { cwd: producer });
+      const producerSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: producer, encoding: 'utf8',
+      }).trim();
+
+      const read = execFileSync('bash', ['-c', command!], {
+        cwd: consumer,
+        env: { ...process.env, producerRepoRoot: producer, producerSha,
+          producerSourceRepoPath: sourcePath },
+        encoding: 'utf8',
+      });
+      expect(read).toBe('producer interface\n');
+      expect(() => execFileSync('git', ['show', `${producerSha}:${sourcePath}`], {
+        cwd: consumer, stdio: 'pipe',
+      })).toThrow();
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects every mutable-checkout fallback in the foreign-plan section', () => {
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    expect(section).not.toContain('Read it by the ABSOLUTE PATH the brief gives');
+    expect(section).not.toContain('cat "$planAbsPath"');
+    expect(section).not.toContain('show "HEAD:');
+    expect(section).not.toContain('current checkout is authoritative');
+
+    // GENERALISED from the single `-C "$PWD"` spelling this replaced. The D-2715
+    // defect is "the producer object is looked up somewhere that is not the
+    // producer repository", and `$PWD` is only its most legible form — `git -C .`,
+    // or a bare `git show` inheriting the consumer's cwd, are the same bug and
+    // walked straight past a `not.toContain` of one string. Every immutable read
+    // the section documents is harvested and required to name its own root.
+    const shows = [...section.matchAll(/git\b[^\n]*\bshow "\$(planSha|producerSha):[^"]*"/g)]
+      .map((m) => ({ cmd: m[0], sha: m[1]! }));
+    expect(shows.length, 'the foreign-plan section documents no immutable read at all')
+      .toBeGreaterThanOrEqual(2);
+    for (const { cmd, sha } of shows) {
+      const expected = sha === 'planSha' ? 'homeRepoRoot' : 'producerRepoRoot';
+      expect(cmd, `a $${sha} read is not rooted at $${expected}`)
+        .toMatch(new RegExp(`^git -C "\\$${expected}" show `));
+    }
+  });
+
+  it('adds no new clause and no second numbered list', () => {
+    // The count pins above would catch a fourteenth clause; this catches the
+    // near-miss that would make THEM unreadable — a numbered list in the new
+    // prose, which `^\d+\. ` cannot tell from a clause.
+    const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered).toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('names no destructive verb and no run route in the new section', () => {
+    // A worker that reads "the home repo" and then reads a run route in the same
+    // breath is one prompt away from advancing someone else's run. The run
+    // routes belong to the coordinator — this skill says so in its own API
+    // section, and the new section must not quietly walk it back.
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore',
+      '/advance', '/close', '/dispatch']) {
+      expect(section, `the foreign-plan section names ${forbidden}`).not.toContain(forbidden);
+    }
   });
 });

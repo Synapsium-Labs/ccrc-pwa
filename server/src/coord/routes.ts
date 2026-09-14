@@ -28,6 +28,7 @@ import { queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
@@ -215,6 +216,9 @@ function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
   if (r.ok) return reply.code(200).send({ ok: true, id: r.id, items: r.items });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    // D-2545. 503, never the 404 above: the run exists.
+    case 'run-unreadable':
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused':
       return reply.code(r.code === 'unknown-item' ? 404 : 409)
@@ -346,7 +350,7 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
  *
  * EVERY ROUTE HERE ANSWERS 501 `{ok:false,error:'not-configured'}` WITHOUT A
  * STORE, the same shape the push routes and `/api/notifications/catchup`
- * already use (`server.ts:186-215`): a box with no coordination database is
+ * already use (`server.ts:195-224`): a box with no coordination database is
  * not broken, it simply has none.
  *
  * MAIL LIVES HERE; RUN ROUTES ARE TASK 9's, in this same file — both share the
@@ -535,7 +539,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:9004`, cadence at `ccd/ccd:10472`) — and an honest mistake.
+   * rotates every 5s (`ccd/ccd:9327`, cadence at `ccd/ccd:10795`) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.
@@ -668,7 +672,7 @@ export function registerCoordRoutes(
     // `io.readdir` returning `null` (an ordinary transient failure in remote
     // mode: one dropped agent-WS round trip) is not evidence that no session
     // exists anywhere on the fleet, and `readRegistry` collapses exactly that
-    // failure to `[]` (`registry.ts:104`). Reading `[]` as "the sender does
+    // failure to `[]` (`registry.ts:106`). Reading `[]` as "the sender does
     // not exist" turns a transient hiccup into a PERMANENT, recorded
     // `unknown-sender` for a session that is plainly alive — the same
     // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
@@ -690,7 +694,7 @@ export function registerCoordRoutes(
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       // `readRegistry` also drops a row that WAS listed (its `.uuid` file
-      // exists in `names`) when a sibling field read fails (`registry.ts:123`,
+      // exists in `names`) when a sibling field read fails (`registry.ts:125`,
       // "incomplete registry entry — skip, don't crash") — ALSO transient,
       // not "this session does not exist". `names` proves presence
       // independently of whether every field could be read, the same
@@ -752,7 +756,21 @@ export function registerCoordRoutes(
     // 8: runId, when given, must name a run that exists. One lookup, reused
     // below for the envelope's program/wave — a second `coord.run(runId)`
     // after this would be the same read twice for no reason.
-    const run = runId !== null ? coord.run(runId) : null;
+    const runRead = runId !== null ? coord.run(runId) : null;
+    // D-2545. UNREADABLE IS NOT ABSENT, and this is the one place on this route
+    // where the difference changes what the sender should do: `unknown-run`
+    // says "you named a run that does not exist — fix the id", while this says
+    // "the run is there and this box cannot read it — do not retry blindly".
+    //
+    // NOT through `refuse()`, deliberately: that helper RECORDS a rejection row
+    // in the very database that just failed a read, and its `code` parameter is
+    // a `MailRejectCode` — admitting a read failure to that vocabulary would
+    // put a word on the mail wire for a condition no mail was ever rejected
+    // for. A plain 503, recorded nowhere, in the `not-configured` family.
+    if (runRead !== null && !runRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: runRead.detail });
+    }
+    const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
       return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
@@ -922,8 +940,8 @@ export function registerCoordRoutes(
     }
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) {
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) {
       return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
@@ -1060,8 +1078,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
@@ -1075,7 +1093,7 @@ export function registerCoordRoutes(
   // the PWA sees everything." Four routes (dispatch/close's sibling
   // `POST /api/runs/:id/advance` joins them below, closing review finding 1),
   // ZERO NEW CCD VERBS — every argv below is one of the five already granted
-  // (`agent/src/whitelist.ts:310-336`): `wsAdd`/`ensure` are dispatch,
+  // (`agent/src/whitelist.ts:323-349`): `wsAdd`/`ensure` are dispatch,
   // `wsHold` is the claim, `wsRelease` the close, `wsArchive` the one
   // explicit-abandon escape hatch.
   //
@@ -1314,8 +1332,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
@@ -1345,8 +1363,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1378,8 +1396,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1424,8 +1442,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // Read BEFORE the mutex, not inside it: a malformed body is decided by this
     // request alone, and queueing it behind a live dispatch would make the
     // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
@@ -1450,6 +1468,10 @@ export function registerCoordRoutes(
     }
     switch (r.kind) {
       case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      // D-2545. 503, never the 404 above: the run exists and this box cannot
+      // read it — the ungated release valve must say which.
+      case 'run-unreadable':
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
       // 502, the coord-route family's status for this condition
@@ -1508,8 +1530,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as
       { to?: unknown;
@@ -1532,7 +1554,16 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const run = coord.run(id);
+    const read = coord.run(id);
+    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
+    // the coordinator this run does not exist, which is a lie about a row
+    // sitting in the table with an integer this process cannot represent.
+    // 503, in the `not-configured` family — a fact about this box, not about
+    // the request. Before any `verifyDone` re-measurement or any advance.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
     if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
@@ -1559,7 +1590,18 @@ export function registerCoordRoutes(
 
     const adv = coord.advance(id, to, 'coordinator');
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    return reply.code(200).send({ ok: true, run: toRunSummary(coord.run(id)!) });
+    // Re-read after the advance for the fresh row. `!` is gone with the type
+    // (D-2545): an advance that succeeded and then read back absent or
+    // unreadable is a real condition, and answering it honestly is cheaper
+    // than a non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
+    }
+    if (after.run === null) {
+      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
+    }
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
     });
   });
 
@@ -1589,8 +1631,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
@@ -1750,7 +1792,7 @@ export function registerCoordRoutes(
     //
     // A missing `NotifyLog` degrades the RECORD and never the write; and
     // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1225-1228` catches it. Refusing an
+    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
     // operator's write because the feed archive is unavailable would be the
     // collapse, not the safety.
     const log = deps.notifyLog;
@@ -1769,7 +1811,7 @@ export function registerCoordRoutes(
           `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
       } finally {
         // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
         // gives: `record()` bumps the in-memory seq, and a seq handed to a
         // client but never persisted lets a restart re-mint the same
         // `{epoch, seq}` pair for a different event — the stale-but-valid
@@ -1861,8 +1903,16 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
-    const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
-    const summaries: RunSummary[] = runs.map(toRunSummary);
+    const read = deps.coord.runs({ includeClosed: q.closed === '1' });
+    // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
+    // the WHOLE read rather than quietly shipping the others: a board silently
+    // missing the run an operator is looking for is worse than a board that
+    // says it could not be read. 503 and an honest error, never a partial list
+    // and never an empty one.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
+    }
+    const summaries: RunSummary[] = read.runs.map(toRunSummary);
     return { runs: summaries };
   });
 
@@ -1906,13 +1956,21 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // An unknown run and a run with no declared ledger are DIFFERENT answers a
     // caller acts on differently: the first means the id is wrong, the second
     // means this wave declared none (the board renders `—`, not `0/0`). They
     // must not both come back as an empty array.
-    if (deps.coord.run(id) === null) {
+    const read = deps.coord.run(id);
+    // D-2545. The comment directly above says an unknown run and a run with no
+    // declared ledger are different answers a caller acts on differently; an
+    // UNREADABLE run is a third, and folding it into the 404 would tell the
+    // caller its id was wrong.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
     return { ok: true, items: deps.coord.workItems(id) };
@@ -1977,7 +2035,7 @@ export function registerCoordRoutes(
    * and the reason is `GET /api/runs`'s exactly: A WORKER MUST BE ABLE TO ASK
    * "WHAT HAPPENED TO MY WORKSPACE" WITHOUT A BROWSER. It runs on the fleet
    * host with no cookie jar, and the answer it needs is about a workspace that
-   * may no longer exist — `_reg_purge` (`ccd:458-556`) has already deleted
+   * may no longer exist — `_reg_purge` (`ccd:484-582`) has already deleted
    * every per-session field by then, which is the whole reason the journal is
    * a dot-prefixed DIRECTORY. Gated, an armed box answers `401 no-session` and
    * the one surface that survives a destruction is unreachable from the box
@@ -2265,8 +2323,16 @@ export function registerCoordRoutes(
 
     if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
-    if (runId !== null && coord.run(runId) === null) {
-      return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+    if (runId !== null) {
+      const read = coord.run(runId);
+      // D-2545: the row is there and unreadable — not absent. 503, so the
+      // claimant does not go looking for a typo in an id that is correct.
+      if (!read.ok) {
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      }
+      if (read.run === null) {
+        return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+      }
     }
 
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
@@ -2349,8 +2415,8 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
@@ -2394,8 +2460,8 @@ export function registerCoordRoutes(
   app.post('/api/claims/:id/break', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     return sendClaimEndOutcome(reply, deps.coord.claimBreak(id, 'operator', Date.now()));
   });
 
@@ -2686,13 +2752,19 @@ export function registerCoordRoutes(
     // session, exactly as the mail ingress and the claims lanes do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses (dispatch/close/advance/claims/ledger above) — a
-    // non-numeric id must 400 before it ever reaches `node:sqlite`, not
-    // throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
+    // for a row that is gone; this row is not gone, it is unreadable, and the
+    // two need different sentences for the same reason `child-unmeasurable`
+    // was split out of `ask-moved` below. 503, a fact about this box.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2854,12 +2926,16 @@ export function registerCoordRoutes(
     // session, exactly as `/answer` and the mail ingress do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses — a non-numeric id must 400 before it ever reaches
-    // `node:sqlite`, not throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545, `/answer`'s arm exactly — see its comment.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2990,6 +3066,12 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    return reply.code(200).send({ ok: true, asks: coord.asksForParent(parent, state) });
+    const read = coord.asksForParent(parent, state);
+    // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
+    // list, so a partial one is worse than none — it looks complete.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
+    }
+    return reply.code(200).send({ ok: true, asks: read.asks });
   });
 }

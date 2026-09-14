@@ -7,7 +7,7 @@
 // spelled `refusal`, never `refused`.
 //
 // FIX ROUND 2 (task 15) — CITATION CORRECTED. This originally cited
-// ccd:2120-2126 and ccd:5834-5839 as recording this class having shipped
+// ccd:3024-3030 and ccd:7530-7535 as recording this class having shipped
 // once already; neither range is about a poisoned refusal-token scan (one
 // is `_pr_py`'s PR-check JSON output, the other is `_ws_reap_locked`'s audit
 // row builder) and the citation was wrong. The actual precedent is

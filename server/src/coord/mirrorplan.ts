@@ -17,7 +17,7 @@ export interface FramedRead {
    *  no event, and its bytes are still stepped over by `nextCursor`. */
   readonly lines: readonly string[];
   /** The BYTE offset just past the last complete line. `Buffer.byteLength`,
-   *  never `String.length` — `hookstate.ts:150` takes the same care with its
+   *  never `String.length` — `hookstate.ts:184` takes the same care with its
    *  own cap, and a multibyte `--reason` would otherwise shift every later
    *  cursor by the difference between chars and bytes. */
   readonly nextCursor: number;

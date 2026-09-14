@@ -346,7 +346,7 @@ describe('verifyDone — the mismatch table', () => {
   it('rejects a claim naming the wrong PR number for a really-bound PR (finding 3)', async () => {
     // `FIXED_CLAIM.prNumber` is `null` in every row of the table above — this
     // re-measured fact has no row of its own there. `cmd_pr_state`'s own
-    // comment (`ccd/ccd:2389`) describes exactly this event: a worker whose
+    // comment (`ccd/ccd:2512`) describes exactly this event: a worker whose
     // claim still names an earlier PR number after the branch has rebound.
     const root = project(TIP, null);
     const deps = fingerprintDeps(runnerFor('open'), root); // the real, bound PR is #42
@@ -504,7 +504,7 @@ describe('verifyDone — prPhase/prNumber are validated, not merely typed (findi
 describe('verifyDone — the branch to re-measure comes from the live registry (finding 1)', () => {
   /** Registry row for `SESSION`, the same field shape `name-sweep.test.ts`'s
    *  own `seed()` writes — `readRegistry` needs wrapper+workdir+uuid or it
-   *  skips the row entirely (`registry.ts:122`). `branch: null` (the default)
+   *  skips the row entirely (`registry.ts:124`). `branch: null` (the default)
    *  seeds no row at all, so `readRegistry` never lists this id. */
   const seedRegistry = (home: string, branch: string | null): void => {
     const reg = path.join(home, '.cc-sessions');

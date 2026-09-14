@@ -15,7 +15,7 @@ const BACKLOG_TAIL_BYTES = 1024 * 1024;
  *   - `events`/`offset` as before;
  *   - `missing` — no {mtimeMs,size} came back for `file`. Byte-identical in
  *     meaning to `io.stat(file) === null`, which is what the `backlog` frame's
- *     own `missing` was derived from at `sessionws.ts:564` before this type
+ *     own `missing` was derived from at `sessionws.ts:598` before this type
  *     existed, so the wire field's meaning does not move;
  *   - `measured` — false when that failure was NOT a proven absence. An
  *     UNMEASURED absence rendered as a confident empty chat is the defect

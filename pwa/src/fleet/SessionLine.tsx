@@ -240,8 +240,8 @@ export function SessionLine({
   // into a turn that then ran 80.7 minutes with no idle boundary at all.
   // `!session.dialogPending` (Finding 5, fix round): `liveSessionStatus`
   // collapses Claude Code's `waiting` into this row's `busy` status
-  // (server/src/fleet.ts:316-317) while the SAME read sets `dialogPending`
-  // true (fleet.ts:419) — so without this guard a session sitting on a
+  // (server/src/fleet.ts:451-452) while the SAME read sets `dialogPending`
+  // true (fleet.ts:554) — so without this guard a session sitting on a
   // permission prompt for hours at high context reads as wedged. D-2016's
   // own text draws exactly this line: "attention means a human answer
   // unblocks the session, which is false here" — a dialog-pending row is the

@@ -29,14 +29,14 @@ export interface JournalRow {
   readonly at: number | null;
   readonly act: LifecycleAct;
   /** The act token ccd wrote when this build cannot name it; null whenever
-   *  `act` is not `LC_ACT_UNKNOWN` (`shared/api.ts:4003-4005`'s invariant on
+   *  `act` is not `LC_ACT_UNKNOWN` (`shared/api.ts:4869-4871`'s invariant on
    *  `LifecycleEvent.badact`, and `parseJournalLine` re-establishes it rather
    *  than trusting the line: the journal is append-only on a box with a
    *  single UNIX user, so a forged line pairing a VALID `act` with a
    *  caller-supplied `badact` is a real input this parser must not believe). */
   readonly badact: string | null;
   readonly outcome: LifecycleOutcome;
-  /** `badact`'s twin on the outcome side (`shared/api.ts:4007-4010`); null
+  /** `badact`'s twin on the outcome side (`shared/api.ts:4873-4876`); null
    *  whenever `outcome` is not `LC_OUTCOME_UNKNOWN`, same invariant, same
    *  reason it is re-established rather than trusted. */
   readonly badoutcome: string | null;
@@ -76,7 +76,7 @@ const b = (o: Obj, k: string): boolean | null => (typeof o[k] === 'boolean' ? (o
  *
  *  FIX ROUND 1, F3: the membership check used to be a hand-written
  *  `Set(['worktree','registry','none'])` plus an `as LifecycleMeas['atticsrc']`
- *  cast — a SECOND, unenforced copy of the union `shared/api.ts:3874`
+ *  cast — a SECOND, unenforced copy of the union `shared/api.ts:4740`
  *  declares. The reviewer proved it was inert by adding a fourth member
  *  (`'branchref'`) to that union and getting `tsc --noEmit` clean: a real
  *  fourth attic source would have silently landed on `null` — the field's
@@ -101,7 +101,7 @@ const atticsrc = (o: Obj, k: string): LifecycleMeas['atticsrc'] => {
 /** Each reviver returns an object LITERAL, so a member added to the interface
  *  in `shared/api.ts` and forgotten here is a compile error rather than a
  *  silently-dropped field — the exact mechanism `reviveFleetSession`
- *  (`shared/api.ts:1509-1640`) relies on. They are exported because the STORE
+ *  (`shared/api.ts:1951-2082`) relies on. They are exported because the STORE
  *  reads the same JSON back out of `obsJson`/`decJson`/`measJson` through
  *  them: one definition, both directions. */
 export function reviveObs(v: unknown): LifecycleObs | null {
@@ -137,7 +137,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
     //
     // FIX ROUND 1, F3 (related, lower priority): this used to hand-roll
     // `surface === 'none' ? 'none' : isStopSurface(surface) ? surface :
-    // 'unknown'` when `isDecSurface` (`shared/api.ts:3679`) already says the
+    // 'unknown'` when `isDecSurface` (`shared/api.ts:4523`) already says the
     // same thing — its own docstring (`:3678`) exists so "there is one
     // door". Functionally identical (verified: `isDecSurface(null)` is
     // `false` the same way the hand-rolled check was, so an absent `surface`
@@ -245,13 +245,13 @@ export function parseJournalLine(line: string): JournalRow {
     // ccd's OWN `badact` key first regardless of what `act` turned out to
     // be — so a forged line reading `{"act":"destroy","badact":"forged"}`
     // came out as `{act:'destroy', badact:'forged'}`, violating
-    // `shared/api.ts:4003-4005`'s invariant ("null whenever `act` is not
+    // `shared/api.ts:4869-4871`'s invariant ("null whenever `act` is not
     // `LC_ACT_UNKNOWN`. The two are never both set.") on a line this parser
     // itself produced. The journal is append-only on a box with a single
     // UNIX user — identity there is attribution, not authentication
     // (`CLAUDE.md`) — so any session can append a line, and this parser is
     // the boundary that has to re-establish the invariant the writer
-    // enforces (`ccd/ccd:1417-1422`'s `_lc_emit`, which only ever sets
+    // enforces (`ccd/ccd:1535-1540`'s `_lc_emit`, which only ever sets
     // `badact`/`badoutcome` for a token that FAILED its vocabulary match,
     // never alongside a matched one) rather than trust it off the wire.
     // ONE condition now: `badact` only exists to answer "what did `act`
@@ -262,8 +262,8 @@ export function parseJournalLine(line: string): JournalRow {
     outcome,
     // `badoutcome` — F1: previously dropped entirely (no field on
     // `JournalRow`, `o['badoutcome']` never read), even though ccd writes it
-    // today (`ccd/ccd:1351`, `:1417-1422`) and `LifecycleEvent.badoutcome`
-    // (`shared/api.ts:4007-4010`) already declares it with the identical
+    // today (`ccd/ccd:1469`, `:1417-1422`) and `LifecycleEvent.badoutcome`
+    // (`shared/api.ts:4873-4876`) already declares it with the identical
     // invariant `badact` has: "null whenever `outcome` is not
     // `LC_OUTCOME_UNKNOWN`... neither sends a reader to `raw` for it."
     // Without this, "ccd said an outcome word this build can't model",

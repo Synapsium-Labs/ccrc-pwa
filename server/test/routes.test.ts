@@ -10,7 +10,11 @@ import { ccdRunner } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
 import { parseDialog } from '../src/pane/dialog.js';
 import { Bus } from '../src/bus.js';
-import type { SessionStreamMsg } from '../../shared/api.js';
+import {
+  HOLD_ROUTE_REASON_MAX_BYTES,
+  parseCanonicalPositiveSafeInteger,
+  type SessionStreamMsg,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { guardRunner, seedRoster, testDeps } from './helpers.js';
 import { unreadableField } from './ioDoubles.js';
@@ -114,6 +118,35 @@ function serverRouteSources(): { src: string; routes: RouteSource[] } {
   };
 }
 
+/** Every `:id` registration in `coord/routes.ts`, whether or not it parses its
+ *  id the canonical way. This is the COMPLEMENT of `canonicalCoordIdRoutes` and
+ *  the half that makes the rule enforceable: a census built from call sites can
+ *  only notice a seam it already covers, so a NEW `:id` route spelled
+ *  `Number(idParam)` would never enter the list and the pin would stay green on
+ *  exactly the defect the parser exists to prevent. */
+function coordIdPathRoutes(): Omit<RouteSource, 'code'>[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  expect(starts.length, 'the coord route scan found no registrations').toBeGreaterThan(10);
+  return starts.flatMap((start) => (start[2]!.includes(':id')
+    ? [{ method: start[1]!.toUpperCase() as 'GET' | 'POST', routePath: start[2]! }]
+    : []));
+}
+
+function canonicalCoordIdRoutes(): Omit<RouteSource, 'code'>[] {
+  const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+  const starts = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)];
+  return starts.flatMap((start, i) => {
+    const code = withoutComments(src.slice(start.index, starts[i + 1]?.index));
+    return /\bparseCanonicalPositiveSafeInteger\s*\(/.test(code)
+      ? [{
+          method: start[1]!.toUpperCase() as 'GET' | 'POST',
+          routePath: start[2]!,
+        }]
+      : [];
+  });
+}
+
 function knownIdCalls(): KnownIdCall[] {
   const calls: KnownIdCall[] = [];
   for (const { method, routePath, code } of serverRouteSources().routes) {
@@ -156,6 +189,57 @@ describe('HTTP pool-reader policy census', () => {
         method === expectedCall.method && routePath === expectedCall.routePath,
       );
       expect(route?.code, `${expectedCall.method} ${expectedCall.routePath} lost the bounded callback root`).toMatch(callbackAndBudget);
+    }
+  });
+});
+
+describe('canonical positive-safe decimal parser', () => {
+  it.each(['1', '42', String(Number.MAX_SAFE_INTEGER)])('accepts %s', (text) => {
+    expect(parseCanonicalPositiveSafeInteger(text)).toBe(Number(text));
+  });
+
+  it.each([
+    1, '', '0', '-1', '+1', ' 1', '1 ', '01', '1.0', '1.0000000000000001',
+    '1e0', '0x1', String(Number.MAX_SAFE_INTEGER + 1),
+  ])('rejects non-canonical or unsafe input %j', (text) => {
+    expect(parseCanonicalPositiveSafeInteger(text)).toBeNull();
+  });
+});
+
+describe('canonical coordination id route census', () => {
+  it('keeps all thirteen textual resource-id seams on the shared parser', () => {
+    expect(canonicalCoordIdRoutes()).toEqual([
+      { method: 'POST', routePath: '/api/mail/:id/ack' },
+      { method: 'GET', routePath: '/api/mail/:id' },
+      { method: 'POST', routePath: '/api/runs/:id/dispatch' },
+      { method: 'POST', routePath: '/api/runs/:id/close' },
+      { method: 'POST', routePath: '/api/runs/:id/abandon' },
+      { method: 'POST', routePath: '/api/runs/:id/reclaim' },
+      { method: 'POST', routePath: '/api/runs/:id/advance' },
+      { method: 'POST', routePath: '/api/runs/:id/items' },
+      { method: 'GET', routePath: '/api/runs/:id/items' },
+      { method: 'POST', routePath: '/api/claims/:id/release' },
+      { method: 'POST', routePath: '/api/claims/:id/break' },
+      { method: 'POST', routePath: '/api/asks/:id/answer' },
+      { method: 'POST', routePath: '/api/asks/:id/release' },
+    ]);
+  });
+
+  it('leaves no `:id` route off the parser, and no second spelling in the file', () => {
+    // The inverse scan. Positive census ∩ every `:id` registration must be the
+    // whole of the latter — so a route added tomorrow with its own coercion
+    // reds HERE, naming itself, rather than silently sitting outside the census.
+    expect(canonicalCoordIdRoutes()).toEqual(coordIdPathRoutes());
+
+    // And the old idiom is gone from the file entirely. `Number(q.limit)` and
+    // friends are deliberately untouched — a limit is not a resource id — so
+    // this is scoped to the param spellings a resource id actually arrives in.
+    const src = withoutComments(
+      readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8'),
+    );
+    for (const idiom of [/\bNumber\(\s*idParam\s*\)/, /\bNumber\(\s*\(?\s*req\.params\b/]) {
+      expect(src, `coord/routes.ts coerces a resource id with ${idiom} again`)
+        .not.toMatch(idiom);
     }
   });
 });
@@ -706,7 +790,7 @@ describe('clip route', () => {
 
   it('413s an over-cap clip with its size — a real file this transport cannot carry is not a missing one', async () => {
     // The measured local/remote divergence, at the only surface that shows
-    // it: `ccd clip` (ccd/ccd:13416) files an image of any size, the agent
+    // it: `ccd clip` (ccd/ccd:13766) files an image of any size, the agent
     // refuses >12 MB, and this route used to call that "not-found".
     const io: FleetIO = {
       ...localIO,
@@ -789,7 +873,7 @@ describe('notify ingestion', () => {
 // degrade — `stopPair` below RECOMPUTES a wrapper/project pair from these
 // very fields to kill a tmux session BY NAME, so an unmeasured field must
 // never silently fall through to a guessed value. Had NO pin before this
-// (`registry.ts:123`'s old drop behaviour had never been exercised through
+// (`registry.ts:125`'s old drop behaviour had never been exercised through
 // this route at all — no test here even named `/stop` until now). Written
 // FIRST and confirmed red against the pre-gate code, which would have
 // answered 404 unknown-session (a LIE: the row is right there, just
@@ -942,6 +1026,116 @@ describe('POST /api/sessions/:id/hold and /release', () => {
     expect(calls.find((c) => c[1] === 'ws-release')?.slice(1)).toEqual(['ws-release', '--session', ID]);
     await app.close();
   });
+
+  // D-2546. The census measured this route as the FOURTH producer of a `.hold`
+  // reason and the only one D-2518 left unbounded: four validations, none of
+  // them a width, and the raw UNTRIMMED string handed to `wsHold` verbatim.
+  // The bound is a ruled BUDGET, not a repair — nothing downstream truncates,
+  // crashes or mis-renders at any width — so what these tests pin is the
+  // refusal's SHAPE, its UNIT, and that it happens before the fleet act.
+  it('accepts a reason at exactly the byte cap, forwarded verbatim', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude-a');
+    const calls: string[][] = [];
+    const run: Runner = async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; };
+    const app = await buildServer(testDeps(home, run));
+    const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(200);
+    // VERBATIM, not merely accepted: the cap is refuse-never-truncate, so an
+    // at-the-cap reason must reach ccd byte-for-byte.
+    expect(calls.find((c) => c[1] === 'ws-hold')?.slice(1))
+      .toEqual(['ws-hold', '--session', ID, '--reason', reason]);
+    await app.close();
+  });
+
+  // D-2731. The status is a second answer this route gives, and it was the only
+  // `oversize` in the tree that answered 400 — so a client routing on
+  // `err.status` (the PWA's own `AbandonSheet` does) read "your reason is too
+  // long" as "you sent the wrong shape", collapsing exactly the distinction the
+  // route's comment says it exists to keep. Pinned as a CENSUS over the whole
+  // server source rather than as a literal here, so the next seam to send
+  // `oversize` cannot quietly pick a different status either.
+  it('sends every `oversize` in the server with the same status', () => {
+    const sources = ['server/src/server.ts', 'server/src/coord/routes.ts'];
+    const statuses = new Map<string, string[]>();
+    for (const rel of sources) {
+      const src = readFileSync(new URL(`../${rel.replace('server/', '')}`, import.meta.url), 'utf8');
+      for (const m of src.matchAll(/'oversize'/g)) {
+        // Look back far enough to reach the status on any of the three shapes
+        // this tree uses: `reply.code(N).send({… 'oversize'`, the ternary
+        // `reply.code(x === 'oversize' ? N : M)`, and `refuse(reply, N, 'oversize'`.
+        const before = src.slice(Math.max(0, m.index! - 200), m.index!);
+        const after = src.slice(m.index!, m.index! + 80);
+        const code = /reply\.code\((\d{3})\)[^;]*$/.exec(before)?.[1]
+          ?? /refuse\(reply,\s*(\d{3}),\s*$/.exec(before)?.[1]
+          ?? /^'oversize'\s*\?\s*(\d{3})/.exec(after)?.[1];
+        if (code) statuses.set(code, [...(statuses.get(code) ?? []), rel]);
+      }
+    }
+    expect([...statuses.keys()].sort(), 'the server sends `oversize` with more than one status')
+      .toEqual(['413']);
+    expect(statuses.get('413')!.length, 'the oversize census found too few sites to be measuring anything')
+      .toBeGreaterThanOrEqual(5);
+  });
+
+  it('refuses one byte over the cap with `oversize`, and never calls ws-hold', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    const reason = 'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES + 1);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize', limit: HOLD_ROUTE_REASON_MAX_BYTES });
+    // THE SEAM, not just the status. A refusal that still fires the fleet act
+    // is the failure worth catching: the whole point of refusing here is that
+    // the registry file is never written.
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('measures BYTES, not characters — a multi-byte reason under the cap in ' +
+     'characters and over it in bytes is refused', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    // '€' is three UTF-8 bytes. This string is well under the cap in
+    // characters and over it in bytes, so it passes a character-counting cap
+    // and fails a byte-counting one. Without this case the constant could be
+    // switched to `.length` and every other test here would stay green.
+    const reason = '€'.repeat(Math.floor(HOLD_ROUTE_REASON_MAX_BYTES / 3) + 1);
+    expect(reason.length).toBeLessThan(HOLD_ROUTE_REASON_MAX_BYTES);
+    expect(Buffer.byteLength(reason, 'utf8')).toBeGreaterThan(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('measures the UNTRIMMED string the route forwards, not the trimmed one it ' +
+     'tests for emptiness', async () => {
+    const { app, calls } = await makeApp(['❯ \n']);
+    // In the cap's own units this is `HOLD_ROUTE_REASON_MAX_BYTES + 2` bytes;
+    // trimmed it would be one byte under. `wsHold` receives the untrimmed
+    // string, so the cap must read the untrimmed string too — otherwise
+    // padding is a way to exceed it.
+    const reason = ` ${'x'.repeat(HOLD_ROUTE_REASON_MAX_BYTES)} `;
+    expect(reason.trim().length).toBeLessThanOrEqual(HOLD_ROUTE_REASON_MAX_BYTES);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload: { reason } });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'oversize' });
+    expect(calls.filter((c) => c[1] === 'ws-hold')).toEqual([]);
+    await app.close();
+  });
+
+  it('still answers `bad-request`, never `oversize`, for the empty/whitespace/' +
+     'non-string shapes — two conditions a caller acts on differently', async () => {
+    const { app } = await makeApp(['❯ \n']);
+    for (const payload of [{}, { reason: '' }, { reason: '   ' }, { reason: 5 }]) {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/hold`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+    }
+    await app.close();
+  });
 });
 
 describe('layer 1 — the guard runner', () => {
@@ -1043,6 +1237,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     return { code: 0, stdout: '', stderr: '' };
   };
 
+  // D-2545 REGRESSION PIN, and the reason it is called out by name: the
+  // wave-1 ruling described this 409 as carrying "no row detail", which was a
+  // premise about the FAILURE arm read as a description of today's behaviour.
+  // The success path carries FULL row detail and must stay byte-identical —
+  // narrowing it would be the unauthorised regression that change was most
+  // likely to cause. This test is that byte-for-byte assertion.
   it('refuses 409 run-open, NAMING the run ids — never a bare slug', async () => {
     const home = seededHome('demo-claimed');
     const calls: string[][] = [];
@@ -1053,6 +1253,28 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
       ok: false, error: 'run-open',
       runs: [{ id: runId, program: 'build4', wave: 2, waveOf: 3 }],
     });
+    expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
+    await app.close();
+  });
+
+  it('refuses 409 run-open with an EMPTY runs array when the sibling rows are ' +
+     'UNREADABLE — refused as claimed, and still not archived (D-2545)', async () => {
+    const home = seededHome('demo-claimed');
+    const calls: string[][] = [];
+    const { app, coord } = await withCoord(home, recording(calls), 'demo-claimed');
+    // A second open run on the same workspace whose `wave` is wider than the
+    // JavaScript safe domain — the shape a newer build writes and a rollback
+    // leaves behind.
+    coord.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(4242, 'build4', BigInt(Number.MAX_SAFE_INTEGER) + 1n, 3, 'demo', 'demo-claimed',
+      'planned', 'ccrc-pwa-coordinator', Date.now());
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
+    expect(res.statusCode).toBe(409);
+    // The SHAPE does not change with the condition — `runs` is present and
+    // empty, because no row was read. Fail-shut at a destructive act.
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

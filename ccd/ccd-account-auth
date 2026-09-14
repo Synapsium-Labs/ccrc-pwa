@@ -1,0 +1,638 @@
+#!/usr/bin/env bash
+# ccd-account-auth — <id> <login|setup-token|openai-login>: drive ONE account
+# connection to a credential, and publish what it is doing to
+# $REG/.auth/<id>.json so a phone can watch without a terminal.
+#
+# THE CREDENTIAL NEVER CROSSES THIS SCRIPT'S STDOUT. Two of the three methods
+# hand the credential to somebody else's file (Claude Code writes
+# `~/<suffix>/.credentials.json`; an external launcher writes its own), and the
+# third captures a token line and SUBSTITUTES it on screen. The status file
+# carries a sign-in URL and, for the external launcher, a device code — the
+# spec says out loud that the device code is not a secret (§11).
+#
+# A SEPARATE EXECUTABLE, not a ccd verb, because it must OUTLIVE the process
+# that started it and own a tty it did not inherit: `ccd account-pane` returns
+# as soon as the pane exists.
+#
+# `set -uo pipefail`, NO `-e`, exactly as ccd and ccrc: every failure below is
+# an explicit `_auth_die`, so nothing aborts silently mid-state and leaves a
+# status file asserting `starting` about a process that is gone.
+set -uo pipefail
+
+SELF=ccd-account-auth
+REG="$HOME/.cc-sessions"
+AUTH_DIR="$REG/.auth"
+SECRETS_DIR="$HOME/.cc-secrets"
+SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
+WRAPPER_DIR="$HOME/.local/bin"
+CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# Every knob env-overridable for the harness, `ccd-graph-sweep`'s idiom
+# (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots take NO override —
+# HOME is the harness's isolation boundary, exactly as in ccd.
+#
+# CCRC_AUTH_SCRIPT names the pty vehicle rather than hard-coding `script`, and
+# that is a TESTABILITY requirement, not a preference: the two pane methods
+# must be able to answer `pane-unsupported-here` under test, and the only
+# other way to make `script(1)` absent is to empty PATH — which also removes
+# `mkdir`, `date`, `jq`, `mv` and `chmod`, so `_auth_publish` fails, no status
+# file is written, and the test asserting on that file gets ENOENT instead of
+# the refusal it came to measure.
+: "${CCRC_AUTH_TIMEOUT:=600}"
+: "${CCRC_AUTH_TICK:=1}"
+: "${CCRC_AUTH_SCRIPT:=script}"
+
+# ── platform ──────────────────────────────────────────────────────────────
+# A LOCAL COPY, deliberately, and it is `session-hook.sh`'s situation exactly:
+# this file is exec'd by tmux with no ccd to source (sourcing ccd RUNS ccd's
+# roster preamble and would die or double-source), so the two helpers it needs
+# are copied here under local names and PINNED byte-for-byte to the originals
+# by `server/test/ccd-account-auth.test.ts`. A copy that drifts is the failure
+# mode this shape invites; the pin is what makes "deliberate copy" a different
+# thing from "a copy nobody is watching".
+#
+# `_auth_timeout` IS `_plat_timeout`, and the copy was taken mechanically
+# rather than retyped — the plan's own quoted version of it predates D-2272
+# and D-2332 and is missing both the `>/dev/null 2>&1` on the watcher and the
+# comment blocks that argue for it.
+CCD_OS=linux
+case "${OSTYPE:-}" in
+  darwin*) CCD_OS=darwin ;;
+  linux*)  CCD_OS=linux ;;
+  *) case "$(uname -s 2>/dev/null)" in Darwin) CCD_OS=darwin ;; esac ;;
+esac
+
+_auth_timeout() {   # <seconds> <cmd> [args...]
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+  done
+  local secs="$1"; shift
+  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  rm -f -- "$stamp" 2>/dev/null
+  "$@" &
+  local pid=$! rc=0 watcher
+  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
+  # with no coreutils — it returns INSTANTLY, and without this guard the
+  # watcher would stamp and signal in the same breath: every call would report
+  # 124 having given the command no time at all. A sleep that cannot run means
+  # THIS CALL GETS NO DEADLINE, which is the same honest degradation the
+  # callers had before a shim existed ("a box without coreutils' `timeout`
+  # still gets an answer, just without a deadline"). Caught by
+  # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
+  # BOTH OF THE WATCHER'S OWN STREAMS GO NOWHERE, AND IT IS THE DIFFERENCE
+  # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
+  # substitution the caller reads, this subshell inherits that pipe on fd 1 -
+  # and on fd 2 as well wherever the call site joins the two, which
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
+  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
+  # write end open and the substitution cannot see EOF until the full duration
+  # has run out, long after the command answered. MEASURED on a box with no
+  # coreutils, a 10-second deadline and a command that answers instantly: 10 006
+  # ms before this redirection, 9 ms after. Neither stream carries anything a
+  # caller wants - the watcher exists for its stamp file and its signal - so
+  # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  #
+  # THE ACCOUNT PROBE IS WHERE THIS WAS NOTICED, NOT WHERE IT BECAME REACHABLE
+  # (D-2332, correcting D-2272). The finding was filed saying that probe is the
+  # tree's FIRST caller inside a command substitution. It is the eleventh of
+  # eleven, measured 2026-09-09: five in ccd, three in ccrc-doctor-checks and
+  # three in ccrc - and eight of the other ten predate the account-connections
+  # branch entirely, so on a box with no coreutils this floor has been under ccd's
+  # tmux liveness probe, its two gh pr queries and the doctor's gh auth status
+  # check for as long as the shim has existed: each of them paid its whole
+  # deadline on every run instead of answering when its command did. The fix
+  # below is unchanged and was always right; what was understated is that it is
+  # a fix for the WHOLE call-site population, not for one new call site. The
+  # population is measured in ccrc-account.test.ts rather than counted here, so
+  # the claim cannot rot back into a claim about one caller.
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  if [ -s "$stamp" ]; then rc=124; fi
+  rm -f -- "$stamp" 2>/dev/null
+  return "$rc"
+}
+
+# ── the status file: ONE writer, five fields, tmp + rename ────────────────
+# ONE WRITER IS THE WHOLE DESIGN. `ccd account-pane --cancel` kills the pane
+# and does NOT stamp `cancelled` itself — the trap below does, from inside the
+# process that knows. Two writers on one file is a torn state waiting for a
+# race, and the caller cannot tell a torn state from a stale one.
+AUTH_ID=''
+AUTH_STATE=starting
+AUTH_URL=''
+AUTH_CODE=''
+AUTH_ERROR=''
+# Task 54's `_auth_capture_token` is this variable's ONLY writer, and
+# `_auth_setup_token` its only reader. It is declared HERE, with the other
+# AUTH_* globals, for the reason `SPAWN_FROMSWAP` is declared beside `_spawn`:
+# `set -u` kills the shell outright at the first read by a path whose writer
+# never ran, and 0 is the safe value — "no token was seen" is what a mint that
+# printed nothing means.
+AUTH_SECRET_WRITTEN=0
+
+_auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
+  local tmp
+  mkdir -p "$AUTH_DIR" 2>/dev/null || return 1
+  chmod 700 "$AUTH_DIR" 2>/dev/null
+  # `.<id>.<pid>.tmp` — a SECOND dot in the suffix, which is exactly what
+  # `_reg_purge`'s `*.*` skip excludes, and under a dotted directory besides.
+  tmp="$AUTH_DIR/.$AUTH_ID.$$.tmp"
+  # `date -u +%FT%TZ`, never `date +%s%3N`: the second spelling is GNU-only and
+  # answers `<epoch>3N` on BSD — a string jq would take and every reader would
+  # misread. An ISO-8601 UTC STRING is the contract wave 2 parses.
+  ( umask 077
+    jq -cn --arg state "$AUTH_STATE" --arg url "$AUTH_URL" \
+           --arg userCode "$AUTH_CODE" --arg error "$AUTH_ERROR" \
+           --arg updatedAt "$(date -u +%FT%TZ)" \
+      '{state:$state, updatedAt:$updatedAt}
+       + (if $url == "" then {} else {url:$url} end)
+       + (if $userCode == "" then {} else {userCode:$userCode} end)
+       + (if $error == "" then {} else {error:$error} end)' > "$tmp"
+  ) || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$AUTH_DIR/$AUTH_ID.json" || { rm -f -- "$tmp"; return 1; }
+}
+
+_auth_state() {   # <state> — move the machine and publish, in one act
+  AUTH_STATE="$1"
+  _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
+}
+
+_auth_die() {   # <reason> — the file says failed, stderr says why, exit 1
+  AUTH_STATE=failed; AUTH_ERROR="$1"
+  _auth_publish || true
+  echo "$SELF: $1" >&2
+  exit 1
+}
+
+_auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
+  AUTH_STATE=cancelled; AUTH_ERROR=''
+  _auth_publish || true
+  exit 0
+}
+
+# BEFORE AUTH_ID IS KNOWN THERE IS NO FILE TO WRITE, which is the whole reason
+# this is a second refusal rather than a call to `_auth_die`. It stays the
+# refusal for `bad method` too, one step past the point where AUTH_ID IS bound:
+# a mistyped method means nothing was attempted, `ccd account-pane` already
+# refuses the same word upstream, and a `failed` status file for a run that
+# never started is a fact about the caller's typing, not about the account.
+die() { echo "$SELF: $*" >&2; exit 1; }
+
+_auth_load_roster() {
+  # MISSING and UNREADABLE stay distinct, ccd's own discipline: the remedy for
+  # one is `ccrc install` and the remedy for the other is chmod, and telling an
+  # operator the wrong one sends them to a generator that will rewrite a file
+  # whose bytes were never the problem.
+  [[ -e "$CCRC_ACCOUNTS_SH" ]] || die "no account roster at $CCRC_ACCOUNTS_SH — generate it with \`ccrc install\`"
+  [[ -r "$CCRC_ACCOUNTS_SH" ]] || die "account roster $CCRC_ACCOUNTS_SH exists but is not readable by $(id -un) — fix its permissions"
+  # shellcheck source=/dev/null
+  source "$CCRC_ACCOUNTS_SH" || die "account roster unreadable: $CCRC_ACCOUNTS_SH"
+}
+
+_auth_rostered() {   # <id> -> 0 when the roster claims it
+  local w v
+  w="$1"
+  for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do [[ "$w" == "$v" ]] && return 0; done
+  return 1
+}
+
+# ── the OSC-8 strip ───────────────────────────────────────────────────────
+# MEASURED 2026-09-07 (CC 2.1.263): the sign-in line is
+#   If the browser didn't open, visit: ESC]8;;<URL>BEL<URL>ESC]8;;BEL
+# so the raw URL appears TWICE — once as the escape's target, once as the
+# visible text. A reader that regexed the RAW bytes would capture
+# `<URL>BEL<URL>ESC]8;;BEL` and hand the operator that to open — and the
+# obvious `${u%%[[:space:]]*}` trim does not save it, because BEL is `\a` and
+# `\a` is not a member of `[[:space:]]`. Pure bash: no `sed -e 's/\x1b…'`,
+# because BSD sed does not understand `\x` and this file is in
+# `macos-platform.test.ts`'s derived corpus from the day it lands.
+_auth_strip_osc8() {   # <line> -> the line with every OSC-8 hyperlink escape removed
+  local s="$1" out='' esc=$'\033' bel=$'\a' head tail
+  while [[ "$s" == *"$esc]8;;"* ]]; do
+    head="${s%%"$esc]8;;"*}"
+    tail="${s#*"$esc]8;;"}"
+    out="$out$head"
+    # BEL first, ST (ESC \) second, and a line carrying both takes BEL: that is
+    # what the measured bytes use, and preferring the OTHER one on such a line
+    # would swallow the visible text between them.
+    if [[ "$tail" == *"$bel"* ]]; then
+      s="${tail#*"$bel"}"
+    elif [[ "$tail" == *"$esc\\"* ]]; then
+      s="${tail#*"$esc\\"}"
+    else
+      # An UNTERMINATED introducer. Dropping the remainder is the safe
+      # direction: what follows is an escape target, not text anybody typed.
+      s=''
+    fi
+  done
+  printf '%s' "$out$s"
+}
+
+_auth_url_of() {   # <clean line> -> the first https:// run on it; rc 1 when there is none
+  local s="$1" u
+  [[ "$s" == *"https://"* ]] || return 1
+  u="https://${s#*https://}"
+  u="${u%%[[:space:]]*}"
+  [[ -n "$u" && "$u" != "https://" ]] || return 1
+  printf '%s' "$u"
+}
+
+# ── the pipes ─────────────────────────────────────────────────────────────
+# THREE descriptors, and each has one job:
+#   fd 8  the child's stdout+stderr, read line by line by `_auth_pump`
+#   fd 9  the child's STDIN, held open by THIS process so the child never sees
+#         EOF while it waits for a code nobody has typed yet
+#   fd 7  the operator's code, arriving from outside on a FIFO this process
+#         owns — opened read-WRITE so it, too, never EOFs
+# The helper reads the code and writes it down fd 9 itself, so the child's
+# stdin has exactly one writer.
+AUTH_RUN=''
+_auth_open_pipes() {
+  AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
+  mkdir -p "$AUTH_RUN" || return 1
+  chmod 700 "$AUTH_RUN" || return 1
+  # Targeted removal, never `rm -rf` on a path under $REG: this process owns
+  # exactly these three names and nothing else in that directory is its
+  # business. A previous run killed mid-flight leaves its FIFOs behind, and
+  # `mkfifo` on an existing path fails — so the removal is not tidiness, it is
+  # what makes a retry possible at all.
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  mkfifo -m 600 "$AUTH_RUN/in"       || return 1
+  mkfifo -m 600 "$AUTH_RUN/out"      || return 1
+  mkfifo -m 600 "$AUTH_RUN/in.child" || return 1
+  # BOTH opened read-WRITE (`<>`), and that is the whole trick: a FIFO opened
+  # read-only blocks until a writer arrives and reports EOF the moment the last
+  # one leaves. Holding a write end on each means the child never sees EOF
+  # while it waits for a code nobody has typed yet, and a code writer that
+  # opens, writes and closes does not end the channel. A FIFO delivers each
+  # byte to exactly ONE reader, and this process never reads fd 9 — so what it
+  # writes there is the child's.
+  exec 9<>"$AUTH_RUN/in.child" || return 1
+  exec 7<>"$AUTH_RUN/in"       || return 1
+}
+
+_auth_close_pipes() {
+  # THE REDIRECTION IS ON THE GROUP, NOT ON THE `exec`s, and that is a
+  # correctness fix rather than a style choice. `exec 7<&- 2>/dev/null` is an
+  # `exec` with no command, so ALL of its redirections are made PERMANENT —
+  # this shell's stderr would point at /dev/null for the rest of the run, and
+  # every refusal after this function (the expiry branch's neighbours, the
+  # non-zero exit, the missing-credential check) would write its sentence
+  # nowhere. Measured: `bash -c 'exec 3<>/dev/null; exec 3<&- 2>/dev/null;
+  # echo x >&2'` prints nothing. The group's own redirection is temporary, so
+  # it still swallows a "bad file descriptor" from closing an fd a failed
+  # `_auth_open_pipes` never opened, which is all it was ever for.
+  { exec 7<&-; exec 8<&-; exec 9<&-; } 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+}
+
+# ── the pump ──────────────────────────────────────────────────────────────
+# ── the token filter ──────────────────────────────────────────────────────
+# THE ONLY PLACE A CREDENTIAL IS EVER SEEN, and it never leaves this function.
+# `_auth_line` calls it FIRST, before any branch that could print, so no later
+# edit can put a token on a stream by accident: a line that carried one is
+# consumed here and the caller is told to stop.
+_auth_write_secret() {   # <token> — 0600, tmp + rename, and nothing is echoed
+  local tok="$1" tmp
+  mkdir -p "$SECRETS_DIR" || return 1
+  chmod 700 "$SECRETS_DIR" || return 1
+  tmp="$SECRETS_DIR/.$AUTH_ID-oauth.env.$$.tmp"
+  ( umask 077; printf 'export CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$tok" > "$tmp" ) \
+    || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+}
+
+# TWO SPELLINGS, deliberately. `setup-token` prints the export line, and
+# matching only that would let a version that changes its wording put a live
+# token into tmux scrollback, the terminal drawer, `Dialog.raw` and the push
+# payload — every surface the pane feeds. The SHAPE is the backstop.
+_auth_capture_token() {   # <clean line> -> 0 when the line carried a token (captured and substituted)
+  local line="$1" tok=''
+  if [[ "$line" == *"CLAUDE_CODE_OAUTH_TOKEN="* ]]; then
+    tok="${line#*CLAUDE_CODE_OAUTH_TOKEN=}"
+  elif [[ "$line" =~ (sk-ant-oat[0-9]{2}-[A-Za-z0-9_-]{16,}) ]]; then
+    tok="${BASH_REMATCH[1]}"
+  else
+    return 1
+  fi
+  tok="${tok%%[[:space:]]*}"
+  tok="${tok%\"}"; tok="${tok#\"}"
+  tok="${tok%\'}"; tok="${tok#\'}"
+  [[ -n "$tok" ]] || return 1
+  _auth_write_secret "$tok" || _auth_die "could not write $SECRETS_DIR/$AUTH_ID-oauth.env"
+  AUTH_SECRET_WRITTEN=1
+  printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  return 0
+}
+
+# ── script(1): two userlands, two argument orders ─────────────────────────
+# The tree's own platform idiom (CCD_OS) rather than a refusal.
+# `script -qfc "<cmd>" /dev/null` is util-linux; BSD's is
+# `script -q /dev/null <cmd> <args…>` — the typescript file comes FIRST and the
+# command is positional. THE BSD ARM IS UNVERIFIED FROM THIS BOX (decision 9):
+# it ships as a branch with an argv-shape test on both arms, and if it is wrong
+# on a real Mac this method answers `pane-unsupported-here` there while login
+# and paste are unaffected.
+_auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE TOKEN PER LINE
+  local joined
+  # `%q`, not `%s`, and it is load-bearing rather than tidy: the util-linux arm
+  # takes ONE `-c` STRING, which `script` hands to a shell — so a path with a
+  # space in it (a HOME under "/Users/Jane Doe", which is an ordinary macOS
+  # home) would be re-split into two arguments and the mint would run the
+  # wrong program. `%q` is bash's own quoter and leaves ordinary tokens
+  # untouched, so the common case reads exactly as it did.
+  printf -v joined '%q ' "$@"; joined="${joined% }"
+  # THE BSD ARM'S ORDER IS RIGHT AND RUNNING IT IS NOT (D-2614, OPEN). The
+  # first macOS CI run this branch ever got — CI schedules nothing for a PR it
+  # cannot compute a merge commit for, and this one conflicted until 2026-09-12
+  # — passes all three argv-contract pins and fails every case that EXECUTES:
+  # 9 of them, 5 in setup-token and 4 in openai-login, which are the TWO
+  # methods that come through here. Hypothesis, unmeasurable from a Linux box:
+  # BSD `script` calls `tcgetattr` on its own stdin and exits 1 when that is
+  # not a terminal, and both callers hand the child a FIFO on stdin
+  # (`<"$AUTH_RUN/in.child"`), overriding the pane's tty. util-linux tolerates
+  # that; BSD does not. The fit is exact — every method through `script` fails,
+  # and `login` and `paste`, which touch no `script(1)` at all, both pass, so
+  # the DEFAULT path is unaffected on either userland. The obvious fix is not
+  # mechanical: `_auth_pump` calls `_auth_forward_code`, which writes into that
+  # same FIFO, so removing the redirect unconditionally would take the code
+  # channel away from any pane method that can be asked for one.
+  if [ "$CCD_OS" = darwin ]; then
+    printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
+  else
+    printf '%s\n' "$CCRC_AUTH_SCRIPT" -qfc "$joined" /dev/null
+  fi
+}
+
+_auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never on stdout
+  # ONLY while the child has actually asked. Forwarding earlier would put a
+  # line into a stdin the child is not reading yet, and the code is single-use.
+  [[ "$AUTH_STATE" == waiting-code ]] || return 0
+  local code=''
+  # A NON-BLOCKING PEEK, then a real read. `read -t 0` answers "is there input
+  # on this descriptor" WITHOUT consuming it, so a tick with nothing waiting
+  # costs nothing and the pump keeps forwarding the child's own output while
+  # the operator reads the URL. Without the peek this call spends a whole TICK
+  # blocked on fd 7 every time round the loop, which halves the rate at which
+  # the child's stream reaches the pane for the entire minutes-long wait.
+  IFS= read -t 0 -u 7 2>/dev/null || return 0
+  IFS= read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
+  [[ -n "$code" ]] || return 0
+  # NOTHING NAMED THE CODE REACHES A STREAM. It goes down fd 9 and nowhere
+  # else; the pane and the transcript get the substitution line instead — the
+  # same policy the token capture applies, applied here to a value that is not
+  # even a secret, because a CALLER cannot tell the two apart and the surfaces
+  # this stdout feeds (tmux scrollback, the terminal drawer, `Dialog.raw`, the
+  # push payload) are the same surfaces either way.
+  printf '%s\n' "$code" >&9 || _auth_die 'could not forward the code to the child'
+  printf '[code written to stdin by ccrc — not shown]\n'
+  _auth_state exchanging
+}
+
+_auth_line() {   # <raw line from the child> [prefix already classified] — classify, substitute, forward
+  local raw="$1" already="${2-}" clean url fresh
+  # CARRIAGE RETURN FIRST, and it is not cosmetic. Two of the three methods
+  # run their child under `script(1)`, which gives it a pty — and a tty's line
+  # discipline translates NL to CR-NL on output. `read -r` splits on NL only,
+  # so every line from a pane method arrives with a trailing CR that would
+  # otherwise reach the status file inside the URL, the transcript and the
+  # substitution line. `login` has no pty and no CR; stripping one that is not
+  # there costs nothing, and this line is therefore NOT measurable from this
+  # method — Task 54's token capture is where deleting it goes red.
+  clean="${raw%$'\r'}"
+  clean="$(_auth_strip_osc8 "$clean")"
+  already="${already%$'\r'}"
+  [[ -z "$already" ]] || already="$(_auth_strip_osc8 "$already")"
+  # THE TOKEN BRANCH IS FIRST, unconditionally, so no later branch can print a
+  # line that carries one. It ships as `return 1` and a later task gives it
+  # eyes; here it never fires, and a `command not found` in its place would put
+  # a line on stderr for every line the pump reads.
+  _auth_capture_token "$clean" && return 0
+  # `url=$(...)` in a PLAIN assignment takes the substitution's exit status,
+  # where `local url=$(...)` would take `local`'s — `url` is declared on the
+  # line above for exactly that reason. ccd states the same rule beside
+  # `_json_str`.
+  if [[ -z "$AUTH_URL" ]] && url="$(_auth_url_of "$clean")"; then
+    AUTH_URL="$url"; _auth_state url
+  fi
+  # CLASSIFY ONLY WHAT IS NEW. A partial the pump already forwarded comes back
+  # with its completion appended — `Paste code here if prompted > ` then, once
+  # the code has gone down fd 9 and the child has answered, the same text plus
+  # `done`. Re-running the prompt match over a prefix that was matched a tick
+  # ago walks the machine BACKWARDS from `exchanging` to `waiting-code`,
+  # telling every watcher the child is asking for a second code it never asked
+  # for. MEASURED before this guard: the observed sequence was
+  # starting, url, exchanging, waiting-code, done.
+  #
+  # A prefix, not a latch, because a re-prompt after a WRONG code is a real
+  # thing and must still be seen: that arrives as text this line did not
+  # already carry, so it lands in `fresh` and fires normally.
+  fresh="$clean"
+  [[ -n "$already" && "$clean" == "$already"* ]] && fresh="${clean#"$already"}"
+  case "$fresh" in
+    *'Paste code here'*|*'Enter the code'*) _auth_state waiting-code ;;
+  esac
+  _auth_user_code "$clean"
+  printf '%s\n' "$clean"
+}
+
+_auth_pump() {   # the one loop: the child's stream out, the operator's code in
+  local line rc pending='' shown=''
+  while :; do
+    line=''
+    IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    if (( rc == 0 )); then
+      _auth_line "$pending$line" "$shown"; pending=''; shown=''
+    elif (( rc > 128 )); then
+      # A TIMEOUT, and this branch is the whole reason `read -t` is here: bash
+      # saves whatever arrived WITHOUT a newline into the variable, so
+      # `Paste code here if prompted > ` — measured to carry none — is visible
+      # here and nowhere else. `shown` keeps one prompt from re-firing every
+      # tick; a partial that later completes IS forwarded again with its full
+      # text, deliberately, because the alternative is holding back output the
+      # operator is waiting to see.
+      # EVERY TICK, not only the tick that emitted the prompt. `_auth_line`
+      # sets `waiting-code`, and `_auth_line` fires ONCE per distinct partial
+      # (the `shown` guard below) — so a forward attached to that one call
+      # would get exactly one chance, on the tick before the operator had even
+      # seen the URL. The code arrives minutes later.
+      #
+      # AND IT RUNS BEFORE `_auth_line`, NOT AFTER. Ordering the two the other
+      # way publishes `waiting-code` and `exchanging` inside the same pump
+      # iteration, microseconds apart, whenever a code is already waiting — so
+      # `waiting-code` exists but is never visible to anything sampling the
+      # file, which is every consumer this state machine has. Running the
+      # forward first puts a whole tick between them: the operator (and the
+      # test that measures the order) sees the machine ask before it sees it
+      # answer.
+      _auth_forward_code
+      pending="$pending$line"
+      if [[ -n "$pending" && "$pending" != "$shown" ]]; then
+        _auth_line "$pending" "$shown"; shown="$pending"
+      fi
+    else
+      # rc 1 = EOF: the child closed its stream.
+      [[ -n "$pending$line" && "$pending$line" != "$shown" ]] && _auth_line "$pending$line" "$shown"
+      return 0
+    fi
+  done
+}
+
+# ── the three methods, and the two line-filters they share ────────────────
+# STUBS, each replaced in its own later task, and each here for a stated
+# reason rather than as scaffolding. Under `set -uo pipefail` with no `-e` an
+# undefined function is not fatal — it is `bash: <name>: command not found` on
+# STDERR, once per line the pump reads, in a method whose own test asserts
+# stderr is empty. A stub is the difference between a staged file and a file
+# that lies about its output.
+_auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
+  # THE UPSTREAM LAUNCHER WITH THE CONFIG DIR SET EXPLICITLY, which is what the
+  # spec asks for: "with CLAUDE_CONFIG_DIR=~/<suffix> … and
+  # CLAUDE_CODE_OAUTH_TOKEN unset". NOT the lane's own launcher: a generated
+  # wrapper re-sources its `secretsFile` inside the child (shared/wrapper.mjs),
+  # which puts back the token `env -u` just removed — so on a token-bearing
+  # lane the custody claim would hold only against a launcher nobody ships.
+  # `setup-token` takes the same shape for the mirror reason (a wrapper's
+  # export would overwrite ITS scratch dir); the rule both obey is one rule:
+  # run the upstream launcher, and set the dir this method wants.
+  local cfg rc
+  cfg="$(_ccrc_cfg_dir "$AUTH_ID")"
+  # `_ccrc_cfg_dir` has NO default arm (shared/generate.mjs), so an id it does
+  # not know echoes nothing rather than guessing a home.
+  [[ -n "$cfg" ]] || _auth_die "no config dir for $AUTH_ID in the roster"
+  [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
+  [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  mkdir -p "$cfg" || _auth_die "cannot create $cfg"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" \
+    env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$cfg" \
+      "$WRAPPER_DIR/$CCRC_UPSTREAM" auth login --claudeai \
+      <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  # 124 IS `_plat_timeout`'s own expiry code, and the ONE thing the callers
+  # branch on — a bounded call that expired is a different fact from one that
+  # failed, and collapsing them would tell an operator to retype a code into a
+  # process that is gone.
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the sign-in exited $rc"
+  [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
+  _auth_state done
+}
+_auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a pty
+  local scratch rc argv=()
+  # THE UPSTREAM LAUNCHER, not the lane's, and the same rule `login` obeys: a
+  # generated wrapper EXPORTS CLAUDE_CONFIG_DIR="$HOME/<suffix>"
+  # (shared/wrapper.mjs), which here would overwrite the scratch dir this
+  # method exists to use. Run the upstream launcher; name the dir you want.
+  [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
+  [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  # BEFORE the pipes, so a box that cannot run this method leaves no FIFOs
+  # behind for the next run to trip over.
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound mint cannot run (use --method login or paste)"
+  # A THROWAWAY dir: setup-token stores nothing and needs no account state, and
+  # a scratch dir carries no settings.json — so no ccrc hook can fire from this
+  # pane.
+  scratch="$SCRATCH_ROOT/$AUTH_ID"
+  mkdir -p "$scratch" || _auth_die "cannot create $scratch"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv \
+    env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$scratch" \
+      "$WRAPPER_DIR/$CCRC_UPSTREAM" setup-token)
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
+    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the mint exited $rc"
+  # A MINT THAT PRINTED NOTHING IS NOT A SUCCESS. `AUTH_SECRET_WRITTEN` is
+  # declared with the other AUTH_* globals and written only by
+  # `_auth_capture_token`; without this line an exit-0 run that showed no
+  # token would stamp `done` over a lane that has no credential.
+  (( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'
+  _auth_state done
+}
+_auth_openai_login() {   # `<launcher> login` — somebody else's program, under a pty
+  # AN EXTERNAL LANE'S LAUNCHER IS NOT CCRC'S. `shared/wrapper.mjs` refuses to
+  # generate a wrapper for `external` outright, so `$WRAPPER_DIR/$id` here is a
+  # file a human wrote and this method only runs it. Its id and its launcher
+  # are the same name by construction. No config dir is minted, no secrets file
+  # is written, and the credential lands wherever that launcher puts it — which
+  # is why the card says "external launcher — ccrc does not manage its
+  # credential" rather than showing a custody line.
+  local rc argv=()
+  [[ -x "$WRAPPER_DIR/$AUTH_ID" ]] \
+    || _auth_die "launcher-absent: $WRAPPER_DIR/$AUTH_ID (declare the lane before logging in)"
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound login cannot run"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv "$WRAPPER_DIR/$AUTH_ID" login)
+  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
+    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  local child=$!
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  (( rc == 0 )) || _auth_die "the launcher's login exited $rc"
+  # NO CREDENTIAL ASSERTION HERE, unlike login and setup-token, and the absence
+  # is the point: ccrc does not know where this launcher keeps its credential
+  # and must not pretend to. The health probe is what measures whether the lane
+  # actually works.
+  _auth_state done
+}
+_auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
+  # The spec says out loud that this value is not a secret and is shown —
+  # which is what makes it the one thing besides the URL that may reach the
+  # status file.
+  #
+  # FIRST match only, and the guard is `-z` on the value rather than a
+  # once-flag: a device-code flow reprints its code on every "still waiting"
+  # line, and a launcher that truncates or re-renders it would otherwise
+  # overwrite the code the operator is in the middle of typing.
+  [[ -z "$AUTH_CODE" ]] || return 0
+  [[ "$1" =~ ([A-Z0-9]{4}-[A-Z0-9]{4}) ]] || return 0
+  AUTH_CODE="${BASH_REMATCH[1]}"
+  _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
+}
+
+_auth_main() {
+  [[ $# -eq 2 ]] || die "usage: $SELF <id> <login|setup-token|openai-login>"
+  AUTH_ID="$1"
+  # BEFORE any path is built from it — the rule ccd states in its R-3 block
+  # ("a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>`
+  # file ccd owns") and applies at every id-minting site. The class is
+  # `shared/roster.ts`'s ID_RE, which is where every rostered id comes from.
+  [[ "$AUTH_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $AUTH_ID"
+  local method="$2"
+  _auth_load_roster
+  _auth_rostered "$AUTH_ID" || die "unknown-account: $AUTH_ID"
+  trap '_auth_cancelled' HUP INT TERM
+  case "$method" in
+    login)        _auth_login ;;
+    setup-token)  _auth_setup_token ;;
+    openai-login) _auth_openai_login ;;
+    *) die "bad method: $method (want login|setup-token|openai-login)" ;;
+  esac
+}
+
+# THE TEST SEAM, one line and no `BASH_SOURCE` guard. In production this file
+# is only ever exec'd, so a source-guard would be machinery nothing exercises;
+# the variable is what `ccd-account-auth.test.ts` sets to assert one function
+# at a time.
+[[ -n "${CCRC_AUTH_NO_MAIN:-}" ]] || _auth_main "$@"

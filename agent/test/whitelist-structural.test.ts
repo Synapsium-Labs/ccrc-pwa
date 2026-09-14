@@ -127,7 +127,7 @@ describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is writt
 
   it('every whitelist literal in the fixtures uses the SHIPPED construct', () => {
     // ROUND 3, P4. g1/g2/g4 and the positive control's `good` were written
-    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:309
+    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:322
     // had become `} as const satisfies ExecWhitelist;`. The two are not the
     // same check — excess-property behaviour under `satisfies` has moved across
     // TS releases before — so a compile-failure pin in the annotation form

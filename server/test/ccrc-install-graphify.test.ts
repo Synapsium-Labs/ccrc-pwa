@@ -1182,12 +1182,36 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     // path put the block for a home that had no CLAUDE.md at all.
     //
     // NO BLANK LINE AFTER THE BLOCK, and that is the fixture being faithful
-    // rather than convenient: the append path (`ccd/ccrc:5321-5326`) writes the
-    // block LAST, `printf '%s\n' "$want"` with nothing after it, so a trailing
-    // blank is never a shape the converge produced. `lb` only ever absorbs the
-    // ONE blank line the append path wrote BEFORE a block, and at line 1 there
-    // is none — the remover must not learn to eat a trailing blank, because
-    // that whitespace would be the operator's, not ccrc's.
+    // rather than convenient.
+    //
+    // SAID AS HISTORY, BECAUSE THE WRITER IS IN NO FILE (D-2023). The append
+    // path was `_inst_graph_always_on`; it arrived in `551a6cb6` (D-1243) and
+    // `6a26a9a3` (D-1245) took it back out when the read side moved to the ccrc
+    // level. This sentence used to carry a line number for it, and there is no
+    // line to carry: `grep -n 'graphify-always-on' ccd/ccrc` returns the
+    // REMOVER's two marker strings (:6311-6312) and nothing else. The number it
+    // had was already naming other code on `origin/main` — `:5321-5326` there is
+    // `_inst_graph_always_on_off`'s own banner, the function that removes the
+    // block cited as the one that wrote it — and each sweep since has moved it
+    // onto a fresh piece of unrelated prose. Repointing it and shifting it are
+    // both wrong when the referent is gone, so it is named by function and by
+    // commit and read out of history: `git show 551a6cb6:ccd/ccrc`.
+    //
+    // WHAT IT WROTE, AND WHY THAT IS STILL THE FIXTURE. Its append arm was
+    // `{ [ -n "$cur" ] && printf '%s\n\n' "$cur"; printf '%s\n' "$want"; }` —
+    // so a home that already had a CLAUDE.md got its text, ONE blank line, then
+    // the block; a home that had none got the block at line 1. In both the block
+    // was LAST and nothing followed it, which is why no case in this describe
+    // seeds a trailing blank.
+    //
+    // AND THE HALF THAT IS A FACT ABOUT A FILE THAT EXISTS is the remover's,
+    // here in this tree: `lb` (ccd/ccrc:6356-6357) starts at the start marker
+    // and steps back exactly one line, and only when that line is empty — so
+    // the one blank it can absorb is the one BEFORE a block, and nothing in the
+    // function looks past the end marker at all. At line 1 there is no line to
+    // step back to. The remover must not learn to eat a trailing blank, because
+    // that whitespace would be the operator's, not ccrc's — the mid-file case
+    // above keeps exactly one blank line for that reason.
     const home = freshBox('ccrc-inst-gfx-off-line1-');
     plantFakeVenv(home);
     const f = seed(home, `${BLOCK}\n## OPERATOR\n- keep me\n`);
@@ -1214,7 +1238,7 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
     // `— left in place; remove by hand`, said in `_inst_graph_hooks_off`'s
     // chained-content refusal — the one other place the tree says it. Cited by
-    // NAME, not by line (D-1343): the plan prescribed `ccd/ccrc:5411 and :5249`
+    // NAME, not by line (D-1343): the plan prescribed `ccd/ccrc:9029 and :5249`
     // verbatim, and :5249 was the converge's unmarked-`## graphify` refusal,
     // which R0's own commit deletes. The spec quotes the phrase with a second
     // em dash; the tree is what ships, and D-1247 records the divergence rather

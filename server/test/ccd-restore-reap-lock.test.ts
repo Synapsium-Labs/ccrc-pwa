@@ -1,10 +1,10 @@
 // server/test/ccd-restore-reap-lock.test.ts
 //
-// The emit must be INSIDE the flock region (opened ccd:4072, closed ccd:4155),
+// The emit must be INSIDE the flock region (opened ccd:5278, closed ccd:5361),
 // or a concurrent `ws-reap` can change `.archived` between the read and the
 // unlink and the record describes a state that never existed at once.
 //
-// It must also never `return` non-zero from inside that region: ccd:4124-4127
+// It must also never `return` non-zero from inside that region: ccd:5330-5333
 // records that any new `return` between 4072 and 4155 leaks the reap lock in the
 // SOURCING shell for ever. `_lc_done` returns 0 on every path, which is exactly
 // what makes this site safe.

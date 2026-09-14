@@ -165,7 +165,16 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
 function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    return coord.currentAsksFor(childIds);
+    const read = coord.currentAsksFor(childIds);
+    // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
+    // absent, exactly as a throw already did — the fail-safe direction this
+    // function was written for, reached by a typed result instead of an
+    // exception. The warn is what distinguishes it from a fleet with no asks.
+    if (!read.ok) {
+      console.warn(`ccrc-server: currentAsksFor refused for ${childIds.length} session(s) — ${read.detail} — one bad read must not kill the poll`);
+      return new Map();
+    }
+    return read.asks;
   } catch (err) {
     console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
     return new Map();

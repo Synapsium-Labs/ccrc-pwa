@@ -168,7 +168,7 @@ describe('the fleet line', () => {
 
   it('a session with a human-chosen name does not animate on a rename', () => {
     // sessionLabel is `name ?? branch ?? …`, and the server only ships a `name`
-    // a human chose (fleet.ts:128 drops Claude Code's derived handles). A rename
+    // a human chose (fleet.ts:241 drops Claude Code's derived handles). A rename
     // under a chosen name changes nothing on screen, by design.
     vi.useFakeTimers();
     const { rerender } = render(

@@ -11,6 +11,7 @@ import { CoordStore, MAIL_RUN_CLOSED_ERROR, MAIL_RECLAIM_CANCELLED_ERROR,
          toRunSummary } from '../src/coord/store.js';
 import { PROGRAM_KICKOFF_SUBJECT, type RunHealth } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun, okRuns } from './coordReadHelpers.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-health-'), '.ccrc', 'coord.db')));
@@ -229,11 +230,11 @@ describe('the per-run health read (F7)', () => {
     const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
     s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
       .run(4_000, k);
-    const wire = s.runs().find((x) => x.id === r.id)!;
+    const wire = okRuns(s.runs()).find((x) => x.id === r.id)!;
     expect(wire.health.coordKickoffPendingSince,
       'runs() never told runHealth who the coordinator is').toBe(4_000);
     // and the single-run read too, which is the other production path.
-    expect(s.run(r.id)!.health.coordKickoffPendingSince).toBe(4_000);
+    expect(okRun(s.run(r.id))!.health.coordKickoffPendingSince).toBe(4_000);
   });
 
   // ── D-1318 ────────────────────────────────────────────────────────────────
@@ -350,7 +351,7 @@ describe('the per-run health read (F7)', () => {
     const r = openRun(s);
     dispatched(s, r.id);
     parkWith(s, mailTo(s, r.id, WORKER), 'recipient not in registry');
-    const wire = s.runs().find((x) => x.id === r.id)!;
+    const wire = okRuns(s.runs()).find((x) => x.id === r.id)!;
     expect(wire.health.mailParked, 'health never reached the wire shape').toBe(1);
   });
 });
@@ -383,9 +384,9 @@ describe('the health facts carry no clock — the constraint that makes them shi
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(2_000);
-      const before = JSON.stringify(s.runs().map(toRunSummary));
+      const before = JSON.stringify(okRuns(s.runs()).map(toRunSummary));
       vi.setSystemTime(2_000 + 600_000);
-      const after = JSON.stringify(s.runs().map(toRunSummary));
+      const after = JSON.stringify(okRuns(s.runs()).map(toRunSummary));
       expect(after, 'a health field moved with the clock — the runs frame can no longer dedupe')
         .toBe(before);
       // Non-vacuity: the facts really are there to have moved.

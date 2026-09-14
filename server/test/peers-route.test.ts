@@ -44,7 +44,7 @@ const seed = (home: string, id: string, uuid: string,
 /** tmux that answers has-session per id: ids named in `dead` have no pane.
  *  `sessionLifecycle` then classifies each row from the pane verdict plus the
  *  registry stamps — dead + `.stopped` reads `stopped`, alive + started reads
- *  running/unsupervised (`shared/api.ts:1325`). */
+ *  running/unsupervised (`shared/api.ts:1617`). */
 const tmuxRunner = (dead: readonly string[] = []): Runner => async (_cmd, args) => {
   if (args[0] === 'has-session') {
     const target = args.join(' ');

@@ -168,7 +168,15 @@ export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
-  const run = coord.run(id);
+  const read = coord.run(id);
+  // D-2545, `closeRun`'s own arm exactly (see its comment): the row exists and
+  // its integers are unrepresentable — refused in words, ahead of any fleet
+  // act, never thrown. `POST /api/runs/:id/dispatch` is as uncaught as the
+  // close route, so a throw here was a bare 500 with no `DispatchOutcome`
+  // shape. `hold-invalid` for the same reason, and the same `detail` rule:
+  // the column, never the value.
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
   if (!run) return { ok: false, kind: 'unknown-run' };
   // Precondition (D-46; a genuine CLAIM, not a stale read, because the
   // caller runs this whole function behind `CoordMutex` — see that class's
@@ -327,7 +335,7 @@ export async function dispatchRun(
   if (run.sessionId === null) {
     // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
     // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
-    // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
+    // <path> (branch …)`, `ccd/ccd:1234`) — a prose line nobody wrote a
     // contract for, and this repo has already paid for one of those. Read
     // the registry before and after; exactly one new `workspace !== null`
     // row for this project is the run's session.

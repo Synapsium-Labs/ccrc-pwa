@@ -17,6 +17,7 @@ import type { PushPayload } from '../src/push.js';
 import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okRuns } from './coordReadHelpers.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -404,7 +405,7 @@ function toggleableLiveIO(): { io: FleetIO; degrade: () => void; heal: () => voi
 // `busy` rather than leaving it at the `alive` default of 'idle' — and that
 // second route reached the push loop looking exactly like a measurement.
 //
-// `unmeasuredIds` (`watch.ts:749`) is derived from `FleetSession.unmeasured`,
+// `unmeasuredIds` (`watch.ts:849`) is derived from `FleetSession.unmeasured`,
 // which is typed `IdentityField[]` and means, precisely, "which of the
 // identity TRIPLE this assembly could not measure". An unreadable live-status
 // file degrades none of the three, so the new `busy` was not in that set — it
@@ -652,7 +653,7 @@ describe('ask notifications carry actions only where the route would accept them
   // RC-off pane renders the busy spinner WHILE a dialog is painted below it —
   // a real, expected combined screen. `detectDialogs`'s own gate asks
   // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom). Fix
-  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:169) also
+  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:178) also
   // now gates on `hasMenu` instead of vetoing on the busy marker, so the
   // pending set really does pick this session up and the ask push fires.
   it('D-102: a live busy spinner painted alongside a menu still raises the ask push — RC-off panes render both at once', async () => {

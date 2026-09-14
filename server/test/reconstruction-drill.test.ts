@@ -31,7 +31,7 @@ function copyFixtureWithout(dir: string, relPath: string): string {
 }
 
 /** A copy of the fixture tree with one file's content replaced — the shape a
- *  stale hold left behind (registry.ts:27: display-only, and PR I's own
+ *  stale hold left behind (registry.ts:28: display-only, and PR I's own
  *  close path rewrites it under the NEXT wave's reason before the ledger
  *  catches up, so disagreement between hold and ledger is an ordinary,
  *  expected state, not a corrupted one). `mkTmp` owns cleanup. */
@@ -80,7 +80,7 @@ function reconstruct(dir: string): Reconstructed {
 
   // 3. The registry says where the work physically is, and — while the hold is
   //    still on — which wave the program had reached. The hold reason is
-  //    display-only by contract (registry.ts:27); reading it HERE is a
+  //    display-only by contract (registry.ts:28); reading it HERE is a
   //    disaster-recovery act by a human, not a parser in the running system.
   //    It is corroborated against the ledger rather than trusted: PR I's own
   //    close path re-holds a workspace under the NEXT wave's reason before
@@ -97,7 +97,7 @@ function reconstruct(dir: string): Reconstructed {
   const holdAgrees = m !== null && Number(m[1]) === ledgerCurrentWave && Number(m[2]) === ledgerWaves;
 
   // 4. `.prhistory` is append-only, and ccd writes to it only when a NEW pr
-  //    number SUPERSEDES an old one for this workspace (ccd:865-866),
+  //    number SUPERSEDES an old one for this workspace (ccd:942-943),
   //    recording the OUTGOING pr and its phase — so the CURRENT pr for a
   //    workspace is never in `.prhistory`; it lives in the registry's
   //    `.prnumber`/`.prphase` instead. Both are corroborated against the
@@ -224,7 +224,7 @@ describe('the reconstruction drill', () => {
     // MEASURED against the unpatched drill in fix-round review: this exact
     // hold against this exact (unchanged) 3-wave ledger returned
     // {currentWave: 9, waves: 12, confidence: 'hold-corroborated'} — no
-    // throw, no downgrade. The hold is display-only (registry.ts:27) and PR
+    // throw, no downgrade. The hold is display-only (registry.ts:28) and PR
     // I's close path rewrites it under the NEXT wave's reason as part of an
     // ordinary close, so disagreement is the expected shape at a wave
     // boundary — the committed ledger must win, and the label must say so.

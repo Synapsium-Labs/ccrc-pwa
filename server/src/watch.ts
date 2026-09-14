@@ -56,7 +56,7 @@ import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 
-const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
+const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
 /** Task sweeps read every task file of every session, so they run on their own
  *  slower clock than the 2 s pane poll — a plan advances on the scale of
@@ -141,7 +141,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  `registry-branch-drift` joins the set for the same "no title fixes it"
  *  reason as the worktree pair above: `cmd_ws_rename` now refuses when git's
  *  own worktree record disagrees with the registry's `branch` field — the
- *  corroboration `cmd_ws_reap` already requires (`ccd:5763`) — because
+ *  corroboration `cmd_ws_reap` already requires (`ccd:7459`) — because
  *  without it a hand `git branch -m` (which moves git's answer but never
  *  updates the registry) leaves this sweep's own condition 2 believing the
  *  branch is still at its born name while `ws-rename` would act on whatever
@@ -158,7 +158,7 @@ const PROVENANCE_WINDOW_MS = 3_600_000;
  *  — `attemptedRenames`'s per-(incarnation, derived-branch) key is already the
  *  correct guard for a name-dependent refusal. Today the arm is dead code:
  *  `deriveBranch` only ever emits `ws/[a-z0-9]+(-[a-z0-9]+)*`, a subset
- *  `_ws_branch_valid` (`ccd/ccd:3063-3071`) always accepts, so `bad-branch`
+ *  `_ws_branch_valid` (`ccd/ccd:3186-3194`) always accepts, so `bad-branch`
  *  never actually reaches this lane — see `naming.ts:26-30`.
  *
  *  `held` (Wave 3 §3.1's `ws-rename` rung) is DELIBERATELY ABSENT and must
@@ -208,7 +208,7 @@ const MAIL_SWEEP_MS = 10_000;
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6724-6725`). */
+ *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:7047-7048`). */
 const MAIL_QUIET_MS = 60_000;
 
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
@@ -508,7 +508,7 @@ export class FleetWatcher {
    *  to be forgotten.
    *
    *  KEYED ON `<id>#<uuid>`, not `<id>` alone: `<project>-<slug>` is a SLUG,
-   *  recycled by `ws-reap` (`ccd:2409`), and nothing in this map is ever
+   *  recycled by `ws-reap` (`ccd:3313`), and nothing in this map is ever
    *  pruned when a row disappears — so a bare `<id>` key would let a reaped
    *  workspace's stale pairs shadow an unrelated LATER workspace that drew the
    *  same recycled slug. `r.uuid` is minted fresh by every `ws-add`, so the
@@ -517,7 +517,7 @@ export class FleetWatcher {
    *  changes with the uuid.
    *
    *  THE SAME KEY CHANGE ALSO HAPPENS WITHOUT A REAP: `ccd`'s `_sync_uuid`
-   *  (`ccd:9004`) rewrites the registry's `uuid` field in place, on the SAME
+   *  (`ccd:10700`) rewrites the registry's `uuid` field in place, on the SAME
    *  live session, whenever Claude Code rotates its own session uuid (a
    *  `/clear`, a compaction) — no `ws-reap`/`ws-add` cycle required. So "a
    *  server restart earns one retry", above, is not the only way a pair earns
@@ -879,7 +879,7 @@ export class FleetWatcher {
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
-      // (`inject/send.ts:26-36,115,126`). Awaiting it would put the dialog
+      // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepMail` immediately above — the
@@ -1144,7 +1144,19 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     let runs: RunSummary[];
-    try { runs = coord.runs().map(toRunSummary); }
+    try {
+      const read = coord.runs();
+      // D-2545: SKIP THE FRAME, the identical degrade to the throw arm below.
+      // `lastRunsJson` is left untouched either way, so the previously-sent
+      // frame stands and a later successful tick still diffs correctly against
+      // what was last actually broadcast. Emitting `[]` here would tell every
+      // client that every run had closed.
+      if (!read.ok) {
+        console.warn(`ccrc-server: emitRuns refused (${read.detail}) — no runs frame this tick`);
+        return;
+      }
+      runs = read.runs.map(toRunSummary);
+    }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
       return;
@@ -1615,7 +1627,7 @@ export class FleetWatcher {
    * design:
    *
    *   1. it is a workspace, not a main checkout, and not archived — `ccd
-   *      ws-archive` "DESTROYS NOTHING" (`ccd:3833`), so an archived row keeps
+   *      ws-archive` "DESTROYS NOTHING" (`ccd:5039`), so an archived row keeps
    *      `workspace`, `branch = ws/<slug>`, its worktree and its transcript,
    *      fully in scope for conditions 2-4 unless excluded here; same guard,
    *      same shape, as the skip right below this one in the file
@@ -1637,7 +1649,7 @@ export class FleetWatcher {
    *      uuid too.
    *
    * KNOWN GAP IN CONDITION 3, accepted and not engineered around: `ccd caps`
-   * has advertised `ws-rename` since long before it took flags (`ccd:3482`), so
+   * has advertised `ws-rename` since long before it took flags (`ccd:4413`), so
    * a fleet on an older ccd passes the verb gate. The old body binds the verb's
    * two arguments positionally — `local id="${1:?usage: …}"; local
    * new="${2:?…}"` — and this argv is `['ws-rename', '--session', <id>,
@@ -1667,7 +1679,7 @@ export class FleetWatcher {
     if (this.lastNameSweep !== 0 && now - this.lastNameSweep < NAME_SWEEP_MS) return;
     this.lastNameSweep = now;
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
-    // is `sl?.branch ?? r.branch` (fleet.ts:155) and the statusline wins, so it
+    // is `sl?.branch ?? r.branch` (fleet.ts:268) and the statusline wins, so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
@@ -1709,9 +1721,15 @@ export class FleetWatcher {
       // `readRegistry` maps an unreadable-but-listed `.hold` to HOLD_UNREADABLE
       // and an empty one to HOLD_NO_REASON, both NON-null, so `!== null` is the
       // whole test and must not grow an emptiness clause.
-      if (r.held !== null || (this.deps.coord?.openRunsForSession(r.id).length ?? 0) > 0) continue;
+      //
+      // D-2545: a REFUSAL reads as CLAIMED too, on the same "doubt reads as
+      // HELD" rule this comment already states for an unreadable `.hold`. The
+      // sweep's act is a branch rename; a workspace this box could not prove
+      // unclaimed is one it must not rename.
+      const sib = this.deps.coord?.openRunsForSession(r.id);
+      if (r.held !== null || (sib !== undefined && (!sib.ok || sib.siblings.length > 0))) continue;
       // Keyed by id AND uuid, not id alone: `<project>-<slug>` is a SLUG,
-      // recycled by ws-reap (`ccd:2409`'s "144 per project, recycled") —
+      // recycled by ws-reap (`ccd:3313`'s "144 per project, recycled") —
       // `_ws_slug_free` only ever checks live registry rows, which `_reg_purge`
       // deletes on reap, so nothing stops a later `ws-add` drawing the same
       // slug for an unrelated workspace. `identity.uuid` is the Claude Code
@@ -1930,7 +1948,16 @@ export class FleetWatcher {
     let openRunSessionIds = new Set<string>();
     let openRunIds = new Set<number>();
     try {
-      const openRuns = this.deps.coord?.runs() ?? [];
+      const read = this.deps.coord?.runs();
+      // D-2545: a refusal skips the census this pass, exactly as the throw arm
+      // below does and for the same stated reason. NOT `?? []` — an empty run
+      // set is what makes every claimed worktree look unclaimed, which is the
+      // one direction this sweep's own comment above calls dangerous.
+      if (read !== undefined && !read.ok) {
+        console.warn(`ccrc-server: sweepDivergences runs() refused (${read.detail}) — no census this pass`);
+        return;
+      }
+      const openRuns = read?.runs ?? [];
       openRunSessionIds = new Set(
         openRuns.map((r) => r.sessionId).filter((id): id is string => id !== null));
       openRunIds = new Set(openRuns.map((r) => r.id));
@@ -1974,7 +2001,7 @@ export class FleetWatcher {
         id: r.id, project: r.project, workspace: r.workspace, workdir: r.workdir,
         branch: r.branch, held: r.held, archivedAt: r.archivedAt,
         // OFF THE RECORDS THIS SWEEP WAS HANDED, never a second read. The tick
-        // already measured `.supervised` for every row (`registry.ts:185`), and
+        // already measured `.supervised` for every row (`registry.ts:187`), and
         // a re-read here would be a whole-fleet field sweep a minute for a
         // number sitting in scope.
         // D-1157. `r.supervisedAt` is epoch SECONDS and this seam is compared
@@ -2417,7 +2444,7 @@ export class FleetWatcher {
    *
    * WHAT THIS CANNOT SEE, stated because it bounds the guarantee: Claude Code
    * silently QUEUES a prompt sent mid-turn and renders the hint in a dim span
-   * that `draftOf` strips (`inject/send.ts:61`, pinned against a live capture
+   * that `draftOf` strips (`inject/send.ts:65`, pinned against a live capture
    * at `send.test.ts:642`). So "the box reads empty" is not "nothing is
    * pending", and the gate above is what keeps the lane away from a busy
    * session in the first place — not the send path, which would happily
@@ -2714,7 +2741,7 @@ export class FleetWatcher {
           // (`runId IS NULL`) is out of its reach, and `MAIL_REPLAY_MAX_ATTEMPTS`
           // counts SUCCESSFUL replays, which a row gated HERE never gets.
           // Without the park the row stays due at the 15-minute ceiling for
-          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3516`,
+          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3653`,
           // and ccd's own comment: "144 per project, recycled by ws-reap"), so
           // that id can be re-minted for an unrelated workspace and the lane
           // will then type this stale envelope into it. `mail_deliveries`
@@ -3307,13 +3334,24 @@ export class FleetWatcher {
       // `?? []` is not an overloaded null — a server with coordination switched
       // off has no runs to be claimed by, so "no coord" and "no open run" are
       // the same fact here rather than two a caller would treat differently.
-      const openRuns = this.deps.coord?.openRunsForSession(r.id) ?? [];
+      //
+      // D-2545: THE SUCCESS PATH IS BYTE-IDENTICAL — the specific reason below
+      // is still built exactly as it was, and the wave-1 ruling's "generic
+      // open-run reason" describes only the refusal arm. On a refusal the
+      // sentence falls back to a GENERIC one naming no row detail: the reason
+      // is display-only here, and a notification must not assert a run number,
+      // a programme or a wave off a read that did not happen.
+      const sib = this.deps.coord?.openRunsForSession(r.id);
+      const unreadable = sib !== undefined && !sib.ok;
+      const openRuns = sib?.ok ? sib.siblings : [];
       const run = openRuns[openRuns.length - 1];
       const reason = r.held !== null
         ? r.held
         : run !== undefined
           ? `run ${run.id} is still open — ${run.program} wave ${run.wave}${run.waveOf === null ? '' : `/${run.waveOf}`}`
-          : null;
+          : unreadable
+            ? 'a run may still be open — the run rows could not be read'
+            : null;
       this.announceMerged(key, r, pr.number, reason);
     }
   }
@@ -3412,7 +3450,7 @@ export class FleetWatcher {
       // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
       // 'busy' here and this sweep would suppress the parse forever. hasMenu is
       // deliberately independent of the busy check for exactly that reason
-      // (pane/dialog.ts:33-45); it's the same idiom send.ts:320 uses to decide
+      // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
       // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().
@@ -3760,7 +3798,15 @@ export class FleetWatcher {
       // RULING F9.
       let row: AskRow | null;
       try {
-        row = store.askById(held.askId);
+        const read = store.askById(held.askId);
+        // D-2545: the SAME degrade as the throw arm below — leave the hold in
+        // place and retry next sweep. A row this box could not read is not a
+        // row that is gone, and `row === null` below fires the push.
+        if (!read.ok) {
+          console.warn(`ccrc-server: askById refused for ask ${held.askId} (session ${id}) (${read.detail}) — leaving the hold in place to retry next sweep`);
+          continue;
+        }
+        row = read.ask;
       } catch (err) {
         console.warn(`ccrc-server: askById failed for ask ${held.askId} (session ${id}) (${err instanceof Error ? err.message : String(err)}) — leaving the hold in place to retry next sweep`);
         continue;
@@ -3878,7 +3924,16 @@ export class FleetWatcher {
     // the same idiom `sweepMerged` above already uses. Recorded on the ask
     // row for provenance; the OPERATOR MAIL below deliberately does NOT carry
     // it (see that call's own comment).
-    const openRuns = this.deps.coord!.openRunsForSession(r.id);
+    // D-2545. ABORT THE MINT rather than hold a question against a run this
+    // box could not read: `hold` is called inside `detectDialogs`' try/catch,
+    // which falls back to the EXISTING immediate-operator-push `raise()` —
+    // minting no ask row and no parent mail, which is exactly the ruled
+    // behaviour. Reached by a typed result rather than by `node:sqlite`'s bare
+    // `RangeError`, but landing in the same place on purpose, and it throws
+    // BEFORE `insertAsk` so there is nothing to compensate.
+    const sib = this.deps.coord!.openRunsForSession(r.id);
+    if (!sib.ok) throw new Error(`hold: ${sib.detail}`);
+    const openRuns = sib.siblings;
     const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;
     const askId = this.deps.coord!.insertAsk({
       childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,

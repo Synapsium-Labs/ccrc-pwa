@@ -188,7 +188,7 @@ describe('one comparison, two kinds of key', () => {
   });
 
   it('prune never deletes a namespaced key — a session id cannot contain a colon', () => {
-    // ccd's own id regex is ^[A-Za-z0-9._-]+$ (ccd:1671), which is what makes
+    // ccd's own id regex is ^[A-Za-z0-9._-]+$ (ccd:1794), which is what makes
     // `ccrc:feed` collision-proof. Without this rule the feed watermark is
     // deleted — and the deletion PERSISTED — within one fleet snapshot.
     ack('cc-a', 1_000);

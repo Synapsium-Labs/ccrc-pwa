@@ -14,16 +14,18 @@
 // DELIVERY id, a different AUTOINCREMENT sequence — see that file's own
 // docstring). This suite imports and fixtures the real thing.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { CCRC_API } from './ccdWsHelpers.js';
-import { readdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
-  MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES, isPrPhase, isRunRefuseCode,
+  ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
+  isPrPhase, isRunRefuseCode,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -1342,7 +1344,7 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 
   it('names the two id-preserving revives, and says whose act they are', () => {
     // The one-argument form is the whole point: the two-argument form mints a
-    // second id for a live session (ccd:12118-12123, and
+    // second id for a live session (ccd:15265-15270, and
     // SessionActionsSheet.tsx:287-289 names the same operator).
     expect(rb()).toContain('ccd start <id>');
     expect(rb()).toContain('/api/sessions/:id/ensure');
@@ -1498,6 +1500,91 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
 // run record is the one fact both kinds of coordinator share, and `GET /api/runs`
 // is EXEMPT-BUT-AUTHENTICATED (`auth/gate.ts`, D-149) precisely so a cookieless
 // fleet-host session can read it. Anchors by SYMBOL — see M2 above.
+describe('the ask-answer 409 contract distinguishes route/CAS guards from answerAsk refusals', () => {
+  const ROUTE_CAS_409 = ['not-held', 'ask-moved', 'child-unmeasurable'] as const;
+
+  /** Derive the downstream vocabulary from answerAsk's own return statements,
+   *  then prove every token still belongs to the shared wire vocabulary. */
+  const downstreamAnswerRefusals = (): string[] => {
+    const source = readFileSync(path.join(root, 'server/src/inject/ask.ts'), 'utf8');
+    const body = source.slice(source.indexOf('export async function answerAsk('));
+    return [...new Set([...body.matchAll(/ok: false, error: '([^']+)'/g)].map((m) => m[1]!))].sort();
+  };
+
+  it('names the three pre-answer route/CAS 409s and every downstream refusal separately', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    // Guard on the INDEX, not the slice: `slice(-1)` on a missing heading hands
+    // back the file's last character, so a `not.toBe('')` here can never fire and
+    // a renamed heading would red several assertions later under a message about
+    // a refusal code instead.
+    const at = lifecycle.indexOf('## The ask lane');
+    expect(at, 'wave-lifecycle.md no longer carries the ask lane').toBeGreaterThanOrEqual(0);
+    const section = lifecycle.slice(at);
+
+    const downstream = downstreamAnswerRefusals();
+    expect(downstream, 'answerAsk no longer exposes the ten documented downstream refusals')
+      .toHaveLength(10);
+    for (const code of [...ROUTE_CAS_409, ...downstream]) {
+      expect(ASK_REFUSE_CODES as readonly string[], `${code} is not a shared AskRefuseCode`)
+        .toContain(code);
+      expect(section, `the ask lane does not name ${code}`).toContain(`\`${code}\``);
+    }
+
+    expect(flat(section), 'the route/CAS refusals are not scoped before answerAsk')
+      .toContain(flat('three route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or `child-unmeasurable`)'));
+    expect(flat(section), 'the downstream refusal list is not identified as answerAsk output')
+      .toContain(flat('Downstream `answerAsk` refusals include'));
+    // The negative below only catches the literal phrasings; a paraphrase
+    // ("limited to three", "one of three things") walks straight past it. So the
+    // load-bearing pin is POSITIVE and ARITHMETIC: the section states the split
+    // as digits derived from the two sources above, so dropping a downstream
+    // refusal from `answerAsk` or rewriting the prose back to a three-condition
+    // claim both red here rather than only in a phrasing the regex happens to know.
+    expect(section, 'the ask lane no longer states the 409 split as its two derived halves')
+      .toContain(`(${ROUTE_CAS_409.length} + ${downstream.length}) distinct codes`);
+    expect(section, 'the ask lane regressed to one of the literal three-condition phrasings')
+      .not.toMatch(/409[^.]{0,240}(?:only|is|has) three (?:possible )?(?:conditions|refusals)/i);
+  });
+
+  // D-2719 narrowed the CLIENT to `state=held` and left the prose promising the
+  // caller's "open asks" — and open is `held` PLUS `answering` (`fleet.ts`), so
+  // the sentence sent a coordinator looking for contradictory questions to a
+  // call that cannot show it one another principal has already taken. The state
+  // is HARVESTED from the client, so narrowing it again without saying so reds.
+  it('describes the asks-list view as the state the client actually sends', () => {
+    const client = readFileSync(path.join(root, 'ccd/ccrc-api'), 'utf8');
+    const state = /query="parent=\$DERIVED_ID&fromUuid=\$DERIVED_UUID&state=([a-z]+)"/
+      .exec(client)?.[1];
+    expect(state, 'the client no longer builds the asks-list query this harvest knows')
+      .toBeTruthy();
+
+    // And the claim the prose makes ABOUT that state — that it is narrower than
+    // the route's own open set — is measured, not asserted: `fleet.ts` is where
+    // open is decided, and it names two states.
+    const fleet = readFileSync(path.join(root, 'server/src/fleet.ts'), 'utf8');
+    const openStates = /row\.state === '([a-z]+)' \|\| row\.state === '([a-z]+)'/.exec(fleet);
+    expect(openStates, 'fleet.ts no longer decides open on two ask states').not.toBeNull();
+    const [, first, second] = openStates!;
+    expect([first, second], 'the open set no longer contains the client-sent state')
+      .toContain(state);
+    const omitted = [first, second].find((x) => x !== state);
+    expect(omitted, 'the open set no longer has a state this view omits').toBeTruthy();
+
+    const lifecycle = refs('wave-lifecycle.md');
+    const at = lifecycle.indexOf("Read your own children's");
+    expect(at, 'the ask lane no longer describes the asks-list read')
+      .toBeGreaterThanOrEqual(0);
+    const para = flat(lifecycle.slice(at, lifecycle.indexOf('\n\n', at + 1)));
+
+    expect(para, `the asks-list paragraph does not name \`state=${state}\``)
+      .toContain(`\`state=${state}\``);
+    expect(para, 'the asks-list paragraph no longer says the view is narrower than open')
+      .toContain('NARROWER than the open set');
+    expect(para, `the asks-list paragraph does not name the omitted \`${omitted}\` state`)
+      .toContain(`\`${omitted}\``);
+  });
+});
+
 describe('the coordinator skill triggers and resumes on the RUN RECORD, not a hold', () => {
   const fm = (): string => skill.slice(4, skill.indexOf('\n---', 4));
 
@@ -1551,5 +1638,496 @@ describe('the coordinator skill triggers and resumes on the RUN RECORD, not a ho
 
   it('points a dying coordinator at the runbook, by the path the skill installs it at', () => {
     expect(skill).toContain('`references/resume.md`');
+  });
+});
+
+// ── cross-repo wave 2: the project boundary, in the skill (spec §3 F3) ───────
+//
+// Wave 1 made the boundary MECHANICAL (`project-mismatch`, `home-mismatch`) and
+// named both codes in the refusal list. That is the server refusing; this is the
+// coordinator knowing. The two are not the same guard and the difference is
+// measurable: a coordinator that meets `project-mismatch` has already queued a
+// brief onto the wrong repo's workspace in its own head, and the refusal is what
+// stops the fleet — not what tells it what to do instead.
+//
+// Sentence-literal pins, the same mechanism `CONTRACT` uses and for the same
+// reason: the SENTENCE is the instruction, so a paraphrase must fail exactly as
+// a deletion does. Each row carries what it is FOR, so a red names the rule that
+// went missing rather than a 90-character string.
+describe('the coordinator learns the project boundary (cross-repo wave 2, spec §3 F3)', () => {
+  const CROSSING: readonly (readonly [string, string])[] = [
+    ['the reuse rule — a sessionId is a same-project idiom',
+      'Reuse `sessionId` ONLY when the next wave stays in the same project.'],
+    ['what a crossing wave does instead',
+      'A wave that CHANGES project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo'],
+    ['the running-worker cap counts dispatched non-terminal runs',
+      'concurrency counts dispatched non-terminal runs, not held workspaces'],
+    ['the daily cap counts each actual dispatch',
+      'each actual dispatch still consumes daily budget'],
+    ['homeProject on every open',
+      'Every `POST /api/runs` for this programme carries `homeProject`'],
+    ['the brief carries the immutable-plan source tuple',
+      'carries the three immutable-plan coordinates: `homeRepoRoot`, `planRepoPath`, and `planSha`'],
+    ['producer-source provenance is conditional on a real interface dependency',
+      'Only a consumer that depends on a producer interface carries the producer contract'],
+    ['a no-dependency foreign wave carries no producer contract or excerpt',
+      'A foreign-repo wave with no producer-interface dependency carries none of those producer fields and no invented excerpt.'],
+    ['the producer contract includes its own repository root',
+      '`producerRepoRoot`, `producerSourceRepoPath`, `producerSha`'],
+    ['the brief inlines a required contract excerpt verbatim',
+      'contract excerpt inlined verbatim from the merged file'],
+    ['the named plan blob is read exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['the named producer blob is read exactly',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+
+    ['same-project succession transfers the hold',
+      'close the producer with `final:false` so its hold transfers'],
+    ['cross-project succession releases the producer',
+      'close the producer with `final:true` and require `released:true`'],
+    ['the producer is verified after close through closed runs',
+      'run `"$API" runs list --closed 1`'],
+    ['the exact producer SHA is independently proven merged',
+      'independently prove the producer interface PR merged at the exact `producerSha`'],
+    ['deviations are minted against the home project',
+      'minted against the HOME project'],
+  ];
+
+  it('carries the crossing section at all', () => {
+    expect(skill).toContain('## When a wave crosses into another project');
+  });
+
+  it('executes the runs-open example and transmits the complete programme identity', () => {
+    const blocks = [...skill.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1]!)
+      .filter((block) => block.includes('"$API" runs open --json'));
+    expect(blocks, 'SKILL.md must carry exactly one executable runs-open example').toHaveLength(1);
+    const body = /runs open --json - <<JSON\n(\{[^\n]+\})\nJSON/.exec(blocks[0]!);
+    expect(body, 'the executable runs-open example has no one-line JSON body').not.toBeNull();
+    const keys = [...body![1]!.matchAll(/"([A-Za-z]+)":/g)].map((m) => m[1]!).sort();
+    expect(keys).toEqual([
+      'claimedBy', 'homeProject', 'program', 'project', 'title', 'wave', 'waveOf',
+    ]);
+    expect(body![1], 'the executable body omits the immutable programme home')
+      .toContain('"homeProject":"<home project>"');
+
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'ccrc-runs-open-example-'));
+    const calls = path.join(fixture, 'calls');
+    const api = path.join(fixture, '.local/bin/ccrc-api');
+    try {
+      mkdirSync(path.dirname(api), { recursive: true });
+      writeFileSync(api, '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$CALLS"\ncat >> "$CALLS"\n',
+        { mode: 0o755 });
+      const executable = blocks[0]!
+        .replace(/<slug>/g, 'fixture-program')
+        .replace(/<title>/g, 'Fixture title')
+        .replace(/<project>/g, 'consumer-project')
+        .replace(/<home project>/g, 'home-project')
+        .replace(/<M or null>/g, '3');
+      execFileSync('bash', ['-c', executable], {
+        env: { ...process.env, HOME: fixture, API: api, id: 'coordinator-id', CALLS: calls },
+      });
+      const [argv, json] = readFileSync(calls, 'utf8').split('\n', 2);
+      expect(argv).toBe('runs open --json -');
+      expect(JSON.parse(json!)).toEqual({
+        program: 'fixture-program', title: 'Fixture title', project: 'consumer-project',
+        homeProject: 'home-project', wave: 1, waveOf: 3, claimedBy: 'coordinator-id',
+      });
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  // `flat` is this file's own helper (`const flat = (s: string) => s.replace(/\s+/g, ' ')`,
+  // the `readme-holds.test.ts` idiom):
+  // both corpora wrap mid-clause at 80 columns, so a raw `toContain` would pin
+  // the WRAP POINT rather than the sentence and would red on a re-flow that
+  // changed nothing. A paraphrase still fails exactly as a deletion does.
+  it.each(CROSSING)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  // D-2717, on the surface that is always loaded. `wave-lifecycle.md` is read on
+  // demand; SKILL.md is read every wave, and its step 5 states the two
+  // successions as two arms. The CROSSING table above pins their sentences with
+  // bare `toContain`s over the whole file — and the closed-row phrase occurs in
+  // BOTH arms, so deleting it from either one left every row green. Measured per
+  // arm, by index, so an arm that loses an act, or states it before the close it
+  // is supposed to follow, reds where the arm is named.
+  it('orders each SKILL.md succession arm independently: open, close, then the closed-row proof', () => {
+    const start = skill.indexOf('5. **Review the handoff commit**');
+    expect(start, 'SKILL.md no longer carries step 5').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n6. **Final merge:**', start + 1);
+    expect(end, 'step 5 no longer ends where step 6 begins').toBeGreaterThan(start);
+    const step5 = skill.slice(start, end);
+
+    const sameAt = step5.indexOf('**Same project:**');
+    const crossAt = step5.indexOf('**Different project:**');
+    expect(sameAt, 'step 5 no longer has a same-project arm').toBeGreaterThanOrEqual(0);
+    expect(crossAt, 'step 5 no longer has a cross-project arm').toBeGreaterThan(sameAt);
+
+    const same = flat(step5.slice(sameAt, crossAt));
+    const cross = flat(step5.slice(crossAt));
+
+    for (const [name, arm, closeWith] of [
+      ['the same-project arm', same, '`final:false`'],
+      ['the cross-project arm', cross, '`final:true`'],
+    ] as const) {
+      const open = arm.indexOf('open wave N+1 first');
+      const close = arm.indexOf(closeWith);
+      const proof = arm.indexOf('runs list --closed 1');
+      const done = arm.indexOf('require its own `state` to be `done`');
+      expect(open, `${name} no longer opens the successor first`).toBeGreaterThanOrEqual(0);
+      expect(close, `${name} no longer closes the producer with ${closeWith}`).toBeGreaterThan(open);
+      expect(proof, `${name} no longer reads the closed run AFTER its own close`).toBeGreaterThan(close);
+      expect(done, `${name} no longer requires the producer row's own state to be done`)
+        .toBeGreaterThan(proof);
+    }
+
+    // D-2716's other half: merge proof belongs to the cross-project arm, and only
+    // behind a real dependency. Deleting the condition makes it mandatory for
+    // every crossing — green under every other assertion in this file.
+    expect(same, 'the same-project arm now demands an interface merge proof')
+      .not.toContain('merged at the exact `producerSha`');
+    const cond = cross.indexOf('If the consumer depends on an interface from that producer,');
+    const merge = cross.indexOf('merged at the exact `producerSha`');
+    expect(cond, 'the cross-project merge proof is no longer conditional on a real dependency')
+      .toBeGreaterThanOrEqual(0);
+    expect(merge, 'the cross-project arm no longer names the exact-SHA merge proof')
+      .toBeGreaterThan(cond);
+  });
+
+  // D-2730. The crossing section points BACK at step 5, and this branch rewrote
+  // step 5 — so the pointer's claim ("nothing in it says so") was falsified by
+  // the same commit that made it worth reading. A cross-reference is a claim
+  // about another section, and nothing checked it: the CROSSING table pins only
+  // the bolded lead sentence. Grounded in step 5's own arm markers, so rewriting
+  // either section without the other reds here.
+  it('describes step 5 as step 5 actually reads', () => {
+    const start = skill.indexOf('## When a wave crosses into another project');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = flat(skill.slice(start, end === -1 ? undefined : end));
+
+    const step5 = skill.slice(skill.indexOf('5. **Review the handoff commit**'),
+      skill.indexOf('\n6. **Final merge:**'));
+    for (const arm of ['**Same project:**', '**Different project:**']) {
+      expect(step5, `step 5 lost its ${arm} arm`).toContain(arm);
+      expect(section, `the crossing section does not name step 5's ${arm} arm`)
+        .toContain(arm);
+    }
+    // The falsified claim itself, by the property rather than the wording: the
+    // crossing section may not tell the reader step 5 is silent on this, because
+    // step 5 is not.
+    expect(section, 'the crossing section still claims step 5 does not distinguish the two')
+      .not.toMatch(/nothing in it says so|step 5[^.]{0,80}does not say/i);
+  });
+
+  it('names BOTH new refusal codes where the rule that provokes them is stated', () => {
+    // Not the refusal-list sentence (wave 1's, pinned by its own test above):
+    // this is the section that tells a coordinator what it did to earn them, and
+    // a rule stated without its refusal leaves the reader to guess which one
+    // they are looking at.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    expect(start, 'the crossing section is gone').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const code of ['project-mismatch', 'home-mismatch']) {
+      expect(section, `the crossing section never names ${code}`).toContain(code);
+    }
+    // And the caps it warns about are the real ones, spelled as the codes the
+    // dispatch actually answers with.
+    for (const cap of ['cap-concurrency', 'cap-daily']) {
+      expect(section, `the crossing section never names ${cap}`).toContain(cap);
+    }
+  });
+
+  // D-2686's caps paragraph tells a refused coordinator which numbers to read.
+  // It named `running` for BOTH codes for one round, and only `cap-concurrency`
+  // carries one — so the sentence sent a `cap-daily` reader after a field its
+  // frame does not have. HARVESTED from the two refusal frames rather than
+  // typed, so renaming a field, or adding a third cap, reds here.
+  const capRefusalFields = (code: string): string[] => {
+    const src = readFileSync(path.join(root, 'server/src/coord/dispatch.ts'), 'utf8');
+    const at = src.indexOf(`code: '${code}',`);
+    if (at < 0) throw new Error(`dispatch.ts sends no ${code} refusal — this harvest is stale`);
+    const frame = src.slice(at, src.indexOf('};', at));
+    return [...new Set([...frame.matchAll(/(\w+):/g)].map((m) => m[1]!))]
+      .filter((f) => f !== 'code').sort();
+  };
+
+  it('tells a refused coordinator the fields its OWN cap frame carries', () => {
+    const caps = refs('wave-lifecycle.md');
+    const start = caps.indexOf('**Caps count runs, not holds.**');
+    expect(start, 'wave-lifecycle.md no longer carries the caps paragraph')
+      .toBeGreaterThanOrEqual(0);
+    const para = flat(caps.slice(start, caps.indexOf('\n\n**', start + 1)));
+
+    const concurrency = capRefusalFields('cap-concurrency');
+    const daily = capRefusalFields('cap-daily');
+    expect(concurrency, 'cap-concurrency no longer carries limit and running')
+      .toEqual(['limit', 'running']);
+    expect(daily, 'cap-daily no longer carries limit and used').toEqual(['limit', 'used']);
+
+    for (const field of concurrency) {
+      expect(para, `the caps paragraph never names cap-concurrency's \`${field}\``)
+        .toContain(`\`${field}\``);
+    }
+    for (const field of daily) {
+      expect(para, `the caps paragraph never names cap-daily's \`${field}\``)
+        .toContain(`\`${field}\``);
+    }
+    // The whole point: the field `cap-daily` does NOT carry must be said to be
+    // absent from it, not left for the reader to discover on a live refusal.
+    const missing = concurrency.filter((f) => !daily.includes(f));
+    expect(missing, 'the two cap frames no longer differ, so this pin is moot')
+      .not.toEqual([]);
+    for (const field of missing) {
+      expect(para, `the paragraph does not say cap-daily never carries \`${field}\``)
+        .toMatch(new RegExp(`cap-daily[^.]{0,160}never carries \`${field}\``));
+    }
+  });
+
+  it('does not let the crossing section teach a second /clear writer or a reap', () => {
+    // The census tests above count `ws-reap`/`ws-rm`/`ws-gc` over `allSkillText`
+    // and clause 9 owns `/clear`; a new section is exactly where a well-meant
+    // recovery sentence gets added. Asserted HERE too, scoped to the section, so
+    // the failure names the section rather than a whole-file count.
+    const start = skill.indexOf('## When a wave crosses into another project');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-reap', 'ws-rm', 'ws-gc', '/clear']) {
+      expect(section, `the crossing section names ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  // The reference is what a coordinator reads WHILE making the call — the
+  // refusal tables wave 1 extended live here, three lines from the body being
+  // typed. A boundary stated only in SKILL.md is a boundary read once, at
+  // install time, by a session that had no run open yet.
+  const LIFECYCLE: readonly (readonly [string, string])[] = [
+    ['§1 — why sessionId is a same-project field',
+      '`sessionId` reclaims a workspace, and a workspace lives in ONE repo'],
+    ['§1 — the crossing open sends none',
+      'a wave that changes project sends no `sessionId` at all'],
+    ['§1 — homeProject rides the open body',
+      '`"homeProject":"<the home project>"`'],
+    ['§1 — the two response fields, and their null',
+      'both are null while the stored home is null'],
+    ['§1 — ledgerAbsPath is not a plan coordinate',
+      '`ledgerAbsPath` is ONLY that home\'s programme ledger'],
+    ['§2 — what a foreign-repo brief carries beyond the ordinary list',
+      '`homeRepoRoot`, the absolute path to the home repository root; `planRepoPath`'],
+    ['§2 — the named plan is read mechanically',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['§2 — producer-source provenance is conditional',
+      'Only a consumer with a producer-interface dependency carries the producer contract'],
+    ['§2 — no dependency means no producer fields or excerpt',
+      'A foreign-repo wave with no such dependency carries none of these producer fields and no invented excerpt.'],
+    ['§2 — the producer repository root is named',
+      '`producerRepoRoot`, the absolute producer-repository root'],
+    ['§2 — producer-source provenance is named',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['§2 — the named producer source is read mechanically',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['§2 — plan failure cannot fall back to a mutable checkout',
+      'If that repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§2 — producer failure cannot fall back to consumer cwd',
+      'If that producer repository, commit, or path cannot be resolved, it reports and stops.'],
+    ['§5 — same-project close transfers the hold',
+      'close the producer with `final:false`'],
+    ['§5 — cross-project close releases the producer',
+      'close the producer with `final:true` and require `released:true`'],
+    ['§5 — the same-project producer is queried after its close',
+      'After that same-project close, run `"$API" runs list --closed 1`'],
+    ['§5 — the cross-project producer is queried after its close',
+      'After that cross-project close, run `"$API" runs list --closed 1`'],
+    ['§5 — a required merge is proved independently at the producer SHA',
+      'If the consumer depends on an interface from this producer, independently prove the producer interface PR merged at the exact `producerSha`'],
+
+  ];
+
+  it.each(LIFECYCLE)('wave-lifecycle.md states %s', (_what, sentence) => {
+    expect(flat(refs('wave-lifecycle.md')), `wave-lifecycle.md no longer states ${_what}`)
+      .toContain(flat(sentence));
+  });
+
+  it('orders each succession branch independently before consumer dispatch', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
+      lifecycle.indexOf('## 6 — Final merge'));
+    const sameStart = boundary.indexOf('**Same project:**');
+    const crossStart = boundary.indexOf('**Different project:**');
+    const commonStart = boundary.indexOf('\n   A missing/non-`done` producer row', crossStart);
+    const dispatchAt = boundary.indexOf('Dispatch wave N+1');
+    expect(sameStart).toBeGreaterThanOrEqual(0);
+    expect(crossStart).toBeGreaterThan(sameStart);
+    expect(commonStart).toBeGreaterThan(crossStart);
+    expect(dispatchAt).toBeGreaterThan(commonStart);
+
+    const same = boundary.slice(sameStart, crossStart);
+    const sameOpen = same.indexOf('open wave N+1 first');
+    const sameClose = same.indexOf('close the producer with `final:false`');
+    const sameCheck = same.indexOf('"$API" runs list --closed 1');
+    expect(sameOpen, 'same-project successor open is missing').toBeGreaterThanOrEqual(0);
+    expect(sameClose, 'same-project close must follow its open').toBeGreaterThan(sameOpen);
+    expect(sameCheck, 'same-project closed-row proof must follow its close').toBeGreaterThan(sameClose);
+
+    const cross = boundary.slice(crossStart, commonStart);
+    const crossOpen = cross.indexOf('open wave N+1 first');
+    const crossClose = cross.indexOf('close the producer with `final:true`');
+    const crossCheck = cross.indexOf('"$API" runs list --closed 1');
+    const merge = cross.indexOf('independently prove the producer interface\n   PR merged');
+    expect(crossOpen, 'cross-project successor open is missing').toBeGreaterThanOrEqual(0);
+    expect(crossClose, 'cross-project close must follow its open').toBeGreaterThan(crossOpen);
+    expect(crossCheck, 'cross-project closed-row proof must follow its close').toBeGreaterThan(crossClose);
+    expect(merge, 'conditional exact-SHA merge proof must follow the cross-project row proof')
+      .toBeGreaterThan(crossCheck);
+  });
+
+  // D-2728. The wave-3 plan prescribes BOTH a test and the prose that test runs
+  // against, and nothing executes a plan document — so the two halves drifted
+  // apart and the plan still declared "Expected: PASS". Measured against the
+  // shipped plan before this guard: five of its prescribed assertions could not
+  // match its prescribed prose, every one because the required phrase wraps
+  // across a line or a window is too narrow. A worker transcribing both halves
+  // as instructed gets a red suite and most naturally "fixes" the prose, which
+  // was correct. This runs the load-bearing ones for real, against the plan's own
+  // fenced markdown, so either half moving without the other reds HERE — in a
+  // suite that does run — rather than in wave 3's first hour.
+  describe("the wave-3 plan's prescribed assertions match its prescribed prose", () => {
+    /** The markdown/text fenced blocks are the prose the plan tells wave 3 to
+     *  WRITE; its `ts` blocks are the assertions it tells wave 3 to RUN. */
+    const prescribedProse = (): string => {
+      const plan = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave3-docs-flip.md'), 'utf8');
+      const blocks: string[] = [];
+      let inFence = false; let lang = ''; let buf: string[] = [];
+      for (const line of plan.split('\n')) {
+        const fence = /^```(\w*)\s*$/.exec(line);
+        if (fence) {
+          if (!inFence) { inFence = true; lang = fence[1]!; buf = []; }
+          else { if (['markdown', 'md', 'text', ''].includes(lang)) blocks.push(buf.join('\n')); inFence = false; }
+          continue;
+        }
+        if (inFence) buf.push(line);
+      }
+      expect(blocks.length, 'the wave-3 plan prescribes no prose at all').toBeGreaterThan(5);
+      return blocks.join('\n\n');
+    };
+
+    const PRESCRIBED: readonly (readonly [string, RegExp])[] = [
+      ['the producer tuple is conditional on a real dependency',
+        /only[\s\S]{0,100}?depends on a producer interface[\s\S]{0,220}?producerRepoRoot[\s\S]{0,240}?inline/i],
+      ['a no-dependency wave invents no producer evidence',
+        /no producer-interface dependency[\s\S]{0,160}?no producer tuple[\s\S]{0,100}?no invented\s+excerpt/i],
+      ['the named plan blob is the requirements authority',
+        /plan blob[\s\S]{0,100}?requirements\s+authority/i],
+      ['the programme feed read is the full archive',
+        /feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i],
+      ['cross-project succession omits the producer session',
+        /without the producer's\s+`sessionId`/],
+      ['the refusal-as-test rule survives',
+        /`project-mismatch`\s+never fires in anger[\s\S]{0,80}?proof is a test/i],
+      ['the dogfood reads the immutable producer blob',
+        /reads[\s\S]{0,60}?immutable producer source blob/],
+      ['the producer read is rooted at the producer repository',
+        /git -C "\$producerRepoRoot" show "\$producerSha:\$producerSourceRepoPath"/],
+    ];
+
+    it.each(PRESCRIBED)('%s', (_what, re) => {
+      expect(prescribedProse(), `the wave-3 plan prescribes an assertion its own prose cannot satisfy: ${_what}`)
+        .toMatch(re);
+    });
+
+    // D-2729, in the same place and for the same reason: the plan cites the
+    // coordinator's acceptance block, and a citation that drops its first number
+    // reds a correct ledger. Derived from THIS plan's own narrative rather than
+    // typed, so the block moving corrects both at once.
+    it('cites the acceptance block the wave-2 plan actually defines', () => {
+      const wave2 = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave2-skills-pwa.md'), 'utf8');
+      const block = /thirty-third through fortieth — (D-\d{4}–D-\d{4})/.exec(wave2)?.[1];
+      expect(block, 'the wave-2 plan no longer names the coordinator acceptance block').toBeTruthy();
+      const [first] = block!.split('–');
+      const wave3 = readFileSync(path.join(
+        root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave3-docs-flip.md'), 'utf8');
+      expect(wave3, `the wave-3 plan cites a block other than ${block!}`).toContain(block!);
+      const ledger = readFileSync(path.join(
+        root, 'docs/superpowers/programs/crossrepo-programmes.md'), 'utf8');
+      expect(ledger, `the ledger does not record ${first!}`).toContain(first!);
+    });
+  });
+
+  it('keeps the superseded 2026-08-11 specification byte-identical to origin/main', () => {
+    const historicalPath = 'docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md';
+    const historical = readFileSync(path.join(root, historicalPath));
+    const baseline = execFileSync('git', ['show', `origin/main:${historicalPath}`], { cwd: root });
+    expect(historical).toEqual(baseline);
+
+    // The comparison above is against a MOVING ref, and it says nothing about
+    // WHAT the file holds: once this branch merges it compares the file to
+    // itself, so from that moment it pins "unchanged since whatever main says"
+    // rather than the ruling this document exists to preserve. The literals
+    // below are the content half — Q1's refusal and Q2's requirement, the two
+    // rulings every later wave cites — so an edit that lands on main and then
+    // propagates here still reds.
+    const text = historical.toString('utf8');
+    for (const ruling of [
+      '**Q1 — cross-run dependency edge: DISCIPLINE, not schema.**',
+      'the door stays open additively (an optional `dependsOn` + one typed refusal)',
+      '**Q2 — `homeProject`: EXPLICIT AND REQUIRED, soon.**',
+      'Evidence\ndrives schema.',
+    ]) {
+      expect(text, `the 2026-08-11 ruling record no longer carries: ${ruling.slice(0, 56)}…`)
+        .toContain(ruling);
+    }
+  });
+
+  it('does not teach mutable-plan fallbacks or collapse ledger and plan paths', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const brief = lifecycle.slice(lifecycle.indexOf('**Every brief for a wave in ANOTHER project'),
+      lifecycle.indexOf('**The execution skill is the one list item'));
+    expect(brief).not.toContain('cat "$planAbsPath"');
+    expect(brief).not.toContain('show "HEAD:');
+    expect(brief).not.toContain('the absolute path of the home plan');
+    expect(flat(brief)).toContain('current checkout\'s plan is not authoritative');
+
+    const plan = readFileSync(path.join(
+      root, 'docs/superpowers/plans/2026-09-08-crossrepo-wave2-skills-pwa.md'), 'utf8');
+    const task = plan.slice(plan.indexOf('## Task 1:'), plan.indexOf('## Task 2:'));
+    expect(task).toContain('`ledgerAbsPath` names\nonly that programme ledger, never a plan coordinate');
+    expect(task).toMatch(/`homeRepoRoot`[\s\S]{0,120}`planRepoPath`[\s\S]{0,120}`planSha`/);
+    expect(task).not.toContain('`ledgerAbsPath` is\nthe path you build a plan citation from');
+  });
+
+  // §4. There are TWO roles now, and the asymmetry between them is the part a
+  // coordinator gets wrong: `coordinator` has a fallback (the single active
+  // programme) and `worker` cannot have one, because a worker is per RUN and
+  // there is nothing to fall back to. Carry the runId always and the asymmetry
+  // never bites — which is exactly why it has to be written where the send is.
+  const ROLES: readonly (readonly [string, string])[] = [
+    ['mail-envelope.md', 'There are two role names, `coordinator` and `worker`'],
+    ['mail-envelope.md', 'a `worker` mail names the `runId` of the run whose worker it wants'],
+    ['mail-envelope.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+    ['wave-lifecycle.md', 'carry the `runId` on every mail you send, whichever role you address'],
+    ['wave-lifecycle.md', 'a `worker` mail with no `runId` is refused `unknown-recipient`'],
+  ];
+
+  it.each(ROLES)('%s carries the role rule: %s', (file, sentence) => {
+    expect(flat(refs(file)), `${file} no longer states: ${sentence}`).toContain(flat(sentence));
+  });
+
+  it('SKILL.md tells the coordinator how to address a worker, in the crossing section', () => {
+    expect(flat(skill)).toContain(
+      flat("Address the worker as `toId: 'worker'` with this run's `runId`"));
+  });
+
+  it('keeps the resolved-recipient promise while adding the second role', () => {
+    // The envelope's `to:` is still ALWAYS a session id. A second role is a
+    // second thing the INGRESS resolves, never a second thing that can appear
+    // on the face of a rendered envelope — and the byte-identity test above
+    // (renderEnvelope's real output) is what would catch the alternative.
+    const env = flat(refs('mail-envelope.md'));
+    expect(env).toContain('**`to:` is always the resolved recipient.**');
+    expect(env).toContain('resolveWorker');
   });
 });

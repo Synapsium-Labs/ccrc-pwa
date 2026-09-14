@@ -48,6 +48,15 @@ export const TREE_FILES = [
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
   'deploy/gen-accounts.mjs',
   'deploy/gen-wrappers.mjs',
+  // The third module reached that way, and it is here because the install now
+  // ENDS with doctor: `_check_accounts` runs `node
+  // "$CCRC_HERE/../deploy/account-op.mjs" doctor …`, and a placed tree without
+  // it makes that check WARN on a box these suites assert has zero warnings. A
+  // real box has it — `_inst_tree`'s rsync copies `$src/deploy` and
+  // `$src/shared` whole — so its absence here is a property of this list
+  // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
+  // and `shared/base-url.mjs`, are both in this list too.
+  'deploy/account-op.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the
@@ -64,6 +73,16 @@ export const TREE_FILES = [
   // imports here.
   'shared/generate.mjs',
   'shared/mark.mjs',
+  // `shared/base-url.mjs` joined this list in the wave that gave
+  // `shared/roster-json.mjs` its first import: the endpoint gate is IMPORTED
+  // rather than hand-copied (D-1854's split-verdict argument), so a fixture
+  // tree missing it fails the generator's first spawn with
+  // `ERR_MODULE_NOT_FOUND`, not a lint warning. It came back at the
+  // account-pools merge (D-2599), which replaced both suites' own copies of
+  // this list with this shared one and took the entries only they carried with
+  // it — 120 tests red, reported as an ESM resolve error with no mention of a
+  // fixture. When a conflict's other side is EMPTY, diff the deleted block.
+  'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH
@@ -93,6 +112,10 @@ export const TREE_FILES = [
   // role-gated, per `_inst_units`/`_inst_enable`. NB fixture INPUT only — the
   // assertions that make this land are in the two suites, not here.
   'ccd/ccd-telemetry-keepalive',
+  // The account-connection helper `ccd account-pane` execs. `_inst_bins`
+  // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
+  // so unlike the four above it, a Darwin install expects it on PATH too.
+  'ccd/ccd-account-auth',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',

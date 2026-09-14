@@ -1,4 +1,4 @@
-// Route-parity's ground truth (build 9 D17). `coordinator-skill.test.ts:158`
+// Route-parity's ground truth (build 9 D17). `coordinator-skill.test.ts:233`
 // scans coord/routes.ts ONLY, matching app.(get|post)( — so a coordination
 // route registered in another file, or under another verb, would be
 // registered and NAMED NOWHERE: invisible to the corpus linkage in both

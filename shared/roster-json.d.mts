@@ -23,8 +23,13 @@ export interface RosterJsonAccount {
    *  nothing downstream of this type reads it. */
   pool: string | null;
   execKind: ExecSpec['kind'];
-  /** Present only when the roster declared one; `undefined` otherwise —
-   *  including whenever `execKind` is not `'generated'`. */
+  /** Present only when the roster declared one; `undefined` otherwise. Legal on
+   *  ALL THREE exec kinds and gated identically on each — on `generated` it is
+   *  the file ccrc writes and the wrapper sources; on `upstream` and `external`
+   *  it is declarative, naming the file somebody else's launcher sources so
+   *  doctor can say whether it exists. This docstring used to add "including
+   *  whenever `execKind` is not `'generated'`", which the code never did
+   *  (D-1855). */
   secretsFile: string | undefined;
 }
 

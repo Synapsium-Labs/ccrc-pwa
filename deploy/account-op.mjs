@@ -1,0 +1,2219 @@
+#!/usr/bin/env node
+// deploy/account-op.mjs — the ONE writer of `ccrc account`'s stdout.
+//
+// `ccd/ccrc` has no JSON emitter (`grep -c -- --json ccd/ccrc` → 0), and spec
+// §5 requires exactly one JSON object per subcommand. The established split is
+// `deploy/gen-accounts.mjs`'s, stated in that file's header at :4-11: bare
+// `node`, no build step, no `tsx`, no compiled `dist/`; argv in, the RESULT on
+// stdout, diagnostics on stderr under this tool's own name, and the SAME
+// exit-code table `ccd/ccrc:24-33` prints to the operator — 0 ok, 1 the tool ran
+// and the answer was bad, 2 a usage error. Nothing translates at the seam, which
+// is `cmd_adopt`'s own argument for `exec "$BASH"` (ccd/ccrc:2921-2938: "the two
+// tools already share ONE exit-code table … so nothing has to be translated at
+// the seam", :2929-2930).
+//
+// ── WHO OWNS THE EXIT CODE ────────────────────────────────────────────────
+// Whoever DECIDES. Every op except `refuse` decides its own class and exits
+// with it, and `cmd_account` propagates. `refuse` is the exception and the
+// reason is not cosmetic: bash reached its own verdict (a bad id, a suffix
+// outside the read glob) and is asking this file only to WRITE the envelope, so
+// this file exits 0 — "the envelope printed" — and bash exits with the class it
+// chose. An op that also chose the class would give one refusal two owners.
+//
+// ── NO SECRET EVER REACHES THIS FILE ──────────────────────────────────────
+// Not on argv (world-readable in /proc/<pid>/cmdline), not on stdin, not in a
+// file it opens. `cmd_account` writes the lane's 0600 secrets file itself,
+// in `_exp_env_write`'s umask-077 subshell (ccd/ccrc:3492-3544), and hands this
+// file only the roster PATH the entry will name. That is why this CLI can be
+// run by hand, logged, and traced without a containment argument.
+//
+// LOCAL DEPENDENCIES, COUNTED, because a fixture that copies this file has to
+// copy its closure too (`ccrc-doctor.test.ts`'s `installCcrc`, Task 33): beyond
+// `node:*`, this module imports `shared/roster-json.mjs` and — from Task 23's
+// `check-add` — `shared/base-url.mjs`. `roster-json.mjs` itself imports exactly
+// one thing, `./base-url.mjs` (Task 4, which stopped it re-spelling the endpoint
+// gate), and `base-url.mjs` imports nothing at all. So the closure is three
+// files and stays three.
+
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+// FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
+// are the constants `rosterFromJson` itself decides with, so `check-add`
+// refusing a hue, a label, a model id or a model map the writer would then
+// refuse is one rule with one home rather than a pre-pass that has its own
+// opinion. They cost this file no closure: it already imports from this module,
+// and `shared/roster-json.mjs` is where all five were already declared —
+// `export` is the whole of the change on that side.
+//
+// THE THREE THAT ARRIVED IN REVIEW ROUND 1 WERE A HAND COPY BEFORE THEY WERE AN
+// IMPORT. `const ALIASES = ['opus','sonnet','haiku','subagent']` sat in the
+// model block below, character for character `MODEL_ALIASES`, in the one file
+// that already imports its module (D-2022). No scanner saw it —
+// `single-definition.test.ts` looks for provider ROWS and named holders, not for
+// an arbitrary list re-typed — which is why the rule "enumerated once and
+// derived" needs the import to be the easy path rather than the remembered one.
+import {
+  API_KEY_PROVIDERS, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
+  RosterInvalid, rosterFromJson,
+} from '../shared/roster-json.mjs';
+import { BASE_URL_OK } from '../shared/base-url.mjs';
+
+const SELF = 'account-op';
+
+/** THE SIXTH MIRROR, AND IT IS FOUR COLUMNS RATHER THAN FOUR ROWS.
+ *  `shared/roster-json.mjs` already carries five hand-kept copies of
+ *  `shared/roster.ts` rules (`ID_RE` :104, `SUFFIX_SAFE_RE` :111,
+ *  `SECRETS_SAFE_RE` :117, `LABEL_UNSAFE_RE` :122, `HUES` :157) for one reason,
+ *  stated in that file's header at :11-15: a bare `node` cannot import the
+ *  TypeScript. This is the same wall and the same answer, for the four columns
+ *  of `PROVIDERS` the FLEET BOX needs — which of the four providers `add` may
+ *  take rather than `declare`, the one env var the 0600 file exports, the
+ *  endpoint `add` materialises when the operator names none, and the connect
+ *  methods that provider offers.
+ *
+ *  WHY FOUR CONSTANTS AND NOT ONE TABLE. `server/test/providers.test.ts` walks
+ *  every tracked file for a second copy of the provider ROWS — a balanced
+ *  `{…}` span naming two or more provider ids as KEYS with a `ProviderRow`
+ *  field name inside it — and asserts that list is EMPTY, with no exemptions
+ *  (D-1860). A row-shaped mirror here is precisely that span. So the columns
+ *  live one per constant, keyed by id and carrying no field names, and the
+ *  per-provider view every caller reads is COMPOSED from them below: the
+ *  composing literal has the field names and no ids, the columns have the ids
+ *  and no field names, and the two never meet inside one brace span. That is
+ *  not a way around the scan — it is the difference the scan is drawn on. A
+ *  column is a projection of one thing the table already says, checked against
+ *  it; a row is a second table, which drifts.
+ *
+ *  It is a MIRROR, not a fork, and the difference is a mechanism: the
+ *  `providers` op below prints the composed view verbatim, and
+ *  `server/test/ccrc-account.test.ts` compares that answer to
+ *  `shared/providers.ts`'s own projection — no import, no text scrape, red in
+ *  BOTH directions on a new provider, a dropped one or a changed column.
+ *
+ *  §4.2's sentence survives intact: no `.mjs` copy of the TABLE exists. Labels,
+ *  credential wording, probe kinds and the doctor vocabulary live in
+ *  `shared/providers.ts` alone, and nothing here can answer a question about
+ *  them. `single-definition.test.ts` cannot see this file at all — its
+ *  `sources()` filters `/\.tsx?$/` at :54 (D-1860) — so the agreement test and
+ *  the tracked-file scan are the mechanisms, not that one.
+ *
+ *  ── THE METHOD NAMES ARE THE FLAG VALUES ─────────────────────────────────
+ *  Bare, no `pane:` prefix, and the column is called `connect` on both sides.
+ *  `shared/providers.ts`'s `ConnectMethod` docstring carries the argument; the
+ *  short form is that the spec spells these names three times as flag values
+ *  and method-table rows (§5:417, §5:423, §6:511-512) and once, in §4.2's cell
+ *  (:276, :279), as prose about where a method runs — which §6:547 then says in
+ *  words. `check-add` validates the operator's `--method` against this list, so
+ *  a prefixed spelling here would refuse `--method setup-token`, a value the
+ *  spec documents.
+ *
+ *  ── THE TWO NULLS IN `defaultBaseUrl` MEAN DIFFERENT THINGS ──────────────
+ *  `compatible` has none because the operator MUST state the endpoint;
+ *  `anthropic` has none because Claude Code's own default IS the endpoint and
+ *  the lane has no endpoint of its own (§4.2, spec:281-284). Nothing in that
+ *  column tells them apart — `envVar` does, and `check-add` reads it there.
+ *  See the endpoint block in Task 23. */
+const PROVIDER_ENV_VAR = {
+  anthropic: 'CLAUDE_CODE_OAUTH_TOKEN',
+  openrouter: 'ANTHROPIC_AUTH_TOKEN',
+  compatible: 'ANTHROPIC_AUTH_TOKEN',
+  openai: null,
+};
+
+/** The DEFAULT endpoint per provider, `null` where there is none. Read the two
+ *  nulls through the header above before adding a fifth row. */
+const PROVIDER_BASE_URL = {
+  anthropic: null,
+  openrouter: 'https://openrouter.ai/api/v1',
+  compatible: null,
+  openai: null,
+};
+
+/** Offer order, and the first member is the default the connect door opens on —
+ *  which is also what `check-add` uses when `--method` is absent. */
+const PROVIDER_CONNECT = {
+  anthropic: ['login', 'paste', 'setup-token'],
+  openrouter: ['pkce', 'paste'],
+  compatible: ['paste'],
+  openai: ['openai-login'],
+};
+
+/** The providers `add` may create a lane for. `openai` is not one: its launcher
+ *  is somebody else's program and `declare` is the verb for it (§4.2, §5). */
+const PROVIDER_GENERATABLE = new Set(['anthropic', 'openrouter', 'compatible']);
+
+/** The per-provider view every caller in this file reads, composed at load time
+ *  from the four columns above. The keys are the UNION of all four columns'
+ *  own keys, not `PROVIDER_ENV_VAR`'s alone — a stray id in any one column
+ *  (a typo, a copy-paste leftover) has to surface in this composed view for
+ *  the agreement test to catch it, rather than being silently dropped by
+ *  whichever column iteration happened to pick. In the shipped table the four
+ *  key sets agree, so the union is exactly `PROVIDER_IDS` today; a provider
+ *  named in only three of the four columns would print `undefined` for the
+ *  missing one here instead of vanishing, which is the visible failure this
+ *  view exists to guarantee. `providers` prints this object; the agreement
+ *  test rebuilds it from `shared/providers.ts` and compares. */
+const PROVIDER_DEPLOY = Object.fromEntries(
+  [...new Set([
+    ...Object.keys(PROVIDER_ENV_VAR),
+    ...Object.keys(PROVIDER_BASE_URL),
+    ...Object.keys(PROVIDER_CONNECT),
+    ...PROVIDER_GENERATABLE,
+  ])].map((p) => [p, {
+    generatable: PROVIDER_GENERATABLE.has(p),
+    envVar: PROVIDER_ENV_VAR[p],
+    defaultBaseUrl: PROVIDER_BASE_URL[p],
+    connect: PROVIDER_CONNECT[p],
+  }]),
+);
+
+/** ── ONE `roster-invalid` REFUSAL, FIVE VERBS THAT RAISE IT (D-2154) ──────
+ *  The formatting below was spelled FIVE times — `readRoster`, `check-add`,
+ *  `add-entry`, `check-declare`, `declare-entry` — five copies of one ternary
+ *  that had to keep agreeing about two things a reader cannot see from any one
+ *  of them: that the validator's own `remedy` reaches the operator VERBATIM,
+ *  and that a throw from outside the validator's vocabulary (no `remedy`, or a
+ *  `remedy` that is not a string) still produces the message ALONE rather than
+ *  an `undefined` glued onto an operator's sentence.
+ *
+ *  WHY IT IS EXTRACTED HERE RATHER THAN LEFT TO THE TREE TO NOTICE. D-1860:
+ *  `single-definition.test.ts` filters `/\.tsx?$/`, so a `.mjs` file is
+ *  STRUCTURALLY INVISIBLE to the one mechanism that reds a second hand copy of
+ *  a rule. Four of those five could have drifted from the fifth and every suite
+ *  in this repository would have stayed green — the drift nothing in this tree
+ *  can see, in the one file where nothing can see it.
+ *
+ *  EACH VERB KEEPS ITS OWN SENTENCE, which is why this takes an `opening`
+ *  rather than an id: `readRoster` is talking about a file the box ALREADY has
+ *  and an operator who must fix that file; the two `add` arms about an entry
+ *  that would be appended; the two `declare` arms about a declaration. Three
+ *  different next moves, and folding them into one sentence would be an adapter
+ *  narrowing a distinction it received. The two PAIRS are spelled word for word
+ *  alike on purpose (`check-add` with `add-entry`, `check-declare` with
+ *  `declare-entry`): one request must not describe itself two ways depending on
+ *  which of the two gates caught it.
+ *
+ *  IT RETURNS A CLASS, `hueAndLabelClass`'s convention (`ccd/ccrc:24-33`): 0
+ *  when the roster admits the candidate, 1 when it does not — "legal on its
+ *  face and the box said no". Every one of the five sites answered exit 1
+ *  before this extraction and answers exit 1 after it, which is D-2153's
+ *  measurement and the reason `roster-invalid` still has ONE class. */
+function rosterAdmits(candidate, opening) {
+  try {
+    rosterFromJson(candidate);
+  } catch (e) {
+    // The validator's own `remedy` reaches the caller VERBATIM —
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4911-4915; D-2007 moved this cite).
+    const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+    refuse('roster-invalid', `${opening}${e.message}${remedy}`);
+    return 1;
+  }
+  return 0;
+}
+
+/** THE ONE ROSTER READ IN THIS FILE. Every op that needs the roster calls this
+ *  and returns 1 on `null`, so no op grows its own try/catch and no two ops can
+ *  come to disagree about which failure is which. `check-add` (23),
+ *  `add-entry` (24), `declare-entry` and `declared` (27), `lane` (28), `drop`
+ *  and `removed` (32) all come through here. The ONE deliberate exception is
+ *  Task 33's `doctor` op, which reads the same file LAXLY and argues why in its
+ *  own task — `ccd/ccrc-doctor-checks:2253` already has a lax reader for that
+ *  file, for that reason.
+ *
+ *  ABSENT AND UNREADABLE ARE TWO CODES. CLAUDE.md's D-114 rule: this
+ *  repository's measured reads each tell those apart, and the convenience reads
+ *  that fold them say so out loud. The remedies differ — `ccrc install` seeds a
+ *  roster this box has never had; a permissions problem wants chmod and nothing
+ *  else — and `ccd/ccd:958-965` already draws exactly this line over the same
+ *  file's projection, with `-e` and `-r` as two separate refusals.
+ *
+ *  THE VALIDATOR IS THE GATE, NOT THE ANSWER: this returns the PARSED FILE, not
+ *  `rosterFromJson`'s return literal (shared/roster-json.mjs:387-390), which
+ *  carries eight fields — `id, label, configDirSuffix, homeAble, telemetry,
+ *  hue, execKind, secretsFile` — and drops every other one. Measured today,
+ *  that is four dropped fields the validator CHECKS: `hidden`, and
+ *  `provider`/`baseUrl`/`models` from Task 3-4 on. An answer built from the
+ *  return value would be a roster with four validated fields silently removed,
+ *  which is the adapter-narrowing rule's exact shape. */
+/** ── THE ONE WRITER OF THE ROSTER FILE ────────────────────────────────────
+ *  `add-entry`, `declare-entry` and `drop` each carried their own copy of this
+ *  — same tmp, same rename, same mode carry, same catch — and three copies of a
+ *  rule is three chances for the next one to be written without it. `drop`
+ *  inherited D-2052's mode carry only because someone remembered; a fourth
+ *  writer would inherit nothing, and `single-definition.test.ts` cannot see
+ *  this file at all (it filters `/\.tsx?$/`, D-1860). One function, three
+ *  callers, and `ccrc-account.test.ts` counts the `renameSync` calls in this
+ *  file so a fourth copy reds rather than drifts.
+ *
+ *  TMP + RENAME, `_inst_accounts_sh`'s discipline: the file is USER-OWNED and
+ *  must never be observable half-written.
+ *
+ *  THE MODE IS THE FILE'S OWN (D-2052). `renameSync` replaces the inode, so
+ *  whatever mode the tmp carries BECOMES the roster's — a literal here silently
+ *  discarded an operator's `chmod 600 ~/.ccrc/accounts.json` on every write.
+ *  `& 0o777` drops the special nibble: a roster is JSON nothing executes, so
+ *  propagating a setuid bit through a rename would be a widening of its own.
+ *  `statSync` is unguarded because every caller has just read this same path
+ *  through `readRoster` and got a non-null answer.
+ *
+ *  THE NAME IS RANDOM AND THE CREATE IS EXCLUSIVE. It used to be
+ *  `${file}.tmp.${process.pid}` written with a plain `writeFileSync`, which is
+ *  a name anyone who can read `/proc` can derive and a call that FOLLOWS a
+ *  symlink and truncates what it finds. `~/.ccrc` is the operator's own
+ *  directory, so that is a hardening rather than a live hole — but the same two
+ *  properties are what stop two writers of one roster choosing one name, and
+ *  `wx` turns a collision into a refusal instead of a lost roster.
+ *
+ *  IT REFUSES, IT DOES NOT THROW: the caller's `failed` clause says what the
+ *  box is left holding, because these three callers reach this line with very
+ *  different things already on disk. */
+function writeRoster(file, next, failed) {
+  const tmp = `${file}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
+      { mode: statSync(file).mode & 0o777, flag: 'wx' });
+    renameSync(tmp, file);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* the write above is the failure to report */ }
+    refuse('roster-write', `writing ${file} failed: ${e.message} — ${failed}`);
+    return false;
+  }
+  return true;
+}
+
+function readRoster(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      refuse('roster-absent',
+        `${file} does not exist, so this box has no account roster yet. Run 'ccrc install' — it `
+        + 'seeds one and never overwrites an existing one.');
+    } else {
+      refuse('roster-unreadable',
+        `${file} exists and could not be read: ${e.message}. Regenerating it will not help; fix `
+        + 'its permissions (it must be readable by the user this box runs as).');
+    }
+    return null;
+  }
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    refuse('roster-invalid', `${file} is not valid JSON: ${e.message}`);
+    return null;
+  }
+  // THIS SITE'S SENTENCE IS THE FILE'S OWN NAME AND NOTHING ELSE, and that is
+  // the distinction the extraction had to keep: the roster the box ALREADY has
+  // does not validate, so the operator's next move is to fix that file — not a
+  // flag, and not an entry nobody has proposed yet. The other four openings all
+  // name a candidate entry, because at those four addresses one exists.
+  if (rosterAdmits(json, `${file}: `) !== 0) return null;
+  return json;
+}
+
+/** Facts removal must compare to the generated projection before it touches a
+ *  home or registry row. The validating read above proves these fields exist. */
+function removalFacts(json, id) {
+  const roster = rosterFromJson(json);
+  const account = json['accounts'].find((x) => x !== null && typeof x === 'object'
+    && x['id'] === id);
+  if (account === undefined) return null;
+  return {
+    configDirSuffix: account['configDirSuffix'],
+    upstreamId: roster.upstreamId,
+  };
+}
+
+/** ── THE GATES `check-add` AND `check-declare` BOTH RUN (D-2143) ──────────
+ *  ONE SPELLING, TWO CALLERS. The two verbs disagree about nearly everything —
+ *  one writes a launcher, the other records somebody else's and never touches
+ *  it — but they take the same `--label` and the same `--hue`, judged against
+ *  the same two constants `rosterFromJson` itself decides with. A second
+ *  spelling of either gate inside the new arm would be two deciders on one
+ *  rule, free to drift the day a hue is added, so each gate lives here once and
+ *  both arms call it.
+ *
+ *  THEY RETURN A CLASS, NOT A BOOLEAN (`ccd/ccrc:24-33`): 0 when they said
+ *  nothing, 2 when the request was not legal on its face. The caller's own
+ *  `return` is what leaves, so no gate here can decide an exit code for an arm
+ *  that has more to say.
+ *
+ *  WHERE THE OTHER SHARED RULES LIVE, because "no second spelling" is a claim
+ *  about the whole cluster and not about this file: the ID SHAPE is
+ *  `ccd/ccrc`'s `_acct_id_or_refuse`, which both verbs already call; SUFFIX
+ *  SAFETY is `_acct_suffix_or_refuse` in that same file, lifted out of
+ *  `_acct_add_parse` when this task gave it a second caller; and the PROPOSED
+ *  ENTRY is `declaredEntry` below, which `check-declare` and `declare-entry`
+ *  both build from rather than each assembling their own.
+ *
+ *  WHAT IS DELIBERATELY *NOT* SHARED IS THE ENDPOINT BLOCK, and this is the
+ *  line the sharing stops at. `check-add`'s base-url block does two things
+ *  beyond judging a URL: it materialises the provider's DEFAULT endpoint, and
+ *  it decides which lanes have an endpoint at all from the `envVar` column.
+ *  Neither is true of a declared lane — D-2142: that endpoint belongs to
+ *  somebody else's launcher, `declare` records what the operator said and
+ *  defaults nothing — so sharing the URL half alone would leave the
+ *  `base-url-required` half with the validator and put TWO vocabularies on one
+ *  field. One field, one owner: for `declare` the owner is `rosterFromJson`,
+ *  whose message reaches the operator verbatim (D-2142's "one refusal, one
+ *  owner"). The rule that draws the line: a fault decidable against a CONSTANT
+ *  SET this file already imports gets its own code, the same one `add` gives
+ *  and from the same line; a fault about a value the validator owns end to end
+ *  stays the validator's. */
+function hueAndLabelClass(a) {
+  // ── THE TWO IDENTITY GATES THIS PAIR USED TO ONLY CHECK FOR PRESENCE ────
+  // D-2004. Until Task 24 `check-add` checked that `--hue` and `--label` were
+  // GIVEN and nothing about what they said, so an unknown hue or a
+  // control-character label was refused by `add-entry`'s `rosterFromJson` —
+  // one step AFTER the caller had written the 0600 secrets file. Both are
+  // decidable from argv alone, so they belong above the line that derives a
+  // path, beside the id and provider gates rather than downstream of them.
+  //
+  // BOTH CONSTANTS ARE IMPORTED FROM THE VALIDATOR, not re-spelled here. The
+  // writers' own `rosterFromJson(next)` calls still run and are not redundant:
+  // `add-entry` and `declare-entry` are callable by hand, and each is its own
+  // last gate. Two pre-passes, four callers, ONE validator.
+  if (!HUES.has(a['hue'])) {
+    refuse('unknown-hue',
+      `"${a['hue']}" is not a hue this build knows. It knows: ${[...HUES].join(', ')}.`);
+    return 2;
+  }
+  // A label is one line of display text and it reaches TWO renderers — the
+  // PWA's DOM, where a stray newline is invisible, and
+  // `ccd/statusline-command.sh`'s one-line terminal status bar, which
+  // `server/src/pane/statusline.ts` then parses back out of a tmux capture. A
+  // newline there splits the status line in two and the fleet view quietly
+  // disagrees with the session; an escape byte is worse, because the label
+  // recolours everything printed after it. `shared/roster.ts:679-696` carries
+  // the argument and REFUSES rather than stripping, for the reason this file
+  // refuses everywhere else: silently rewriting an operator's value is an
+  // adapter narrowing a distinction it received.
+  if (LABEL_UNSAFE_RE.test(a['label'])) {
+    refuse('bad-label',
+      `the label ${JSON.stringify(a['label'])} carries a control character. A label is one line `
+      + 'of display text: it reaches a one-line terminal status bar that a tab or a newline '
+      + 'splits, and an escape byte recolours everything printed after it. Give a label with no '
+      + 'control characters in it.');
+    return 2;
+  }
+  return 0;
+}
+
+/** ── A FLAG PRESENT WITH NOTHING IN IT IS INVALID, NOT ABSENT ────────────
+ *  ONE LOOP, TWO CALLERS (D-2148 wrote it for `check-add`; D-2154 gave
+ *  `check-declare` the same one rather than a second spelling of it).
+ *
+ *  THE RULING, said here because the two readings give different answers and a
+ *  reader must not have to infer which one this loop took: an empty `--suffix`
+ *  is REFUSED, it is not defaulted the way a missing one is. Absent already
+ *  MEANS something at both call sites ("use the default"), so giving
+ *  present-but-empty the same meaning collapses two conditions a caller handles
+ *  differently — D-2144's rule, cited rather than restated. The dual argument is
+ *  the pre-pass contract: a pre-pass that ACCEPTS a request its verb refuses
+ *  tells a caller the request is good and then watches the verb turn it down,
+ *  and since D-2148 closed this hole in `_acct_add_parse` and `_acct_declare`,
+ *  bash answers `missing-value` at exit 2 for every one of these.
+ *
+ *  IT IS AN ARGV QUESTION AND NOT A FIELD-VALIDITY ONE, and that boundary is
+ *  the reason this gate does not overturn D-2142/D-2150 (the ruling that
+ *  `declare`'s FIELD vocabulary — `baseUrl`, and the roster's own shape rules —
+ *  belongs to `rosterFromJson` and reaches the operator verbatim). Those two
+ *  rulings are about a value the validator owns end to end; an empty flag is
+ *  about a request that is not legal on its face, which no validator of a
+ *  roster can name, because by the time it reads the entry the flag is gone.
+ *  The two do not conflict — the earlier ruling simply did not reach this case
+ *  — and a later reader must not "simplify" one into the other: doing so would
+ *  answer `--suffix ''` with a sentence about `accounts[3]`, which is the
+ *  overloaded seam this whole cluster keeps closing (D-2154).
+ *
+ *  THESE THREE KEYS, AND THE LIST IS A MEASUREMENT RE-RUN PER VERB rather than
+ *  one verb's list borrowed by the other. Every key EACH op reads was driven
+ *  empty, and on both ops exactly `--id`, `--label` and `--suffix` reached a
+ *  refusal that names a ROSTER FIELD and an entry INDEX instead of the flag the
+ *  operator typed; every other key already answers with the code that names its
+ *  OWN condition, and folding those into this generic sentence would replace a
+ *  specific answer with a vaguer one — an adapter narrowing a distinction it
+ *  received. Each call site carries its own table of what its other keys
+ *  answer, and `ccrc-account.test.ts` drives both tables in both directions, so
+ *  a third verb whose measured set differs reds rather than inherits.
+ *
+ *  A KEY AN OP DOES NOT TAKE COSTS NOTHING: it is `undefined` here, not `''`,
+ *  so this loop is total over both callers' key sets and neither had to be
+ *  told which of the three its own row is about.
+ *
+ *  IT RETURNS A CLASS (`ccd/ccrc:24-33`): 0 when it said nothing, 2 when the
+ *  request was not legal on its face. The caller's own `return` is what
+ *  leaves. */
+function emptyFlagClass(a) {
+  for (const k of ['id', 'label', 'suffix']) {
+    if (a[k] !== '') continue;
+    // THE NOUN IS "the entry it proposes" AND NOT "the plan" (D-2154): both
+    // callers propose an entry — `check-add` through `addedEntry(plan)`,
+    // `check-declare` through `declaredEntry(a)` — while only one of them
+    // answers with a `plan`, so the sentence `check-add` shipped alone would
+    // have named a thing `check-declare` does not have.
+    refuse('bad-argv',
+      `--${k} was given an empty value. A flag present with nothing in it is not the same as a `
+      + 'flag nobody passed, so it is refused rather than defaulted or carried into the entry it '
+      + 'proposes: give it a value, or leave it off.');
+    return 2;
+  }
+  return 0;
+}
+
+/** IS THIS A PROVIDER AT ALL — the half of `check-add`'s provider block that
+ *  both verbs mean. The OTHER half is `check-add`'s alone and must stay there:
+ *  `!P.generatable` sends an `openai` request to `declare`, and `declare` is
+ *  where it was sent. */
+function providerKnownClass(provider) {
+  if (!Object.hasOwn(PROVIDER_DEPLOY, provider)) {
+    refuse('unknown-provider',
+      `"${provider}" is not a provider this build knows. It knows: `
+      + `${Object.keys(PROVIDER_DEPLOY).join(', ')}.`);
+    return 2;
+  }
+  return 0;
+}
+
+/** THE ROSTER FACT BOTH VERBS NAME IDENTICALLY. Class 1, not 2: the request was
+ *  legal on its face and the BOX said no (`ccd/ccrc:24-33`). */
+function suffixFreeClass(accounts, suffix, file) {
+  if (accounts.some((x) => x['configDirSuffix'] === suffix)) {
+    refuse('suffix-collision',
+      `config directory ${JSON.stringify(suffix)} already belongs to an account in `
+      + `${file}. Two accounts sharing one CLAUDE_CONFIG_DIR share one set of transcripts, `
+      + 'one settings.json and one credential.');
+    return 1;
+  }
+  return 0;
+}
+
+/** THE PROPOSED `generated` ENTRY, ASSEMBLED ONCE — `declaredEntry` below at
+ *  `add`'s address, and for its reason (D-2152). `check-add` judges this object
+ *  and `add-entry` writes it, and they must be the SAME object or the pre-pass
+ *  is judging something other than what lands.
+ *
+ *  IT TAKES THE PLAN, NOT ARGV, and that is the whole difference from
+ *  `declaredEntry`: `check-add` RESOLVES decisions its argv does not carry (a
+ *  materialised endpoint, a secrets-file name, a method default) and hands the
+ *  resolved plan on to a writer that re-derives none of them, so the plan is the
+ *  object both halves share. `declare` resolves nothing, so its builder can read
+ *  argv directly. Two builders, because the two verbs differ in what they
+ *  decide — not in how many spellings of one entry they carry.
+ *
+ *  ITS TWO CALLERS DIFFER IN WHAT THEY MAY ASSUME, which is why nothing here
+ *  asserts a shape. `check-add` calls it on a plan THIS FILE just built, every
+ *  field a string it validated; `add-entry` calls it on a plan that arrived as
+ *  `--plan` and may have been hand-written, where any field may be anything at
+ *  all. So the builder stays total — it copies what it is given and adds the
+ *  three constants below — and the judgement is `rosterFromJson`'s at both
+ *  addresses. A type check here would be a third opinion about a value the
+ *  validator already owns.
+ *
+ *  `homeAble: true` AND `telemetry: 'anthropic'` are facts about a GENERATED
+ *  wrapper, the mirror of `declaredEntry`'s two: it sets CLAUDE_CONFIG_DIR, so
+ *  ccd can land a session on it, and the statusline writes
+ *  ~/.cc-limits/<id>.json for it (statusline-command.sh:244-251). `homeAble` is
+ *  what `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds the lane
+ *  back until it has been measured (Task 26) — two different questions, and
+ *  collapsing them into `homeAble: false` would make a working lane permanently
+ *  unplaceable rather than merely switched off.
+ *
+ *  `exec` CARRIES EVERY PROVIDER FIELD AND NOTHING ELSE — §4.1's shape, where
+ *  the account-level keys (ACCOUNT_KEYS, shared/roster.ts:310) do not change and
+ *  every new field lives on exec. Absent values are OMITTED rather than written
+ *  null: `parseRoster` is absence-permitting and a null would be a value it must
+ *  then have an opinion about. `plan.models` arrives PARSED — `check-add`
+ *  validated it (Task 23) so that no JSON parse lands in the writer, where a
+ *  throw would exit with a stack trace and an empty stdout. */
+function addedEntry(plan) {
+  const exec = { kind: 'generated', provider: plan.provider };
+  if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
+  if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
+  if (plan.models !== null) exec.models = plan.models;
+  return {
+    id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix, exec,
+    homeAble: true, hue: plan.hue, telemetry: 'anthropic',
+  };
+}
+
+/** THE PROPOSED `external` ENTRY, ASSEMBLED ONCE. `check-declare` judges this
+ *  object and `declare-entry` writes it, and they must be the same object or
+ *  the pre-pass is judging something other than what lands — the defect a
+ *  second spelling here would produce silently, since both would still parse.
+ *
+ *  `external` IS THE DECLARED KIND: ccrc records where somebody else's launcher
+ *  points and never writes that launcher (decision 22(c)). `provider` is
+ *  optional on it — an entry with none is `undeclared` on the wire and offers
+ *  no provider operation but enable/disable and remove (§4.1) — and `baseUrl`
+ *  is declarative for exactly the reason `secretsFile` is.
+ *
+ *  `homeAble: false` and `telemetry: 'none'`, and neither is a placeholder. A
+ *  declared launcher is not a lane ccd may LAND a session on unasked: its
+ *  config dir is its own business, which is the same sentence
+ *  `ccd/ccrc-doctor-checks` uses to explain why doctor asks only whether the
+ *  file exists. `telemetry: 'none'` is what keeps a metered lane out of
+ *  `CCRC_MEASURED`, which is what §4.6's `_ws_least_loaded` fix reads. The
+ *  operator turns either on by editing the roster; the verb does not guess.
+ *
+ *  AND THE SUFFIX DEFAULT IS `.<id>`, NOT `add`'s `.claude-<id>` (D-2142),
+ *  spelled HERE AND ONLY HERE — unlike `add`'s, which `_acct_add_parse` must
+ *  also materialise before its own two suffix gates can measure it. `declare`
+ *  needs no bash copy because its gate (`_acct_suffix_or_refuse`) runs only on
+ *  a suffix the operator GAVE: the default is derived from an id
+ *  `_acct_id_or_refuse` has already measured against `WRAPPER_ID_RE`, so
+ *  `.<id>` is a safe one-segment name by construction and there is nothing for
+ *  a gate to find. It is deliberately NOT gated against $HOME/.claude* the way
+ *  `add`'s is: `add` creates and provisions that directory, so a suffix the
+ *  agent could never read is a lane this box could roster and never show; a
+ *  declared launcher's config dir is somebody else's, may not hold Claude Code
+ *  transcripts at all, and an operator who wants it readable passes
+ *  `--suffix .claude-<id>`. */
+function declaredEntry(a) {
+  const exec = { kind: 'external' };
+  if (a['provider'] !== undefined) exec.provider = a['provider'];
+  if (a['base-url'] !== undefined) exec.baseUrl = a['base-url'];
+  return {
+    id: a['id'], label: a['label'], hue: a['hue'],
+    configDirSuffix: a['suffix'] ?? `.${a['id']}`,
+    homeAble: false, telemetry: 'none', exec,
+  };
+}
+
+/** DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccd/ccrc-doctor-checks:166) and
+ *  `ccd/ccrc-api`'s `ROUTES` shape: one row per op, naming the keys it takes.
+ *  `repeat` lists the keys that may appear more than once and arrive as an
+ *  array — `candidates` (Task 21) is the first, and declaring the shape now is
+ *  what keeps that task from rewriting this parser. */
+const OPS = {
+  refuse: { keys: ['code', 'detail'], repeat: [] },
+  providers: { keys: [], repeat: [] },
+  roster: { keys: ['file'], repeat: [] },
+  // TSV on stdout rather than JSON, and `lane`'s reason: the caller is bash,
+  // which reads it with `IFS=$'\t' read`. Findings are not an error — exit 0
+  // carries them; exit 1 is a roster this reader could not read at all.
+  doctor: { keys: ['file', 'home'], repeat: [] },
+  // `name` and `bytes` arrive as PARALLEL ARRAYS, one pair per candidate, from
+  // a bash loop that already ran doctor's candidate rule. They are repeatable
+  // because the alternative — one JSON blob on argv — would put a value bash
+  // built with `printf` back into the JSON-shaped position this file exists to
+  // own.
+  candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
+  'check-add': {
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method'],
+    repeat: [],
+  },
+  // ONE key carries the whole request, because `check-add` already resolved it:
+  // `--plan` is that op's ANSWER, verbatim, and the arm below takes the `plan`
+  // object out of it. Re-flattening it into nine keys would put this arm in the
+  // business of re-deciding what the pre-pass decided, which is the seam Task 23
+  // exists to remove.
+  'add-entry': { keys: ['file', 'plan'], repeat: [] },
+  // THE WHOLE ANSWER OF `ccrc account add`, COMPOSED HERE rather than in bash,
+  // for the reason this file exists: `ccd/ccrc` has no JSON emitter, and a step
+  // sentence with a quote in it assembled by `printf` would be the one place
+  // this verb's contract could be broken by punctuation. `provisioned` and
+  // `operator-step` REPEAT — parallel to `candidates`' pair, and for the same
+  // argument: one JSON blob on argv would put a value bash built with `printf`
+  // back into the JSON-shaped position this file owns.
+  added: {
+    keys: ['file', 'id', 'disabled', 'provisioned', 'operator-step'],
+    repeat: ['provisioned', 'operator-step'],
+  },
+  // `declare` HAS A PRE-PASS, AND THIS COMMENT USED TO ARGUE IT DID NOT
+  // (D-2143). What it said was that `add` needs `check-add` because `add`
+  // writes a 0600 credential BEFORE the roster entry, while "`declare` writes
+  // no secret and creates no launcher, so its only writer can also be its only
+  // judge." That was sound when it was written and FALSE for the code shipped
+  // beside it: D-2134's ordering, applied to `declare` at D-2140, puts the
+  // kill-switch marker on disk BEFORE the roster entry. Something IS written
+  // when the writer judges, so the writer cannot be the only judge — and the
+  // measured consequence was an operator-visible split between two verbs typed
+  // interchangeably (`add --hue puce` → `unknown-hue`, exit 2, nothing written;
+  // `declare --hue puce` → `roster-invalid`, exit 1, marker on disk), against
+  // the invariant the whole cluster is named for.
+  //
+  // So `check-declare` exists for `check-add`'s reason at a second address: a
+  // request has to be judged while nothing is on disk, and the only way to do
+  // that is a separate, side-effect-free op. NOT a `--dry-run` flag on
+  // `declare-entry` — that would put a does-it-write switch on a write op, when
+  // this architecture already answers that question with a separate op.
+  //
+  // The two rows take the SAME KEYS, deliberately: `_acct_declare` builds one
+  // argv and passes it to both, so a key the judge cannot see is a key nobody
+  // judged. `suffix` is optional and `provider`/`base-url` are the two
+  // declarative fields §5 names.
+  'check-declare': {
+    keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
+  },
+  'declare-entry': {
+    keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
+  },
+  declared: { keys: ['file', 'id', 'disabled'], repeat: [] },
+  switched: { keys: ['id', 'disabled'], repeat: [] },
+  // THE ONE OP IN THIS FILE THAT DOES NOT ANSWER JSON, and the exception is
+  // argued at its arm below rather than here: bash needs seven roster values
+  // and `$( )` + `read` cannot carry an empty field safely in either of the
+  // shapes JSON would arrive in.
+  lane: { keys: ['file', 'id'], repeat: [] },
+  'removal-facts': { keys: ['file', 'id'], repeat: [] },
+  // `--stands` IS THE CALLER'S CLAUSE, and `drop` is the one write op that
+  // needs one. By the time `ccrc account remove` reaches this op it has already
+  // rehomed registry rows and swept a config directory — effects nothing rolls
+  // back and that THIS FILE CANNOT SEE. Every refusal from here is therefore a
+  // report about a half-moved box, and the half that already moved is the half
+  // the operator's next act depends on. It travels as a key rather than being
+  // appended to this file's envelope by bash, because `_acct_run_op` re-emits a
+  // helper refusal VERBATIM: the sentence has one owner, and the facts in it
+  // have another.
+  //
+  // ABSENCE-PERMITTING, like every other optional key here: a hand caller that
+  // has written nothing passes none, and the refusal keeps the sentence it
+  // always had.
+  drop: { keys: ['file', 'id', 'stands'], repeat: [] },
+  removed: {
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step'],
+    repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
+  },
+  'refuse-live': { keys: ['id', 'live'], repeat: ['live'] },
+  // `live` REPEATS — `candidates`' pair at a third address, and for its reason:
+  // one JSON blob on argv would put a value bash built with `printf` back into
+  // the JSON-shaped position this file owns. `measured` is a separate key from
+  // the list itself precisely so an EMPTY list and an UNMEASURED one are two
+  // argv shapes rather than one.
+  rotated: { keys: ['id', 'measured', 'live'], repeat: ['live'] },
+  // THE ONE OP THAT READS STDIN, and the header's "no secret ever reaches this
+  // file" rule survives intact — what arrives is a LAUNCHER's own diagnostic
+  // JSON (`{"loggedIn":…}`, `{"type":"result",…}`) and never a credential.
+  // `--timed-out` is spelled `--timed-out true` and never as a bare flag:
+  // `readPairs` walks STRICT `--key value` pairs, so a bare one would swallow
+  // the next flag as its value and then refuse the token after it.
+  classify: { keys: ['source', 'exit', 'timed-out', 'deadline'], repeat: [] },
+  // `note` REPEATS — `candidates`' pair at a fourth address and for its reason:
+  // one JSON blob on argv would put a value bash built with `printf` back into
+  // the JSON-shaped position this file owns.
+  health: { keys: ['id', 'row', 'limits-touched', 'note'], repeat: ['note'] },
+};
+
+/** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
+ *  classifier server-side (L1, `accounts/health.ts`, pure over the verb's JSON),
+ *  and wave 2 must DERIVE from this rather than re-spell it:
+ *  `single-definition.test.ts` scans `.tsx?` only (its `sources()` filter) and
+ *  its four ROOTS do not include `deploy/`, so it is structurally blind to this
+ *  file — which is D-1860, and why the scan that keeps the two honest is
+ *  hand-written and lives beside its subject (Task 33 writes the first one).
+ *
+ *  `subtype` is `'success'` on every one of these failures and is NEVER read.
+ *  Neither is the exit code, on its own: `auth status` exits 1 while reporting a
+ *  fact, so `exit` enters only as evidence beside the body.
+ *
+ *  IT RETURNS ONE OF THREE THINGS, AND NEVER A BARE `null` FOR TWO OF THEM. A
+ *  row is a verdict. `defer(null)` is "this source produced no verdict and has
+ *  nothing to say" — the caller turns it into exit 3. `defer('<sentence>')` is
+ *  "no verdict, but here is a fact worth carrying" — exit 4, the sentence on
+ *  stdout. The two deferrals are separate because the bash half phrases them
+ *  differently for the operator, and a shared `null` would be exactly the
+ *  overloaded seam this cluster objects to everywhere else. */
+const defer = (note) => ({ deferred: true, note });
+
+/** The JSON shape of a value, as one of six fixed words — never the value
+ *  itself. It exists so the `loggedIn` deferral below can say what arrived
+ *  without echoing a launcher-controlled string into a sentence that ends up on
+ *  argv (D-2222's class, closed at the source rather than only at the cap). */
+/** The auth method as a sentence may say it: a short, conservative token
+ *  verbatim, and anything else by its SHAPE. `shapeOf`'s rule at the one arm
+ *  that never had it — the token set is deliberately narrower than "a string",
+ *  because the value is a method NAME and a method name has no reason to carry
+ *  punctuation, newlines or four thousand characters. */
+function methodOf(v) {
+  if (v === undefined) return 'method not stated';
+  if (typeof v === 'string' && /^[A-Za-z0-9][\w .-]{0,39}$/.test(v)) return v;
+  return `an auth method this build cannot quote: ${shapeOf(v)}`;
+}
+
+/** An OPTIONAL boolean flag, read totally: `true`/`false` are the words, an
+ *  absent flag is `false`, and anything else is a refusal rather than a guess.
+ *  `added`, `declared`, `switched` and `rotated` each spell the REQUIRED form
+ *  of this rule inline (D-2131); these two keys are optional, which is the only
+ *  difference, and the reason they are a function is that they were the two
+ *  that got the rule wrong. Returns `null` when it has refused. */
+function boolFlagClass(a, key) {
+  if (a[key] === undefined) return false;
+  if (a[key] === 'true') return true;
+  if (a[key] === 'false') return false;
+  refuse('bad-argv',
+    `--${key} takes true or false, and got ${JSON.stringify(a[key])} — this field is a fact `
+    + 'this run measured, so a value this file would have to guess at is refused rather than '
+    + 'read as "false"');
+  return null;
+}
+
+function shapeOf(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'an array';
+  const t = typeof v;
+  return t === 'object' ? 'an object' : `a ${t}`;
+}
+
+/** EVERY ROW'S `detail` IS BOUNDED HERE, IN THE FACTORY, AND NOT AT THE ARGV
+ *  BOUNDARY IT LATER CROSSES (D-2266, D-2267). `shapeOf` above closed the
+ *  DEFERRAL's exposure to launcher text; the ROW's was left open, and it is
+ *  five slots wide rather than three — the 401 arm, the `unreachable` arm, the
+ *  `api_error` arm (which interpolates `api_error_status`, any JSON value at
+ *  all because the `=== 401` and `=== null` arms both fall through), and the
+ *  RESIDUAL, which is the widest of them because it needs no `api_error` block
+ *  to reach: any non-zero exit carrying any JSON object arrives there.
+ *
+ *  MEASURED, not argued: a 200 000-character `result` yields a 200 089-byte
+ *  row and a 200 000-character `terminal_reason` yields 200 111, and either of
+ *  them passed as ONE argv word answers exit 126, `Argument list too long`
+ *  (MAX_ARG_STRLEN bounds a single argument at 131 072 bytes). The caller then
+ *  throws away a clean `auth-dead` row for a `no-answer` shrug — about a lane
+ *  whose billed request had already been spent and answered.
+ *
+ *  IT CANNOT BE CAPPED AT THE `--row` ARGV INSTEAD, and that is the whole
+ *  ruling. A row is JSON, and the `health` op parses it (`JSON.parse(a['row']
+ *  ?? '')`); a row truncated on its way to argv makes that parse fall to its
+ *  catch and hand the op a NULL row — a silent wrong answer in place of a loud
+ *  E2BIG. Capping the FIELD keeps the row parseable at every length, and one
+ *  edit here closes all five slots plus every arm a later commit adds.
+ *
+ *  1024 CHARACTERS, STATED IN THE TRUNCATED TEXT so an operator reading a
+ *  clipped sentence knows who clipped it and by how much. It is NOT derived
+ *  from `ccd/ccrc`'s note cap and is not a second copy of it: that one bounds a
+ *  NOTE crossing argv in bash, this one bounds a FIELD inside a JSON document
+ *  in node, the two live on opposite sides of a process boundary that cannot
+ *  share a constant, and either may move without the other. What they share is
+ *  a doctrine, not a number. The longest sentence this file composes is under
+ *  400 characters, so nothing the classifier writes is ever clipped: what this
+ *  bounds is what a LAUNCHER put there. */
+const DETAIL_MAX = 1024;
+
+function capDetail(detail) {
+  if (typeof detail !== 'string' || detail.length <= DETAIL_MAX) return detail;
+  return `${detail.slice(0, DETAIL_MAX)}… (this detail was truncated by ${SELF} `
+    + `at ${DETAIL_MAX} characters)`;
+}
+
+function classify(source, body, exit, timedOut, deadline) {
+  const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const row = (verdict, detail) => (
+    { verdict, measuredAt: at, detail: capDetail(detail), source });
+  if (timedOut) return row('timeout', `${source} did not answer within ${deadline}s`);
+  let j = null;
+  try { j = JSON.parse(body); } catch { j = null; }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) {
+    // NOT a verdict for `auth status`: the caller falls through to the probe,
+    // and it has nothing to report except that it asked.
+    return source === 'auth-status'
+      ? defer(null)
+      : row('unknown', `the probe printed no JSON object (exit ${exit})`);
+  }
+  if (source === 'auth-status') {
+    if (j.loggedIn === true) {
+      // NOT `ok`. THE SHORT-CIRCUIT IS ONE-SIDED: only a lane that claims to be
+      // logged in goes ON to the probe — a live credential is the precondition
+      // for the expensive question, not an answer to it. §8's `ok` row is exit 0
+      // and `is_error !== true` from a real `-p`, which this has not run.
+      // THE METHOD IS LAUNCHER TEXT, and this was the one arm in the file that
+      // took it raw — `shapeOf` was introduced for the deferral's exposure and
+      // `capDetail` for the row's, and this line sat between them. A launcher
+      // answering 200k characters here put all of them on the exit-4 line.
+      // A conservative token prints VERBATIM, because "which method" is the
+      // whole value of the sentence; anything else is described rather than
+      // quoted, exactly as `is_error` is.
+      return defer(`the lane reports itself signed in (${methodOf(j.authMethod)}); `
+        + 'the verdict below is the probe\'s, which is the question that costs something');
+    }
+    if (j.loggedIn === false) {
+      // The one human line `auth status --text` prints, quoted because the card
+      // quotes it.
+      return row('auth-dead', 'Not logged in. Run claude auth login to authenticate.');
+    }
+    // NAMED-BUT-NOT-BOOLEAN IS A THIRD CONDITION, AND IT DEFERS (D-2223 F5).
+    // `{"loggedIn":"true"}`, `{"loggedIn":1}` and `{"loggedIn":null}` used to
+    // fall into the row below, which says the field was not named — it was, and
+    // the sentence was simply false. The ROUTING was the worse half: a row is a
+    // verdict, so a launcher CLAIMING to be signed in in a shape this classifier
+    // does not accept short-circuited and never reached the probe, which is the
+    // exact opposite of the one-sided design the `loggedIn === true` arm above
+    // exists to state. A shape that cannot be read is not evidence about the
+    // credential, so it defers like the signed-in arm does and the probe runs.
+    //
+    // THE SENTENCE NAMES THE SHAPE AND NEVER THE VALUE. `shapeOf` returns one of
+    // six fixed words, so this note's length does not depend on anything the
+    // launcher wrote — the D-2222 concern closed at its source rather than only
+    // at the argv cap that bounds it downstream.
+    if (Object.prototype.hasOwnProperty.call(j, 'loggedIn')) {
+      return defer(`auth status named loggedIn as ${shapeOf(j.loggedIn)} rather than as `
+        + 'true or false, so this run cannot read it as a verdict; the verdict below '
+        + 'is the probe\'s');
+    }
+    // Parseable JSON that says nothing about login IS a verdict: something
+    // answered and had no opinion, which is not the same as nothing answering.
+    return row('unknown', 'auth status named no loggedIn field');
+  }
+  return classifyProbe(row, j, exit);
+}
+
+/** §8's table (spec:654-660), in order, and it is exhaustive by construction:
+ *  anything the first four arms do not claim is `unknown`, which §8 ends with —
+ *  "never reported as ok".
+ *
+ *  IT NEVER READS A `subtype` PROPERTY. That field is `'success'` on every one
+ *  of these failures (spec:662), so a classifier keyed on it would call a 401
+ *  healthy. The evidence is `is_error`, `terminal_reason`, `api_error_status`
+ *  and the result text, and nothing else — pinned by a scan for the property
+ *  access, not for the word.
+ *
+ *  IT ALWAYS RETURNS A ROW, NEVER A DEFERRAL, and that is a contract rather
+ *  than an accident: `defer` means "no verdict, ask the next question", and the
+ *  probe IS the next question. `_acct_probe` has an arm for a classifier that
+ *  broke that rule anyway, because the two halves of this pair ship as separate
+ *  files and can be different builds; this side is where the rule lives.
+ *
+ *  §8's `auth-dead` row has a SECOND evidence clause this does not implement —
+ *  "or the launcher's own `not logged in` on stderr" — because the caller sends
+ *  the launcher's stderr to /dev/null: reading it would mean capturing a second
+ *  stream and matching launcher-controlled prose, and the only lanes that reach
+ *  the probe with a dead credential and NO JSON are the non-anthropic ones,
+ *  which today answer `unknown` (never `ok`). Recorded, not silently dropped. */
+function classifyProbe(row, j, exit) {
+  // `=== false`, NOT `!== true` — A DELIBERATE DEVIATION FROM §8:656, RECORDED
+  // AS D-2270. The spec sentence is written with the negative form, and that
+  // form collapses THREE conditions into `ok`: the body said `false`, the body
+  // said nothing about `is_error` at all, and the body named `is_error` in a
+  // shape this build cannot read. A health verb must not read SILENCE AS
+  // HEALTH — this repo's overloaded-null rule, at a seam whose two sides act on
+  // the answers differently: `ok` ends the question, and everything else sends
+  // an operator to look. The same treatment D-2223 F5 gave `loggedIn` one task
+  // ago, for the same reason and in the same wave.
+  //
+  // AND THE ARM IT HANDS THEM TO NOW NAMES THEM APART (D-2329). This paragraph
+  // used to close by saying nothing was lost because the residual "already
+  // names the shape it saw", and that was FALSE at the moment it was written:
+  // the residual named `terminal_reason` — the one field that is not the
+  // reason — so `is_error` absent, `"false"`, `null` and `0` all left through
+  // one identical sentence. A tightening argued from the overloaded-null rule
+  // cannot itself collapse four conditions at the seam below it, so the
+  // residual was given `is_error` in the D-2223 F5 spelling. It is TRUE now
+  // because that line says it, not because this comment does.
+  if (exit === 0 && j.is_error === false) return row('ok', 'the lane answered one turn');
+  if (j.is_error === true && j.terminal_reason === 'api_error') {
+    const status = j.api_error_status ?? null;
+    const text = typeof j.result === 'string' ? j.result : '';
+    if (status === 401) return row('auth-dead', text || 'the endpoint refused the credential (401)');
+    if (status === null && /^API Error: (Connection refused|getaddrinfo|.*\b5\d\d\b)/.test(text)) {
+      return row('unreachable', text);
+    }
+    return row('unknown', `api_error with status ${status === null ? 'null' : status}: ${text}`);
+  }
+  return row('unknown', `exit ${exit}, is_error ${isErrorAs(j)}, `
+    + `terminal_reason ${j.terminal_reason ?? 'absent'}`);
+}
+
+/** What the residual saw in `is_error`, as a token that is never launcher text
+ *  (D-2329). Four conditions reach the residual at exit 0 and used to be
+ *  indistinguishable in its sentence — the field ABSENT, and the field named as
+ *  a string, a null or a number — which is the overloaded seam the `=== false`
+ *  arm above was tightened to avoid, reopened one line below it.
+ *
+ *  ABSENT IS ITS OWN WORD, and it has to be: `shapeOf(undefined)` would answer
+ *  "a undefined", which reads as a value the body carried rather than as a
+ *  field it never named. A BOOLEAN IS NAMED BY VALUE rather than by shape,
+ *  because `true` and `false` both reach here — `true` beside a
+ *  `terminal_reason` this classifier has no arm for, `false` at a non-zero exit
+ *  — and "a boolean" would put those two back in one sentence. Both spellings
+ *  are this file's own fixed tokens, so nothing a launcher wrote enters the
+ *  note's LENGTH either (D-2222's class, closed at the source the way `shapeOf`
+ *  closed it for `loggedIn`). */
+function isErrorAs(j) {
+  if (!Object.prototype.hasOwnProperty.call(j, 'is_error')) return 'absent';
+  return typeof j.is_error === 'boolean' ? String(j.is_error) : shapeOf(j.is_error);
+}
+
+function out(o) {
+  process.stdout.write(`${JSON.stringify(o)}\n`);
+}
+
+/** The envelope `ccd/ccrc-api:122-126` established: machine-readable on stdout,
+ *  the human sentence on stderr, one shape on every path so a caller never
+ *  parses two. Unlike that one it does NOT exit — see the header. */
+function refuse(code, detail) {
+  out({ ok: false, error: code, detail });
+  process.stderr.write(`${SELF}: ${detail} (${code})\n`);
+}
+
+/** `--key value` pairs, refused rather than ignored. An unknown key is a
+ *  refusal because this file's whole caller is another program: a silently
+ *  dropped `--base-url` would be an endpoint nobody notices missing.
+ *
+ *  THE WALK IS STRICT `i += 2` — every even slot from argv[3] on is read as a
+ *  key, every odd slot as that key's value, no exceptions. A value that
+ *  itself starts with `--` is refused rather than accepted: were it accepted,
+ *  it would be consumed here as the PRECEDING key's value, and the token
+ *  after it would then be read as the NEXT key instead of the value it
+ *  actually is — silently shifting every pair that follows by one slot rather
+ *  than failing loudly. `refuse --code --detail --detail z` is the
+ *  reproduction: without this guard `--detail` (meant as the VALUE of
+ *  `--code`) is swallowed as that value, and `z` is misread as `--detail`'s
+ *  own key. No caller needs a literal value beginning with `--` today (every
+ *  `--code`/`--detail` this file receives is an id, a class name or human
+ *  prose), so refusing the shape is strictly safer than guessing which token
+ *  was meant. */
+function readPairs(argv, spec) {
+  const got = {};
+  for (let i = 3; i < argv.length; i += 2) {
+    const k = argv[i];
+    if (typeof k !== 'string' || !k.startsWith('--')) {
+      refuse('bad-argv', `${JSON.stringify(k ?? '')} is not a --key`);
+      return null;
+    }
+    const name = k.slice(2);
+    if (!spec.keys.includes(name)) {
+      refuse('bad-argv', `--${name} is not a key this op takes`);
+      return null;
+    }
+    const v = argv[i + 1];
+    if (v === undefined) {
+      refuse('bad-argv', `--${name} has no value`);
+      return null;
+    }
+    if (v.startsWith('--')) {
+      refuse('bad-argv',
+        `--${name}'s value ${JSON.stringify(v)} starts with "--" — that looks `
+        + 'like the next --key, not a value, so it is refused rather than '
+        + 'silently consumed and shifting every pair that follows');
+      return null;
+    }
+    if (spec.repeat.includes(name)) {
+      if (got[name] === undefined) got[name] = [];
+      got[name].push(v);
+    } else if (got[name] !== undefined) {
+      refuse('bad-argv', `--${name} was given twice`);
+      return null;
+    } else {
+      got[name] = v;
+    }
+  }
+  return got;
+}
+
+/** THE TWO FINDINGS THIS CHECK EMITS, drawn from the vocabulary
+ *  `shared/providers.ts` defines — `ACCOUNT_FINDINGS`, three members, with
+ *  `type AccountFinding` over it. This module cannot import that: bare `node`,
+ *  no build step, `.ts` unreachable. The copy is kept honest the way every
+ *  other mirror in this file is — by COMPARISON in a test — because
+ *  `single-definition.test.ts` cannot see `deploy/` at all (four TypeScript
+ *  roots, `/\.tsx?$/`, D-1860).
+ *
+ *  IT IS NAMED `DOCTOR_FINDINGS` AND NOT `ACCOUNT_FINDINGS`, deliberately: it
+ *  is a SUBSET, and one identifier standing for two different sets in two files
+ *  is the drift a scan exists to catch rather than to cause. `launcher-absent`
+ *  is the member left out — `_check_wrappers` already reports it, and one fact
+ *  gets one verdict line. */
+const DOCTOR_FINDINGS = ['credential-declared-absent', 'settings-env-drift'];
+
+/** THE ENDPOINT A LANE SHOULD BE TALKING TO: the roster's own `baseUrl` when it
+ *  names one, else the provider's default, else `null`. `null` means "Claude
+ *  Code's own endpoint", and there is then nothing in `settings.json` for this
+ *  check to compare against — which is why the upstream account on a healthy
+ *  box produces no env-block measurement at all rather than a finding about a
+ *  file that does not exist. */
+function effectiveBaseUrl(exec) {
+  if (typeof exec.baseUrl === 'string' && exec.baseUrl !== '') return exec.baseUrl;
+  // §4.1's absence-permitting rule, the same one `lane` reads: an account that
+  // names no provider is anthropic, EXCEPT an external one, whose provider is
+  // genuinely undeclared.
+  const p = exec.provider ?? (exec.kind === 'external' ? null : 'anthropic');
+  if (p === null) return null;
+  return PROVIDER_DEPLOY[p]?.defaultBaseUrl ?? null;
+}
+
+/** IT DOES NOT VALIDATE THE ROSTER, and that is a measurement rather than a
+ *  taste. `rosterFromJson` requires `label`, `homeAble` and `telemetry`;
+ *  `ccrc-doctor.test.ts`'s own `writeRoster` writes NONE of them and `healthy()`
+ *  builds its roster with it — so a check that validated through the parser
+ *  would WARN on every fixture in that file, including the one whose whole
+ *  claim is zero warnings. Nor SHOULD it: the roster's own health is
+ *  `_check_wrappers`' FAIL one entry up, and that check reads the same file
+ *  with its own deliberately lax reader for exactly this reason. Two facts are
+ *  measured here; nothing is re-judged.
+ *
+ *  EXISTENCE ONLY FOR THE CREDENTIAL HALF. The files are 0600 under a 0700
+ *  `~/.cc-secrets` and CLAUDE.md's rule is absolute — existence checks by `ls`
+ *  only. This reports a PATH and a boolean; nothing here opens one.
+ *  `settings.json` is a different class: a 0644 config file whose key field
+ *  this design deliberately leaves EMPTY, so it is read, and reported by key
+ *  name and endpoint. */
+function opDoctor(a) {
+  let json;
+  try {
+    json = JSON.parse(readFileSync(a['file'], 'utf8'));
+  } catch (e) {
+    process.stderr.write(`${SELF}: ${a['file']} could not be read as JSON: ${e.message}\n`);
+    return 1;
+  }
+  if (json === null || typeof json !== 'object' || !Array.isArray(json.accounts)
+      || json.accounts.length === 0) {
+    process.stderr.write(`${SELF}: ${a['file']} declares no accounts array\n`);
+    return 1;
+  }
+  const home = a['home'];
+  const lines = [];
+  let creds = 0;
+  let envs = 0;
+  for (const acct of json.accounts) {
+    if (acct === null || typeof acct !== 'object') continue;
+    const e = (acct.exec !== null && typeof acct.exec === 'object') ? acct.exec : {};
+    if (typeof e.secretsFile === 'string' && e.secretsFile !== '') {
+      creds += 1;
+      if (!existsSync(join(home, e.secretsFile))) {
+        lines.push([DOCTOR_FINDINGS[0], acct.id,
+          `the roster declares ~/${e.secretsFile} and it is not on disk`].join('\t'));
+      }
+    }
+    const wants = effectiveBaseUrl(e);
+    if (wants === null || typeof acct.configDirSuffix !== 'string') continue;
+    const settings = join(home, acct.configDirSuffix, 'settings.json');
+    if (!existsSync(settings)) continue;
+    envs += 1;
+    let env = null;
+    try {
+      const parsed = JSON.parse(readFileSync(settings, 'utf8'));
+      env = (parsed !== null && typeof parsed === 'object') ? (parsed.env ?? null) : null;
+    } catch { env = null; }
+    if (env === null || typeof env !== 'object') {
+      lines.push([DOCTOR_FINDINGS[1], acct.id,
+        `${acct.configDirSuffix}/settings.json carries no env block, so the lane uses Claude Code's `
+        + `default endpoint rather than ${wants}`].join('\t'));
+      continue;
+    }
+    const has = typeof env.ANTHROPIC_BASE_URL === 'string' ? env.ANTHROPIC_BASE_URL : null;
+    if (has !== wants) {
+      lines.push([DOCTOR_FINDINGS[1], acct.id,
+        `the roster says ${wants} and ${acct.configDirSuffix}/settings.json says ${has ?? 'nothing'}`]
+        .join('\t'));
+    }
+  }
+  // THE COUNTS RIDE THE SAME RUN as the findings — one measurement, one answer.
+  // A second invocation could disagree with the first about a box that changed
+  // underneath it, and the PASS line would then describe a box nobody measured.
+  process.stdout.write(
+    `${['COUNTS', json.accounts.length, creds, envs].join('\t')}\n`
+    + (lines.length > 0 ? `${lines.join('\n')}\n` : ''));
+  return 0;
+}
+
+function main(argv) {
+  const op = argv[2];
+  if (op === undefined || !Object.hasOwn(OPS, op)) {
+    process.stderr.write(
+      `usage: node deploy/account-op.mjs <${Object.keys(OPS).join('|')}> [--<key> <value>]…\n`);
+    return 2;
+  }
+  const a = readPairs(argv, OPS[op]);
+  if (a === null) return 2;
+
+  if (op === 'providers') {
+    out({ ok: true, providers: PROVIDER_DEPLOY });
+    return 0;
+  }
+
+  if (op === 'doctor') {
+    for (const k of ['file', 'home']) {
+      if (a[k] === undefined) { refuse('bad-argv', `doctor needs --${k}`); return 2; }
+    }
+    return opDoctor(a);
+  }
+
+  if (op === 'roster') {
+    const file = a['file'];
+    if (file === undefined) { refuse('bad-argv', 'roster needs --file'); return 2; }
+    const json = readRoster(file);
+    if (json === null) return 1;
+    out({ ok: true, roster: json });
+    return 0;
+  }
+
+  if (op === 'check-add') {
+    // EVERY REFUSAL IN THIS ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE, and
+    // that is the whole reason `check-add` is a separate, side-effect-free op
+    // rather than a paragraph inside Task 24's `add-entry`. Nothing below opens
+    // a file for writing, and nothing may.
+    const need = ['file', 'id', 'provider', 'label', 'hue'];
+    for (const k of need) {
+      if (a[k] === undefined) { refuse('bad-argv', `check-add needs --${k}`); return 2; }
+    }
+    // ── A FLAG PRESENT WITH NOTHING IN IT IS INVALID, NOT ABSENT (D-2148) ───
+    // The ruling, the sentence and the three keys are `emptyFlagClass`' above,
+    // shared with `check-declare` since D-2154 — one loop rather than a second
+    // spelling of it in the arm that got it next.
+    //
+    // THREE OF THIS OP'S NINE KEYS, and the list is a MEASUREMENT: every key
+    // this arm reads was driven empty and only `--id`, `--label` and `--suffix`
+    // reached `ok: true`. The other six already refuse an empty value with the
+    // code that names their own condition — `--file` `roster-absent`,
+    // `--provider` `unknown-provider`, `--hue` `unknown-hue`, `--method`
+    // `method-not-supported`, `--models` `models-invalid`, `--base-url`
+    // `base-url-unparseable` — and two of those six answer DIFFERENTLY on a
+    // login lane (`models-not-supported`, `base-url-not-supported`), which is
+    // why the test's table for this arm drives both lane shapes (D-2151).
+    //
+    // WHAT IT IS WORTH, on a path bash can no longer reach: all three used to
+    // travel into the plan and be refused by `add-entry`'s `rosterFromJson`
+    // with `roster-invalid` at exit 1 — i.e. AFTER a hand caller following this
+    // op's own documented sequence had written the 0600 secret and the
+    // kill-switch marker. That is D-2004's class at the one address D-2004 did
+    // not sweep, and this op exists so that no refusal of a request is reached
+    // with bytes already on disk.
+    //
+    // ── AND THEY SURVIVE THE PRE-PASS BELOW, MEASURED RATHER THAN ASSUMED ───
+    // D-2152 gave this arm a closing `rosterFromJson`, which reaches all three
+    // of these keys, so the honest question is whether this gate is now an
+    // unreachable one — the shape that rots. It is not, and the reason is the
+    // three sentences it replaces. With the call below deleted (measured on both
+    // a compatible and a login lane, identical on each), the answers become:
+    //
+    //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
+    //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
+    //   --suffix ''  1  account "lab-dev0" has an invalid configDirSuffix "". Set it …
+    //
+    // Every one names a ROSTER FIELD and an entry INDEX rather than the flag the
+    // operator typed — `configDirSuffix` is not a flag at all — and every one
+    // prescribes editing an account that does not exist, when the fix is to give
+    // one flag a value. They are also class 1, "the request was legal on its face
+    // and the box said no" (ccd/ccrc:24-33), and an empty flag is precisely a
+    // request that is NOT legal on its face. So the gate keeps its place: the
+    // pre-pass catches what no gate NAMES, and these three are named.
+    const empty = emptyFlagClass(a);
+    if (empty !== 0) return empty;
+    const id = a['id'];
+    const provider = a['provider'];
+
+    // ── THE TWO IDENTITY GATES, SHARED WITH `check-declare` (D-2004, D-2143) ─
+    // The gates and their sentences moved to `hueAndLabelClass` above when
+    // `declare` grew a pre-pass that needs exactly these two; the arguments for
+    // both live there. Nothing about this arm's order changed: they are still
+    // decided from argv alone, above the line that derives a path.
+    const identity = hueAndLabelClass(a);
+    if (identity !== 0) return identity;
+
+    // ── THE CONFIG DIRECTORY ────────────────────────────────────────────────
+    // §4.4's default. `--suffix` is OPTIONAL here, unlike the five above, and
+    // that is a DEVIATION FROM THE PLAN's own Step 3, which listed `suffix`
+    // among the required keys while its Step 1 test asserted this arm defaults
+    // it (`--suffix defaults to .claude-<id>`, the `'--suffix': null` sentinel)
+    // — two halves of one plan that could not both be true. The test won,
+    // because a `check-add` that refused a request `add` accepts would be a
+    // pre-pass that does not pre-check the request actually made.
+    //
+    // IT IS SPELLED TWICE, AND THAT IS THE COST, said out loud rather than
+    // hidden: `_acct_add_parse` (ccd/ccrc) also materialises `.claude-$ACCT_ID`,
+    // because it must have a value before it can run its own two suffix gates
+    // (`suffix-outside-read-root`, `bad-suffix`) — a gate cannot measure a
+    // value that does not exist yet. So bash always passes `--suffix`, and this
+    // branch is reachable only by a hand call to this file. Two spellings of one
+    // rule is exactly what this repository forbids, so the agreement is a
+    // MECHANISM rather than this paragraph: `ccrc-account.test.ts`'s
+    // "`_acct_add_parse` and `check-add` default the config dir to the same
+    // string" drives both and compares them, and reds if either moves.
+    // `??` AND NOT `||`, and the empty string is settled ABOVE rather than
+    // here: `??` catches only `undefined`, which is the whole of D-2148's
+    // second half — this line used to emit `"configDirSuffix": ""` into the
+    // plan for `--suffix ''`.
+    const suffix = a['suffix'] ?? `.claude-${id}`;
+
+    // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
+    // The "is it a provider at all" half is `providerKnownClass` above, shared
+    // with `check-declare`; the half below is this arm's alone.
+    const known = providerKnownClass(provider);
+    if (known !== 0) return known;
+    const P = PROVIDER_DEPLOY[provider];
+    if (!P.generatable) {
+      // §4.2: this lane is somebody else's launcher. `add` WRITES a wrapper;
+      // `declare` records one it must never touch. Two verbs, because the two
+      // acts differ in what ccrc is allowed to overwrite.
+      refuse('external-provider-use-declare',
+        `provider "${provider}" is an external launcher: ccrc records it and never writes it. `
+        + `Use 'ccrc account declare --id ${id} --provider ${provider} …' once its executable is `
+        + 'in ~/.local/bin.');
+      return 2;
+    }
+
+    // ── THE METHOD ──────────────────────────────────────────────────────────
+    const method = a['method'] ?? P.connect[0];
+    if (!P.connect.includes(method)) {
+      refuse('method-not-supported',
+        `provider "${provider}" has no connect method "${method}". It has: ${P.connect.join(', ')}.`);
+      return 2;
+    }
+
+    // ── THE MODEL MAP ───────────────────────────────────────────────────────
+    // VALIDATED HERE, so nothing downstream parses it under a `set -u` shell or
+    // inside a jq program. The four aliases are §4.3's, and an unknown one is a
+    // REFUSAL rather than a silent drop: a key the operator typed and this box
+    // discarded is a routing decision nobody made and nobody can see.
+    //
+    // ── D-2021: THE THREE CONDITIONS THAT USED TO REACH THE WRITER ──────────
+    // Task 23 shipped this block checking the SHAPE of `--models` and nothing
+    // the roster's own validator checks, so three requests passed the pre-pass,
+    // took the credential, wrote the 0600 secrets file and only then met
+    // `rosterFromJson` inside `add-entry`. MEASURED at c87819e4, each answering
+    // `roster-invalid` at exit 1 with `~/.cc-secrets/<id>-<tag>.env` already on
+    // disk:
+    //
+    //   1. `--models '{"opus":"x"}'` — `rosterFromJson` requires ALL FOUR
+    //      aliases (shared/roster-json.mjs:362-369) and this block required
+    //      none of them.
+    //   2. `--models '{"opus":"a b", …}'` — every value must match
+    //      `MODEL_ID_RE` (:150) and this block asked only for a non-empty
+    //      string.
+    //   3. `--provider anthropic --method paste --models '{…}'` —
+    //      `exec.models` is refused outside `API_KEY_PROVIDERS` (:296-300) and
+    //      this block accepted `--models` on any provider.
+    //
+    // FOUR CODES, NOT ONE, and none of them folded into `models-invalid`: the
+    // three above are three different mistakes with three different fixes
+    // (complete the map, correct a value, drop the flag or change the
+    // provider), and a caller that rendered one sentence for all of them would
+    // be the overloaded seam this arm's own base-url block refuses to be.
+    //
+    // ── AND `selectable`, WHICH IS THE OPPOSITE DISAGREEMENT ────────────────
+    // `check-add` was STRICTER than the roster here, not laxer: the alias loop
+    // below refused `models.selectable` as "not a routing alias" — and
+    // `rosterFromJson` ACCEPTS that key and validates it (:313-339). Refusing it
+    // at `add` is right and stays: wave 1's `add` offers the four aliases, the
+    // `selectable` list is a per-entry catalogue with its own cross-check
+    // against what the four route to, and a flag that silently half-carried it
+    // would be worse than one that says no. But it must be a refusal that SAYS
+    // SO. "not a routing alias" is a sentence about a key the roster format does
+    // not have, and the roster format has this one — so it gets its own code and
+    // its own sentence naming what it is and where it does belong. A refusal
+    // that misnames the operator's key sends them to fix the wrong thing.
+    let models = null;
+    if (a['models'] !== undefined) {
+      // THE LANE FIRST, before anything judges the value — `base-url-not-supported`
+      // above is the same shape and the same order: a flag that cannot mean
+      // anything on this provider is answered as a flag, not as a bad value.
+      if (!API_KEY_PROVIDERS.has(provider)) {
+        refuse('models-not-supported',
+          `provider "${provider}" carries no model map, so --models cannot mean anything on this `
+          + 'lane: it would be written into the roster and then refused by every reader of it. '
+          + `Drop the flag, or add this account with one of: ${[...API_KEY_PROVIDERS].join(', ')}.`);
+        return 2;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(a['models']);
+      } catch (e) {
+        refuse('models-invalid', `--models is not valid JSON: ${e.message}`);
+        return 2;
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        refuse('models-invalid',
+          '--models must be an object mapping the routing aliases to model ids, e.g. '
+          + '{"opus":"<id>","sonnet":"<id>","haiku":"<id>","subagent":"<id>"}.');
+        return 2;
+      }
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k === 'selectable') {
+          refuse('selectable-not-supported',
+            '--models carries "selectable". That IS a field of the roster\'s model map, and it is '
+            + `not one this verb writes: 'ccrc account add' takes the four routing aliases `
+            + `(${MODEL_ALIASES.join(', ')}) and nothing else. Add the account with those four, `
+            + `then put "selectable" on its exec.models in ${a['file']} and run 'ccrc install'.`);
+          return 2;
+        }
+        if (!MODEL_ALIASES.includes(k)) {
+          refuse('models-invalid',
+            `--models names "${k}", which is not a routing alias. The aliases are: `
+            + `${MODEL_ALIASES.join(', ')}.`);
+          return 2;
+        }
+        // THE VALUE, against the validator's own regex rather than against
+        // "a non-empty string" — the old test admitted `a b`, which the writer
+        // then refused one step after the secret was written. The sentence is
+        // `rosterFromJson`'s own remedy (:307-310), because the operator is
+        // fixing the same field either way and should not read two descriptions
+        // of one rule.
+        if (typeof v !== 'string' || !MODEL_ID_RE.test(v)) {
+          refuse('bad-model-id',
+            `--models maps "${k}" to ${JSON.stringify(v)}, which is not a model id: a letter or `
+            + 'digit followed by up to 127 of letters, digits, ".", "_", ":", "/" and "-".');
+          return 2;
+        }
+      }
+      // ALL FOUR OR NONE. Last, so a map that is both incomplete and wrong is
+      // answered about the value the operator actually typed before it is
+      // answered about the ones they did not.
+      const missing = MODEL_ALIASES.filter((k) => !Object.hasOwn(parsed, k));
+      if (missing.length > 0) {
+        refuse('models-incomplete',
+          `--models is missing ${missing.join(', ')}. All four routing aliases are required when `
+          + `--models is given — ${MODEL_ALIASES.join(', ')} — because a roster carrying a partial `
+          + 'map is one no reader will parse. Give all four, or drop the flag.');
+        return 2;
+      }
+      models = parsed;
+    }
+
+    // ── THE ENDPOINT ────────────────────────────────────────────────────────
+    // FIRST, WHICH LANES HAVE ONE AT ALL. `defaultBaseUrl: null` appears twice
+    // in the table and means two different things: `compatible` has no default
+    // because the operator must state the endpoint, `anthropic` has none
+    // because Claude Code's own default IS the endpoint (§4.2, spec:281-284).
+    // A gate written as "no default and no flag → refuse" collapses those two
+    // and refuses `ccrc account add --provider anthropic`, which spec:417
+    // documents as legal and which three cases in this file assert. Spec:417
+    // scopes the class in its own words: "`base-url-required` (provider
+    // `compatible` with no `--base-url`)".
+    //
+    // The table tells the two apart WITHOUT a provider-name literal, and this
+    // is the column that does it: an endpoint-bearing lane is one that exports
+    // `ANTHROPIC_AUTH_TOKEN`, because §4.3's env block for exactly those lanes
+    // is `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=""`
+    // — the three keys the spec MEASURED on the fleet box (spec:310-311) — and
+    // Task 25 writes that block from `plan.baseUrl`. A lane exporting
+    // `CLAUDE_CODE_OAUTH_TOKEN` writes no `ANTHROPIC_BASE_URL` at all, and one
+    // exporting nothing (`openai`) never got here — `!P.generatable` refused it
+    // above. Read the predicate as "this lane names its own endpoint", not as
+    // "this string equals that string": the day a fifth provider needs a
+    // different answer, the honest fix is a column in `PROVIDERS` and its
+    // mirror here, not a second clause bolted on below.
+    const endpointBearing = P.envVar === 'ANTHROPIC_AUTH_TOKEN';
+    const given = a['base-url'];
+    if (!endpointBearing) {
+      // NOT SILENTLY DROPPED. An earlier draft resolved the plan with
+      // `baseUrl: provider === 'anthropic' ? null : baseUrl`, which validated
+      // the operator's URL and then threw it away — a routing decision nobody
+      // made and nobody can see, the same class of quiet discard the `--models`
+      // block above refuses an unknown alias for. If the flag cannot mean
+      // anything for this provider, saying so is the answer.
+      if (given !== undefined) {
+        refuse('base-url-not-supported',
+          `provider "${provider}" has no endpoint of its own: its lane talks to Claude Code's own `
+          + 'default, so --base-url would be recorded in the roster and never used by anything. '
+          + 'Drop the flag, or use --provider compatible with that endpoint.');
+        return 2;
+      }
+    }
+    // MATERIALISED, not left absent, for the lanes that have one (§4.1 permits
+    // absence and `add` never leans on it — the argument is at Task 24). One
+    // gate, `BASE_URL_OK`, because a second spelling of it would be a second
+    // decider on the one check standing between a lane's key and a clear-text
+    // hop.
+    const baseUrl = endpointBearing ? (given ?? P.defaultBaseUrl) : null;
+    if (endpointBearing && baseUrl === null) {
+      refuse('base-url-required',
+        `provider "${provider}" has no default endpoint, so --base-url is required. Give the `
+        + 'Anthropic-compatible endpoint this lane talks to, e.g. https://<host>/v1 or '
+        + 'http://127.0.0.1:<port> for a loopback proxy.');
+      return 2;
+    }
+    // ONE SENTENCE PER REASON, AND NO CODE TABLE BETWEEN THEM. `BASE_URL_OK`
+    // answers `{ ok: false, reason }` where `reason` is ALREADY the refusal
+    // code — `base-url-insecure`, not `insecure` — so this map is keyed on the
+    // codes themselves and adds words, never names. A translation table here
+    // (`{ insecure: 'base-url-insecure', … }`) would make the gate and the verb
+    // two naming authorities for one decision, which is the seam the prefixed
+    // spelling in `shared/base-url.mjs` exists to remove (§12.5 renders these
+    // sentences; the codes travel on the wire in wave 2).
+    const BASE_URL_SAYS = {
+      'base-url-unparseable': 'it does not parse as a URL at all — give a full one, scheme included.',
+      'base-url-insecure': 'it is plain http: and the host is not a loopback literal, so the key '
+        + 'would cross the network in clear.',
+      'base-url-credentials': 'it carries user:pass@ — a URL is not a place to keep a key.',
+      'base-url-query': 'it carries a query string, which this box would send on every request '
+        + 'without ever showing it to you.',
+      'base-url-fragment': 'it carries a #fragment, which no HTTP client ever sends — so the '
+        + 'endpoint you meant is not the one this would use.',
+    };
+    // A lane with no endpoint has nothing for the gate to judge, and calling it
+    // on `null` would be asking a URL question about the absence of a URL. The
+    // only way to reach here with `null` is the not-endpoint-bearing arm above,
+    // which has already refused a flag if one was given. `null` is therefore
+    // "no question asked", distinct from a verdict, and it is what the plan
+    // stores for such a lane.
+    const verdict = baseUrl === null ? null : BASE_URL_OK(baseUrl);
+    if (verdict !== null && !verdict.ok) {
+      if (!Object.hasOwn(BASE_URL_SAYS, verdict.reason)) {
+        // A reason this build has no sentence for is a BUG, and it says so
+        // rather than inventing a class. `BASE_URL_OK` and this table ship
+        // together; the day they do not, this is the line that says which one
+        // moved.
+        refuse('base-url-unknown-verdict',
+          `BASE_URL_OK answered ${JSON.stringify(verdict.reason)}, which this build has no refusal `
+          + 'for — this is a bug in ccrc, not a fact about your endpoint, and nothing was written.');
+        return 1;
+      }
+      refuse(verdict.reason,
+        `--base-url ${JSON.stringify(baseUrl)} is not usable: ${BASE_URL_SAYS[verdict.reason]}`);
+      return 2;
+    }
+    // THE NORMALISED VALUE IS WHAT GETS STORED, never the operator's bytes.
+    // `URL` lower-cases the scheme and the host and leaves the path alone, and
+    // it supplies a root path where the input had none — so `http://127.0.0.1:8642`
+    // resolves as `http://127.0.0.1:8642/` and `HTTPS://Orchard-API/V1` as
+    // `https://orchard-api/V1`. §4.1 shows the endpoint on the card, doctor
+    // compares it against `settings.json` and Task 25 writes it there, so a
+    // stored value that differs from the resolved one is two answers to one
+    // question (`shared/base-url.ts`'s header makes the argument). It also
+    // ends the embedded-newline hazard on this field for free: `new URL()`
+    // strips a raw LF while parsing, so `https://orchard-api/v1<LF>x` is stored
+    // as `https://orchard-api/v1x` — measured 2026-09-07, node 22.
+    const resolvedBaseUrl = verdict === null ? null : verdict.url;
+
+    // ── THE ROSTER: THE TWO REFUSALS THAT PROTECT AN EXISTING LANE ──────────
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const accounts = json['accounts'];
+    if (accounts.some((x) => x['id'] === id)) {
+      // THE ONE REFUSAL THAT MUST COME BEFORE THE SECRET WRITE, and the reason
+      // `check-add` is a separate op at all: `~/.cc-secrets/<id>-<tag>.env`
+      // for an id already in the roster is ANOTHER LANE'S credential file. A run
+      // that wrote first and refused second would have destroyed a working
+      // lane's token in order to say no.
+      refuse('duplicate-id',
+        `account "${id}" is already in ${a['file']}. Use 'ccrc account credential --id ${id} `
+        + "--credential -' to replace its key, or pick another id.");
+      return 1;
+    }
+    // THE SECOND, shared with `check-declare` — one config directory, one
+    // account, whichever verb is asking.
+    const free = suffixFreeClass(accounts, suffix, a['file']);
+    if (free !== 0) return free;
+
+    // ── WHAT TASKS 24 AND 25 WRITE FROM ─────────────────────────────────────
+    // The RESOLVED plan, computed once, here, so no later step re-derives a
+    // decision this one already made. `login` lanes carry no secrets file: the
+    // credential is the config dir's own .credentials.json.
+    //
+    // `baseUrl` is whatever the endpoint block above resolved — null for a lane
+    // with no endpoint of its own, the gate's NORMALISED `url` otherwise. It is
+    // NOT re-decided here: a second `provider === 'anthropic' ? null : …`
+    // ternary at this line (the shape an earlier draft had) would be a second
+    // decider on the same question, and the two disagreed — the block above
+    // refused the request the ternary was written to soften.
+    const isToken = method !== 'login';
+    // THE SECRETS FILE IS NAMED FOR WHAT IT CARRIES, not for who issued it, and
+    // the spec says both things in different sections: §5:417 writes the general
+    // shape `~/.cc-secrets/X-P.env`, §4.3:322 writes the api-key lane's real
+    // name `~/.cc-secrets/<id>-openrouter.env`, and §6:511, §7:476, §11 and
+    // §12.5 write the OAuth lane's real name `~/.cc-secrets/<id>-oauth.env`.
+    // Only the second and third are names of files that exist: every anthropic
+    // lane on this fleet carries the `-oauth` spelling today
+    // (`server/test/helpers.ts:69` is `.cc-secrets/claude-a-oauth.env`), and the
+    // two illustrative remedies in the tree — `shared/roster.ts:568` and
+    // `shared/wrapper.mjs:132-133` — spell it that way too.
+    //
+    // It has to be ONE rule, because three writers derive this path and a
+    // disagreement between them is a lane whose wrapper sources a file nothing
+    // wrote: this line, `_acct_write_secret` (Task 22/24), and
+    // `ccd-account-auth`'s `setup-token` capture (Task 54), which mints an OAuth
+    // token into `~/.cc-secrets/<id>-oauth.env` on a lane that already exists.
+    // The rule is the `envVar` column, the same derivation the endpoint block
+    // above uses: a lane exporting `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth
+    // token and its file is `<id>-oauth.env`; an api-key lane's file is
+    // `<id>-<provider>.env`, which is §4.3's own spelling.
+    const secretTag = P.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
+    const plan = {
+      id,
+      provider,
+      label: a['label'],
+      hue: a['hue'],
+      configDirSuffix: suffix,
+      method,
+      baseUrl: resolvedBaseUrl,
+      secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
+      envVar: isToken ? P.envVar : null,
+      // The PARSED object, not the string bash handed over — `add-entry`
+      // writes it into the roster and Task 25 hands it to jq with
+      // `--argjson`, and neither should be the place a parse failure lands.
+      models,
+    };
+
+    // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────
+    // D-2152, and it is `check-declare`'s closing gate at this arm's address.
+    // Until it shipped, this op was the only pre-pass in the file that returned
+    // a plan it never validated: every field a later task adds to that plan was
+    // another value travelling unjudged into `add-entry`'s `rosterFromJson` —
+    // which refuses AFTER the caller following this op's own documented sequence
+    // has written the 0600 credential and the kill-switch marker. MEASURED at
+    // 6d1c75df, four requests answering `ok: true` here and `roster-invalid` at
+    // exit 1 one step later, with bytes already on disk:
+    //
+    //   --id 'lab dev0'      accounts[3] has an invalid id "lab dev0"
+    //   --id 'Lab.Dev'       accounts[3] has an invalid id "Lab.Dev"
+    //   --suffix claude-x    has an invalid configDirSuffix "claude-x"
+    //   --suffix ../evil     has an invalid configDirSuffix "../evil"
+    //
+    // Neither field had a shape gate in this arm at all: bash gates both
+    // (`_acct_id_or_refuse`, `_acct_suffix_or_refuse`), and this arm was leaning
+    // on a caller it does not have — the hand-caller path its own `--suffix`
+    // comment documents as the only way in.
+    //
+    // IT IS LAST, AND THE ORDER IS THE RULING (D-2152). Every specific refusal
+    // above keeps its own code and its own remedy: `unknown-hue`, `bad-label`,
+    // `unknown-provider`, `method-not-supported`, the five `--models` codes, the
+    // five base-url ones, `duplicate-id`, `suffix-collision`. This gate catches
+    // only what no helper NAMES, so it can never supersede one — a validator
+    // sentence in place of six specific answers would be an adapter narrowing a
+    // distinction it received, and `ccrc-account.test.ts` pins the precedence in
+    // both directions.
+    //
+    // AND IT ANSWERS `roster-invalid` AT EXIT 1, which is the objection D-2021
+    // raised against this shape and the measurement that answers it: every
+    // `roster-invalid` this file raises is exit 1 — `readRoster`'s two,
+    // `add-entry`'s, `check-declare`'s and `declare-entry`'s — so the code still
+    // has ONE class. What changes is WHEN it fires, not what it costs: before
+    // the first byte instead of after the credential. D-2021's worry was a
+    // consequence of validating late, not of validating twice.
+    //
+    // `add-entry`'s OWN `rosterFromJson` STAYS, for `declare-entry`'s reason:
+    // that op is callable by hand with a hand-written plan and is its own last
+    // gate. Two gates, two callers, ONE validator — which is not two spellings
+    // of a rule, because the rule is spelled in `shared/roster-json.mjs` and
+    // neither of them re-states it.
+    //
+    // THE FORMATTING IS `rosterAdmits`' ONE COPY (D-2154); the SENTENCE below
+    // is this verb's own, and it is THE WRITER'S, WORD FOR WORD (`add-entry`,
+    // below). One request must not describe itself two ways depending on which
+    // of the two gates caught it, and the operator's fix is the same flag
+    // either way.
+    const admits = rosterAdmits({ ...json, accounts: [...accounts, addedEntry(plan)] },
+      `the entry for "${id}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    out({ ok: true, plan });
+    return 0;
+  }
+
+  if (op === 'add-entry') {
+    // THE WRITER. Everything it needs was DECIDED by `check-add` and travels in
+    // `--plan`; this arm re-derives nothing. `configDirSuffix` in particular is
+    // taken off the plan and never rebuilt from the id (D-2003): `.claude-<id>`
+    // is already spelled twice on purpose — `_acct_add_parse`, which must
+    // materialise it before its own two suffix gates can measure it, and
+    // `check-add`, which must resolve a complete plan for a hand caller — and a
+    // third spelling here would be one this repository forbids outright, with
+    // no test standing over it.
+    if (a['file'] === undefined || a['plan'] === undefined) {
+      refuse('bad-argv', 'add-entry needs --file and --plan'); return 2;
+    }
+    let answer;
+    try {
+      answer = JSON.parse(a['plan']);
+    } catch (e) {
+      refuse('bad-argv', `the value of --plan is not valid JSON: ${e.message}`); return 2;
+    }
+    // `--plan` IS `check-add`'s WHOLE ANSWER, not its `plan` field alone, and
+    // the seam is that way round on purpose: `_acct_add` captured that op's
+    // stdout and hands the same bytes back — the very bytes it re-emits
+    // verbatim when `check-add` REFUSED — so nothing in bash reshapes an answer
+    // node wrote. This arm takes the one field it needs out of it and REFUSES
+    // when that field is not there, because the alternative is what the first
+    // draft of this task actually did: write an entry whose every field is
+    // `undefined` and let `rosterFromJson` report it as `an invalid id
+    // undefined`, which names neither the caller's mistake nor its fix.
+    //
+    // THE OBJECT TEST IS SPELLED THE WAY THE `--models` BLOCK ABOVE SPELLS IT
+    // (`parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)`)
+    // rather than borrowed from `shared/roster-json.mjs`'s `isPlainObject`: that
+    // helper is not exported, and exporting a JS type test to save one line here
+    // would put a validator-internal name on this file's import list for no
+    // decision it makes.
+    const plan = answer !== null && typeof answer === 'object' && !Array.isArray(answer)
+      ? answer['plan'] : undefined;
+    if (plan === null || typeof plan !== 'object' || Array.isArray(plan)) {
+      refuse('bad-argv',
+        'the value of --plan is not a check-add answer: it carries no "plan" object. Pass that '
+        + "op's stdout through unchanged rather than unwrapping it.");
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+
+    // THE ENTRY IS `addedEntry`'S, NOT ASSEMBLED HERE (D-2152) — `declare-entry`'s
+    // rule at this address, and it arrived here for the same reason: `check-add`
+    // judges the same object this writes, and a second spelling of the assembly
+    // would be a pre-pass judging something other than what lands, a
+    // disagreement no parser could see since both shapes would still validate.
+    // Every argument about the three fields this verb DECIDES rather than takes
+    // (`homeAble`, `telemetry`, `exec.kind`) lives on that function, beside the
+    // note that it is called on a plan that may have been hand-written.
+    const entry = addedEntry(plan);
+
+    const next = { ...json, accounts: [...json['accounts'], entry] };
+
+    // VALIDATED BEFORE IT IS WRITTEN, through the same validator every other
+    // reader uses. `_inst_roster`'s rule (ccd/ccrc:4882-4887): seeding a roster
+    // a box cannot parse poisons that box, because the rule that makes the file
+    // safe to own — never overwritten — is what stops the next run fixing it.
+    //
+    // AND IT IS STILL NOT REDUNDANT NOW THAT `check-add` RUNS THE SAME GATE
+    // (D-2152), for `declare-entry`'s reason: this op is callable by hand with a
+    // hand-written `--plan` that no pre-pass ever saw, and it is the writer's own
+    // last gate. What the pre-pass changed is which of the two an operator
+    // following the documented sequence MEETS — the one with nothing on disk.
+    // THE PRE-PASS'S SENTENCE, WORD FOR WORD (`check-add`, above), through the
+    // one formatter (D-2154).
+    const admits = rosterAdmits(next,
+      `the entry for "${plan.id}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+
+    // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline
+    // (:4926-4928). The file is USER-OWNED and this verb is its first writer in
+    // this CLI — a deliberate, argued exception to the seed-once class
+    // (`_inst_roster`), and the reason the write is atomic rather than an
+    // in-place edit: an operator's roster must never be observable half-written.
+    //
+    // AND THE MODE IS THE FILE'S OWN, NOT A LITERAL (D-2052). `renameSync`
+    // replaces the inode, so whatever mode the tmp carries BECOMES the roster's
+    // mode — a hard-coded `0o644` here silently discarded an operator's
+    // `chmod 600 ~/.ccrc/accounts.json` on every `add` (measured: 600 before,
+    // 644 after). A file's mode is a distinction this verb RECEIVED from the
+    // operator, on the one file this CLI otherwise treats as theirs, and the
+    // same premise the atomic write is argued from forbids widening it.
+    // `_inst_roster`'s `cp` + `mv` leaves the mode to umask and imposes
+    // nothing, so this verb is no longer the one writer of that file that
+    // overrides the operator. THE TREE HAS ALREADY RULED ON THIS EXACT SHAPE:
+    // `_inst_graph_always_on_off` reads the file's own mode before rewriting it
+    // (`ccd/ccrc:6358-6364`, D-1244 — "forcing 644 would widen a CLAUDE.md an
+    // operator had restricted"). This is that ruling at a second address.
+    //
+    // `& 0o777` DROPS THE SPECIAL NIBBLE (setuid/setgid/sticky), unlike
+    // `_plat_mode`'s `%Mp%Lp`, and that is right for this file: a roster is
+    // JSON that nothing executes, so there is no setuid bit worth carrying and
+    // propagating one through a rename would be a widening of its own.
+    //
+    // `statSync` IS UNGUARDED ON PURPOSE: `readRoster` above read this same
+    // path and returned non-null, so the file provably exists — there is no
+    // absent case to fold. A throw here is a real fault and the `catch` below
+    // reports it as `roster-write`, which is what it is.
+    //
+    // ONE THING THIS DOES NOT CHANGE, said rather than left to be discovered:
+    // `writeFileSync`'s `mode` is masked by the process umask at CREATE, so a
+    // 0664 roster under umask 022 still lands 0644 — exactly as the `0o644`
+    // literal did. Carrying the mode on the create rather than chmod-ing the
+    // tmp afterwards is deliberate: the tmp is never WIDER than the file it
+    // replaces for an instant, which is `_acct_write_secret`'s umask argument
+    // (ccd/ccrc:4144-4147) at this address.
+    if (!writeRoster(a['file'], next, 'nothing was changed')) return 1;
+    out({ ok: true, roster: next });
+    return 0;
+  }
+
+  if (op === 'candidates') {
+    const names = a['name'] ?? [];
+    const bytes = a['bytes'] ?? [];
+    if (names.length !== bytes.length) {
+      // A count mismatch is the ONLY way a size could be attached to the wrong
+      // name, and a misaligned index cannot be trusted about any of them —
+      // `cmd_wrappers`' witness-index rule (ccd/ccrc:2596-2599), verbatim.
+      refuse('bad-argv', `candidates got ${names.length} --name and ${bytes.length} --bytes`);
+      return 2;
+    }
+    const list = [];
+    for (let i = 0; i < names.length; i++) {
+      if (!/^[0-9]+$/.test(bytes[i])) {
+        refuse('bad-argv', `--bytes for "${names[i]}" is not a number`);
+        return 2;
+      }
+      list.push({ name: names[i], bytes: Number(bytes[i]) });
+    }
+    out({ ok: true, candidates: list });
+    return 0;
+  }
+
+  if (op === 'added') {
+    // `--file` and `--id` are the request; `--provisioned` and `--operator-step`
+    // are lists that may legitimately be empty, so their absence is not a fault.
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `added needs --${k}`); return 2; }
+    }
+    // A BOOLEAN ON THE WIRE, not the string bash handed over: the caller renders
+    // a switch from it, and `"false"` is truthy in every language that will read
+    // this.
+    //
+    // AND THE CONVERSION IS TOTAL, which is a DEVIATION from this task's plan
+    // snippet (`disabled: a['disabled'] === 'true'`) and is the same argument
+    // carried one step further. That expression maps every value that is not the
+    // exact word `true` — a typo, a missing flag, `False`, `1` — to `false`,
+    // which publishes "this lane is ON" about a lane that is off: an overloaded
+    // seam of exactly the class this cluster keeps closing, in the one field an
+    // operator acts on. There is one caller and it always passes one of the two
+    // words, so the shape is refusable rather than guessable.
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv',
+        `added needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`
+        + ' — this field says whether the new lane is switched off, so a value this file '
+        + 'would have to guess at is refused rather than read as "on"');
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({
+      ok: true,
+      id: a['id'],
+      disabled: a['disabled'] === 'true',
+      provisioned: a['provisioned'] ?? [],
+      'operator-steps': a['operator-step'] ?? [],
+      roster: json,
+    });
+    return 0;
+  }
+
+  if (op === 'check-declare') {
+    // EVERY REFUSAL IN THIS ARM FIRES BEFORE ITS CALLER HAS WRITTEN A BYTE —
+    // `check-add`'s opening sentence at this arm's own address, and the whole
+    // reason the op exists (D-2143). `_acct_declare` calls it BEFORE the
+    // kill-switch marker, which is the first thing that verb puts on disk.
+    // Nothing below opens a file for writing, and nothing may.
+    for (const k of ['file', 'id', 'label', 'hue']) {
+      if (a[k] === undefined) { refuse('bad-argv', `check-declare needs --${k}`); return 2; }
+    }
+    // ── AN EMPTY FLAG IS AN ARGV FAULT HERE TOO (D-2154) ────────────────────
+    // `check-add`'s gate at this arm's own address, and it is `emptyFlagClass`'
+    // ONE loop rather than a second spelling: the ruling, the sentence and the
+    // argument that this does not overturn D-2142/D-2150's field-vocabulary
+    // ruling all live on that function.
+    //
+    // THREE OF THIS OP'S SEVEN KEYS, and the list is this verb's OWN
+    // measurement, not `check-add`'s borrowed. Every key this arm reads was
+    // driven empty at 1dc39a6f; `--id`, `--label` and `--suffix` each answered
+    // `roster-invalid` at exit 1 with the validator's sentence about a roster
+    // FIELD and an entry INDEX —
+    //
+    //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
+    //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
+    //   --suffix ''  1  account "lab-dev0" has an invalid configDirSuffix "". Set it …
+    //
+    // — the identical three sentences round 4 rejected for `check-add`, at
+    // class 1 for a request that is not legal on its face. The other four keep
+    // their own codes and stay out of the loop: `--file` `roster-absent` (1),
+    // `--hue` `unknown-hue` (2), `--provider` `unknown-provider` (2), and
+    // `--base-url` `roster-invalid` (1) — which is the base-url residual
+    // D-2150 ACCEPTED for wave 1 and NOT an oversight of this loop. Its
+    // sentence names `exec.baseUrl`, the very field `--base-url` sets, and
+    // carries the validator's own `base-url-unparseable` tag; the fix wave 2
+    // will make is an export from `shared/roster-json.mjs`, not a fourth key
+    // here.
+    //
+    // ONE LANE SHAPE AND NOT TWO, and that is a measurement rather than a
+    // saving (D-2151 applied where it bites, D-2153's own correction): all
+    // seven keys were driven empty on BOTH an undeclared request and a
+    // `--provider compatible --base-url …` one, and every answer was identical
+    // — this arm has no `envVar`/generatable branch, so no flag is refused here
+    // as a flag that cannot mean anything on this lane. The rule earns its
+    // place in `check-add`'s table, where two codes do change, and not in this
+    // one.
+    const empty = emptyFlagClass(a);
+    if (empty !== 0) return empty;
+    const identity = hueAndLabelClass(a);
+    if (identity !== 0) return identity;
+    // OPTIONAL, SO THE GATE IS CONDITIONAL AND THE ABSENCE IS NOT A FAULT: an
+    // entry with no provider is `undeclared` on the wire (§4.1). What is a
+    // fault is a provider nothing knows, and it is decidable from argv against
+    // a constant set — class 2, the same code and the same line `add` uses.
+    if (a['provider'] !== undefined) {
+      const known = providerKnownClass(a['provider']);
+      if (known !== 0) return known;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const entry = declaredEntry(a);
+    const free = suffixFreeClass(json['accounts'], entry.configDirSuffix, a['file']);
+    if (free !== 0) return free;
+    // THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT THE WRITER BUILDS.
+    // This is the gate that makes the op worth having rather than a list of
+    // three checks: it catches every field-validity fault the constants above
+    // do not name — a bad endpoint, a `compatible` lane with none, a
+    // configDirSuffix the validator refuses — and it catches them with NOTHING
+    // on disk. It also closes a window the bash side cannot: `_acct_declare`'s
+    // `duplicate-id` gate reads `~/.ccrc/accounts.sh`, the PROJECTION, while
+    // this reads `~/.ccrc/accounts.json` itself, so an id already in the roster
+    // and not yet in a stale projection is refused HERE — before the marker,
+    // which is D-2137's hazard measured rather than argued.
+    //
+    // THE CLASS IS 1 AND THE MESSAGE IS THE VALIDATOR'S, VERBATIM (D-2142).
+    // Not translated into a table of this file's own codes: for a declared lane
+    // the endpoint and the config directory belong to somebody else's launcher,
+    // `declare` defaults neither, and one field with two vocabularies is the
+    // seam this cluster keeps closing. One refusal, one owner.
+    const admits = rosterAdmits({ ...json, accounts: [...json['accounts'], entry] },
+      `declaring "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    // THE ENTRY IT JUDGED, so a hand caller can read what would be written and
+    // `_acct_read_op` has a body to measure. `declare-entry` does NOT take it
+    // back as a `--plan` the way `add-entry` does, and that is not an
+    // inconsistency: `add`'s plan carries decisions `check-add` RESOLVED (a
+    // materialised endpoint, a secrets-file name, a method default) which no
+    // later step may re-derive, while this arm resolves nothing — every field
+    // here is the operator's own value or `declaredEntry`'s constant, and both
+    // ops build it from that one function.
+    out({ ok: true, entry });
+    return 0;
+  }
+
+  if (op === 'declare-entry') {
+    for (const k of ['file', 'id', 'label', 'hue']) {
+      if (a[k] === undefined) { refuse('bad-argv', `declare-entry needs --${k}`); return 2; }
+    }
+    // THROUGH `readRoster`, THE MODULE'S ONE READER. It is not a convenience: it
+    // is the only place that tells this file's three read conditions apart —
+    // `roster-absent` (ENOENT), `roster-unreadable` (there and unopenable, a
+    // permissions fix rather than a regeneration) and `roster-invalid` (there and
+    // not a roster, carrying the validator's own remedy verbatim) — and a second
+    // reader here would collapse them into one code that tells the operator to do
+    // the wrong thing twice out of three times. It also validates, which is the
+    // FIRST of the two refusals below.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // TWO REFUSALS, NOT ONE, and the difference is the operator's next move:
+    // "the roster you already had does not validate" is a file to fix — that is
+    // `readRoster`'s `roster-invalid`, above — and "the entry you asked for would
+    // break it" is a flag to change, which is the check after the append.
+    //
+    // THE ENTRY IS `declaredEntry`'S, NOT ASSEMBLED HERE (D-2143). `check-declare`
+    // judges the same object this writes, and a second spelling of the assembly
+    // would be a pre-pass judging something other than what lands — a
+    // disagreement no parser could see, since both shapes would still validate.
+    // Every argument about the three fields this verb DECIDES rather than takes
+    // (`homeAble`, `telemetry`, the `.<id>` suffix default) lives on that
+    // function.
+    //
+    // AND THE `rosterFromJson` BELOW IS STILL NOT REDUNDANT, for `add-entry`'s
+    // reason: this op is callable by hand without the pre-pass, and it is the
+    // writer's own last gate. Two gates, two callers, ONE validator.
+    const entry = declaredEntry(a);
+    const next = { ...json, accounts: [...json['accounts'], entry] };
+    // THE PRE-PASS'S SENTENCE, WORD FOR WORD (`check-declare`, above), through
+    // the one formatter (D-2154).
+    const admits = rosterAdmits(next,
+      `declaring "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline: an
+    // operator's roster must never be observable half-written. AND THE MODE IS
+    // THE FILE'S OWN, NOT A LITERAL (D-2052, a DEVIATION from this task's plan
+    // snippet, which spelled `0o644`): `renameSync` replaces the inode, so a
+    // literal would silently widen a roster its operator had chmod-ed 0600.
+    // `statSync` is unguarded for `add-entry`'s reason — `readRoster` above read
+    // this same path a few lines ago.
+    if (!writeRoster(a['file'], next, 'nothing was changed')) return 1;
+    // SILENT ON SUCCESS, which is a CONTRACT and not a shrug: `_acct_write_op`
+    // refuses `helper-noisy` if this path ever prints, because the answer is
+    // `declared`'s and two JSON objects on one stdout is the seam bash closes.
+    return 0;
+  }
+
+  if (op === 'declared') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `declared needs --${k}`); return 2; }
+    }
+    // A BOOLEAN ON THE WIRE, not the string bash handed over, and the conversion
+    // is TOTAL — `added`'s rule (D-2131) at a second address. `=== 'true'` alone
+    // maps every other value, a typo included, to `false`, which publishes "this
+    // lane is ON" about a lane that is off.
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv',
+        `declared needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`
+        + ' — this field says whether the new lane is switched off, so a value this file '
+        + 'would have to guess at is refused rather than read as "on"');
+      return 2;
+    }
+    // `readRoster` again, for the reason above: one reader, three conditions,
+    // and the validator's remedy reaching the operator verbatim.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // THE KIND IS MEASURED OFF THE ENTRY, NOT SPELLED AS A CONSTANT — a
+    // DEVIATION from this task's plan snippet (`kind: 'external'`). The same
+    // answer carries the whole roster, so a literal beside it would be two
+    // spellings of one value, free to disagree the day this op answers for an
+    // entry it did not write. That leaves exactly one condition to name rather
+    // than guess, and it is a bug in ccrc rather than a fact about the box:
+    // `_acct_declare` calls this immediately after `declare-entry` landed the
+    // entry, so an id the roster does not carry means the two disagree.
+    const entry = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (entry === undefined) {
+      refuse('internal-no-entry',
+        `${a['file']} carries no account "${a['id']}", so this run cannot report what was `
+        + 'declared — this is a bug in ccrc, not a fact about your box. Read the roster back '
+        + "with 'ccrc account roster'.");
+      return 1;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      kind: entry['exec']['kind'],
+      disabled: a['disabled'] === 'true',
+      roster: json,
+    });
+    return 0;
+  }
+
+  if (op === 'switched') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'switched needs --id'); return 2; }
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv', `switched needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`);
+      return 2;
+    }
+    // A boolean state reaches the wire, never the truthy string bash passed.
+    out({ ok: true, id: a['id'], disabled: a['disabled'] === 'true' });
+    return 0;
+  }
+
+  if (op === 'lane') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `lane needs --${k}`); return 2; }
+    }
+    // `readRoster` (Task 21), the module's one VALIDATING reader: three
+    // conditions, three codes, the validator's remedy verbatim. A lane read out
+    // of a roster the server would refuse to boot on is a fact about a box
+    // nobody can run, so refusing here is the answer rather than a nuisance.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // `json['accounts']` UNGUARDED, `declared`'s spelling and not this task's
+    // plan snippet's `Array.isArray(json?.accounts) ? … : []`. `readRoster`
+    // returns only after `rosterFromJson` has refused a non-array `accounts`
+    // (shared/roster-json.mjs:520), so the guard could never be false — an
+    // unmeasurable branch, and a second spelling of a read this file already
+    // has one spelling of.
+    const acct = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (acct === undefined) {
+      refuse('unknown-id',
+        `no account "${a['id']}" in ${a['file']} — 'ccrc account roster' lists what is there`);
+      return 1;
+    }
+    const e = (acct['exec'] !== null && typeof acct['exec'] === 'object') ? acct['exec'] : {};
+    // §4.1's absence-permitting rule: an account that names no provider is
+    // anthropic, EXCEPT an `external` one, whose provider is genuinely
+    // undeclared and whose credential is therefore nobody's business here.
+    const provider = e['provider'] ?? (e['kind'] === 'external' ? null : 'anthropic');
+    // `PROVIDER_DEPLOY` is the deploy-side mirror this file already carries and
+    // the `providers` op already proves against `shared/providers.ts` in both
+    // directions (Task 20). A provider the table does not know answers '' and
+    // the caller refuses `not-managed` — never a guessed env var name.
+    const envVar = provider === null ? null : (PROVIDER_DEPLOY[provider]?.envVar ?? null);
+    const q = (v) => (v === null || v === undefined ? '' : String(v));
+    // ONE FIELD PER LINE, AND AN `END` SENTINEL. Not TSV: TAB is an IFS
+    // whitespace character, so bash's `read` collapses a run of them and an
+    // empty middle field silently shifts every field after it (CLAUDE.md's
+    // measured 5th-TSV-field hazard). Not a bare list either: `$( )` strips
+    // trailing newlines, so a trailing EMPTY field would vanish. `END` is
+    // `_box_build_fields`' answer to the identical problem in this identical
+    // file (ccd/ccrc:1300-1301), and the reader's count check is :1318.
+    process.stdout.write([
+      q(e['kind']), q(provider), q(e['secretsFile']), q(envVar),
+      q(acct['configDirSuffix']), q(e['baseUrl']), acct['homeAble'] === true ? '1' : '0', 'END',
+    ].join('\n') + '\n');
+    return 0;
+  }
+
+  if (op === 'removal-facts') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `removal-facts needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const facts = removalFacts(json, a['id']);
+    if (facts === null) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so nothing can be removed`);
+      return 1;
+    }
+    process.stdout.write(`${facts.configDirSuffix}\n${facts.upstreamId}\nEND\n`);
+    return 0;
+  }
+
+  if (op === 'drop') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `drop needs --${k}`); return 2; }
+    }
+    // BOTH of this arm's refusals carry it, not just the write: an id the
+    // roster does not have is reached with the caller's earlier effects just as
+    // landed as a write that failed.
+    const stands = a['stands'] ?? 'the roster was unchanged';
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const next = {
+      ...json,
+      accounts: json['accounts'].filter((x) => !(x !== null && typeof x === 'object'
+        && x['id'] === a['id'])),
+    };
+    if (next.accounts.length === json['accounts'].length) {
+      refuse('unknown-id', `no account "${a['id']}" in ${a['file']}, so ${stands}`);
+      return 1;
+    }
+    const admits = rosterAdmits(next,
+      `removing "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
+    if (!writeRoster(a['file'], next, stands)) return 1;
+    return 0;
+  }
+
+  if (op === 'removed') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `removed needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    if (json['accounts'].some((x) => x !== null && typeof x === 'object'
+      && x['id'] === a['id'])) {
+      refuse('internal-entry-remains',
+        `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
+      return 1;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      roster: json,
+      rehomed: a['rehomed'] ?? [],
+      kept: a['kept'] ?? [],
+      removed: a['removed'] ?? [],
+      'operator-steps': a['operator-step'] ?? [],
+    });
+    return 0;
+  }
+
+  if (op === 'refuse-live') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'refuse-live needs --id'); return 2; }
+    const live = a['live'] ?? [];
+    const detail = `${a['id']} has ${live.length} live session(s) — stop or swap each one first`;
+    out({ ok: false, error: 'live-sessions', detail, live });
+    process.stderr.write(`${SELF}: ${detail} (live-sessions)\n`);
+    return 0;
+  }
+
+  if (op === 'rotated') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'rotated needs --id'); return 2; }
+    // A BOOLEAN ON THE WIRE, TOTAL, `declared`'s rule (D-2131) at a third
+    // address — and here it decides which of two facts the answer states, so a
+    // `=== 'true'` that mapped every typo to `false` would publish "nobody
+    // could tell" about a box that told us plainly.
+    if (a['measured'] !== 'true' && a['measured'] !== 'false') {
+      refuse('bad-argv',
+        `rotated needs --measured true or --measured false, and got ${JSON.stringify(a['measured'] ?? null)}`
+        + ' — this field says whether tmux answered at all, so a value this file would have to '
+        + 'guess at is refused rather than read as a measurement');
+      return 2;
+    }
+    // A LIST WITH NOTHING MEASURED BEHIND IT IS THE ONE SHAPE NEITHER SIDE MAY
+    // SEND. `--measured false --live x` would be bash claiming a session it
+    // also says it could not see; silently dropping the list would let a caller
+    // believe it had been carried.
+    if (a['measured'] === 'false' && a['live'] !== undefined) {
+      refuse('bad-argv',
+        'rotated was given --live ids together with --measured false, which says both that a '
+        + 'session is running on this lane and that nothing could be measured — this is a bug in '
+        + 'ccrc, not a fact about your box');
+      return 2;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      // THE ONE READER OF THE DISTINCTION. `null` is "nobody could tell" and
+      // `[]` is "nobody is running": two facts an operator acts on differently,
+      // so they are decided once, here, from a flag bash had to set on purpose
+      // — never inferred from an empty list.
+      live: a['measured'] === 'true' ? (a['live'] ?? []) : null,
+    });
+    return 0;
+  }
+
+  if (op === 'classify') {
+    const source = a['source'];
+    if (source !== 'auth-status' && source !== 'probe') {
+      refuse('bad-argv', 'classify needs --source auth-status|probe'); return 2;
+    }
+    if (a['exit'] === undefined || !/^[0-9]+$/.test(a['exit'])) {
+      refuse('bad-argv', 'classify needs --exit <number>'); return 2;
+    }
+    // THE ONE OP THAT READS STDIN, and the header's rule survives intact: what
+    // arrives here is a LAUNCHER's own diagnostic JSON — `{"loggedIn":…}` or
+    // `{"type":"result",…}` — and never a credential. `--credential -` remains
+    // the only spelling that reads a secret and it is read in bash
+    // (`_acct_read_credential`), which is what keeps this CLI loggable.
+    // `readFileSync(0)` rather than a stream, so `main` stays synchronous.
+    let body = '';
+    try { body = readFileSync(0, 'utf8'); } catch { body = ''; }
+    // D-2131's TOTAL CONVERSION at its fourth address. `=== 'true'` alone maps
+    // every other value — `yes`, `True`, a typo — to `false`, which here means
+    // reporting `unknown` about a call that DID time out. Absence still
+    // permits: `_acct_check` passes this flag only on the two paths where it is
+    // true, so refusing an absent one would refuse every ordinary run.
+    const timedOut = boolFlagClass(a, 'timed-out');
+    if (timedOut === null) return 2;
+    const row = classify(source, body, Number(a['exit']),
+      timedOut, a['deadline'] ?? '?');
+    if (row.deferred === true) {
+      // EXIT 3, EMPTY STDOUT: "this source produced no verdict, and nothing to
+      // say about it". EXIT 4, ONE LINE OF PLAIN TEXT: "no verdict, but carry
+      // this fact". Neither is a refusal — nothing is wrong with the box — and
+      // neither is a row, because a row would be a verdict the caller would
+      // short-circuit on. Exit 4 is the ONLY stdout in this module that is not
+      // a JSON object; it is read by `_acct_auth_status`'s `$( )` and appended
+      // to the answer's `notes`, so the VERB's stdout is still exactly one JSON
+      // object. If a third deferral ever needs a shape richer than a sentence,
+      // it gets its own code and its own reader — not a JSON body on this one.
+      if (row.note === null) return 3;
+      process.stdout.write(`${row.note}\n`);
+      return 4;
+    }
+    out(row);
+    return 0;
+  }
+
+  if (op === 'health') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'health needs --id'); return 2; }
+    let row = null;
+    try { row = JSON.parse(a['row'] ?? ''); } catch { row = null; }
+    if (row === null || typeof row !== 'object' || typeof row.verdict !== 'string') {
+      // THE VERB'S OWN STDOUT CANNOT BE HALF-BUILT. A first draft spliced the
+      // row into a bash string, so an empty `ACCT_HEALTH` printed
+      // `…,"health":` — invalid JSON reaching the caller that parses it. Here
+      // the row is re-serialised by the writer that owns every byte of stdout,
+      // and a row it cannot parse is a sentence rather than a broken body.
+      refuse('classify-failed',
+        `the health classifier produced no readable row for "${a['id']}", so nothing was measured`);
+      return 1;
+    }
+    // TOTAL, `classify`'s rule one arm down: a value this file would have to
+    // guess at publishes "the telemetry directory did not move", which is the
+    // one fact this flag exists to report.
+    const limitsTouched = boolFlagClass(a, 'limits-touched');
+    if (limitsTouched === null) return 2;
+    out({
+      ok: true,
+      id: a['id'],
+      health: row,
+      limitsTouched: limitsTouched,
+      notes: a['note'] ?? [],
+    });
+    return 0;
+  }
+
+  // `refuse` — SEAM HAZARD, DOCUMENTED RATHER THAN CLOSED (review round 1,
+  // M7). Every bad-argv exit from this file (a `readPairs` refusal above, or
+  // the one below) ALREADY wrote a JSON envelope to stdout via `refuse()` —
+  // this op's own contract is "exit 0, envelope printed" only for a
+  // WELL-FORMED call, and exit 2 here still means an envelope reached
+  // stdout, just the "bad-argv" one rather than the caller's intended
+  // "$2"/"$3". `ccd/ccrc`'s `_acct_refuse` (its own header carries the other
+  // half of this note) treats ANY non-zero exit from `_acct_node refuse …`
+  // as "no envelope was printed", which is only true when node itself never
+  // ran main() to completion — not when main() ran and refused the CALL.
+  // Unreachable via `_acct_refuse` today (its argv shape is fixed), but a
+  // future caller of `refuse` with variable argv would hit it. Left as a
+  // trap rather than fixed here: the fix is a seam change (the caller would
+  // need to tell "no envelope" from "wrong envelope" apart), not a comment.
+  if (a['code'] === undefined || a['detail'] === undefined) {
+    refuse('bad-argv', 'refuse needs --code and --detail');
+    return 2;
+  }
+  refuse(a['code'], a['detail']);
+  return 0;
+}
+
+process.exitCode = main(process.argv);

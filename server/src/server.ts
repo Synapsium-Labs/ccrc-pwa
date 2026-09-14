@@ -63,7 +63,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1280,7 +1280,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // and the next real transition's `FleetWatcher.emitRuns` broadcast
       // reaches it exactly as it would any other already-connected client.
       if (deps.coord) {
-        try { onRuns(deps.coord.runs().map(toRunSummary)); }
+        try {
+          const read = deps.coord.runs();
+          // D-2545: SKIP THE FRAME, same degrade as the throw arm below and for
+          // the same stated reason. A refusal here is not an empty fleet — an
+          // empty `runs` frame would tell this client every run had closed —
+          // so nothing is sent and the next successful broadcast reaches this
+          // socket exactly as it would any other already-connected client.
+          if (!read.ok) {
+            console.warn(`ccrc-server: /ws/fleet cold-start runs() refused (${read.detail}) — no runs frame for this socket`);
+          } else {
+            onRuns(read.runs.map(toRunSummary));
+          }
+        }
         catch (err) {
           console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
         }
@@ -1736,7 +1748,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // present but broken rather than absent.
     let held: AskRow | null;
     try {
-      held = coord.heldAskFor(id);
+      const read = coord.heldAskFor(id);
+      // D-2545: the SAME degrade as the throw arm just below, reached by a
+      // typed result. D-2169's promise is that the operator's own lock-screen
+      // press never becomes a 500, and a row this box cannot read is no more
+      // a reason to refuse the digit than a database it cannot open.
+      if (!read.ok) {
+        console.warn(`ccrc-server: heldAskFor(${id}) refused (${read.detail}) — answering the ` +
+          "operator's press unrecorded rather than refusing it");
+        return pressPlain();
+      }
+      held = read.ask;
     } catch (err) {
       console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
         `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
@@ -2013,7 +2035,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * tags, `{ pool: null }` clears.
    *
    * THE TERNARY PICKS THE ENTRY, not a verb interpolated into an array —
-   * `start`/`enable`'s rule (`ccdargv.ts:180`), so both spellings are
+   * `start`/`enable`'s rule (`ccdargv.ts:181`), so both spellings are
    * enumerated by `whitelist-subset.test.ts`.
    *
    * `:project` GOES THROUGH UNVALIDATED, exactly as `/workspaces` above sends
@@ -2177,7 +2199,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // THREE facts, three answers. 404 asserts the clip does not exist and is
       // now said only when the read PROVED it. An over-cap clip is a real file
       // this transport cannot carry — 413, the same status the upload route
-      // gives the same ceiling (`MAX_UPLOAD_BYTES`, server.ts:1803-1804), with
+      // gives the same ceiling (`MAX_UPLOAD_BYTES`, server.ts:2152-2153), with
       // the measured size when the agent sent one. Everything else — a dropped
       // agent round trip, a whitelist refusal, an EACCES — is 502, matching
       // `GET /api/peers?of=`'s `registry-unmeasurable` rather than
@@ -2393,7 +2415,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       //
       // `?.` — a server with coordination switched off archives exactly as it
       // did before this wave.
-      const runs = deps.coord?.openRunsForSession(id) ?? [];
+      const read = deps.coord?.openRunsForSession(id);
+      // D-2545, AND THE SUCCESS PATH IS UNCHANGED — the 409 still carries the
+      // full `OpenSibling[]` it has always carried, and the wave-1 ruling's
+      // "409 with no row detail" describes only the FAILURE arm below.
+      //
+      // On a refusal the archive is refused as CLAIMED with an EMPTY `runs`
+      // array: this box could not prove the workspace free, and the fail-shut
+      // direction at a destructive act is to refuse. The array is empty rather
+      // than absent because the field's shape must not change with the
+      // condition; the caller reads a refusal that names no row, which is the
+      // honest answer when no row was read.
+      //
+      // `?.` still means "coordination switched off archives exactly as before".
+      if (read !== undefined && !read.ok) {
+        return reply.code(409).send({ ok: false, error: 'run-open', runs: [] });
+      }
+      const runs = read?.siblings ?? [];
       if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
     }
     const argv = CCD_ARGV.wsArchive(id, pwaDec(req));
@@ -2457,6 +2495,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `HOLD_EMPTY_REASON_TEXT`'s wording.
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // THE BUDGET, not a repair (D-2546). Nothing downstream truncates, crashes
+    // or mis-renders at any width — the census found no binding constraint, and
+    // the one discriminating reader (the session hook) degrades to silence by
+    // its own shape gate. `HOLD_ROUTE_REASON_MAX_BYTES` is an operator-ruled
+    // budget for free-form text in a registry field; its own docstring carries
+    // the warrant for the number, why it is a separate constant from the
+    // structurally identical `LC_REASON_MAX_BYTES`, and why it is a CONTRACT AT
+    // THIS CHOKEPOINT rather than an OS wall (`ccd ws-hold` stays directly
+    // callable on the box at any width).
+    //
+    // MEASURED ON THE UNTRIMMED STRING — the one `wsHold` is about to forward
+    // verbatim, not the trimmed copy the emptiness test above reads. A cap and
+    // the value it bounds must be the same value, or padding is a way to
+    // exceed it; the check above asks a different question ("did the operator
+    // say anything at all?") and is entitled to its own reading.
+    //
+    // BYTES, UTF-8, matching the constant's unit and NOT `HOLD_REASON_MAX_CHARS`'s
+    // characters — that one sizes the hook's readable display window, this one
+    // bounds an HTTP ingress.
+    //
+    // A DISTINCT CODE from the `bad-request` directly above, deliberately:
+    // "you sent the wrong shape" and "your reason is too long" are two
+    // conditions a caller acts on differently (retype versus shorten), and
+    // collapsing them is the overloaded-value-at-a-seam defect in its
+    // error-code form. `oversize` is the mail seam's own spelling for exactly
+    // this condition. REFUSED, never truncated: a shortened hold reason is a
+    // silently altered operator statement.
+    //
+    // 413, not 400 (D-2731): every other `oversize` in this tree answers 413 —
+    // the kickoff seam three hundred lines up and all four mail seams in
+    // `coord/routes.ts` — and a client that routes on `err.status` rather than
+    // on the slug (`AbandonSheet` does) reads a 400 as "you sent the wrong
+    // shape", which is the one distinction the paragraph above exists to keep.
+    if (Buffer.byteLength(body.reason, 'utf8') > HOLD_ROUTE_REASON_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize',
+        limit: HOLD_ROUTE_REASON_MAX_BYTES,
+        detail: `reason exceeds ${HOLD_ROUTE_REASON_MAX_BYTES} bytes — it is written verbatim into ` +
+          'the registry hold field and refused rather than shortened' });
     }
     const argv = CCD_ARGV.wsHold(id, body.reason, pwaDec(req));
     // Same verb generation and same skew answer as `/archive`/`/restore`

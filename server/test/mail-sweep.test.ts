@@ -28,6 +28,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { MAIL_GATES } from '../../shared/api.js';
+import { okRun } from './coordReadHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1231,7 +1232,7 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     // is runId-scoped, and MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays,
     // which a row gated here never gets. Left unparked it stays due at the
     // 15-minute ceiling for ever, and `_ws_slug_new` recycles a purged slug
-    // ("144 per project, recycled by ws-reap", ccd/ccd:3489), so the id can be
+    // ("144 per project, recycled by ws-reap", ccd/ccd:3626), so the id can be
     // re-minted for an unrelated workspace and the lane will type THIS envelope
     // into it — `mail_deliveries` carries no recipient uuid, so nothing
     // downstream can tell the two recipients apart.
@@ -2543,8 +2544,8 @@ describe('sweepMail: the coordinator quiet window', () => {
     // — was left to the three `advance` calls above, unmeasured. They are not
     // guaranteed to land: `advance` answers a refusal for a transition the table
     // forbids, and a refusal here is silent.
-    expect(coord.run(r.id)!.claimedBy).toBe(ID);
-    expect(coord.run(r.id)!.state, 'the run never reached a terminal state — ' +
+    expect(okRun(coord.run(r.id))!.claimedBy).toBe(ID);
+    expect(okRun(coord.run(r.id))!.state, 'the run never reached a terminal state — ' +
       'this case is no longer about a TERMINAL run').toBe('done');
     const d = queueTestDelivery(coord, ID, ENVELOPE);
 
