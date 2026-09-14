@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { CCD, makeCcdHarness, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, measOf, lcDir } from './lifecycleHelpers.js';
 
@@ -225,4 +225,161 @@ describe('the observability probe stays memoised across one destruction run', ()
     h.sh(`_reg_purge ${id}`);
     expect(h.tmuxCalls()).toEqual(['list-panes -a -F #{session_name} #{pane_pid}']);
   });
+});
+
+// ── D-2605: row generation, the locked purge, and the honest callers ─────
+describe('the row generation, and the purge that runs under the row mutex (spec §3.4)', () => {
+  const REG = (): string => path.join(h.home, '.cc-sessions');
+  const gen = (id: string): string => path.join(REG(), `${id}.generation`);
+  const lock = (id: string): string => path.join(REG(), `.${id}.compactions.lock`);
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  /** `_reg_generation_init` under a real acquisition, the way row creation
+   *  calls it — the only minting site there is. */
+  const init = (id: string): string =>
+    h.sh(`_compact_lock_acquire ${id} 5 || { echo LOCKFAIL; exit 0; }
+          fd="$COMPACT_LOCK_FD"
+          if _reg_generation_init ${id}; then echo OK; else echo REFUSED; fi
+          _compact_lock_release "$fd"`);
+
+  it('mints EXACTLY 36 bytes with no terminal LF — asserted by wc -c, not by a pattern alone', () => {
+    expect(init('demo-quiet-basin')).toBe('OK');
+    const raw = fs.readFileSync(gen('demo-quiet-basin'));
+    // THE BYTE COUNT IS THE CONTRACT, and a regex alone cannot carry it: a
+    // naive `_plat_uuid > file` writes 37 bytes (measured — both branches of
+    // `_plat_uuid` end in a newline, and `cat /proc/sys/kernel/random/uuid` is
+    // 37 bytes on disk). Such a row is WEDGED FOR EVER: the value fails the
+    // grammar on every later read, nothing may mint over an invalid present
+    // generation, and no compliant cleanup unlinks one either.
+    expect(raw.length, 'exactly 36 bytes').toBe(36);
+    expect(raw.includes(0x0a), 'no terminal LF').toBe(false);
+    expect(raw.toString('utf8')).toMatch(UUID);
+  });
+
+  it('is IDEMPOTENT on a valid row and NEVER repairs, replaces or removes an invalid one', () => {
+    expect(init('demo-quiet-basin')).toBe('OK');
+    const first = fs.readFileSync(gen('demo-quiet-basin'), 'utf8');
+    expect(init('demo-quiet-basin')).toBe('OK');
+    expect(fs.readFileSync(gen('demo-quiet-basin'), 'utf8'), 'a valid generation is immutable').toBe(first);
+
+    // EVERY PRESENT-INVALID SHAPE REFUSES, and the bytes are left exactly as
+    // found — that is what makes "absence is the only mint condition" a
+    // mechanism rather than a hope.
+    for (const [name, bytes] of [
+      ['uppercase', '0189ABCD-1234-5678-9ABC-0123456789AB'],
+      ['trailing LF', '0189abcd-1234-5678-9abc-0123456789ab\n'],
+      ['empty', ''],
+      ['multiline', '0189abcd-1234-5678-9abc-0123456789ab\nmore\n'],
+      ['malformed', 'not-a-uuid'],
+      ['short', '0189abcd-1234-5678-9abc-0123456789a'],
+    ] as const) {
+      const id = 'demo-quiet-mesa';
+      fs.writeFileSync(gen(id), bytes);
+      expect(init(id), `${name} is refused`).toBe('REFUSED');
+      expect(fs.readFileSync(gen(id), 'utf8'), `${name} is left exactly as found`).toBe(bytes);
+    }
+  });
+
+  it('a FIFO, a directory and a symlink at the pathname all refuse, and none is replaced', () => {
+    const id = 'demo-quiet-mesa';
+    spawnSync('mkfifo', [gen(id)]);
+    expect(init(id), 'FIFO').toBe('REFUSED');
+    expect(fs.lstatSync(gen(id)).isFIFO(), 'the FIFO is still there').toBe(true);
+    fs.unlinkSync(gen(id));
+
+    fs.mkdirSync(gen(id));
+    expect(init(id), 'directory').toBe('REFUSED');
+    expect(fs.lstatSync(gen(id)).isDirectory()).toBe(true);
+    fs.rmdirSync(gen(id));
+
+    // A DANGLING symlink is PRESENT AND INVALID, never absent — `-e` is false
+    // for it, which is exactly why `-L` is asked beside `-e`. Folding it into
+    // absence would let a mint clobber a name somebody else owns.
+    fs.symlinkSync(path.join(REG(), 'nowhere'), gen(id));
+    expect(init(id), 'dangling symlink').toBe('REFUSED');
+    expect(fs.lstatSync(gen(id)).isSymbolicLink()).toBe(true);
+  });
+
+  it('CONCURRENT minting publishes exactly ONE value: no-clobber `link`, and EEXIST reclassifies', () => {
+    const id = 'demo-quiet-basin';
+    // Eight real processes against one absent generation. `link` is no-clobber
+    // (measured: rc 1 `File exists`, nothing changed), so the loser reads the
+    // incumbent back rather than repairing or replacing it.
+    const out = h.sh(`for i in 1 2 3 4 5 6 7 8; do
+        ( _compact_lock_acquire ${id} 5 && { _reg_generation_init ${id}; _compact_lock_release "$COMPACT_LOCK_FD"; } ) &
+      done; wait
+      cat "$HOME/.cc-sessions/${id}.generation"`);
+    expect(out).toMatch(UUID);
+    const names = fs.readdirSync(REG()).filter((n) => n.includes('generation'));
+    expect(names, 'one canonical generation and no leaked source or read alias')
+      .toEqual([`${id}.generation`]);
+  });
+
+  it('a completed mint leaves NO private residue — no init source, no read alias, one permanent lock', () => {
+    expect(init('demo-quiet-basin')).toBe('OK');
+    const names = fs.readdirSync(REG());
+    expect(names.filter((n) => n.includes('generation-init'))).toEqual([]);
+    expect(names.filter((n) => n.includes('generation-read'))).toEqual([]);
+    expect(names.filter((n) => n.includes('lock-init'))).toEqual([]);
+    expect(names.filter((n) => n.includes('lock-open'))).toEqual([]);
+    expect(names.filter((n) => n.includes('compactions.lock'))).toEqual(['.demo-quiet-basin.compactions.lock']);
+  });
+
+  it('GENERATION LAST is a MECHANISM: the purge loop SKIPS it and one explicit unlink takes it after the tail', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const from = src.indexOf('_reg_purge() {');
+    const body = src.slice(from, src.indexOf('_substrate_mark() {'));
+    // `.generation` is a dot-free suffix like any other field, so WITHOUT the
+    // skip the loop unlinks it in ordinary glob order and "generation last" is
+    // a no-op comment. The skip and the explicit unlink are one mechanism and
+    // are asserted together.
+    expect(body).toContain('"$suffix" == archived || "$suffix" == reaping || "$suffix" == generation');
+    const skipAt = body.indexOf('|| "$suffix" == generation');
+    const tailAt = body.indexOf('[[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"');
+    const genAt = body.indexOf('rm -f "$REG/$id.generation"');
+    expect(skipAt).toBeGreaterThan(-1);
+    expect(tailAt).toBeGreaterThan(-1);
+    expect(genAt, 'the explicit generation unlink exists').toBeGreaterThan(-1);
+    expect(genAt, 'and it comes AFTER the archived/reaping tail').toBeGreaterThan(tailAt);
+  });
+
+  it('the purge takes the row mutex, and the acquisition is the ONE statement before the unconditional emit', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const from = src.indexOf('_reg_purge() {');
+    const body = src.slice(from, src.indexOf('_substrate_mark() {'));
+    const emitAt = body.indexOf('_lc_done purge');
+    const head = body.slice(0, emitAt);
+    // STRENGTHENING the landed "is unconditional" pin, which checks only
+    // emit-before-loop and no trailing `||`/`&&` — both of which stay GREEN
+    // under a silently inserted conditional guard. Nothing but the header
+    // comment and THIS acquisition may stand here, so a third statement reds.
+    const stmts = head.split('\n')
+      .slice(1)                                   // the function's own `_reg_purge() {` line
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+    expect(stmts.length, `only the acquisition may stand here, found:\n${stmts.join('\n')}`).toBeGreaterThan(0);
+    for (const st of stmts) {
+      expect(st, `unexpected statement before the emit: ${st}`).toMatch(
+        /^(local _pg_fd|_compact_lock_acquire|if \(\( _pg_rc == 2 \)\)|if \[ -e "\$REG\/\$1\.generation"|elif \(\( _pg_rc != 0 \)\)|else$|_pg_fd="\$COMPACT_LOCK_FD"|fi$|return [12];?$)/);
+    }
+  });
+
+  it('a HELD lock refuses the purge: nothing is journaled, nothing is deleted, and the row stands', async () => {
+    const id = seed('demo-quiet-basin');
+    // mint the row's generation and its permanent lock the way creation does
+    expect(init(id)).toBe('OK');
+    const before = fs.readdirSync(REG()).sort();
+    const holder = spawn('bash', ['-c',
+      `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 8`, '_', lock(id)]);
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
+      holder.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
+      holder.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    try {
+      expect(h.sh(`_reg_purge ${id} && echo PURGED || echo REFUSED`)).toBe('REFUSED');
+      expect(eventsOf(h.home, 'purge'), 'a lock miss journals NO purge-done fact').toHaveLength(0);
+      expect(fs.readdirSync(REG()).sort(), 'and deletes nothing').toEqual(before);
+    } finally { holder.kill('SIGKILL'); }
+  }, 30_000);
 });

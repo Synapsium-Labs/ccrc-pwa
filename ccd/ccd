@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=aed40c179032a732eb060abbdcd63ffc129dd4844a506f4982e6400e8abecd03
+# ccrc:generated 1 sha256=f6ded90d18109c55177bb40e182429cd1516ac702b2e2d89716ee5622c01fb0e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1741,6 +1741,188 @@ _reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
     meas.project "$(_reg_get "$1" project)"
   _reg_set "$1" started 1
 }
+# ── THE PERMANENT STABLE LOCK, ccd's side (D-2605, spec §3.4) ────────────
+# The SAME `$REG/.<id>.compactions.lock` inode the hook takes, reached through
+# the same protocol, because the thing being excluded is a compaction-artifact
+# publisher and the hook is the other one. ccd carries its OWN literal of the
+# bound rather than sourcing the hook's: the two files ship as separate
+# `install_atomic` targets, so a shared spelling would have a window where one
+# side carries it and the other does not. They are TWINNED and pinned
+# value-equal over the bash corpus.
+COMPACT_LOCK_WAIT=5
+
+# The `link`-off-canonical, open-the-alias, unlink-the-alias protocol, spelled
+# once. Canonical is NEVER opened at its own pathname — `exec {fd}<>"$lock"` is
+# create-capable, and two racers each creating a different inode at one
+# pathname would each be told by `flock` that they hold "the" lock.
+#
+# rc 2 is MECHANISM ABSENCE, established by `command -v flock` BEFORE any
+# acquire is attempted; rc 1 is an ordinary refusal or a timeout. Measured,
+# both a contended `flock -w` and a missing binary spell their failure `1`, so
+# the distinction can live only in WHICH probe answered. The two conditions
+# have DIFFERENT callers' rulings (§3.4, "Platform outcome"), which is why they
+# may not be folded together here.
+_compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode
+  local fd="$1" lock="$2" p=""
+  if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
+  elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
+  else return 1; fi
+  [[ -f "$p" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || return 1
+  return 0
+}
+
+_compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 mechanism absent
+  local id="$1" wait="$2" lock="$REG/.$1.compactions.lock" al="" fd="" tries=0 src=""
+  COMPACT_LOCK_FD=""
+  command -v flock  >/dev/null 2>&1 || return 2
+  command -v mktemp >/dev/null 2>&1 || return 2
+  command -v link   >/dev/null 2>&1 || return 2
+  if [ -e "$lock" ] || [ -L "$lock" ]; then
+    [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  else
+    src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) || return 1
+    [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+    link "$src" "$lock" 2>/dev/null || true      # EEXIST: validate, never recreate
+    rm -f "$src" 2>/dev/null || true
+    [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  fi
+  while (( tries < 8 )); do
+    al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$lock" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  # `{ exec …; } 2>/dev/null`, NEVER `exec … 2>/dev/null`. MEASURED: `exec`
+  # with redirections and NO COMMAND applies them to THE SHELL, permanently, so
+  # the bare form silences ccd's stderr for the rest of the process — which is
+  # how `_spawn_start`'s operator-facing "--resume … left no session" warning
+  # vanished under this function's first draft, caught by
+  # `ccd-spawn-split.test.ts`. A `{ …; }` group is not a subshell, so the
+  # `{fd}` assignment still lands here and a failed open still returns 1.
+  { exec {fd}<>"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  _compact_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  flock -w "$wait" "$fd" 2>/dev/null || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  _compact_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  COMPACT_LOCK_FD="$fd"
+  return 0
+}
+
+_compact_lock_release() {   # <fd>
+  local fd="${1-}"
+  [[ -n "$fd" ]] || return 0
+  { exec {fd}>&-; } 2>/dev/null || true
+  return 0
+}
+
+# ── ROW GENERATION: immutable authorization (D-2605, spec §3.4) ──────────
+# `$REG/<id>.generation` is AUTHORIZATION and nothing else — not `.uuid`, not a
+# payload `session_id`, not journal data, and it never occurs in the sixteen-key
+# record. Exactly 36 lowercase ASCII UUID bytes and NO terminal LF.
+#
+# WHY THE BYTE COUNT IS A CONTRACT rather than a convention: an invalid PRESENT
+# generation is never repaired, replaced or removed — so a writer that shipped
+# 37 bytes (the trailing LF `_plat_uuid` emits on both its branches) would fail
+# the grammar on every later read, nothing could mint over it, and no compliant
+# cleanup would unlink it. The row would be wedged for ever. Measured on this
+# box: `cat /proc/sys/kernel/random/uuid` is 37 bytes on disk, `$( )` capture is
+# 36 characters, and a 37-byte file is rejected by the grammar below because
+# bash's `$` anchor refuses a trailing LF.
+_reg_generation_valid() {   # <value> -> 0 iff exactly the 36-byte lowercase UUID grammar
+  [[ "${1-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  (( ${#1} == 36 )) || return 1
+  return 0
+}
+
+# CLASSIFY THE PATHNAME BEFORE READING IT. Genuine absence is the ONLY condition
+# that may mint, so it has to be distinguishable from every present-invalid one
+# — and a DANGLING SYMLINK is present-and-invalid, never absent, which is why
+# `-L` is asked beside `-e` (the same one-expression pairing `_reg_field_state`
+# uses). Folding it into absence would let a mint clobber a name somebody else
+# owns.
+#
+# The value is read through an OWNED HARD-LINK ALIAS on a retained FD, never
+# `_reg_get`, `_reg_read` or a bare `cat`: those name the canonical path twice
+# (once to test, once to read) and a replacement between the two is invisible
+# to them. The same-inode recheck after the read is what closes that.
+_reg_generation_read() {   # <id> -> 0 + REG_GENERATION; 1 present-but-invalid; 2 genuinely absent
+  # `"$REG/$1.generation"`, NOT `"$REG/$id.generation"`, and the distinction is
+  # MEASURED rather than stylistic: `local` DECLARES every name in the statement
+  # before it performs any assignment, so under ccd's `set -u` an initialiser
+  # that references an earlier name in the SAME `local` dies with `id: unbound
+  # variable`. (Measured on bash 5.2.21; it is also why `_compact_lock_acquire`
+  # above spells its own path off `$1`.)
+  local id="$1" p="$REG/$1.generation" al="" fd="" tries=0 v=""
+  REG_GENERATION=""
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then return 2; fi
+  [[ -f "$p" && ! -L "$p" && -r "$p" ]] || return 1
+  command -v link >/dev/null 2>&1 || return 1
+  while (( tries < 8 )); do
+    al="$REG/.$id.generation-read.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$p" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  { exec {fd}<"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  # 37, NOT 36: a 37-character read is what SEES a trailing LF or a longer file,
+  # where a 36-character one would silently accept the first 36 bytes of either.
+  IFS= read -r -N 37 v <&"$fd" 2>/dev/null || true
+  # STILL THE SAME INODE, before the value is trusted: a canonical replaced
+  # since the `link` is a different row's authorization wearing this name.
+  if ! _compact_lock_same "$fd" "$p"; then { exec {fd}<&-; } 2>/dev/null; return 1; fi
+  { exec {fd}<&-; } 2>/dev/null || true
+  _reg_generation_valid "$v" || return 1
+  REG_GENERATION="$v"
+  return 0
+}
+
+# GENUINE ABSENCE ONLY. Mints from a validated `_plat_uuid`, writes the no-LF
+# bytes to a private `mktemp` source under `umask 077`, and publishes by
+# NO-CLOBBER `link` — so two racers cannot both win, and EEXIST means
+# reclassify the incumbent rather than repair it. The source goes on every
+# handled result.
+_reg_generation_mint() {   # <id> -> 0 published or an incumbent stands; 1 refused
+  local id="$1" p="$REG/$1.generation" src="" v=""
+  command -v mktemp >/dev/null 2>&1 || return 1
+  command -v link   >/dev/null 2>&1 || return 1
+  v=$(_plat_uuid 2>/dev/null) || return 1
+  # THE STRIP IS THE WRITER'S JOB, not the generator's: `_plat_uuid` emits a
+  # trailing LF on BOTH branches. `$( )` already removes it; the byte check
+  # below is what turns that from an accident into a mechanism.
+  _reg_generation_valid "$v" || return 1
+  src=$( umask 077; mktemp "$REG/.$id.generation-init.XXXXXX" 2>/dev/null ) || return 1
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  { printf '%s' "$v" > "$src"; } 2>/dev/null || { rm -f "$src" 2>/dev/null; return 1; }
+  [[ "$(wc -c < "$src" 2>/dev/null | tr -d ' ')" == 36 ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  link "$src" "$p" 2>/dev/null || true
+  rm -f "$src" 2>/dev/null || true
+  return 0
+}
+
+# THE ONE MINTING SITE'S ENTRY POINT, called by row creation and by nobody else.
+# `_spawn_start` READS AND VALIDATES; it never mints. A row with no generation
+# is answered by the standing fail-closed rule downstream, never by a mint at
+# spawn time — minting there would hand a fresh authorization to a row that was
+# purged or reused in the gap.
+_reg_generation_init() {   # <id> -> 0 the row carries a valid generation; 1 refused
+  local rc=0
+  _reg_generation_read "$1"; rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;     # PRESENT-INVALID is never repaired, replaced or removed
+    *) ;;              # genuine absence: the only mint condition
+  esac
+  _reg_generation_mint "$1" || return 1
+  _reg_generation_read "$1"      # EEXIST reclassifies: read back whoever won
+}
+
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -1829,6 +2011,36 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # even for a row that has nothing left, where the id alone is the record. No
   # `verb` either: this function cannot see its caller, and guessing one would
   # be the fabricated fact the design exists to refuse.
+  # ── D-2605: THE STABLE LOCK, and it is the ONE new statement allowed to
+  # stand between this function's opening brace and the unconditional
+  # unconditional purge-done emit below. Nothing else may go here: the landed
+  # `ccd-lifecycle-purge.test.ts` "is unconditional" pin checks only
+  # emit-before-unlink-loop and the absence of a trailing `||`/`&&`, and both
+  # stay GREEN under a silently inserted conditional guard — which is why that
+  # test is strengthened with a source scan in the same commit rather than left
+  # as the sole protection.
+  #
+  # MECHANISM ABSENCE IS GATED ON THE GENERATION, not blanket. `<id>.generation`
+  # is the witness that this row's hooks were ever handed one: it is minted ONLY
+  # by a flock-capable row creation, deleted LAST by this function, and replaced
+  # on safe reuse. So a PRESENT generation proves the row's hooks may hold this
+  # lock now, and destroying the row under them would be the race the lock
+  # exists to exclude — refuse. An ABSENT generation proves no hook on this row
+  # ever received one, so no hook arm ever ran the lifecycle and there is
+  # nothing to race — proceed. The permanent lock is NOT the witness: it spans
+  # generations and is minted even by a purge against a never-existed id, so it
+  # proves history rather than a live regime, and gating on it would wedge a
+  # genuinely flock-less box fleet-wide.
+  local _pg_fd="" _pg_rc=0
+  _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; _pg_rc=$?
+  if (( _pg_rc == 2 )); then
+    # MECHANISM ABSENT. Fail open only on a generation-ABSENT row.
+    if [ -e "$REG/$1.generation" ] || [ -L "$REG/$1.generation" ]; then return 2; fi
+  elif (( _pg_rc != 0 )); then
+    return 1
+  else
+    _pg_fd="$COMPACT_LOCK_FD"
+  fi
   # `_lc_done` returns 0 on every path, and this emit still carries no condition
   # of its own and still precedes the unlink loop — so nothing HERE gates the
   # purge. What gates it now sits one level up: since D-2605 the whole function
@@ -1856,7 +2068,10 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
-    [[ "$suffix" == archived || "$suffix" == reaping ]] && continue
+    # `generation` IS A MECHANISM, NOT AN OUTCOME (D-2605): it is a dot-free
+    # suffix like any other field, so without this arm the loop deletes it in
+    # ordinary glob order and "generation last" is a no-op comment.
+    [[ "$suffix" == archived || "$suffix" == reaping || "$suffix" == generation ]] && continue
     rm -f "$f"
   done
   # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
@@ -1878,6 +2093,24 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # the wedge this ordering exists to prevent. It is also what makes the order
   # observable to a test — nothing else about two adjacent unlinks is.
   [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
+  # THE DOT-LEADING PRIVATE COMPACTION FAMILIES, which the loop above cannot
+  # see (its glob is `"$REG/$id".*` — id, then a dot) and which would otherwise
+  # hold the slug for ever under the widened `_ws_slug_free`. The permanent
+  # lock is skipped BY NAME: it spans row generations and safe reuse by design.
+  local pf psuffix
+  for pf in "$REG/.$id".*; do
+    [[ -e "$pf" ]] || continue
+    psuffix="${pf#"$REG/.$id."}"
+    _ws_private_family "$psuffix" || continue
+    rm -f "$pf"
+  done
+  # GENERATION LAST, after the archived/reaping tail and after every private
+  # family — and OUTSIDE the loop above, which skips it. It is the row's
+  # authorization: while it stands, a hook holding it can still take the lock,
+  # so it is the last thing to go.
+  rm -f "$REG/$id.generation"
+  _compact_lock_release "$_pg_fd"
+  return 0
 }
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
   # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
@@ -2794,6 +3027,37 @@ _lc_refuse() {   # act id token detail [k v]... — EMITS, THEN DIES. Never retu
   local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4 2>/dev/null || :
   _lc_emit "$a" refused "$i" "" refusal "$tok" detail "$msg" "$@"
   die "$msg"
+}
+
+_lc_refuse_return() {   # act id tx token detail [k v]... — EMITS, THEN RETURNS
+  # THE NON-FATAL SIBLING, and it exists because `_lc_refuse` cannot be reused
+  # where the caller must keep going: that one "EMITS, THEN DIES. Never
+  # returns." `ws-gc --prune` sweeps a list of rows, and a refusal on one row
+  # must not kill the sweep at the first declining row.
+  #
+  # THE NAME CARRIES ITS DISTINGUISHING PROPERTY, deliberately. The earlier
+  # spelling, `_lc_refused`, sat ONE CHARACTER from `_lc_refuse` while differing
+  # in ARITY — five positionals against four — and in FATALITY. A mistyped call
+  # would shift every argument by one AND kill the sweep at the first declining
+  # row: the exact outcome this emitter exists to prevent.
+  #
+  # IT CARRIES A `tx`, where `_lc_refuse` passes a literal empty one. That is
+  # what lets it close a minted transaction: `_ws_gc_prune_row`'s dead-reg arm
+  # has already emitted `_lc_intent destroy … "$lctx"` by the time it learns
+  # `_reg_purge` refused, and a decline reported only through `_gc_declined` —
+  # a printf report row, not a lifecycle emit — would leave that intent with
+  # ZERO terminal facts, permanently, on every sweep.
+  #
+  # Same `refusal`/token spelling discipline as `_lc_refuse` above, and for the
+  # same reason: `ccd-wsaudit-nonpoison.test.ts` harvests four token shapes over
+  # THIS WHOLE BLOCK'S TEXT, comments included, so neither the emitter's name
+  # nor anything written about it may spell one of them. (That suite's own
+  # source is where the four are enumerated; quoting them here would be the
+  # very poisoning it exists to refuse — measured, an earlier draft of this
+  # comment did exactly that and reddened it.)
+  local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
+  _lc_emit "$a" refused "$i" "$t" refusal "$tok" detail "$msg" "$@"
+  return 0
 }
 
 _lc_surface_norm() {   # word -> the DECLARED surface, or NOTHING when none was
@@ -4465,6 +4729,27 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
 
   local id="$project-$slug"
+  # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
+  # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
+  # this verb dies with a retryable message naming the lock and leaves NOTHING
+  # — no `.uuid`, no `.generation`, no partial row — so nothing irreversible
+  # has happened and re-running is the whole remedy. That is the opposite
+  # disposition from `_spawn_start`'s contended miss, and deliberately: there,
+  # failing closed would wedge a rescue swap on a compaction lock; here, there
+  # is nothing to wedge and a half-written row is the worse outcome.
+  #
+  # The lock is CLOSED before the setup hook and before `_spawn_start`, which
+  # takes its own — it guards the residue check and the generation mint, and
+  # nothing else.
+  local gfd=""
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT" \
+    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was created; retry"
+  gfd="$COMPACT_LOCK_FD"
+  if ! _reg_generation_init "$id"; then
+    _compact_lock_release "$gfd"
+    die "$REG/$id.generation is present and invalid — refusing to build a workspace on it; inspect it by hand"
+  fi
+  _compact_lock_release "$gfd"; gfd=""
   local uuid; uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
@@ -4960,7 +5245,21 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     echo "warn: no worktree record for $workdir; registry says branch '$reg_branch', which still exists — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
   fi
 
-  _reg_purge "$id"                                                          # finding F3
+  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
+  # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
+  # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
+  # refusal precedes anything irreversible, a failure follows it. Reporting it
+  # as a suppressed success is the exact false success `_reg_purge`'s own
+  # "never claims success" rule forbids, and reporting it as a bare decline
+  # would say nothing was touched, which is false. The message names WHAT
+  # COMPLETED and that the registry row and its generation still stand.
+  if ! _reg_purge "$id"; then                                              # finding F3
+    _lc_fail destroy "$id" "$lctx" purge-refused \
+      "the workspace was torn down, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd ws-rm $id\` once the compaction settles" \
+      verb ws-rm dec.reason "$reason"
+    echo "ccd: $id: torn down, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
 
   # AFTER `_reg_purge`, so the `done` line sits after the terminal act. Note
   # this workspace now has TWO records for one removal — the D3 backstop's
@@ -11231,7 +11530,21 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]] && rm -rf "$cdir"
   fi
 
-  _reg_purge "$id"                                                         # (i) LAST, finding F3
+  # ── D-2605: THIS CALLER READS THE STATUS TOO ───────────────────────────
+  # `_ws_reap_tail` is post-action by construction — the worktree, branch and
+  # clips are already gone by the time it runs — so a refusal here is a
+  # FAILURE. It is also UNREACHABLE on a flock-less box, and deliberately so:
+  # `cmd_ws_reap` already dies at its own `command -v flock` gate, and
+  # `_lc_refuse` "EMITS, THEN DIES. Never returns." So this branch answers
+  # CONTENTION only, never mechanism absence, and that is exactly why it must
+  # not be folded into the mechanism-absence ruling's two-caller list.
+  if ! _reg_purge "$id"; then                                              # (i) LAST, finding F3
+    _lc_fail reap "$id" "$lctx" purge-refused \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run once the compaction settles" \
+      verb ws-reap meas.branch "$branch"
+    echo "ccd: $id: reaped, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
   # `WsTombstone` stays reap's, and this line names it so `GET /api/lifecycle`
   # can join the two through the already-whitelisted `$REG/.reaped/` read —
   # the tombstone's first CONSUMER. No `_ws_tombstone` call is added to any
@@ -11732,9 +12045,30 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       local lctx; lctx=$(_lc_tx)
       _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
         meas.project "$project" meas.workspace "$slug" meas.state dead-reg
-      _reg_purge "$project-$slug"                                          # finding F3
-      _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
-      _gc_reclaimed "dead registry entry $project-$slug" ;;
+      # ── D-2605: THE ONE CALLER THAT MAY DECLINE ─────────────────────────
+      # It reaches `_reg_purge` as its FIRST destructive act — measured, the
+      # sequence above is `_lc_tx`, `_lc_intent destroy`, then this — so a
+      # refusal precedes anything irreversible and IS a refusal. Left
+      # status-blind (which is how this arm shipped) it answered a refusal with
+      # a completed `destroy` plus an operator-facing `reclaimed` line while the
+      # registry row and its `.generation` still stood, repeated on every sweep.
+      #
+      # `_gc_declined` ALONE is not enough: it is `GC_DECLINED=$(( … )); _gc_row
+      # declined "$1"` — a printf report row, not a lifecycle emit — so a
+      # decline reported only through it leaves the `intent destroy` above with
+      # ZERO terminal facts, permanently. Hence exactly one
+      # `_lc_refuse_return`, carrying that same minted `$lctx`, beside it: no
+      # `_lc_done destroy`, no `_gc_reclaimed`, and the sweep CONTINUES to the
+      # next row, which is why the emitter returns rather than dying.
+      if ! _reg_purge "$project-$slug"; then                              # finding F3
+        _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
+          "$REG/.$project-$slug.compactions.lock was unavailable; the registry row is untouched" \
+          verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
+        _gc_declined "dead registry entry $project-$slug — the compaction lock was unavailable; nothing was removed"
+      else
+        _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
+        _gc_reclaimed "dead registry entry $project-$slug"
+      fi ;;
     reg-broken)
       # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
       # there), so there is no id to purge and this arm must not invent one.
@@ -13463,11 +13797,45 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
+  # ── D-2605: the row's generation, read under the mutex, CLOSED BEFORE the
+  # fork ────────────────────────────────────────────────────────────────────
+  # It READS AND VALIDATES; it never MINTS. Minting is row creation's alone: a
+  # mint here would hand a fresh authorization to a row that was purged or
+  # REUSED in the gap, and a row with no generation is answered by the standing
+  # fail-closed rule downstream instead.
+  #
+  # THE LOCK IS CLOSED BEFORE EITHER `_tmux_new_session` COMMAND IS BUILT OR
+  # RUN, and that is not tidiness. The tmux server daemon — or anything it
+  # spawns — can outlive this critical section, a held `{fd}<>` descriptor is
+  # inherited across fork/exec, and no compliant path may rely on tmux calling
+  # `closefrom()`. Releasing first is safe because every lifecycle arm already
+  # refuses on an environment/canonical generation mismatch under its own lock,
+  # so a row purged or reused in the gap is simply refused downstream.
+  #
+  # A CONTENDED MISS FAILS OPEN, deliberately. Failing closed here was
+  # REJECTED: a rescue swap contending with the outgoing pane's own PreCompact,
+  # which can hold the lock for seconds, would not come back up — and a swap
+  # must never wedge on a compaction lock. The cost is stated plainly rather
+  # than swallowed, because a contended hold at spawn time is itself an anomaly
+  # and the resulting inertness cannot self-heal by any later event. It is
+  # self-consistent with the generation gate rather than an exception to it: a
+  # session with no generation cannot hold this lock, so there is no publisher
+  # the missed acquisition could have raced.
+  local genfd="" genenv="" genval="" genrc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; genrc=$?
+  if (( genrc == 0 )); then
+    genfd="$COMPACT_LOCK_FD"
+    if _reg_generation_read "$id"; then genval="$REG_GENERATION"; genenv="CCRC_SESSION_GENERATION='$genval' "; fi
+    _compact_lock_release "$genfd"; genfd=""
+  elif (( genrc == 1 )); then
+    echo "ccd: warn: $id: could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s;" \
+         "spawning without CCRC_SESSION_GENERATION — this session's compaction lifecycle is inert until its next respawn" >&2
+  fi
   # `_tmux_new_session`, not a bare `tmux new-session`: this is the call that
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -13507,8 +13875,24 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # pane than the attempt it is replacing. (This is the copy that gets
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
+      # ITS OWN ACQUISITION, immediately before the retry's own fork, and
+      # closed before it — the primary read above happened before a `sleep` and
+      # a `has-session`, so its answer is stale by now. It requires THE SAME
+      # value this invocation already saw: a row purged and re-created in the
+      # gap has a different generation, and exporting that one would authorize
+      # this pane against a row it does not belong to.
+      local rgenfd="" rgenrc=0
+      genenv=""
+      _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; rgenrc=$?
+      if (( rgenrc == 0 )); then
+        rgenfd="$COMPACT_LOCK_FD"
+        if [[ -n "$genval" ]] && _reg_generation_read "$id" && [[ "$REG_GENERATION" == "$genval" ]]; then
+          genenv="CCRC_SESSION_GENERATION='$genval' "
+        fi
+        _compact_lock_release "$rgenfd"; rgenfd=""
+      fi
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -13970,6 +14354,27 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
+  # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
+  # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
+  # this verb dies with a retryable message naming the lock and leaves NOTHING
+  # — no `.uuid`, no `.generation`, no partial row — so nothing irreversible
+  # has happened and re-running is the whole remedy. That is the opposite
+  # disposition from `_spawn_start`'s contended miss, and deliberately: there,
+  # failing closed would wedge a rescue swap on a compaction lock; here, there
+  # is nothing to wedge and a half-written row is the worse outcome.
+  #
+  # The lock is CLOSED before the setup hook and before `_spawn_start`, which
+  # takes its own — it guards the residue check and the generation mint, and
+  # nothing else.
+  local gfd=""
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT" \
+    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry"
+  gfd="$COMPACT_LOCK_FD"
+  if ! _reg_generation_init "$id"; then
+    _compact_lock_release "$gfd"
+    die "$REG/$id.generation is present and invalid — refusing to start on it; inspect it by hand"
+  fi
+  _compact_lock_release "$gfd"; gfd=""
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$wrapper"
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
@@ -15619,7 +16024,21 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
-  _reg_purge "$id"
+  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
+  # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
+  # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
+  # refusal precedes anything irreversible, a failure follows it. Reporting it
+  # as a suppressed success is the exact false success `_reg_purge`'s own
+  # "never claims success" rule forbids, and reporting it as a bare decline
+  # would say nothing was touched, which is false. The message names WHAT
+  # COMPLETED and that the registry row and its generation still stand.
+  if ! _reg_purge "$id"; then
+    _lc_fail forget "$id" "$lctx" purge-refused \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd forget $id\` once the compaction settles" \
+      verb forget dec.reason "$reason"
+    echo "ccd: $id: unsupervised and killed, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
   _lc_done forget "$id" "$lctx" verb forget dec.reason "$reason"
   echo "forgot $id — registry entry removed; the transcript and any pasted images are kept"
 }

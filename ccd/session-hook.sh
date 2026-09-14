@@ -929,14 +929,23 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   # A failed `exec` redirection returns 1 and does NOT exit a non-interactive
   # bash (measured); the `2>/dev/null` is what keeps this file's stderr-silence
   # contract, since the failure message is printed by the shell itself.
-  exec {fd}<>"$al" 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  # `{ exec …; } 2>/dev/null`, NEVER `exec … 2>/dev/null`. MEASURED, and it is
+  # a real defect rather than a style point: `exec` with redirections and NO
+  # COMMAND applies them to THE SHELL, permanently — so the bare form silences
+  # this process's stderr for the rest of the run, not just for the open.
+  # (Caught by `ccd-spawn-split.test.ts`'s operator-facing resume warning going
+  # missing on the ccd side; the same idiom is here, where the contract is
+  # silence anyway and nothing would have reddened.) A `{ …; }` group is not a
+  # subshell, so the `{fd}` assignment still lands in this scope, and a failed
+  # open still returns 1.
+  { exec {fd}<>"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
   # THE ALIAS GOES NOW, on success and on every handled failure below: the FD is
   # the only reference this process keeps, so a completed acquisition leaves
   # zero owned artifacts and a crash leaves at most one aged, exact-family name.
   rm -f "$al" 2>/dev/null || true
-  _hook_lock_same "$fd" "$lock" || { exec {fd}>&- 2>/dev/null; return 1; }
-  flock -w "$1" "$fd" 2>/dev/null || { exec {fd}>&- 2>/dev/null; return 1; }
-  _hook_lock_same "$fd" "$lock" || { exec {fd}>&- 2>/dev/null; return 1; }
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  flock -w "$1" "$fd" 2>/dev/null || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
   HOOK_LOCK_FD="$fd"
   return 0
 }
@@ -946,7 +955,7 @@ _hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST refer
   # An empty operand is `ambiguous redirect` (measured), so the guard is real
   # rather than defensive; closing an already-closed descriptor is rc 0.
   [[ -n "$fd" ]] || return 0
-  exec {fd}>&- 2>/dev/null || true
+  { exec {fd}>&-; } 2>/dev/null || true
   return 0
 }
 

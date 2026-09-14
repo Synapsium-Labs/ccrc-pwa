@@ -5547,7 +5547,8 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
-  | 'spawn-failed';            // _lc_fail: the undo landed, the session did not come back
+  | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
+  | 'purge-refused';           // D-2605: the row's compaction mutex was unavailable, so the registry row stands
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -5579,6 +5580,14 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
   'spawn-failed':
     'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
+  // D-2605. The act itself COMPLETED — this token only ever rides a `_lc_fail`
+  // from a post-action caller, or the non-fatal `_lc_refuse_return` from the
+  // one caller that reaches the purge before anything irreversible — so the
+  // sentence must not say "nothing happened". What it says is what is still
+  // TRUE: the registry row and its generation are still on disk, and re-running
+  // the verb is the whole remedy.
+  'purge-refused':
+    'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
