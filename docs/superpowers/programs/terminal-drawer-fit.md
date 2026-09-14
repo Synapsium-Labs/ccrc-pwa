@@ -21,6 +21,14 @@ Wave 1 is independently valuable and safe with nothing after it. Wave 3 may merg
 DOES nothing until wave 2 is on the fleet box: it un-pins only through a verb gated on
 `capSupported(state,'win-size-v1')`, which answers false on no evidence.
 
+**Deviation block: `D-2766`–`D-2781`** (16 numbers, allocated once at run-open 2026-09-14; floor now
+2782). Every wave draws from this block and defines each number in the same act as using it. A worker
+never calls the allocator mid-wave (coordinator clause 10); it names the departure in its wave-done
+mail and the coordinator assigns from the block. **Wave 1 owes none as planned** — both departures an
+earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
+
+Run ids: wave 1 = **51**.
+
 ## Decisions & deviations (why, not just what)
 
 The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer most needs the *why* for.
