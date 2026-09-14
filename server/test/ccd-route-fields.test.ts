@@ -98,6 +98,13 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(h.sh(`_route_effort_for ${ID} ''`)).toBe('high');
   });
 
+  it('_route_effort_for haiku+auto: auto is the absent-equivalent — no note, empty output (controller ruling S1-R5)', () => {
+    seed();
+    h.sh(`_reg_set ${ID} effort auto`);
+    expect(h.sh(`_route_effort_for ${ID} haiku; echo "|rc=$?"`)).toBe('|rc=0');
+    expect(swapLog()).toBe('');
+  });
+
   it('ROUTE_FIELDS is the seven-field record, in the spec\'s order', () => {
     expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact degraded inert');
   });

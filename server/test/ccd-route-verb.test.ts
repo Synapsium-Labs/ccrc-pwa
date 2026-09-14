@@ -76,6 +76,15 @@ describe('ccd route (routing spec 2026-09-14 §5.3)', () => {
     for (const f of ['class', 'effort', 'subagent', 'degraded', 'colour']) expect(h.reg(ID, f)).toBeNull();
   });
 
+  it('a control character in --reason cannot forge a swap.log line: refused before any write (controller ruling S1-R4)', () => {
+    seed();
+    const r = shStatus(`cmd_route --session ${ID} --set effort=high --reason $'evil\\nfake route line'`);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/--actor\/--reason must not contain control characters/);
+    expect(h.reg(ID, 'effort')).toBeNull();
+    expect(swapLog()).toBe('');
+  });
+
   it('refuses the haiku+effort PAIR whether it arrives in one call or across two, and the earlier field stays', () => {
     seed();
     let r = route(`--session ${ID} --set class=haiku --set effort=high`);
@@ -86,6 +95,26 @@ describe('ccd route (routing spec 2026-09-14 §5.3)', () => {
     expect(r.status).toBe(1); expect(r.out).toMatch(/class haiku takes no effort level/);
     expect(h.reg(ID, 'effort')).toBeNull();
     expect(h.reg(ID, 'class')).toBe('haiku');
+  });
+
+  it('haiku+auto is not the refused pair — auto is the absent-equivalent (controller ruling S1-R5)', () => {
+    seed(); h.sh(`_reg_set ${ID} effort auto`);
+    expect(route(`--session ${ID} --set class=haiku`).status).toBe(0);
+    expect(h.reg(ID, 'class')).toBe('haiku');
+  });
+
+  it('--set effort=auto on a haiku session is accepted', () => {
+    seed(); h.sh(`_reg_set ${ID} class haiku`);
+    expect(route(`--session ${ID} --set effort=auto`)).toEqual({ status: 0, out: `set ${ID} effort=auto\n` });
+    expect(h.reg(ID, 'effort')).toBe('auto');
+  });
+
+  it('haiku with a real effort LEVEL is still refused, with the auto-aware message', () => {
+    seed(); h.sh(`_reg_set ${ID} class haiku`);
+    const r = route(`--session ${ID} --set effort=high`);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/class haiku takes no effort level — set effort=auto or pick another class/);
+    expect(h.reg(ID, 'effort')).toBeNull();
   });
 
   it('a multi-field call is all-or-nothing on validation: one bad value and no field is written', () => {

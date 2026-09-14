@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fac99cf804e6a6d524604e97496e852f8827788c1ea00b1e5fdf6eac4be341d9
+# ccrc:generated 1 sha256=f639735842cdd24cbca86d0ce3ed0eebd6f6aebf0e22c7cc4e3685ec89b374c9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6590,6 +6590,13 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
       *)         die "$usage" ;;
     esac
   done
+  # --actor and --reason are free-form caller text that reaches swap.log
+  # verbatim (the journal arm is safe — `_lc_json` JSON-encodes); refuse any
+  # control character in either so a newline can never forge a second
+  # `route …` line (controller ruling S1-R4). Dies before anything is written.
+  case "$actor$reason" in
+    *[[:cntrl:]]*) die "route: --actor/--reason must not contain control characters" ;;
+  esac
   [[ -n "$id" && ${#sets[@]} -gt 0 ]] || die "$usage"
   [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
@@ -6608,7 +6615,10 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     [[ "$f" == class ]] && cls="$v"
     [[ "$f" == effort ]] && eff="$v"
   done
-  [[ "$cls" == haiku && -n "$eff" ]] && die "class haiku takes no effort level — clear effort or pick another class"
+  # `auto` types nothing (spec §5.1: it is the ABSENT-equivalent), so
+  # haiku+auto is not the refused pair — only haiku+a LEVEL is (controller
+  # ruling S1-R5).
+  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class"
   for kv in "${sets[@]}"; do
     f="${kv%%=*}"; v="${kv#*=}"
     raw=$(_reg_get "$id" "$f" 2>/dev/null) || raw=""
@@ -14264,10 +14274,17 @@ _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
 }
 _route_effort_for() {   # id class -> stdout the effort to apply. Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
-  # refused here with its own note and nothing is typed.
+  # refused here with its own note and nothing is typed. `auto` is spec
+  # §5.1's ABSENT-equivalent — haiku+auto types nothing and notes nothing,
+  # same as haiku+absent; only haiku+a LEVEL is the refused pair (controller
+  # ruling S1-R5, matched by `cmd_route`'s own pair check above).
   local id="$1" cls="$2" e
   e=$(_route_get "$id" effort)
-  if [[ "$cls" == haiku && -n "$e" ]]; then _route_pair_note "$id"; e=""; fi
+  if [[ "$cls" == haiku && "$e" == auto ]]; then
+    e=""
+  elif [[ "$cls" == haiku && -n "$e" ]]; then
+    _route_pair_note "$id"; e=""
+  fi
   printf '%s' "$e"
   return 0
 }
