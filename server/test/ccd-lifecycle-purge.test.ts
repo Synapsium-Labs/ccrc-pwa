@@ -1470,6 +1470,46 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     }
   }, 180_000);
 
+  it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {
+    // The plan requires the arity pin to ship "with the behaviour control that
+    // the `ws-gc --prune` forced-refusal fixture must still reach the NEXT
+    // row", and §5's dead-reg row ends "and the sweep continues to the next
+    // row". MEASURED at the round's base: every forced-refusal fixture in the
+    // tree calls `_ws_gc_prune_row` DIRECTLY, on ONE row — so none of them can
+    // see the loop at all, and a declining arm that started terminating the
+    // sweep (a `die`, a `return` the loop honours, a `set -e`) would truncate
+    // `ws-gc --prune` at the first contended row with every later reclaimable
+    // row silently unprocessed, while every single-row leg stayed green.
+    //
+    // TWO ROWS, AND THE ORDER IS THE FIXTURE. `_ws_gc_scan` walks
+    // `"$REG"/*.workspace`, an alphabetical glob, so `aaa` is reached before
+    // `zzz` — and only the FIRST carries a generation, which is what makes it
+    // the one that declines.
+    const deadAt = (id: string, slug: string): void => {
+      h.sh(`_reg_set ${id} uuid 72be9ee2-0000-4bcc-b60b-0cfc0dc3d199
+        _reg_set ${id} project demo; _reg_set ${id} workspace ${slug}
+        _reg_set ${id} branch ws/${slug}; _reg_set ${id} workdir /gone`);
+    };
+    deadAt('demo-aaa-basin', 'aaa-basin');
+    deadAt('demo-zzz-basin', 'zzz-basin');
+    plantGeneration('demo-aaa-basin');
+    const out = h.sh(`${NOFLOCK} cmd_ws_gc --prune 2>&1 || true`);
+
+    // ROW ONE DECLINED, positively.
+    expect(out, 'the first row is reported as declined').toContain('declined');
+    expect(out).toContain('demo-aaa-basin');
+    const destroys = eventsOf(h.home, 'destroy');
+    const first = destroys.filter((e) => String(e['id']) === 'demo-aaa-basin');
+    expect(first.map((e) => e['outcome']), 'one intent, one refusal').toEqual(['intent', 'refused']);
+    expect(h.reg('demo-aaa-basin', 'uuid'), 'and its row still stands').not.toBeNull();
+
+    // ROW TWO WAS STILL REACHED — the property this leg exists for.
+    const purged = eventsOf(h.home, 'purge').map((e) => String(e['id']));
+    expect(purged, 'the sweep carried on to the second row').toContain('demo-zzz-basin');
+    expect(purged, 'and did not touch the row it refused').not.toContain('demo-aaa-basin');
+    expect(h.reg('demo-zzz-basin', 'uuid'), 'the second row is gone').toBeNull();
+  }, 120_000);
+
   it('(d2) ws-gc --prune on the SAME row DECLINES — positively, and the false success negatively', () => {
     // THE SHIPPED STATUS-BLIND ARM PASSES A BARE "emits neither `_lc_fail` nor
     // `_lc_done purge`", which is exactly the false-success implementation this
