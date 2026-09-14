@@ -725,7 +725,14 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
     // printing it is its entire job. It is the stand-in for `claude
     // setup-token` itself, not an artifact the helper wrote; filtering it is
     // what keeps this assertion about the helper.
-    const found = execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8' })
+    // BOUNDED, and the bound is the point (D-2739). This is the suite's only
+    // unbounded recursive walk, and it runs over a tree the helper puts FIFOs
+    // in. A reader that does not skip devices blocks on one for ever: the
+    // 2026-09-12 macOS job was cancelled at 25 minutes with a `grep` still
+    // alive in its orphan cleanup. GNU grep skips devices under -r; BSD grep
+    // is unmeasured. A timeout turns a silent 25-minute wedge into a failure
+    // that says so.
+    const found = execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8', timeout: 30_000 })
       .split('\n').filter(Boolean)
       .filter((p) => p !== path.join(harnessBin(h.home), 'claude'))
       .sort();
@@ -1036,4 +1043,102 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
     expect(shipAt, 'the helper must land before the agent restart that caches ccd caps')
       .toBeLessThan(restartAt);
   });
+});
+
+// ── THE PANE-BOUND SPAWN HAS TO END ───────────────────────────────────────
+// D-2673 gave the darwin arm a shape that could not terminate, and D-2679
+// booked the wrong reason for it. Both are measured here rather than argued.
+//
+// The arm is selected by `CCD_OS`, which the helper derives once at source
+// time — so a Linux box can drive the DARWIN arm by assigning it after
+// sourcing. That is the whole reason these cases can be red on this box
+// instead of waiting on a macOS leg that gets cancelled before it reports.
+// What is NOT claimed here is anything about BSD `script(1)`; that lives in
+// `script-shim-platform.test.ts` and only macOS can answer it.
+describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)', () => {
+  /** Drive one spawn+pump+wait cycle with the arm forced, and report what
+   *  happened through a FILE.
+   *
+   *  THE RESULT GOES THROUGH A FILE, NOT A PIPE, and that is the point of this
+   *  helper rather than a detail of it (D-2739). A pane-bound run can leave a
+   *  copier holding whatever fds it inherited; hand it a pipe that the parent
+   *  reads to EOF and the reader waits on a process nobody is going to reap.
+   *  `timeout` bounds the run, and every stream the driver owns goes to a file.
+   */
+  const drive = (os: 'linux' | 'darwin', opts: {
+    mint: string; code?: string; secs?: string; grace?: string; noDeadline?: boolean;
+  }): Record<string, string> => {
+    const out = path.join(h.home, `drive-${os}.txt`);
+    const script = `
+      source "${HELPER}"
+      CCD_OS=${os}; AUTH_ID=claude-a
+      ${opts.noDeadline ? '_auth_timeout() { shift; "$@"; }' : ''}
+      _auth_open_pipes || exit 9
+      _auth_spawn_pty_child bash -c "$MINT"
+      child=$AUTH_CHILD; exec 8<"$AUTH_RUN/out"
+      [ -n "\${CODE:-}" ] && printf '%s\\n' "$CODE" >&9
+      _auth_pump; wait "$child"; rc=$?
+      # The default on AUTH_EXPIRED below is load-bearing: the helper runs
+      # under set -u, so a tree without D-2736 global would die HERE rather
+      # than in the behaviour under test - a red proving the variable is
+      # absent and nothing about whether the run terminates.
+      # EVERY COUNT THROUGH $(( )), because BSD wc -l PADS: macOS answers
+      # "       0" where GNU answers "0", and a string compare then fails on a
+      # value that is correct. Measured on macos-latest - the same GNU-vs-BSD
+      # class as D-2613's stat -c, caught by CI rather than by reading.
+      before=$(( $(pgrep -P $$ -x cat | wc -l) ))
+      _auth_close_pipes; sleep 1
+      printf 'rc=%s\\nexpired=%s\\ncopier_before=%s\\ncopier_after=%s\\nfifos=%s\\nstate=%s\\n' \\
+        "$rc" "\${AUTH_EXPIRED:-0}" "$before" "$(( $(pgrep -P $$ -x cat | wc -l) ))" \\
+        "$(( $(ls -1 "$AUTH_RUN" 2>/dev/null | wc -l) ))" "$AUTH_STATE" > "${out}"
+    `;
+    const env = ghContainedEnv(h.home, {
+      ...process.env, HOME: h.home, CCRC_AUTH_NO_MAIN: '1', CCRC_AUTH_TICK: '0.2',
+      CCRC_AUTH_TIMEOUT: opts.secs ?? '600', CCRC_AUTH_PUMP_GRACE: opts.grace ?? '10',
+      MINT: opts.mint, CODE: opts.code ?? '',
+    }, { systemd: true, tmux: true });
+    // 20s is well under vitest's own patience and well over every case here;
+    // a case that reaches it has HUNG, which is the defect being pinned.
+    try { execFileSync('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore' }); }
+    catch { /* a hang throws ETIMEDOUT; the file below is then absent or stale */ }
+    if (!fs.existsSync(out)) return { hung: 'yes' };
+    return Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
+      .map((l) => l.split('=') as [string, string]));
+  };
+
+  // THE ONE THAT WOULD HAVE CAUGHT D-2673. Same helper, same mint, only the
+  // arm differs — and before the fix the darwin row never returned at all.
+  for (const os of ['linux', 'darwin'] as const) {
+    it(`${os}: the run ENDS, and reports the mint's own status`, () => {
+      const r = drive(os, { mint: 'echo line-one; exit 3' });
+      expect(r['hung'], `the ${os} arm never returned — spawn/pump/wait did not terminate`)
+        .toBeUndefined();
+      expect(r['rc'], `the ${os} arm lost the mint's exit status`).toBe('3');
+    });
+
+    it(`${os}: the operator's code still reaches the mint`, () => {
+      const r = drive(os, { mint: 'read -r c; [ "$c" = SECRET-42 ] && exit 0 || exit 9', code: 'SECRET-42' });
+      expect(r['hung']).toBeUndefined();
+      expect(r['rc'], 'the code written to fd 9 did not arrive on the mint\'s stdin').toBe('0');
+    });
+
+    // THE BACKSTOP, asked of a deadline that does not fire — which is D-2661's
+    // measured behaviour on macOS, reproduced here by removing the deadline
+    // outright rather than by waiting for it to misbehave.
+    it(`${os}: a mint whose deadline never fires still ends, as EXPIRED not failed`, () => {
+      const r = drive(os, { mint: 'echo alive; sleep 300', secs: '1', grace: '1', noDeadline: true });
+      expect(r['hung'], 'nothing bounded the pump, so the run never ended').toBeUndefined();
+      expect(r['expired'], 'the run ended but did not record itself as expired, so the '
+        + 'caller would stamp `failed: the mint exited 143` over a promised terminal state').toBe('1');
+    });
+
+    // The copier is its own writer unless the substitution drops fd 9, and a
+    // copier that cannot reach EOF outlives the run that made it.
+    it(`${os}: the copier does not outlive _auth_close_pipes`, () => {
+      const r = drive(os, { mint: 'echo alive; sleep 300', secs: '1', grace: '1', noDeadline: true });
+      expect(r['copier_after'], 'a copier survived the run; it holds fd 9 on the FIFO it reads')
+        .toBe('0');
+      expect(r['fifos'], 'FIFOs were left under $HOME').toBe('0');
+    });
+  }
 });
