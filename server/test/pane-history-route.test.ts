@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
-import { Tmux, type ExecResult, type Runner } from '../src/exec.js';
+import { Tmux, PANE_PROBE_FORMAT, type ExecResult, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { Bus } from '../src/bus.js';
@@ -25,7 +25,7 @@ const ID = 'claude-a-MekWarLive';
 
 async function makeApp(
   capture: ExecResult,
-  listPanes: ExecResult = { code: 0, stdout: '', stderr: '' },
+  listPanes: ExecResult = { code: 0, stdout: '1 1953 2000 220 50 0\n', stderr: '' },
 ): Promise<{ app: FastifyInstance; calls: string[][] }> {
   const home = mkTmp('ccrc-pane-history-');
   seedRoster(home);
@@ -52,9 +52,11 @@ describe('GET /api/sessions/:id/pane/history', () => {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 1953, scrollback: 1953, alternate: false, width: 220,
+    });
     // THE ARGV IS THE GUARD. `-p` to stdout, `-e` so the history keeps the
-    // colours it was written in, `-S -2000` to start above the screen, and
+    // colours it was written in, `-S -<history>` to start above the screen, and
     // `-J` so a line wrapped at the PANE's width arrives as the one logical
     // line it was, for the reader to wrap at THEIRS. All four are reachable
     // under the agent's existing `['capture-pane']` grant — flags are not
@@ -69,7 +71,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // it the phone wraps text that tmux already wrapped, and a word breaks
     // twice.
     expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
-      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-1953'],
     ]);
     await app.close();
   });
@@ -86,7 +88,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
     await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
-    expect(calls.map((c) => c[1])).toEqual(['capture-pane', 'list-panes']);
+    expect(calls.map((c) => c[1])).toEqual(['list-panes', 'capture-pane']);
     await app.close();
   });
 
@@ -139,17 +141,17 @@ describe('GET /api/sessions/:id/pane/history', () => {
   it('carries the scrollback measurement beside the text, off the verb that was already allowed', async () => {
     const { app, calls } = await makeApp(
       { code: 0, stdout: HISTORY, stderr: '' },
-      { code: 0, stdout: '1979 0\n', stderr: '' },
+      { code: 0, stdout: '1 1979 2000 220 50 0\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(res.json()).toEqual({
-      ok: true, text: HISTORY, lines: 2000, scrollback: 1979, alternate: false,
+      ok: true, text: HISTORY, lines: 1979, scrollback: 1979, alternate: false, width: 220,
     });
     // `list-panes`, not a new verb: the whitelist entry `panePid` already uses,
     // so this widens nothing in the exec surface.
     expect(calls).toContainEqual(
-      ['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', '#{history_size} #{alternate_on}']);
+      ['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', PANE_PROBE_FORMAT]);
   });
 
   it('reports the alternate screen as CONTEXT, beside the count that decides', async () => {
@@ -161,7 +163,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     // the pair.
     const { app } = await makeApp(
       { code: 0, stdout: 'a full screen\n', stderr: '' },
-      { code: 0, stdout: '0 1\n', stderr: '' },
+      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
     );
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
@@ -214,5 +216,110 @@ describe('the shipped comments say what F1 measured', () => {
     const without = Number(m![2]);
     expect(withJ, 'the numbers are inverted: -J joins lines, so it renders FEWER rows')
       .toBeLessThan(without);
+  });
+});
+
+describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
+  it('captures `-S -<history>` when the pane was measured, not the constant', async () => {
+    // PR #96 captured 2000 lines and then asked how many there were. A pane
+    // holding 47 lines paid for 2000 and a pane holding 1953 got a window
+    // sized by a guess that happened to be right. The order flips so the read
+    // is sized by the measurement.
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+    );
+    await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(calls.map((c) => c[1]), 'the capture ran before the measurement that sizes it')
+      .toEqual(['list-panes', 'capture-pane']);
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-47'],
+    ]);
+    await app.close();
+  });
+
+  it('falls back to PANE_HISTORY_LINES when the pane could not be measured', async () => {
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 1, stdout: '', stderr: 'no server running\n' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+    ]);
+    // ABSENT, NOT ZERO: an unmeasurable probe omits all three fields, and a
+    // reader that finds them absent behaves exactly as it did before they
+    // existed. The capture itself succeeded, so this is a 200.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
+    await app.close();
+  });
+
+  it('carries scrollback, alternate AND width when the probe was ok', async () => {
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 1953 2000 220 50 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    // `width` is what lets the drawer size its OWN scrollback as
+    // history x ceil(paneWidth / readerCols) + rows (§5.4). Without it the
+    // reader is back to a constant multiplier over a width it cannot see.
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 1953, scrollback: 1953, alternate: true, width: 220,
+    });
+    await app.close();
+  });
+
+  it('echoes the SIZE IT ASKED FOR as `lines`, so the two sides cannot disagree', async () => {
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(res.json()).toMatchObject({ lines: 47, scrollback: 47 });
+    await app.close();
+  });
+
+  it('a measured ZERO history still asks for the constant — tmux returns what it has', async () => {
+    // `-S -0` would start at the screen's own top and return nothing above it,
+    // which is indistinguishable from a failed read to the layer above. The
+    // measured zero travels as `scrollback: 0` instead, which is exactly the
+    // fact the drawer refuses to open a layer on.
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+    ]);
+    expect(res.json()).toMatchObject({ scrollback: 0, alternate: true, width: 220 });
+    await app.close();
+  });
+
+  it('still refuses an unsafe id before either verb runs', async () => {
+    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const res = await app.inject({ method: 'GET', url: '/api/sessions/..%2Fetc/pane/history' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
+    expect(calls, 'a rejected id still reached tmux').toEqual([]);
+    await app.close();
+  });
+
+  it('the capture still decides the status: gone -> 404, anything else -> 502 with its detail', async () => {
+    const gone = await makeApp({ code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
+    const g = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(g.statusCode).toBe(404);
+    expect(g.json()).toEqual({ ok: false, error: 'gone' });
+    await gone.app.close();
+
+    const bad = await makeApp({ code: 1, stdout: '', stderr: 'server exited unexpectedly\n' });
+    const b = await bad.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(b.statusCode).toBe(502);
+    expect(b.json()).toEqual({ ok: false, error: 'unmeasured', detail: 'server exited unexpectedly' });
+    await bad.app.close();
   });
 });

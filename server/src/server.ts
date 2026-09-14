@@ -1556,27 +1556,38 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/sessions/:id/pane/history', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
-    const r = await deps.tmux.captureHistory(id, PANE_HISTORY_LINES);
-    if (r.ok) {
-      // A SECOND measurement, and the route carries it rather than deciding on
-      // it: `capture-pane` answers with the visible screen even when there is
-      // nothing above it, so a successful read alone cannot tell "here is the
-      // history" from "there is no history and this is just the screen again".
-      // The drawer needs that difference to say something true instead of
-      // opening a view with an empty scrollbar in it.
-      //
-      // ADDITIVE and absence-permitting (wire discipline): an unmeasurable
-      // probe omits both fields, and a reader that finds them absent must
-      // behave exactly as it did before they existed. Zero is a MEASURED zero;
-      // absent is "we could not look", and the two must never collapse.
-      const sb = await deps.tmux.paneScrollback(id);
-      return sb === null
-        ? { ok: true, text: r.text, lines: PANE_HISTORY_LINES }
-        : { ok: true, text: r.text, lines: PANE_HISTORY_LINES, scrollback: sb.lines, alternate: sb.alternate };
+    // THE MEASUREMENT COMES FIRST, AND IT SIZES THE READ (spec §5.2). PR #96
+    // captured 2000 lines and then asked how many there were, so a pane holding
+    // 47 paid for 2000 and the answer's own `lines` was a constant rather than
+    // a fact. One `list-panes -F` costs a single tmux round trip and turns the
+    // capture window into a measurement.
+    //
+    // A MEASURED ZERO KEEPS THE CONSTANT: `-S -0` starts at the screen's own
+    // top and returns nothing above it, which one layer up is indistinguishable
+    // from a failed read. The zero still travels as `scrollback: 0`, which is
+    // the fact the drawer refuses to open a layer on.
+    //
+    // AN UNMEASURABLE PROBE DOES NOT FAIL THE ROUTE. It falls back to the
+    // constant and OMITS the three measured fields — absence-permitting, and
+    // absent is not zero. The CAPTURE is what decides the status, because the
+    // capture is what the reader came for: `gone` -> 404, anything else -> 502
+    // carrying tmux's own message.
+    const probe = await deps.tmux.paneProbe(id);
+    const asked = probe.ok && probe.history > 0 ? probe.history : PANE_HISTORY_LINES;
+    const r = await deps.tmux.captureHistory(id, asked);
+    if (!r.ok) {
+      return r.reason === 'gone'
+        ? reply.code(404).send({ ok: false, error: 'gone' })
+        : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
     }
-    return r.reason === 'gone'
-      ? reply.code(404).send({ ok: false, error: 'gone' })
-      : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
+    // `width` rides along so the DRAWER can size its own scrollback against the
+    // pane's width rather than a constant multiplier: a stored line re-wrapped
+    // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
+    // the census holds a 302-column window, so the multiplier is measured
+    // rather than assumed (spec §5.4).
+    return probe.ok
+      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text: r.text, lines: asked };
   });
 
   // Write routes: serialized per session through one KeyedQueue; injection
