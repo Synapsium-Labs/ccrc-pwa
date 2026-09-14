@@ -1082,11 +1082,15 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
       # under set -u, so a tree without D-2736 global would die HERE rather
       # than in the behaviour under test - a red proving the variable is
       # absent and nothing about whether the run terminates.
-      before=$(pgrep -P $$ -x cat | wc -l)
+      # EVERY COUNT THROUGH $(( )), because BSD wc -l PADS: macOS answers
+      # "       0" where GNU answers "0", and a string compare then fails on a
+      # value that is correct. Measured on macos-latest - the same GNU-vs-BSD
+      # class as D-2613's stat -c, caught by CI rather than by reading.
+      before=$(( $(pgrep -P $$ -x cat | wc -l) ))
       _auth_close_pipes; sleep 1
       printf 'rc=%s\\nexpired=%s\\ncopier_before=%s\\ncopier_after=%s\\nfifos=%s\\nstate=%s\\n' \\
-        "$rc" "\${AUTH_EXPIRED:-0}" "$before" "$(pgrep -P $$ -x cat | wc -l)" \\
-        "$(ls -1 "$AUTH_RUN" 2>/dev/null | wc -l)" "$AUTH_STATE" > "${out}"
+        "$rc" "\${AUTH_EXPIRED:-0}" "$before" "$(( $(pgrep -P $$ -x cat | wc -l) ))" \\
+        "$(( $(ls -1 "$AUTH_RUN" 2>/dev/null | wc -l) ))" "$AUTH_STATE" > "${out}"
     `;
     const env = ghContainedEnv(h.home, {
       ...process.env, HOME: h.home, CCRC_AUTH_NO_MAIN: '1', CCRC_AUTH_TICK: '0.2',

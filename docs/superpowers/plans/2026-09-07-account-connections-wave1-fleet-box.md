@@ -19744,7 +19744,18 @@ is its LAST element … which is the one whose status the callers' `rc` branches
 and invited exactly the wrong conclusion about `wait`.
 
 **Fix:** the mint is no longer in a pipeline. Process substitution hands it the same PIPE that D-2614
-measured BSD `script` accepting, while leaving `wait` answerable by the mint alone. Pinned by
+measured BSD `script` accepting, while leaving `wait` answerable by the mint alone.
+
+**CONFIRMED ON macos-latest 2026-09-13** (run 34782240360, both legs). `test-macos`: **8865 passed, 2
+failed, 303/304 files** — and `the mint exited 1`, which appeared **9 times** on the broken tree,
+appears **0 times**. So D-2614 is not merely diagnosed but repaired on the userland that had it, and the
+pane-bound methods pass there for the first time. `probe-macos` ran the whole auth file in **16.6
+seconds**, where the same file was cancelled at 25 minutes two days earlier.
+
+The 2 failures were this branch's own test, not the helper: **BSD `wc -l` PADS its output**, answering
+`"       0"` where GNU answers `"0"`, so a string compare failed on a correct value. Every count in the
+driver now goes through `$(( ))`. Same GNU-vs-BSD class as D-2613's `stat -c %a`, and caught the same
+way — by running it there, not by reading it. Pinned by
 `ccd-account-auth.test.ts`'s "the pane-bound spawn has to END", which drives the darwin arm from Linux by
 assigning `CCD_OS` after sourcing — so the defect is red on an ordinary box instead of waiting on a macOS
 leg that gets cancelled before it reports.
