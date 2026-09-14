@@ -1937,8 +1937,12 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // The shared parser, not `Number(idParam)`: `routes.ts`'s id census
+    // (`routes.test.ts`) requires every `:id` seam in this file to read its id
+    // the one canonical way — ` 1`, `01`, `1e0`, `0x1` and anything past
+    // MAX_SAFE_INTEGER are refused rather than coerced into a row id.
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     const signals = deps.coord.runSignals(id);
     if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
     return { ok: true, signals };
