@@ -3916,3 +3916,468 @@ describe('the compaction card — the row generation authorizes every arm (spec 
     }
   });
 });
+
+// ── D-2605: the INVERTED canonical-write source scan (spec §5, round 9/11) ─
+// The round-8 recognizer grepped for a canonical-set LITERAL adjacent to a
+// primitive, and measured against the shipped tree it matches ZERO real
+// mutation sites: every mutating line names a VARIABLE, and the only lines in
+// either file where a canonical literal sits beside a primitive-shaped word
+// are two comments. So the recognizer is inverted.
+//
+// THE ORDER IS THE WHOLE MECHANISM. The canonical-pathname resolution is the
+// FILTER that PRODUCES the found set; only then is the found set compared
+// against the allow-list. Read the other way round — "require each primitive to
+// appear on a named list" — the rule would demand that every `mv`/`rm`/`>` in a
+// 1,900-line hook sit on a seventeen-entry list, which no correct tree
+// satisfies.
+//
+// CANONICAL, fixed for this scan, is the FOUR row artifacts Plan A's Global
+// Constraints name — `.compactset`, `.compactcard`, `.compactions` and
+// `.generation` — not the set and card alone: three of the entries below are
+// `.compactions`/`.generation` mutations a set+card scoping produces none of.
+describe('the compaction card — every canonical write is on the list (spec §5)', () => {
+  type Site = { file: string; fn: string; line: number; cmd: string; target: string; locked: boolean; text: string };
+
+  /** A canonical pathname LITERAL. `$1` as well as `$id`, because ccd's own
+   *  `local id="$1" p="$REG/$1.generation"` cannot reference `id` in the same
+   *  `local` under `set -u` and spells the path off the positional. */
+  const CANON_LIT = /"\$REG\/\$(?:id|1|\{id\}|\{1\})\.(?:compactset|compactcard|compactions|generation)"/;
+  /** A GLOB whose pattern CAN match a canonical basename. This clause is what
+   *  puts `_reg_purge`'s `rm -f "$f"` into the found set honestly: measured,
+   *  `ccd/ccd` carries ZERO `compactset`/`compactcard`/`compactions` literals,
+   *  so that site is unreachable by variable-binding or text adjacency alone,
+   *  and a second glob-based canonical unlink added elsewhere would otherwise
+   *  evade the scan entirely. */
+  const CANON_GLOB = /"\$REG\/\$(?:id|1|\{id\}|\{1\})"\.\*/;
+  const ACQ = /^_(?:hook|compact)_lock_acquire$/;
+  const REL = /^_(?:hook|compact)_lock_release$/;
+  /** The primitives, exactly as §5 enumerates them for the bash corpus.
+   *  `_hook_write_atomic` is a PRIMITIVE in its own right — which is why the
+   *  scan never descends into it and its call site, not its internal
+   *  `mv -f "$tmp" "$1"`, is the found member. */
+  const PRIMS = ['mv', 'rm', 'link', '_hook_write_atomic'];
+  const OPAQUE = ['_hook_write_atomic'];
+
+  const noComments = (t: string): string =>
+    t.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l)).join('\n');
+
+  /** `^name() {` … `^}`. Both corpus files spell every function that way. */
+  const fnsOf = (code: string): Array<{ name: string; a: number; b: number }> => {
+    const out: Array<{ name: string; a: number; b: number }> = [];
+    let off = 0; let cur: string | null = null; let start = 0;
+    for (const ln of code.split('\n')) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(ln);
+      if (m && cur === null) { cur = m[1]!; start = off; }
+      else if (ln === '}' && cur !== null) { out.push({ name: cur, a: start, b: off + ln.length }); cur = null; }
+      off += ln.length + 1;
+    }
+    return out;
+  };
+
+  /** Statement fragments: newline, `;`, `&&`, `||` and `|` all end one. */
+  const fragsOf = (body: string): Array<{ off: number; text: string }> => {
+    const out: Array<{ off: number; text: string }> = [];
+    let i = 0;
+    for (const ln of body.split('\n')) {
+      let pos = 0;
+      for (const part of ln.split(/(;|&&|\|\||\|)/)) {
+        if (part === ';' || part === '&&' || part === '||' || part === '|') { pos += part.length; continue; }
+        out.push({ off: i + pos, text: part }); pos += part.length;
+      }
+      i += ln.length + 1;
+    }
+    return out;
+  };
+
+  const cmdOf = (frag: string): { cw: string | null; rest: string } => {
+    let s = frag;
+    for (;;) {
+      const m = /^\s*(\{|\(|!|if|elif|while|until|then|else|do)\s+/.exec(s);
+      if (!m) break;
+      s = s.slice(m[0].length);
+    }
+    s = s.replace(/^\s+/, '');
+    const m = /^([A-Za-z_][A-Za-z0-9_.-]*)\b/.exec(s);
+    return { cw: m ? m[1]! : null, rest: s };
+  };
+
+  /** argv words after the command word, with double quotes kept and honoured. */
+  const wordsOf = (rest: string): string[] => {
+    let s = rest.replace(/^[A-Za-z_][A-Za-z0-9_.-]*/, '');
+    const out: string[] = []; let cur = ''; let q = false;
+    for (const ch of s) {
+      if (ch === '"') { q = !q; cur += ch; }
+      else if (/\s/.test(ch) && !q) { if (cur) { out.push(cur); cur = ''; } }
+      else cur += ch;
+    }
+    if (cur) out.push(cur);
+    return out;
+  };
+
+  /** THE FILTER, as a pure function of the corpus text — so a mutated STRING is
+   *  a real control rather than a stub. Resolution has four clauses, and §5
+   *  names each: a variable bound to a canonical literal; a variable bound by a
+   *  canonical-matching GLOB; a LITERAL canonical pathname written straight
+   *  into a primitive's argument; and a POSITIONAL traced from every call site
+   *  that passes one, transitively (which is what reaches a restored
+   *  `_hook_compact_rollback_set`'s `$set` → `$1` → `mv -f "$set" "$claim"`). */
+  const scan = (corpus: Array<readonly [string, string]>): Site[] => {
+    const files = corpus.map(([label, text]) => {
+      const code = noComments(text);
+      return { label, code, fns: fnsOf(code) };
+    });
+    const defined = new Set(files.flatMap((f) => f.fns.map((x) => x.name)));
+    const canonVars = new Map<string, Set<string>>();   // `${label} ${fn}`
+    const canonPos = new Map<string, Set<number>>();    // fn name -> positions
+    const vkey = (l: string, f: string): string => `${l} ${f}`;
+    for (const f of files) {
+      for (const { name, a, b } of f.fns) {
+        const body = f.code.slice(a, b);
+        const s = new Set<string>();
+        for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)=${CANON_LIT.source}`, 'g'))) s.add(m[1]!);
+        for (const m of body.matchAll(new RegExp(`for\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+in\\s+${CANON_GLOB.source}`, 'g'))) s.add(m[1]!);
+        canonVars.set(vkey(f.label, name), s);
+      }
+    }
+    const resolves = (w: string, label: string, fn: string): boolean => {
+      if (CANON_LIT.test(w)) return true;
+      for (const v of canonVars.get(vkey(label, fn)) ?? []) if (new RegExp(`^"\\$\\{?${v}\\}?"$`).test(w)) return true;
+      for (const k of canonPos.get(fn) ?? []) if (new RegExp(`^"\\$\\{?${k}\\}?"$`).test(w)) return true;
+      return false;
+    };
+    // FIXPOINT, bounded: the corpus's call graph is shallow, and a bound turns
+    // a cycle into a finite answer instead of a hang.
+    for (let pass = 0; pass < 12; pass++) {
+      let changed = false;
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (OPAQUE.includes(name)) continue;
+          const body = f.code.slice(a, b);
+          for (const { text } of fragsOf(body)) {
+            const { cw, rest } = cmdOf(text);
+            if (cw === null || OPAQUE.includes(cw) || !defined.has(cw)) continue;
+            let i = 0;
+            for (const w of wordsOf(rest)) {
+              i++;
+              if (w.startsWith('-')) continue;
+              if (!resolves(w, f.label, name)) continue;
+              const set = canonPos.get(cw) ?? new Set<number>();
+              if (!set.has(i)) { set.add(i); canonPos.set(cw, set); changed = true; }
+            }
+          }
+        }
+      }
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (OPAQUE.includes(name)) continue;
+          const body = f.code.slice(a, b);
+          for (const k of canonPos.get(name) ?? []) {
+            for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)="\\$\\{?${k}\\}?"`, 'g'))) {
+              const s = canonVars.get(vkey(f.label, name))!;
+              if (!s.has(m[1]!)) { s.add(m[1]!); changed = true; }
+            }
+          }
+        }
+      }
+      if (!changed) break;
+    }
+    // LOCK STATE. Within a function, the state at an offset is decided by the
+    // LAST acquire/release statement before it. A release that shares its LINE
+    // with a `return` is an EARLY-EXIT release and does not end the section for
+    // the code that follows it — measured, `_hook_compact_pre` guards every
+    // step with `|| { _hook_lock_release "$lockfd"; return 0; }`, so counting
+    // those as section ends reads the whole published arm as unlocked. A
+    // function with NO lock statement of its own inherits: it is held iff EVERY
+    // call site of it is itself held (`_hook_compact_card_locked`,
+    // `_hook_generation_ok`, `_reg_generation_read`/`_mint` are all of that
+    // shape — their caller takes the lock).
+    const lockStmts = (body: string): Array<{ off: number; kind: 'a' | 'r' }> => {
+      const out: Array<{ off: number; kind: 'a' | 'r' }> = [];
+      for (const { off, text } of fragsOf(body)) {
+        const { cw } = cmdOf(text);
+        if (cw === null) continue;
+        const ls = body.lastIndexOf('\n', off) + 1;
+        const leRaw = body.indexOf('\n', off);
+        const line = body.slice(ls, leRaw < 0 ? body.length : leRaw);
+        if (ACQ.test(cw)) out.push({ off, kind: 'a' });
+        else if (REL.test(cw) && !line.includes('return')) out.push({ off, kind: 'r' });
+      }
+      return out.sort((x, y) => x.off - y.off);
+    };
+    const bodyOf = (label: string, fn: string): { body: string; a: number } | null => {
+      const f = files.find((x) => x.label === label);
+      const d = f?.fns.find((x) => x.name === fn);
+      return f && d ? { body: f.code.slice(d.a, d.b), a: d.a } : null;
+    };
+    const callSites = (fn: string): Array<{ label: string; fn: string; off: number }> => {
+      const out: Array<{ label: string; fn: string; off: number }> = [];
+      for (const f of files) {
+        for (const { name, a, b } of f.fns) {
+          if (name === fn) continue;
+          for (const { off, text } of fragsOf(f.code.slice(a, b))) {
+            if (cmdOf(text).cw === fn) out.push({ label: f.label, fn: name, off });
+          }
+        }
+      }
+      return out;
+    };
+    const held = (label: string, fn: string, off: number, seen: Set<string> = new Set()): boolean => {
+      const d = bodyOf(label, fn);
+      if (!d) return false;
+      const before = lockStmts(d.body).filter((s) => s.off < off);
+      if (before.length) return before[before.length - 1]!.kind === 'a';
+      if (seen.has(vkey(label, fn))) return false;
+      const next = new Set(seen); next.add(vkey(label, fn));
+      const cs = callSites(fn);
+      return cs.length > 0 && cs.every((c) => held(c.label, c.fn, c.off, next));
+    };
+
+    const sites: Site[] = [];
+    for (const f of files) {
+      for (const { name, a, b } of f.fns) {
+        if (OPAQUE.includes(name)) continue;
+        const body = f.code.slice(a, b);
+        for (const { off, text } of fragsOf(body)) {
+          const { cw, rest } = cmdOf(text);
+          let target: string | null = null;
+          let cmd = cw ?? '';
+          if (cw !== null && PRIMS.includes(cw)) {
+            for (const w of wordsOf(rest)) {
+              if (w.startsWith('-')) continue;
+              if (resolves(w, f.label, name)) { target = w; break; }
+            }
+          }
+          if (target === null) {
+            // `>` / `>>` redirection onto a canonical word.
+            for (const m of text.matchAll(/>>?\s*("[^"]*")/g)) {
+              if (resolves(m[1]!, f.label, name)) { cmd = '>'; target = m[1]!; break; }
+            }
+          }
+          if (target === null) continue;
+          sites.push({
+            file: f.label, fn: name, line: f.code.slice(0, a + off).split('\n').length,
+            cmd, target, locked: held(f.label, name, off),
+            text: text.trim().replace(/\s+/g, ' '),
+          });
+        }
+      }
+    }
+    return sites;
+  };
+
+  /** THE ALLOW-LIST, ENUMERATED BY MEASUREMENT, with each entry's arm, its
+   *  protocol step and its lock state — and with the exact number of SITES the
+   *  filter produces for it, because two entries are one act spelled in two
+   *  branches (§5's own "either factoring is permitted" point) and a bare
+   *  seventeen-site list could not say which.
+   *
+   *  TWO ENTRIES DEPART FROM §5's SIXTEEN, both measured, both recorded in this
+   *  task's report rather than guessed:
+   *
+   *  - Entry (2), §3.1 item 5's redundant-canonical-alias unlink, has ZERO
+   *    sites: it is NOT BUILT on this tree. Measured — `_hook_compact_pre`
+   *    carries no `-ef` test against `$set` at all (the file's only two are
+   *    `_hook_compact_post`'s claim-identity proofs), so §5's sixteen-entry
+   *    EQUALITY is red on a correct tree in that direction. The entry stays,
+   *    with its count at 0, so that building it reds HERE — with a message
+   *    naming the count — rather than silently passing.  (D-TBD-precompact-
+   *    redundant-alias-unbuilt.)
+   *  - Entry (17) is on NO §5 entry and IS produced by the filter:
+   *    `_reg_generation_read`'s `link "$p" "$al"`, the ccd-side twin of entry
+   *    (16)'s hook-side generation-read alias, a `link` whose SOURCE names
+   *    canonical. §5 enumerated the hook's and not ccd's.  (D-TBD-ccd-
+   *    generation-read-alias-unlisted.)
+   *
+   *  Named for completeness and EXCLUDED BY THE FILTER — each appears on no
+   *  entry, and a scan producing any of them is over-broad: the exact-family
+   *  age sweep (dot-LEADING `.tmp` grammar, which no canonical basename has);
+   *  the stage `rm`s on the non-publishing outcomes; SessionStart's
+   *  `( set -C; : > "$claim" )` placeholder and its `rm -f "$claim"`;
+   *  PostCompact's `touch "$claim"`; the marker source's `mktemp`/`link`/`rm`;
+   *  the permanent lock's own init and every acquisition's lock-open alias
+   *  (dot-leading, and not among the four row artifacts); and the helper's two
+   *  `writeAtomic` primitives, excluded because no canonical pathname reaches
+   *  its argv at all — option A's load-bearing property. */
+  const ALLOW: Array<{ id: number; file: string; fn: string; cmd: string; needle: string; count: number; where: string }> = [
+    { id: 1, file: 'hook', fn: '_hook_compact_pre', cmd: 'rm', needle: 'rm -f "$cardf"', count: 1, where: 'PreCompact step 6, ambiguous-card removal, FIRST held lock' },
+    { id: 2, file: 'hook', fn: '_hook_compact_pre', cmd: 'rm', needle: 'rm -f "$set"', count: 0, where: 'PreCompact step 6, §3.1 item 5 redundant-canonical-alias unlink — NOT BUILT' },
+    { id: 3, file: 'hook', fn: '_hook_compact_pre', cmd: '_hook_write_atomic', needle: '_hook_write_atomic "$set"', count: 1, where: 'PreCompact step 7, initial publication, FIRST held lock' },
+    { id: 4, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$cardstage" "$cardf"', count: 1, where: 'PreCompact step 13, card-stage rename, SECOND held lock' },
+    { id: 5, file: 'hook', fn: '_hook_compact_pre', cmd: 'mv', needle: 'mv -f "$setstage" "$set"', count: 2, where: 'PreCompact step 13, set-stage rename (rc 0 arm and rc 3 arm), SECOND held lock' },
+    { id: 6, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'rm', needle: 'rm -f "$f"', count: 1, where: 'SessionStart(compact) step 2, aged-card deletion, the one retained lock' },
+    { id: 7, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'mv', needle: 'mv -f "$f" "$claim"', count: 1, where: 'SessionStart(compact) step 3, claim by rename, same lock' },
+    { id: 8, file: 'hook', fn: '_hook_compact_card_locked', cmd: 'link', needle: 'link "$claim" "$f"', count: 2, where: 'SessionStart(compact) step 3, card restore on a crossed or body-less claim, same lock' },
+    { id: 9, file: 'hook', fn: '_hook_compact_post', cmd: 'link', needle: 'link "$set" "$claim"', count: 1, where: 'PostCompact settlement, claim link off canonical, settlement lock' },
+    { id: 10, file: 'hook', fn: '_hook_compact_post', cmd: 'rm', needle: 'rm -f "$set"', count: 1, where: 'PostCompact settlement, canonical unlink strictly before the claim touch, same lock' },
+    { id: 11, file: 'hook', fn: '_hook_compact_post', cmd: 'link', needle: 'link "$claim" "$set"', count: 1, where: 'PostCompact settlement, no-clobber restore after a failed touch, same lock' },
+    { id: 12, file: 'ccd', fn: '_reg_purge', cmd: 'rm', needle: 'rm -f "$f"', count: 1, where: '_reg_purge purge-loop body, glob-bound, stable lock held for the whole body' },
+    { id: 13, file: 'ccd', fn: '_reg_purge', cmd: 'rm', needle: 'rm -f "$REG/$id.generation"', count: 1, where: '_reg_purge generation-last unlink, literal-canonical, same lock' },
+    { id: 14, file: 'hook', fn: '_hook_compact_post', cmd: 'mv', needle: 'mv -f "$stage" "$journal"', count: 1, where: 'PostCompact final journal transaction, reacquired and validated FINAL lock' },
+    { id: 15, file: 'ccd', fn: '_reg_generation_mint', cmd: 'link', needle: 'link "$src" "$p"', count: 1, where: 'row creation, no-clobber link mint of the generation, ROW-CREATION lock' },
+    { id: 16, file: 'hook', fn: '_hook_generation_ok', cmd: 'link', needle: 'link "$p" "$al"', count: 1, where: 'PreCompact step 5 generation-read alias off canonical, the caller\'s held lock' },
+    { id: 17, file: 'ccd', fn: '_reg_generation_read', cmd: 'link', needle: 'link "$p" "$al"', count: 1, where: 'ccd-side generation-read alias off canonical — NOT on §5\'s sixteen' },
+  ];
+
+  const bashCorpus = (): Array<readonly [string, string]> =>
+    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', fs.readFileSync(CCD, 'utf8')]] as const;
+
+  const entryOf = (s: Site): number[] =>
+    ALLOW.filter((e) => e.file === s.file && e.fn === s.fn && e.cmd === s.cmd && s.text.includes(e.needle)).map((e) => e.id);
+
+  it('the found set EQUALS the allow-list, entry by entry, with every site under a held lock', () => {
+    const sites = scan(bashCorpus());
+    // NON-VACUITY, MANDATORY and in BOTH clauses: a scan that finds nothing
+    // cannot red on anything — the round-8 spelling found nothing — and
+    // requiring only the `_hook_write_atomic` call site would leave the GLOB
+    // clause itself unproven. §5 names these two by their pre-Task-9 anchors
+    // (`session-hook.sh:886` and `ccd/ccd:1848`); this task moved both, so they
+    // are required BY IDENTITY — file, function and statement — rather than by
+    // a line number that drifts with every edit above them.
+    expect(sites.length, 'the found set is non-empty').toBeGreaterThan(0);
+    expect(sites.some((s) => s.file === 'hook' && s.fn === '_hook_compact_pre' && s.text.startsWith('_hook_write_atomic "$set"')),
+      'the initial publication is in the found set').toBe(true);
+    expect(sites.some((s) => s.file === 'ccd' && s.fn === '_reg_purge' && s.text === 'rm -f "$f"'),
+      'the GLOB clause reaches _reg_purge\'s unlink loop').toBe(true);
+
+    // EVERY SITE ON EXACTLY ONE ENTRY — an unmatched site is a canonical write
+    // nobody argued for, a doubly-matched one is an ambiguous allow-list.
+    const unmatched = sites.filter((s) => entryOf(s).length === 0)
+      .map((s) => `${s.file}:${s.line} ${s.fn} ${s.text}`);
+    expect(unmatched, 'canonical writes on no allow-list entry').toEqual([]);
+    expect(sites.filter((s) => entryOf(s).length > 1), 'sites matching two entries').toEqual([]);
+
+    // AND EVERY ENTRY ITS EXACT COUNT — which is what makes DELETING an entry,
+    // or adding a second copy of a site an entry already names, red.
+    const counted = ALLOW.map((e) => `${e.id}=${sites.filter((s) => entryOf(s).includes(e.id)).length}`);
+    expect(counted).toEqual(ALLOW.map((e) => `${e.id}=${e.count}`));
+    expect(sites.length, 'and nothing outside the counted sites').toBe(ALLOW.reduce((n, e) => n + e.count, 0));
+
+    // THE LOCK STATE IS PART OF THE ENTRY, not a comment beside it.
+    expect(sites.filter((s) => !s.locked).map((s) => `${s.file}:${s.line} ${s.text}`),
+      'every canonical write happens under a held lock').toEqual([]);
+  });
+
+  it('the helper writes NO canonical pathname — excluded by the FILTER, not by an entry', () => {
+    // Option A's load-bearing property: no canonical pathname reaches the
+    // helper's argv, so its two surviving `writeAtomic` primitives are not
+    // canonical writes at all. A JS-shaped filter, because the bash resolution
+    // above cannot read this file.
+    const helper = fs.readFileSync(HELPER_SRC, 'utf8');
+    const jsCanon = (t: string): string[] =>
+      [...t.matchAll(/\b(renameSync|unlinkSync|linkSync|writeFileSync)\s*\(([^;]*)\)/g)]
+        .filter((m) => /\.(compactset|compactcard|compactions|generation)\b/.test(m[2]!))
+        .map((m) => m[0]!.slice(0, 100));
+    expect(jsCanon(helper), 'the helper names no canonical row artifact').toEqual([]);
+    // CONTROL, so the emptiness above is a measurement and not a broken
+    // matcher: the same filter over a mutated copy finds the re-added write.
+    const mutant = helper.replace('    renameSync(tmp, target);',
+      '    renameSync(tmp, `${process.env["REG"]}/${id}.compactset`);');
+    expect(mutant, 'the mutation applied').not.toBe(helper);
+    expect(jsCanon(mutant).length, 'and the filter sees it').toBeGreaterThan(0);
+  });
+
+  it('CONTROL: a restored rollback is reached through the POSITIONAL trace, two hops from its call site', () => {
+    // §5's first mutation. The restored function binds `local set="$1"` — no
+    // canonical literal anywhere in it — so a scan resolving only literals and
+    // locally-bound variables stays GREEN on it, which is exactly what round
+    // 9's resolution rule did. The chain the filter must walk is
+    // `$set` (call site) → `$1` → `local set="$1"` → `mv -f "$set" "$claim"`.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const restored = `
+_hook_compact_rollback_set() {
+  local set="$1" nonce="$2" original="$3" claim=""
+  claim="$REG/.$id.$$.\${nonce}.compactset-rollback.tmp"
+  if ! { mv -f "$set" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  { link "$claim" "$set"; } 2>/dev/null || true
+}
+`;
+    const mutated = hook[1]
+      .replace('_hook_write_atomic() {', `${restored.trim()}\n\n_hook_write_atomic() {`)
+      .replace('  _hook_write_atomic "$set" "$nonce" "$doc" ||',
+        '  _hook_compact_rollback_set "$set" "$nonce" "$doc" || true\n  _hook_write_atomic "$set" "$nonce" "$doc" ||');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const found = sites.filter((s) => s.fn === '_hook_compact_rollback_set');
+    // The fragment text keeps its leading group/control tokens — `cmdOf` strips
+    // them to find the command word and does not rewrite the statement.
+    expect(found.map((s) => s.text), 'the restored rollback\'s canonical mutations').toEqual([
+      'if ! { mv -f "$set" "$claim"', '{ link "$claim" "$set"',
+    ]);
+    expect(found.every((s) => entryOf(s).length === 0), 'and they sit on no entry — the scan reds').toBe(true);
+  });
+
+  it('CONTROL: an unlocked publication of an entry the list already names reds on its COUNT and on its lock state', () => {
+    // §5's second mutation. It is the one mutant an equality keyed only on
+    // "which statements exist" would miss the point of: the statement is one
+    // the allow-list names, so what reds is the COUNT (1 → 2) and the LOCK
+    // STATE of the copy, not its shape.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace(
+      '  _hook_lock_release "$lockfd"; lockfd=""\n  [[ "$CS_SCOPE" != ambiguous ]] || return 0',
+      '  _hook_lock_release "$lockfd"; lockfd=""\n  _hook_write_atomic "$set" "$nonce" "$doc" || true\n  [[ "$CS_SCOPE" != ambiguous ]] || return 0');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    expect(sites.filter((s) => entryOf(s).includes(3)), 'entry 3 now has two sites').toHaveLength(2);
+    expect(sites.filter((s) => !s.locked).map((s) => s.text), 'and one of them is outside the lock')
+      .toEqual(['_hook_write_atomic "$set" "$nonce" "$doc"']);
+  });
+
+  it('CONTROL: a second glob-bound unlink loop elsewhere in ccd reds — the clause round 9 had no way to reach', () => {
+    // §5's added mutation. Under the round-9 resolution rule, with no glob
+    // clause, this stayed GREEN: `ccd/ccd` carries ZERO canonical literals, so
+    // nothing in it resolved to canonical by variable binding or adjacency.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = ccd[1].replace('_substrate_mark() {',
+      '_evil_sweep() {\n  local id="$1" f\n  for f in "$REG/$id".*; do\n    rm -f "$f"\n  done\n}\n_substrate_mark() {');
+    expect(mutated, 'the mutation applied').not.toBe(ccd[1]);
+    const sites = scan([hook, ['ccd', mutated]]);
+    const evil = sites.filter((s) => s.fn === '_evil_sweep');
+    expect(evil.map((s) => s.text), 'the second loop is in the found set').toEqual(['rm -f "$f"']);
+    expect(evil[0]!.locked, 'and it is unlocked').toBe(false);
+    expect(entryOf(evil[0]!), 'on no entry').toEqual([]);
+  });
+
+  it('CONTROL: an unlocked rename over the canonical JOURNAL reds — green under every set+card scoping', () => {
+    // §5's third mutation, and the one that shows why "canonical" is the FOUR
+    // row artifacts rather than the set and card: a scan scoped to set+card
+    // reaches neither this statement nor entries 13, 14 and 15.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace('  _hook_lock_release "$lockfd"\n  return 0\n}\n\n# NO UNLOCKED CLEANUP.',
+      '  _hook_lock_release "$lockfd"\n  mv "$stage" "$REG/$id.compactions" 2>/dev/null || true\n  return 0\n}\n\n# NO UNLOCKED CLEANUP.');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const extra = sites.filter((s) => s.text.startsWith('mv "$stage" "$REG/$id.compactions"'));
+    expect(extra, 'the literal-canonical clause finds it').toHaveLength(1);
+    expect(extra[0]!.locked, 'outside the final held lock').toBe(false);
+    expect(entryOf(extra[0]!), 'and on no entry').toEqual([]);
+  });
+
+  it('CONTROL: deleting any ONE entry reds, and entry 2 is the measured absence this tree carries', () => {
+    // "Delete any one of the entries ⇒ reds" is a property of the LIST, not of
+    // the source, so it is measured here against the real found set rather than
+    // by mutating a file: with an entry removed its sites become unmatched.
+    const sites = scan(bashCorpus());
+    for (const e of ALLOW) {
+      const without = ALLOW.filter((x) => x.id !== e.id);
+      const orphaned = sites.filter((s) =>
+        without.filter((x) => x.file === s.file && x.fn === s.fn && x.cmd === s.cmd && s.text.includes(x.needle)).length === 0);
+      // Entry 2 is the ONE entry whose deletion changes nothing, because it has
+      // ZERO sites: §3.1 item 5's redundant-canonical-alias unlink is not built
+      // on this tree. That is the measured reason §5's sixteen-entry EQUALITY
+      // cannot stand as written, and it is recorded here rather than papered
+      // over by a weaker two-inclusion form.
+      if (e.count === 0) { expect(orphaned, `entry ${e.id} has no sites`).toEqual([]); continue; }
+      expect(orphaned.length, `deleting entry ${e.id} orphans its sites`).toBe(e.count);
+    }
+    expect(ALLOW.filter((e) => e.count === 0).map((e) => e.id), 'exactly one entry is unbuilt').toEqual([2]);
+    // The absence, measured rather than asserted: the file's only `-ef` tests
+    // against the canonical set are PostCompact's two claim-identity proofs.
+    const hookSrc = fs.readFileSync(HOOK, 'utf8');
+    const pre = hookSrc.slice(hookSrc.indexOf('_hook_compact_pre() {'), hookSrc.indexOf('_hook_compact_post() {'));
+    expect(pre.includes('-ef "$set"'), '_hook_compact_pre runs no -ef identity test against canonical').toBe(false);
+    expect([...hookSrc.matchAll(/-ef "\$set"/g)], 'the two that exist are PostCompact\'s').toHaveLength(2);
+  });
+});
