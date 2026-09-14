@@ -119,16 +119,59 @@ describe('a partially purged registry never frees the slug', () => {
   // comment keeps this list; it is repeated here so the fixture is a full
   // registry entry rather than a plausible subset.
   const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
-    'compactnote', 'compactskip', 'home', 'hookstate.json', 'lastcompact', 'lastswap', 'pool', 'prnumber',
-    'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+    'compactnote', 'compactskip', 'generation', 'home', 'hookstate.json', 'lastcompact', 'lastswap',
+    'pool', 'prnumber', 'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+  /** One DOT-LEADING private compaction family, so the fixture is a full
+   *  POST-D-2605 row rather than the dot-free half of one. `_ws_slug_free` now
+   *  refuses on these too, and `_reg_purge` takes them in a second loop the
+   *  dot-free one cannot see — so leaving them out would make the terminal
+   *  FREE prove less than it claims. */
+  const PRIVATE = '.demo-quiet-mesa.compactset.999.compact-1-999-1-2.stage';
 
   const seedFullEntry = (): string => {
     const regdir = path.join(home, '.cc-sessions');
     for (const f of fs.readdirSync(regdir)) {
       fs.rmSync(path.join(regdir, f), { recursive: true, force: true });
     }
-    for (const f of FIELDS) fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`), 'x\n');
+    for (const f of FIELDS) {
+      // `generation` has a BYTE GRAMMAR the rest do not; a row seeded with `x`
+      // there is a present-INVALID generation, which is a different subject.
+      fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`),
+        f === 'generation' ? '0189abcd-1234-5678-9abc-0123456789ab' : 'x\n');
+    }
+    fs.writeFileSync(path.join(regdir, PRIVATE), '');
     return regdir;
+  };
+
+  /** THE BUDGET BOUND, MEASURED RATHER THAN COUNTED BY HAND (D-2605).
+   *
+   *  The shipped bound was the literal `FIELDS.length + 2`, which held exactly
+   *  two budget steps of headroom past the purge's last unlink. Task 9 adds
+   *  three more `rm` calls inside the function's own body — the stable lock's
+   *  init source and its open alias, and the explicit generation unlink after
+   *  the archived/reaping tail — plus the dot-leading private-family loop, so
+   *  a hand-kept literal is now a number that drifts every time the protocol
+   *  gains a step. Measured on the shipped tree at the time of writing: 21 rm
+   *  calls before this task, 24 after, against a bound of 23 — i.e. the
+   *  literal had already gone BELOW the real count, and the only reason the
+   *  terminal FREE stayed reachable was that the old fixture seeded no
+   *  `generation` for the 24th `rm` to take.
+   *
+   *  So the bound is re-derived HERE, by replaying one unbudgeted purge under
+   *  a COUNTING shadow of the same shape. A guessed bound makes the assertion
+   *  pass while proving nothing, which is the failure `:164-166`'s own comment
+   *  exists to prevent. */
+  const measureRmCalls = (): number => {
+    seedFullEntry();
+    const out = sh(
+      `RMCALLS=0
+       rm() { RMCALLS=$(( RMCALLS + 1 )); command rm "$@"; }
+       _reg_purge demo-quiet-mesa
+       unset -f rm
+       echo "$RMCALLS"`);
+    const n = Number(out.trim().split('\n').pop());
+    expect(Number.isInteger(n) && n > 0, `the rm count did not measure: ${out}`).toBe(true);
+    return n;
   };
 
   it('holds at EVERY interruption point of _reg_purge, not just the disclosed one', () => {
@@ -139,8 +182,12 @@ describe('a partially purged registry never frees the slug', () => {
     // terminal state (nothing left, slug genuinely free) is covered too, and
     // the assertion is keyed off the MEASURED residue rather than off a
     // hardcoded expectation of which field goes when.
+    // TWO STEPS OF HEADROOM PAST THE MEASURED LAST UNLINK, which is what the
+    // shipped `FIELDS.length + 2` bought and what makes the terminal FREE
+    // reachable at all.
+    const LAST = measureRmCalls() + 2;
     const verdicts: string[] = [];
-    for (let k = 0; k <= FIELDS.length + 2; k++) {
+    for (let k = 0; k <= LAST; k++) {
       seedFullEntry();
       const out = sh(
         `rm() { if (( RMBUDGET-- > 0 )); then command rm "$@"; fi; }
@@ -161,9 +208,10 @@ describe('a partially purged registry never frees the slug', () => {
     // one interruption that left residue, and the completed purge.
     expect(verdicts.filter((v) => v.endsWith('TAKEN')).length,
       'the budget never actually interrupted anything').toBeGreaterThan(0);
+    // SPELLED AS THE SAME EXPRESSION as the loop bound, so the two cannot drift.
     expect(verdicts[verdicts.length - 1],
       'the purge never ran to completion, so FREE was never proved reachable')
-      .toBe(`${FIELDS.length + 2}:FREE`);
+      .toBe(`${LAST}:FREE`);
   });
 
   it('refuses ws-add on the residue the purge is documented to leave', () => {
