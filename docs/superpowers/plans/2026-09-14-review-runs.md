@@ -66,6 +66,8 @@ Departures from the spec discovered while planning, each minted 2026-09-14 and d
 
 - **D-2805 (2026-09-14, found executing Task 2)** — **The re-entry cap check is not inlined in the advance route; both routes read the cap through one `capsMeasured(coord)` helper in `dispatch.ts`.** Task 2 Step 3 said "insert" the check inline in `routes.ts`. `coord-caps-route.test.ts` ("…and the usage half is read in exactly one place, so a rebuild cannot be faithful") pins that `routes.ts` spells `.capsUsage(` exactly once, on the premise that "the usage reading exists for this answer alone" — a premise spec §7.2 pin 2 ends, since the advance route now needs the same numbers for a refusal. Weakening the pin would give up the guard on the caps view for a route that does not build it; inlining trips it. So the read and the concurrency decision move into `dispatch.ts` as `capsMeasured(coord): { caps, usage, overConcurrency }`, `dispatchRun` consumes it for BOTH its cap refusals (one read, where before it read inline), and the advance route consumes `overConcurrency` — `routes.ts` keeps its single `.capsUsage(` (the caps view), the refusal's arithmetic is spelled once, and the pin stands untouched. Found by the Task 2 re-review; the first review had missed the pin and the first implementer had cited the wrong test for it.
 
+- **D-2807 (2026-09-14, found executing Task 7)** — **`POST /api/runs/:id/abandon` — the ungated operator valve (D-282) — must reach a review run; its abandon arm targets `closing` kind-blind, and `REVIEW_RUN_TRANSITIONS` has no `closing`.** Spec §10 says a dead reviewer is closed by the coordinator through the gated close route's `state:'failed'` arm, and says nothing about the operator door. But D-282's whole argument for leaving abandon ungated is the wedge whose coordinator is DEAD and whose box token died with it — a dead reviewer holding a slot under a dead coordinator would have had no door at all. The abandon arm in `close.ts` now picks its target by kind: `run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing'`, the store call's `viaClosing: target === 'closing'` already follows, and a test abandons a `working` review run to `failed` with its workspace released. Found by the Task 7 implementer; the spec is not edited by this plan, so §13's amendment list should carry this when the spec is next revised.
+
 
 ---
 
@@ -1392,13 +1394,13 @@ export async function verifyReviewDone(
 ```
 (`statMeasured`'s result shape: `{ ok:true, … } | { ok:false, reason: 'absent' | 'unreadable' | … }` — read `server/src/io.ts` for the exact `reason` union and adjust the detail's ternary to it.) Run `-t "verifyReviewDone"` → PASS.
 
-- [ ] **Step 4: Write the failing route tests** — in `run-routes.test.ts`'s `kind:review` describe (Task 5). This needs a fixture git repo for the reviewed branch: copy the `project(loose, packed, branch)` helper from `coord-fingerprint.test.ts:25-37` into this file (with a comment naming its origin), and pass `{ cfg: { projectsRoot: root } }` as `openApp`'s third argument.
+- [ ] **Step 4: Write the failing route tests** — in `run-routes.test.ts`'s `kind:review` describe (Task 5). This needs a fixture git repo for the reviewed branch: `run-routes.test.ts` already has a fixture-repo builder (`gitRoot`, near `:1632`) — reuse it rather than copying `coord-fingerprint.test.ts`'s `project()`; pass `{ cfg: { projectsRoot: root } }` as `openApp`'s third argument.
 ```ts
   /** W dispatched into a fixture repo whose `ws/demo-w1` is at TIPW, positioned
    *  at awaiting-review; R opened and dispatched against it. */
   const TIPW = 'c'.repeat(40);
   const reviewInFlight = async (home: string, tipNow: string = TIPW) => {
-    const root = project(tipNow, null, 'ws/demo-w1');
+    const root = gitRoot(tipNow, 'ws/demo-w1');   // the file's own fixture-repo builder; read its signature
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
     const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };
@@ -1408,6 +1410,7 @@ export async function verifyReviewDone(
     expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
     const r = (await postOpen(app, REVIEW(opened.id))).json() as { id: number };
     w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+    expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);   // markDispatched is not a transition
     expect(w.coord.advance(r.id, 'working', 'test').ok).toBe(true);
     const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
     calls.length = 0;
@@ -1432,7 +1435,7 @@ export async function verifyReviewDone(
     const { w, reviewId, report, calls } = await reviewInFlight(home, 'd'.repeat(40));
     const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'stale-review' } });
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });   // sendCloseOutcome's doneVerdict shape: { error, detail }
     expect(okRun(w.coord.run(reviewId))!.state).toBe('working');
     expect(calls).toEqual([]);                                            // no fleet act on a refusal
   });
@@ -1442,7 +1445,7 @@ export async function verifyReviewDone(
     const { reviewId, report } = await reviewInFlight(home);
     const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report: report + '.missing' } });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'report-unreadable' } });
+    expect(res.json()).toMatchObject({ ok: false, error: 'report-unreadable' });
   });
 
   it('closes a review run failed without any re-measurement (the reviewer died)', async () => {
@@ -1562,6 +1565,8 @@ async function closeReviewRun(
 }
 ```
 Imports needed in `close.ts`: `path` from `node:path`; `verifyReviewDone` from `./fingerprint.js`; `RunRow`, `OpenSibling`, `OpenSiblingsResult` types from `./store.js` (check which are already imported). `HANDOFF_SHA` is `close.ts`'s existing 40-hex regex (`:381`). Move the `siblingsOf`/`survivorOf` closures' definitions ABOVE the new early return if they are not already (they are at `:126-132`, before `:230` — fine).
+
+The ABANDON arm (D-2807): in `closeRun`'s abandon arm change `const target: RunState = run.state === 'planned' ? 'failed' : 'closing';` to `const target: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';` with a comment naming D-2807 (a review run has no `closing`; the operator's ungated valve must still reach it). The store call already passes `viaClosing: target === 'closing'`. Test (in `run-routes.test.ts`'s `kind:review` describe): abandon a `working` review run through `POST /api/runs/:id/abandon` → 200 with `state:'failed'` and `released:true`, its state reads `failed`, `calls` shows one `ws-release`, and no `closing` event exists for it.
 
 Also: the `mail-routes.test.ts` kebab allowlist (`:630-632`) names mail SUBJECT literals; add `'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)` beside `'wave-done-rejected'`.
 
