@@ -5364,6 +5364,14 @@ export interface LifecycleMeas {
    *  classification, never free text (see `LifecycleDec.reason` for that).
    *  Both `rehome` writers set this. */
   readonly reason: string | null;
+  /** The registry entries a purge could NOT unlink, on a `_lc_fail` carrying
+   *  `purge-incomplete` (D-2782). Present ONLY on that condition: the purge
+   *  ran, the row is destroyed, the `purge` done-fact is already journaled,
+   *  and this names what is still on disk for a human to remove. `null` on
+   *  every other act, including the `purge-refused` refusal, where nothing was
+   *  removed and there is nothing to name — the two must not be told apart by
+   *  reading a sentence. It is prose for a person and never a parsed list. */
+  readonly unremoved: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -5385,6 +5393,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
+  unremoved: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
