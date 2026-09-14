@@ -73,6 +73,31 @@ refused and reported. That refusal is the protocol working against a bad instruc
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
 
+### Fix round 1, verified (2026-09-14)
+
+Four opus verifiers on isolated worktrees at `2e14ffbb`, each re-running the round's claimed
+mutations and then attempting a **wrong-but-passing** implementation of the guard it owns; two
+refuters per finding, each required to answer *"if this holds, what is the right fix?"* — the field
+the previous round lacked. 22 raised, 7 refuted, 15 survived.
+
+Every claim the worker made reproduces, both halves of every red-now/green-before pair included.
+**F5 is genuinely pinned** — no reachable wrong-but-passing variant exists. The F4 reversal is
+byte-clean. But the wrong-but-passing battery earned its place twice over:
+
+- **F6 pins the frame it sends, not the resize arm.** The one frame is `{cols: 43}` — the same cols
+  the socket attached with — so four wrong refits pass, including the realistic
+  `if (m.cols !== cols)`, which is invisible across the entire 9346-test server suite. A verifier
+  measured the remedy: send a width-CHANGING frame first, and W1/W2/W4/W5 all red.
+- **The reflow guard still pins a token, not its subject.** `prose()` flattens `//` but not JSDoc —
+  and `TerminalDrawer.tsx`, the file the correction was about, carries it as JSDoc. And the
+  anti-vacuity demand is still pointer-satisfiable: `See F1 (1853 -> 9460).` passes all 18 tests,
+  the exact failure it was written to close, while the test's own comment claims otherwise.
+- **The union test hand-names three tokens** while its comment says it walks the union.
+
+**The lesson that generalises: "deleting the guard reds" is a weaker property than "a wrong guard
+reds", and only the second is what a mutation table is for.** Three of these guards passed the first
+and failed the second. Ask for the wrong implementation, not just the absent one.
+
 **D-2771** was assigned during fix round 1, when the worker disagreed with a coordinator ruling and
 was right (below). **Ten of the sixteen remain unspent.**
 

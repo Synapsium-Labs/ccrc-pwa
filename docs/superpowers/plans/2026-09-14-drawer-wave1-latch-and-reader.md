@@ -3402,6 +3402,24 @@ forbid. The worker refused it and reported, which is the protocol working agains
   grandfathering — an `INHERITED_GROUNDS` entry naming `.term-histbar`'s own background, gate
   passing 12.32 dark / 10.41 light against a 4.5 floor. A first attempt using `GROUNDS` was
   correctly refused by the gate.
+- **D-2772** (programme shape, against the COORDINATOR): wave 1 was dispatched with this programme's
+  spec and plans on a third branch behind an unmerged PR, so the worker's tree contained no plan in
+  which an issued deviation number could be defined — and `server/test/deviation-refs.test.ts`
+  refuses any tracked `D-` ref above the highest number DEFINED in `docs/superpowers/plans/*.md`
+  **in that tree**. The worker therefore could not carry an in-source `D-N` comment at all, which
+  CLAUDE.md's own convention ("source files carry `D-N` refs in comments; read them as authoritative
+  history") assumes it can. The worker's conclusion was right for its situation; its generalisation
+  — that no program worker can honour the convention until the plan merges — is refuted by merged
+  history, measured: account-pools landed six wave plans on `main` in a docs-only PR (`ece7597a`,
+  #56) **before** dispatching any wave, crossrepo-programmes did the same with three (`644aea41`,
+  #68), and account-connections wave 1 carried its plan in the worker's own PR (`ecd953b0`, #90).
+  This programme is the only one that dispatched against plans on a third, unmerged branch. **The
+  defect is the dispatch, not the guard.** Resolution: wave 1 keeps the number in its commit message
+  with the reason in the docstring; **PR #102 merges before wave 2 dispatches**; a worker may never
+  write its own plan file to define an assigned number (it goes green today and reds every future
+  branch, because `crossTreeCollisions` is subject-free and keyed on file name); wave 4 reconciles
+  the inline refs once the plans are on `main`.
+
 - **D-2771** (Task 8 / §5.3): this plan CONTRADICTS ITSELF about what a probe failure puts on the
   wire. Lines 1036-1038 dictate, verbatim, a `PaneHistoryReply` docstring saying the probe's
   `unreadable` vs `unparseable` vocabulary "rides in `detail`, which is what the drawer renders" —
