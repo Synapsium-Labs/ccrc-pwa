@@ -5025,6 +5025,65 @@ describe('the compaction card — the row generation authorizes every arm (spec 
     expect(runFull(postCompact(tree, transcript, SUMMARY), env)).toEqual({ stdout: '', stderr: '' });
   };
 
+  // ── PreCompact protocol STEP 12, first half: the generation AGAIN ──────
+  // Deleting the whole `if ! _hook_generation_ok; then … fi` that opens the
+  // reacquired section left session-hook at 260/260, and it is the one guard in
+  // this file with neither a fixture nor an argued-unpinnable disclosure beside
+  // it. It is NOT redundant with the nonce compare-and-swap two lines below,
+  // and that is measurable: the CAS asks whether the canonical set still
+  // carries THIS run's nonce, which says nothing about whether the ROW is still
+  // the one this pane was authorized for. A row re-created while the helper
+  // runs presents a different generation and the SAME canonical set — because
+  // the set is published in the FIRST held section, before the helper — so the
+  // CAS passes and only this guard refuses.
+  //
+  // THE WINDOW IS THE HELPER, which runs between the release and the
+  // reacquire, so the helper is where the fixture has to act.
+  const plantGenerationRewritingHelper = (next: string): void => {
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      `fs.writeFileSync(path.join(REG, 'demo-quiet-basin.generation'), ${JSON.stringify(next)});`,
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+  };
+
+  it('STEP 12 revalidates the generation — a row re-created while the helper runs publishes NOTHING', () => {
+    const OTHER = '0189abcd-1234-5678-9abc-0123456789fe';
+    expect(OTHER, 'the fixture really changes it').not.toBe(GENERATION);
+    const tree = cardTree();
+    plantGenerationRewritingHelper(OTHER);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // THE ROW REALLY MOVED, so the leg is about the guard and not about a
+    // fixture that failed to fire.
+    expect(fs.readFileSync(genFile(), 'utf8'), 'the helper re-authorized the row').toBe(OTHER);
+    // AND THE CAS WOULD HAVE PASSED: the canonical set published in the first
+    // held section still carries this run's nonce, which is what makes this
+    // guard the only thing refusing.
+    expect(fs.existsSync(setFile()), 'the initial set was published before the helper').toBe(true);
+    expect(fs.existsSync(cardFile()), 'no card was published onto a row this pane no longer owns').toBe(false);
+    // …and the two stages are reclaimed by the refusal itself rather than left.
+    expect(reg().filter((n) => n.includes('.stage')), 'the stages went with the refusal').toEqual([]);
+  });
+
+  it('CONTROL: the identical wrapper that does NOT move the generation publishes the card', () => {
+    // Without this the leg above could be a wrapper that breaks the helper.
+    const tree = cardTree();
+    plantGenerationRewritingHelper(GENERATION);
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(genFile(), 'utf8')).toBe(GENERATION);
+    expect(fs.existsSync(cardFile()), 'the same helper, the same tree, an unchanged row').toBe(true);
+  });
+
   it('the MARKER publication revalidates the generation — a row re-authorized between the print and the mark mints nothing', () => {
     // §3.3 step 5: "Before unlock and only after successful output, REVALIDATE
     // environment generation and publish the exact nonce marker." The serve arm
