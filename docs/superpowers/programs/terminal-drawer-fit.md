@@ -12,7 +12,7 @@ scrollback it exists to render.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) — 6/6 CI green | **fix round 1** |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) — **6/6 CI green, MERGEABLE** | **review complete; awaiting a non-author approval** |
 | 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
 | 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
@@ -72,6 +72,26 @@ refused and reported. That refusal is the protocol working against a bad instruc
   the mock prepended) and the fake is faithful (xterm 6.0.0's `BufferService.scrollLines` is
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
+
+### Wave 1: review COMPLETE, 2026-09-14
+
+Tip `2e6547a6`. **All six CI legs pass**, `test-macos` included; PR #106 measures `MERGEABLE` and is
+blocked only on a non-author approval. Run 51 is at `merging`, items 17/17. Three fix rounds,
+**D-2766–D-2774**, ten mutants re-run by hand in the last round and all ten red.
+
+**What this wave actually taught the programme.** Every defect that mattered was in the PLAN this
+session wrote, not in the execution, and each surfaced because the worker ran something rather than
+read it. It corrected the coordinator twice, both times with measurements rather than argument —
+reversing the F4 wire-widening ruling outright, and refusing the G3 remedy that would have redded a
+file which never carried the false claim. The three defect classes worth carrying into waves 2–4:
+
+1. **"Deleting the guard reds" is weaker than "a wrong guard reds."** Three guards passed the first
+   and failed the second. Ask every mutation table for the wrong implementation, not the absent one.
+2. **A comment and its test written in one sitting drift apart.** Five instances on one branch,
+   the fifth inside the comment written to fix the fourth. A regex over prose cannot be completed —
+   cap it, and make it state what it cannot catch.
+3. **A fixture can red for the wrong reason** (D-2774), which is a guard that cannot fail one level
+   up. One fixture per token, each isolating exactly one absence.
 
 ### Fix round 3, verified by hand — ten mutants, ten reds (2026-09-14)
 
