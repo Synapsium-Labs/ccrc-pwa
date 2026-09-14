@@ -3367,10 +3367,48 @@ Re-measure rather than quoting the claim: `handoffCommit === branchTip` on **thi
 
 Numbers are ISSUED, never chosen: allocate with `POST /api/ledger/deviations` and DEFINE in the same act. A session that cannot reach the allocator writes `D-TBD-<slug>` and reports (worker clause 11).
 
-*(None owed as planned — see Task 17 Step 4. Both departures an earlier draft of this plan carried
-were ruled into the spec instead: `1c4e79fe`'s salvage by §5.6 and §11 ruling 9, `width?: number` by
-§5.3 and §11 ruling 10. Entries appear here only if executing the wave forced a real departure from
-what this plan says.)*
+None were owed *as planned*. Executing the wave found five, every one of them a defect in THIS
+PLAN rather than in the spec or the execution — four surfaced by the worker and confirmed by
+re-measurement, one an addition the coordinator ruled in. The coordinator assigned them from the
+programme block at review (worker clause 11: a worker never calls the allocator mid-wave).
+
+**Task 17 Step 4 of this plan is itself wrong and is struck**: it tells the worker to call
+`POST /api/ledger/deviations`, which the wave brief, the programme ledger and worker clause 11 all
+forbid. The worker refused it and reported, which is the protocol working against a bad instruction.
+
+- **D-2766** (Task 4): this plan's own Step 3 replacement comment for `server/src/exec.ts` refutes
+  the false "tmux never reflows" claim *by quoting it*, and Step 1's regex has no word boundary
+  after `reflow` — so the refutation scans identically to the assertion the guard forbids, and Step
+  4's "Expected: PASS everywhere" is unreachable. Measured RED, `offenders = ['server/src/exec.ts']`.
+  Reworded to refute without restating. The regex was deliberately NOT loosened: that would readmit
+  the genuine false claim and break this same task's Step 5 mutation, which requires red.
+- **D-2767** (Task 11): this plan's second test CANNOT FAIL. React double-invokes an effect only on
+  a component's INITIAL mount commit, and that effect's body returns early until `hist` flips to
+  `'history'` — which happens later, on a state change of an already-mounted component — so
+  StrictMode never reaches it. Measured: delete `if (!alive) return;` and the suite stays green at
+  57 passed. Step 5's mutation 2 is unfalsifiable by construction: both statements run in one
+  synchronous cleanup block and the parse callback fires strictly after it returns. Replaced with
+  the race that is real — history lands, xterm parses, a keystroke returns to live, cleanup
+  disposes mid-parse.
+- **D-2768** (Task 12): both of this plan's tests resolve the FRESH read first, the one order in
+  which the pre-existing `histRef.current.at !== 'reading'` check already suffices — so Step 2's
+  "Expected: FAIL" is wrong (measured 59 passed against code with no request id) and both Step 5
+  mutations stay green. This plan also **mis-states the defect**: the stale answer is not appended
+  after the fresh one; the fresh read is DISCARDED ENTIRELY (measured `['STALE-A']` against
+  `['FRESH-B']`). Tests flipped to stale-first; the `reqRef` implementation is correct as written.
+- **D-2769** (Task 17): `pwa/design/audit.mjs` is not in this plan's file table, and had to be
+  edited: PR #96's `.term-histbar-word` sets a colour with no recoverable ground, so it entered the
+  uncovered census D-2689 freezes and the whole-branch pass was red. Closed by MEASUREMENT, not by
+  grandfathering — an `INHERITED_GROUNDS` entry naming `.term-histbar`'s own background, gate
+  passing 12.32 dark / 10.41 light against a 4.5 floor. A first attempt using `GROUNDS` was
+  correctly refused by the gate.
+- **D-2770** (Task 16): `pwa/test/history-term-viewport.test.tsx`, the fake-`Terminal` wiring half
+  of spec §11 ruling 11. This plan silently substituted a source scan for it — on the correct
+  measurement that a REAL `Terminal`'s `viewportY` does not move under jsdom — and recorded
+  "Departures: None", which is the departure. Ruled IN scope: the `vi.mock` isolation is necessary
+  (the same control is RED against the real xterm and GREEN with the mock prepended) and the fake
+  is faithful (xterm 6.0.0's `BufferService.scrollLines` clamp is byte-for-byte the fake's). It is
+  complementary to the scan, not redundant.
 
 ---
 
