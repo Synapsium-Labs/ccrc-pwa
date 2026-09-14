@@ -487,3 +487,31 @@ describe('the programme ledger', () => {
       .toMatch(/selected PR head[\s\S]{0,80}?same `producerSha`/);
   });
 });
+
+describe('the legacy-flip measurement is recorded, whichever way it went', () => {
+  it('the ledger carries both numbers and the date they were taken', () => {
+    // WHY BOTH NUMBERS (D-2067): spec §3 F2's
+    // criterion is "zero `legacy-home-project` events over seven consecutive
+    // days", and a box that opened no runs at all in the window satisfies it
+    // while proving nothing. `opens_7d` is the denominator that makes the zero
+    // mean something, and the ledger must carry it beside the numerator or the
+    // record is not a measurement.
+    const m = passage('the ledger measurement block', LEDGER, '## Measurements', '\n## ');
+    expect(m, 'the measurement does not name the event it counted')
+      .toContain('legacy-home-project');
+    expect(m, 'the measurement records no legacy-event count').toMatch(/legacy_7d\s*=\s*\d+/);
+    expect(m, 'the measurement records no run-open count — the zero above means nothing without it')
+      .toMatch(/opens_7d\s*=\s*\d+/);
+    expect(m, 'the measurement is undated, so nobody can tell whether the window has moved')
+      .toMatch(/20\d\d-\d\d-\d\d/);
+  });
+
+  it('and says the read was an operator act, because no route can serve it', () => {
+    const m = passage('the ledger measurement block', LEDGER, '## Measurements', '\n## ');
+    expect(m, 'the measurement does not say where it was taken').toContain('coord.db');
+    // Grounded, so the sentence reds the day a route DOES serve the trail:
+    // if `runEvents` ever appears in the route file, this claim is stale.
+    expect(ROUTES, 'a route now reads runEvents — the ledger sentence calling this an ' +
+      'operator act is now false and must be corrected').not.toContain('runEvents');
+  });
+});

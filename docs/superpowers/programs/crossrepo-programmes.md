@@ -152,6 +152,32 @@ beside it when the programme closes.
   hung child in well under a minute" is false for every synchronous spawn, where `testTimeout` is a post-hoc label
   (measured three ways). The config sentence is flagged to the operator for whoever owns the suite.
 
+## Measurements
+
+**The legacy-generation flip criterion (spec §3 F2), taken 2026-09-14 on the server box.**
+`legacy_7d = 1` — `run_events` rows whose `detail` begins `legacy-home-project`, in the rolling
+seven-day window. `opens_7d = 11` — runs opened in the same window, independently confirmed by
+the coordinator from the runs route.
+
+The read is an **operator act**: `run_events` is exposed by no HTTP route (measured — every
+mention of `run_events` in `server/src/coord/routes.ts` sits inside a code comment, none inside
+a route registration or handler body, and `CoordStore.runEvents` has no caller outside
+`server/test`). `sqlite3` is not installed on the server box, so the count was taken through
+`node:sqlite`'s `DatabaseSync(..., { readOnly: true })` — the same engine the server itself
+uses — against `~/.ccrc/coord.db`, and from nowhere else. It prints two integers and no rows.
+
+The single counted event is run 43 (programme `account-pools`, wave 5/6), `causedBy=coordinator`,
+at `2026-09-11T12:02:33.805Z` — the **only** `legacy-home-project` event ever recorded (count = 1,
+first = last), so the rolling window clears `2026-09-18T12:02:33Z` absent a further legacy open
+before then.
+
+**The gate this wave applies:** flip only when `legacy_7d = 0` **and** `opens_7d > 0`. The second
+number is not in the spec's sentence and is the reason this block exists: seven days in which
+nothing was opened also reports zero legacy events, and that is an absence of traffic, not
+evidence that the legacy branch went unused. Measured this wave: `legacy_7d = 1`, so **the gate is
+closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEPTED` stays `true`. Task 6 does not
+run this wave.
+
 ## Carried constraints
 
 - **Wave 2 owns two mechanisms wave 1's review measured and did not build:** (a) a `project-mismatch` at
