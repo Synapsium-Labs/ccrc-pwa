@@ -108,6 +108,45 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(p2).toContain(`--model opus --settings '{"enableWorkflows":true}' --`);
   });
 
+  it('workflow=off on an Anthropic lane composes NOTHING and stamps inert=workflow (controller ruling S1-R12)', () => {
+    // `off` and absence compose the same argv, so without this stamp the record
+    // claims a state it never set: `{"enableWorkflows":false}` is unmeasured,
+    // and the lane's own settings.json still decides. Slice 4 measures the
+    // false key and clears the stamp.
+    seed('myid');
+    h.sh(`_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow off`);
+    const [primary, retry] = spawnBoth('myid');
+    for (const l of [primary, retry]) expect(l).not.toContain('--settings');
+    expect(h.reg('myid', 'inert')).toBe('workflow');
+  });
+
+  it('workflow=on on an Anthropic lane stamps no inert — it really was applied', () => {
+    seed('myid');
+    h.sh(`_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow on`);
+    const [primary] = spawnBoth('myid');
+    expect(primary).toContain(`--settings '{"enableWorkflows":true}'`);
+    expect(h.reg('myid', 'inert')).toBeNull();
+  });
+
+  it('ultracode with workflow=off stamps no inert: ultracode implies workflows ON, and that IS composed', () => {
+    seed('myid');
+    h.sh(`_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid workflow off`);
+    const [primary] = spawnBoth('myid');
+    expect(primary).toContain(`--settings '{"enableWorkflows":true,"ultracode":true}'`);
+    expect(h.reg('myid', 'inert')).toBeNull();
+  });
+
+  it('the RC flag and --model are separated by exactly one space, in the production shape (Task 6 minor)', () => {
+    // `${rcflag:+ }` — the separator only the box-flag-ON shape exercises. With
+    // the flag off `$rcflag` is empty and `launchflags` is `$routeflags` alone,
+    // so every other case here would pass with the separator deleted.
+    seed('myid');
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'remote-control'), 'on\n');
+    h.sh(`_reg_set myid class opus`);
+    const [primary, retry] = spawnBoth('myid');
+    for (const l of [primary, retry]) expect(l).toContain(`--remote-control 'myid' --model opus `);
+  });
+
   it('a swap landing (lastswap within 300s) carries every field — the continuity the operator ruled', () => {
     seed('myid');
     h.sh(`_reg_set myid class fable; _reg_set myid effort xhigh; _reg_set myid subagent sonnet; _reg_set myid workflow off

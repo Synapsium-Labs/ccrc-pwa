@@ -33,8 +33,22 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     seed(); h.sh('_reg_set myid effort auto'); settle();
     expect(typed()).toEqual([]);
   });
-  it('a record with no effort field at all (only class): types nothing — absent means auto', () => {
+  it('a record with no effort field at all (only class): SPAWN_EFFORT, as today (controller ruling S1-R11)', () => {
+    // THE EFFORT FIELD IS THE TEST, not `_route_any`. A record that names a
+    // class and no effort chose nothing about effort, so the box default is
+    // still what applies — and a `class` field must not switch it off.
     seed(); h.sh('_reg_set myid class sonnet'); settle();
+    expect(typed()).toEqual(['tmux send-keys -t cc-myid -l /effort ultracode']);
+  });
+  it('a ccd-WRITTEN field alone never switches off the default: `degraded` is not a record of anybody\'s effort', () => {
+    // Slice 3 stamps `degraded` itself, on a session whose operator chose
+    // nothing. Under `_route_any` that stamp silently cancelled `SPAWN_EFFORT`
+    // — a behaviour change with no writer and no channel (S1-R11).
+    seed(); h.sh('_reg_set myid degraded opus'); settle();
+    expect(typed()).toEqual(['tmux send-keys -t cc-myid -l /effort ultracode']);
+  });
+  it('an EMPTY effort file still counts as present: a field somebody wrote is a field somebody meant', () => {
+    seed(); h.sh('_reg_set myid effort ""'); settle();
     expect(typed()).toEqual([]);
   });
   it('class haiku with an effort on disk: types nothing and notes the PAIR', () => {

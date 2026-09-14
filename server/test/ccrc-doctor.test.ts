@@ -6224,15 +6224,15 @@ describeLinux('ccrc doctor: scopes', () => {
   });
 });
 
-describe('ccrc doctor: accounts', () => {
-  /** A lane whose config dir carries a settings.json env block — the shape an
-   *  api-key lane is provisioned with, API key field deliberately empty. */
-  function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
-    const d = join(home, suffix);
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
-  }
+/** A lane whose config dir carries a settings.json env block — the shape an
+ *  api-key lane is provisioned with, API key field deliberately empty. */
+function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
+  const d = join(home, suffix);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
+}
 
+describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
   const ROUTING_ROSTER = { version: 1, accounts: [
     { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
     { id: 'gpt', label: 'gpt', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
@@ -6305,7 +6305,24 @@ describe('ccrc doctor: accounts', () => {
     writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
     expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
   });
+  it('routing: WARNS when the projection predates CCRC_SUBAGENT_CLASSES — the array ccd validates `subagent` against', () => {
+    // The vacuous-green shape S1-R9 removed, ONE ARRAY OVER: `ccrc install`
+    // writes both arrays from one generator, but they shipped in different
+    // releases, so a box installed between them has the backend array and not
+    // this one — and ccd cannot validate a `subagent` field there at all.
+    const home = routingBox('ccrc-doctor-routing-stale-subagent-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, readFileSync(sh, 'utf8').split('\n')
+      .filter((l) => !l.startsWith('CCRC_SUBAGENT_CLASSES=')).join('\n'));
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: could not read/);
+    expect(line).toContain('CCRC_SUBAGENT_CLASSES');
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+});
 
+describe('ccrc doctor: accounts', () => {
   const COMPATIBLE: RosterEntry = {
     id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
     exec: {

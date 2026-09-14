@@ -4333,13 +4333,25 @@ _check_routing() {
     return 0
   fi
   # An unsourceable projection (corrupt file, `.` fails) and a projection that
-  # sources fine but predates `CCRC_ANTHROPIC_BACKEND` (`declare -p` fails) are
+  # sources fine but predates one of the routing arrays (`declare -p` fails) are
   # NOT "the roster declares no Anthropic-backend account" — that PASS is
   # reserved for an array that IS declared, with zero elements. Folding all
   # three into one empty `raw` would report green having measured nothing, so
   # this is its own probe, done first and separately from building `raw`.
-  if ! ( . "$sh" 2>/dev/null && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 ); then
-    _dr_warn routing "could not read the roster projection at \$HOME/.ccrc/accounts.sh" \
+  #
+  # BOTH ARRAYS, not just the backend one (fix round 2, Finding 1b). `ccrc
+  # install` writes `CCRC_ANTHROPIC_BACKEND` and `CCRC_SUBAGENT_CLASSES` from
+  # the same generator in the same file, but they arrived in different
+  # releases — the second is routing slice 1's — so a box last installed
+  # between them has the first and not the second, and ccd cannot validate a
+  # `subagent` routing field there at all (`_route_valid` answers "unmeasured"
+  # and the field fails closed). Probing only the array that predates the
+  # feature is S1-R9's vacuous-green shape one array over: a green line whose
+  # subject was never measured. One `&&`, one remedy, the same sentence.
+  if ! ( . "$sh" 2>/dev/null \
+         && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 \
+         && declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 ); then
+    _dr_warn routing "could not read the roster projection at \$HOME/.ccrc/accounts.sh, or it predates the routing arrays (CCRC_ANTHROPIC_BACKEND, CCRC_SUBAGENT_CLASSES)" \
       "re-run ccrc install to regenerate it, or check the Anthropic lanes' settings.json by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
     return 2
   fi

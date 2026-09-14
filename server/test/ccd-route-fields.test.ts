@@ -60,6 +60,16 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(log).not.toContain('gemini');
   });
 
+  it('the count the note calls BYTES is bytes, not characters (controller ruling S1-R2)', () => {
+    seed();
+    // `gémini` is 6 characters and 7 bytes; `${#v}` under a UTF-8 locale would
+    // say 6, and the word in the line is "bytes".
+    h.sh(`_reg_set ${ID} class 'gémini'`);
+    expect(get('class')).toBe('|rc=0');
+    expect(swapLog()).toMatch(/field class holds an unrecognised value \(7 bytes\)/);
+    expect(swapLog()).not.toContain('gémini');
+  });
+
   it('the note is floored PER FIELD: two invalid fields read alternately write one line each per floor window', () => {
     seed();
     h.sh(`_reg_set ${ID} class gemini; _reg_set ${ID} effort extreme`);
@@ -76,14 +86,48 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-a.routenoteclass'))).toBe(false);
   });
 
-  it('subagent is validated against the PROJECTED list; a projection that predates it rejects every value', () => {
+  it('subagent is validated against the PROJECTED list; a projection that predates it is UNMEASURED, never a bad value', () => {
     seed();
     h.sh(`_reg_set ${ID} subagent sonnet`);
     expect(get('subagent')).toBe('sonnet|rc=0');
     const sh = path.join(h.home, '.ccrc', 'accounts.sh');
     fs.writeFileSync(sh, fs.readFileSync(sh, 'utf8').split('\n').filter((l) => !l.startsWith('CCRC_SUBAGENT_CLASSES=')).join('\n'));
+    // THE THIRD ANSWER. rc 2 says the VOCABULARY was unavailable — this call
+    // measured nothing about `sonnet`, which is a perfectly good value.
+    expect(h.sh(`_route_valid subagent sonnet; echo "rc=$?"`)).toBe('rc=2');
+    expect(h.sh(`_route_valid subagent nonsense; echo "rc=$?"`)).toBe('rc=2');
+    // and it still FAILS CLOSED: nothing unchecked reaches an argv or a keystroke
     expect(get('subagent')).toBe('|rc=0');
-    expect(swapLog()).toMatch(/route-reject demo-a: field subagent/);
+    const log = swapLog();
+    expect(log).toMatch(/route-unmeasured demo-a: field subagent could not be checked .*re-run ccrc install/);
+    // neither the bytes NOR a count of them: a byte count is a claim about a
+    // value somebody looked at, and nobody looked at this one
+    expect(log).not.toMatch(/route-reject demo-a: field subagent/);
+    expect(log).not.toContain('bytes');
+    expect(log).not.toContain('sonnet');
+    // its own floor marker, dotless so `_reg_purge` reaps it with the row
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routeunmeassubagent`))).toBe(true);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routenotesubagent`))).toBe(false);
+  });
+
+  it('the two refusals do not share a floor marker: each speaks once per window, whichever came first', () => {
+    seed();
+    h.sh(`_reg_set ${ID} subagent sonnet; _reg_set ${ID} class gemini`);
+    const sh = path.join(h.home, '.ccrc', 'accounts.sh');
+    fs.writeFileSync(sh, fs.readFileSync(sh, 'utf8').split('\n').filter((l) => !l.startsWith('CCRC_SUBAGENT_CLASSES=')).join('\n'));
+    h.sh(`for i in 1 2 3; do _route_get ${ID} subagent; _route_get ${ID} class; done`);
+    expect(swapLog().match(/route-unmeasured demo-a: field subagent/g)).toHaveLength(1);
+    expect(swapLog().match(/route-reject demo-a: field class/g)).toHaveLength(1);
+  });
+
+  it('_route_peek is PURE: the same three conditions, and no journal line or floor marker for any of them (fix round 2, M2)', () => {
+    seed();
+    h.sh(`_reg_set ${ID} class opus`);
+    expect(h.sh(`_route_peek ${ID} class; echo "|rc=$?"`)).toBe('opus|rc=0');
+    h.sh(`_reg_set ${ID} class gemini`);
+    expect(h.sh(`_route_peek ${ID} class; echo "|rc=$?"`)).toBe('|rc=0');
+    expect(swapLog()).toBe('');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routenoteclass`))).toBe(false);
   });
 
   it('_route_effort_for refuses the haiku+effort PAIR with its own note — the value was valid, the pair is not — and passes it on any other class', () => {
