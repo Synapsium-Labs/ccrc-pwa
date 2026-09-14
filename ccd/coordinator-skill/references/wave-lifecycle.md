@@ -228,8 +228,8 @@ of that in a brief buys nothing and spends the one budget a brief is short of
 the plan file's path, the tasks or task range this wave owns, **the execution
 skill the worker should invoke** (`superpowers:executing-plans` or
 `superpowers:subagent-driven-development`), the interfaces earlier waves
-settled, the deviations already ledgered, and whatever your review of the last
-handoff decided.
+settled, the deviations already ledgered, and whatever the last review run's
+report, and your ruling on it, decided.
 
 **Every brief for a wave in ANOTHER project carries three immutable-plan
 coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
@@ -566,7 +566,7 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
-1. Review the handoff commit the way you would review any commit.
+1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.
