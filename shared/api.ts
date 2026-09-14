@@ -4582,8 +4582,8 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Seventeen codes exist below today; the next new one would be the
- * eighteenth, not the ninth.
+ * Eighteen codes exist below today; the next new one would be the
+ * nineteenth, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
@@ -4630,12 +4630,16 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
  * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
  * already settled, 409, refused rather than silently applied.
+ *
+ * `review-in-flight` — a second non-terminal review run named the same
+ * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
+ * invariant 3).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -4643,6 +4647,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
+  'review-in-flight': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

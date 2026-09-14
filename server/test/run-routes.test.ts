@@ -3510,3 +3510,105 @@ describe('the run routes refuse an unreadable run rather than acting on it (D-25
     expect(res.json()).toMatchObject({ ok: false, error: 'run-unreadable' });
   });
 });
+
+describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
+  let app: FastifyInstance;
+  afterEach(async () => { await app.close(); });
+
+  /** A work run positioned at awaiting-review through the store — the route's
+   *  verifyDone is Task 7's concern, not this describe's. */
+  const workAtReview = async (home: string) => {
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    return { w, workId: opened.id };
+  };
+  const REVIEW = (workId: number, over: Record<string, unknown> = {}) =>
+    ({ program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: workId,
+       claimedBy: CLAIMED_BY, ...over });
+
+  it('opens a review run that derives project, wave and waveOf from the run it reviews', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const res = await postOpen(app, REVIEW(workId));
+    expect(res.statusCode).toBe(200);
+    const { id } = res.json() as { id: number };
+    const row = okRun(w.coord.run(id))!;
+    expect(row).toMatchObject({ kind: 'review', reviews: workId, project: PROJECT, wave: 1, waveOf: 3,
+      claimedBy: CLAIMED_BY, state: 'planned', sessionId: null });
+    // Its hold reason is the worker's wave and its OWN id (spec §5.4) — the existing grammar.
+    expect(holdReasonVerdict(row.program, row.wave, row.waveOf, row.id)).toMatchObject({ ok: true,
+      reason: `program:${OPEN_BODY.program} wave:1/3 run:${id}` });
+  });
+
+  it('refuses a second non-terminal review run for the same work run: review-in-flight', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { workId } = await workAtReview(home);
+    const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const res = await postOpen(app, REVIEW(workId, { title: 'Again' }));
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'review-in-flight', by: String(first.id) });
+  });
+
+  it('allows a new review run once the previous one is terminal', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    expect(w.coord.advance(first.id, 'failed', 'test').ok).toBe(true);
+    expect((await postOpen(app, REVIEW(workId, { title: 'R2' }))).statusCode).toBe(200);
+  });
+
+  it.each([
+    ['reviews absent', (id: number) => ({ ...REVIEW(id), reviews: undefined }), 'reviews'],
+    ['reviews on a work run', (id: number) => ({ ...OPEN_BODY, wave: 2, reviews: id }), 'reviews'],
+    ['kind unknown', (id: number) => REVIEW(id, { kind: 'unknown' }), 'kind'],
+    ['a sessionId', (id: number) => REVIEW(id, { sessionId: 'demo-w1' }), 'sessionId'],
+    ['a different project', (id: number) => REVIEW(id, { project: 'elsewhere' }), 'project'],
+    ['a different wave', (id: number) => REVIEW(id, { wave: 2 }), 'wave'],
+    ['a different program', (id: number) => REVIEW(id, { program: 'other' }), 'program'],
+    ['a different claimedBy', (id: number) => REVIEW(id, { claimedBy: 'ccrc-pwa-other' }), 'claimedBy'],
+    ['a run that does not exist', () => REVIEW(999_999), 'reviews'],
+  ])('refuses %s as bad-request, naming the field', async (_what, body, field) => {
+    const home = mkTmp('ccrc-runs-');
+    const { workId } = await workAtReview(home);
+    const res = await postOpen(app, body(workId));
+    expect(res.statusCode).toBe(400);
+    const j = res.json() as { ok: boolean; error: string; detail: string };
+    expect(j).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(j.detail).toContain(field);
+  });
+
+  it('refuses to review a run that is not at awaiting-review, naming its state', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // dispatched, not awaiting-review
+    const res = await postOpen(app, REVIEW(opened.id));
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { detail: string }).detail).toContain('dispatched');
+  });
+
+  it('refuses to review a review run', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const res = await postOpen(app, REVIEW(r.id, { title: 'meta' }));
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { detail: string }).detail).toContain('kind');
+  });
+
+  it('a review run does not count against the cap until it is dispatched, and does once it is', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    expect(w.coord.capsUsage().running).toBe(0);              // the idle worker (Task 1)
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    expect(w.coord.capsUsage().running).toBe(0);              // planned
+    w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+    expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.capsUsage().running).toBe(1);              // the reviewer REPLACES the worker's slot (§5.4)
+  });
+});

@@ -1139,13 +1139,24 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
+    const { program, title, claimedBy, sessionId, homeProject, kind, reviews } = body;
+    // Design 2026-09-14 §5.1 / D-2799. `kind` absent is 'work' — every caller
+    // that predates review runs. Checked BEFORE the shape guard below: that
+    // guard's own project/wave relaxation reads `kind !== 'review'` and would
+    // otherwise fold an invalid `kind` into "this is a work-shaped body" and
+    // answer the generic bare `bad-request` (no field named) rather than this
+    // one's own detail.
+    if (!(kind === undefined || kind === 'work' || kind === 'review')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'kind must be work or review' });
+    }
     if (typeof program !== 'string' ||
         typeof title !== 'string' || title.trim() === '' ||
-        typeof project !== 'string' || project.trim() === '' ||
+        (kind !== 'review' && (typeof body.project !== 'string' || body.project.trim() === '')) ||
+        (body.project !== undefined && typeof body.project !== 'string') ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        !isPositiveDecimalSafeInteger(wave) ||
-        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
+        (kind !== 'review' && !isPositiveDecimalSafeInteger(body.wave)) ||
+        (body.wave !== undefined && !isPositiveDecimalSafeInteger(body.wave)) ||
+        !(body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf)) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
         // Present-and-not-a-string is a malformed body. The VALUE is shaped
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
@@ -1154,6 +1165,38 @@ export function registerCoordRoutes(
         // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
         !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // `kind`'s own vocabulary was already proven above, before this guard.
+    // Each further refusal below names its field so the caller can tell
+    // "malformed JSON" from "you sent the wrong thing".
+    const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
+    if (runKind === 'work' && reviews !== undefined) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
+    }
+    if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
+    }
+    // A review run's project, wave and waveOf are the REVIEWED run's — read off
+    // its row, never off this body, which may only agree (D-2799). The body's
+    // own shape guard above already accepted `project`/`wave` as it always
+    // did; here the review arm overrides them with the measured values.
+    let project = body.project as string, wave = body.wave as number, waveOfBody = body.waveOf;
+    if (runKind === 'review') {
+      if (sessionId !== undefined) {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' });
+      }
+      const target = coord.run(reviews as number);
+      if (!target.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: target.detail });
+      if (target.run === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews names no run' });
+      const t = target.run;
+      if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
+      if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
+      if (t.program !== program) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
+      if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
+      if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
+      if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
+      if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
+      project = t.project; wave = t.wave; waveOfBody = t.waveOf;
     }
     // A programme names one ledger file, so separators, dot components, and
     // display-label punctuation are refused before the value reaches storage or
@@ -1173,7 +1216,7 @@ export function registerCoordRoutes(
       if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
       home = shaped.home;
     }
-    const waveOfVal = (waveOf ?? null) as number | null;
+    const waveOfVal = (waveOfBody ?? null) as number | null;
 
     // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
     // repository, and reusing it for a wave in another is the one crossing this
@@ -1223,6 +1266,7 @@ export function registerCoordRoutes(
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
+      kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
       ...(home !== undefined ? { homeProject: home } : {}) });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({

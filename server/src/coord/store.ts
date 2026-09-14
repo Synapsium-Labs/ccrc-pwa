@@ -79,7 +79,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight'; by: string }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -760,7 +760,11 @@ export class CoordStore {
      *  writes only the two real kinds. */
     kind?: Extract<RunKind, 'work' | 'review'>;
     /** The work run a review run reads. Required by the ROUTE when
-     *  `kind:'review'`; written as-is here. */
+     *  `kind:'review'`; written as-is here. MUST name an existing run — the
+     *  route proves it before calling (400 `reviews names no run`); the FK
+     *  is enforced at runtime, so a dangling id here would throw SQLite's
+     *  constraint error rather than answer in words, which is why no other
+     *  caller may pass one. */
     reviews?: number | null;
   }): OpenRunResult {
     try {
@@ -785,6 +789,12 @@ export class CoordStore {
         // that is the non-goal spec:291-292 actually names.
         if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
           return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
+        }
+        // Design 2026-09-14 §5.1: one review run per work run at a time. Inside
+        // the transaction so two opens cannot both pass the read.
+        if (input.kind === 'review') {
+          const inflight = this.reviewInFlightFor(input.reviews ?? -1);
+          if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
         }
         // Idempotent retry (fix — review findings 19/32): a run already open,
         // `planned`, and claimed by the SAME coordinator for this exact
@@ -2146,6 +2156,23 @@ export class CoordStore {
     return (this.db.prepare(
       `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).get(program) as { c: number }).c;
+  }
+
+  /** The one NON-TERMINAL review run naming `workRunId`, or null (design
+   *  2026-09-14 §5.1 — "one review run per work run at a time"). Read fresh at
+   *  both decision points that need it: the review OPEN (inside `openRun`'s own
+   *  transaction) and the send-back ADVANCE (routes). `TERMINAL_RUN_STATES_SQL`
+   *  is L0's pair; an `unknown`-state review run is LIVE here (D-2794).
+   *
+   *  An unrepresentable id answers null — D-2545's family; the route's `run()`
+   *  read of the same row will refuse first on every path that reaches it. */
+  reviewInFlightFor(workRunId: number): number | null {
+    const row = this.db.prepare(
+      `SELECT CAST(id AS TEXT) AS idText FROM runs WHERE reviews = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id LIMIT 1`,
+    ).get(workRunId) as { idText: string } | undefined;
+    if (!row) return null;
+    const id = Number(row.idText);
+    return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
