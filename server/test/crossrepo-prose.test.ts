@@ -202,3 +202,154 @@ describe('README: cross-repo programmes', () => {
       .not.toMatch(/\btwo\b/i);
   });
 });
+
+/** The run-lifecycle numbered list alone — its own bold lead-in to the mail-bus
+ *  paragraph that follows it. Deliberately NOT the whole "Fleet coordination"
+ *  section: a code named in the mail-bus paragraph must not satisfy a claim
+ *  about the route that emits it. */
+const lifecyclePassage = (): string =>
+  passage('README, the run lifecycle', README, '**Run lifecycle**', '\n**The mail bus');
+
+/** The programme-mail paragraph alone, between the mail-bus paragraph (whose
+ *  own passage `box-token-census.test.ts:307-339` pins count-free) and the caps
+ *  paragraph (likewise, `:341-360`). Both anchors are those files' anchors, so
+ *  a paragraph inserted into either pinned slice by mistake fails HERE with a
+ *  length or ordering error rather than confusing the census. */
+const programmeMailPassage = (): string =>
+  passage('README, the programme-mail paragraph', README,
+    '**Programme mail at scale.**', '\n**Caps and pause.**');
+
+describe('README: the run lifecycle and programme mail', () => {
+  it('names each -mismatch refusal in the lifecycle step that emits it', () => {
+    expect(MISMATCH_CODES.length, 'no -mismatch codes — wave 1 has not landed')
+      .toBeGreaterThanOrEqual(2);
+    const p = lifecyclePassage();
+    for (const code of MISMATCH_CODES) {
+      expect(p, `the run lifecycle does not name \`${code}\` in the step that emits it`)
+        .toContain(`\`${code}\``);
+    }
+    // THE ORDERING CLAIM, which is the whole reason the dispatch refusal is
+    // safe: spec §3 F1 requires the resume-arm check BEFORE the hold, the
+    // `/clear` and the transition. A README that names the code without saying
+    // when it fires has documented a refusal and hidden its one guarantee.
+    expect(p, 'the lifecycle names the dispatch refusal without saying it fires before the hold')
+      .toMatch(/before the hold/i);
+  });
+
+  it('states where each refusal is measured, not merely that it exists', () => {
+    const p = lifecyclePassage();
+    expect(p, "step 1 does not say the open refusal happens before the row is opened")
+      .toMatch(/before the row is opened/i);
+    expect(p, 'the lifecycle does not name the field the home refusal compares')
+      .toContain('homeProject');
+    for (const field of ['ledgerRepo', 'ledgerAbsPath']) {
+      expect(ROUTES, `${field} is not in coord/routes.ts — this loop is over nothing`)
+        .toContain(field);
+      expect(p, `step 1 does not name the response field ${field}`).toContain(field);
+    }
+
+    const same = passage('README, same-project succession', p,
+      'For a same-project successor', 'For a cross-project successor');
+    const sameOpen = same.indexOf('same `sessionId`');
+    const sameClose = same.indexOf('`final:false`');
+    const sameClosed = same.indexOf('closed row');
+    const sameDispatch = same.lastIndexOf('dispatch');
+    for (const [marker, at] of [
+      ['same `sessionId`', sameOpen], ['`final:false`', sameClose],
+      ['closed row', sameClosed], ['dispatch', sameDispatch],
+    ] as const) {
+      expect(at, `same-project ${marker} is absent`).toBeGreaterThan(-1);
+    }
+    expect(sameOpen, 'same-project producer closes before successor open').toBeLessThan(sameClose);
+    expect(sameClose).toBeLessThan(sameClosed);
+    expect(sameClosed).toBeLessThan(sameDispatch);
+
+    const cross = p.slice(p.indexOf('For a cross-project successor'));
+    expect(cross, 'cross-project succession does not omit the producer session')
+      .toMatch(/without the producer's\s+`sessionId`/);
+    expect(cross, 'cross-project succession does not verify the closed producer')
+      .toMatch(/closed row[\s\S]{0,100}?`done`/i);
+    expect(cross, '`done` is incorrectly treated as merge proof')
+      .toMatch(/`done`[\s\S]{0,180}?not[\s\S]{0,40}?merge proof/i);
+    expect(cross, 'cross-project succession makes merge proof universal instead of dependency-gated')
+      .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove[\s\S]{0,200}?producerSha/i);
+    // D-2740: the brief's literal `cross.indexOf("without the producer's
+    // \`sessionId\`")` never matches this passage — the prescribed prose wraps
+    // that phrase across a line, so the literal reads -1. The sibling assertion
+    // two lines up already used `\s+` and passed; this one is now the same
+    // shape, searched rather than indexed so its offset still orders below.
+    const crossOpen = cross.search(/without the producer's\s+`sessionId`/);
+    const crossClose = cross.indexOf('`final:true`');
+    const crossRelease = cross.indexOf('`released:true`');
+    const crossClosed = cross.indexOf('closed row');
+    const crossDependency = cross.indexOf('If the consumer depends');
+    const crossMerge = cross.indexOf('independently prove');
+    const crossDispatch = cross.lastIndexOf('dispatch');
+    for (const [marker, at] of [
+      ["without the producer's sessionId", crossOpen], ['`final:true`', crossClose],
+      ['`released:true`', crossRelease], ['closed row', crossClosed],
+      ['If the consumer depends', crossDependency], ['independently prove', crossMerge],
+      ['dispatch', crossDispatch],
+    ] as const) {
+      expect(at, `cross-project ${marker} is absent`).toBeGreaterThan(-1);
+    }
+    expect(crossOpen, 'cross-project producer closes before successor open').toBeLessThan(crossClose);
+    expect(crossClose).toBeLessThan(crossRelease);
+    expect(crossRelease).toBeLessThan(crossClosed);
+    expect(crossClosed).toBeLessThan(crossDependency);
+    expect(crossDependency).toBeLessThan(crossMerge);
+    expect(crossMerge).toBeLessThan(crossDispatch);
+
+    for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'phase', 'headRefOid', 'producerSha']) {
+      expect(p, `producer merge proof does not name ${evidence}`).toContain(evidence);
+    }
+    expect(p, 'the named producer SHA is not pinned to the closed row and raw PR row')
+      .toMatch(/`headRefOid`[\s\S]{0,160}?`handoffCommit`[\s\S]{0,120}?`producerSha`/);
+  });
+
+  it('the programme-mail paragraph names both roles and the exact read semantics', () => {
+    const p = programmeMailPassage();
+    expect(p, 'the paragraph does not name the worker role').toContain("toId: 'worker'");
+    expect(p, 'the paragraph does not name the coordinator role').toContain("toId: 'coordinator'");
+    expect(p, 'the paragraph does not say what an unresolvable role answers')
+      .toContain('unknown-recipient');
+    expect(p, 'the paragraph does not name the exact full-history URL')
+      .toContain('GET /api/mail?program=<slug>&all=1');
+    expect(p, 'the paragraph does not say the default programme mail read is outstanding-only')
+      .toMatch(/GET \/api\/mail\?program=<slug>`[\s\S]{0,120}?outstanding/i);
+    expect(p, 'the paragraph does not name the feed filter').toContain('GET /api/feed?program=');
+    expect(p, 'the paragraph does not say the feed is the full archive')
+      .toMatch(/feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i);
+    // The heir promise, and the one writer it is kept in — grounded, so a
+    // rename of the funnel reds the sentence that names it.
+    const store = read('server/src/coord/store.ts');
+    expect(store, 'bindSession is gone from the store — wave 1 has not landed').toContain('bindSession');
+    expect(p, 'the paragraph does not name the funnel the heir promise is kept in')
+      .toContain('bindSession');
+    // Ruling 2 (this wave): the identical `to`/`program` correction Task 1 made
+    // in the cross-repo subsection has a second, independent copy here — the
+    // programme-mail paragraph's own read-semantics sentence, which the plan
+    // originally wrote as "`to` becomes optional when `program` is given", a
+    // claim `server/src/coord/routes.ts:1046-1048` refutes: the two are
+    // mutually exclusive, and naming both is a 400.
+    expect(p, 'the paragraph does not say `to` and `program` are mutually exclusive')
+      .toMatch(/`to`[\s\S]{0,120}?`program`[\s\S]{0,60}?mutually exclusive/i);
+    expect(p, 'the folded sentence came back — `to` is not merely optional beside `program`')
+      .not.toMatch(/`to` becomes optional/);
+  });
+
+  it('does not disturb the two count-free paragraphs it sits between', () => {
+    // Locality, asserted rather than hoped: the new paragraph must be OUTSIDE
+    // both pinned slices. If it landed inside either, that slice would now
+    // contain this paragraph's own text — which these two checks catch here,
+    // with a message that says what to do, instead of in the census with a
+    // message about hand-kept door counts.
+    const mailBus = passage('README, the mail-bus paragraph', README,
+      '`/api/mail` (and its ack route)', 'Minting the token file matters');
+    expect(mailBus, 'the programme-mail paragraph was inserted INSIDE the pinned mail-bus slice')
+      .not.toContain('**Programme mail at scale.**');
+    const caps = passage('README, the caps paragraph', README, '**Caps and pause.**', 'Pause is a');
+    expect(caps, 'the programme-mail paragraph was inserted INSIDE the pinned caps slice')
+      .not.toContain('**Programme mail at scale.**');
+  });
+});

@@ -1687,7 +1687,15 @@ buy.
    written or read here** (the route's own docstring says so verbatim); it
    only names `docs/superpowers/programs/<slug>.md` in the response, so a
    coordinator that forgot to commit it is told once, in the place it would
-   notice. A second coordinator on the same program is refused. Wave 1 (no
+   notice. A second coordinator on the same program is refused. The body also
+   carries `homeProject`, the programme's home repo, stored on the programme
+   row at first insert: a later open naming a *different* one is refused
+   `home-mismatch` (**409**, `by:` the stored value), while a stored home that
+   is still null is backfilled from the body. A `sessionId` whose earlier runs
+   belong to another project is refused `project-mismatch` (**409**, `by:` that
+   project) *before the row is opened*, so a refusal leaves no `planned` orphan.
+   The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
+   `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims
    the workspace. Wave N≥2 (`sessionId` names the workspace being reclaimed)
    holds it immediately (`ccd ws-hold`).
@@ -1695,7 +1703,11 @@ buy.
    caps **before spawning or resuming anything**; wave 1 (`run.sessionId`
    still null) runs `ccd ws-add` and learns the new session id by diffing
    the registry before/after (never ccd's own echoed sentence, and never
-   `ccd start` — no ccd verb of that name runs anywhere in this lane). Wave
+   `ccd start` — no ccd verb of that name runs anywhere in this lane). The
+   resume arm refuses `project-mismatch` (**409**, `by:` the registry record's
+   project) when the record it finds belongs to a different project than the
+   run — *before the hold*, before the injected `/clear` and before the
+   transition, so a mismatch costs the workspace nothing. Wave
    N≥2 resumes the *same* workspace with `ccd ensure` (the harness resumes
    its own transcript) and then discards that resumed context with an
    injected `/clear` through `sendPrompt`'s full proof discipline, so
@@ -1721,19 +1733,36 @@ buy.
    *quality* stays discipline, not something this server enforces — then must
    **open wave N+1 before it can close wave N**. A programme with zero open runs
    retires permanently, so close-first would break role-addressed coordinator
-   mail between the two calls. For a same-project successor, the new
-   `POST /api/runs` names the same `sessionId`; that opens a new row and re-holds
-   the same workspace under the wave-N+1 reason. Only then does
-   `POST /api/runs/:id/close` with `final:false` close this run as `done` and
-   hand the hold to the already-open successor. After close succeeds, read the
-   producer through `runs list --closed 1`; require its state to be `done` and,
-   before dispatching a dependent interface consumer, prove the producer PR is
-   merged at the named producer SHA. A cross-project successor opens first
-   without the producer's `sessionId`; close the producer with `final:true` so
-   its now-distinct workspace is released, require `released:true`, then verify
-   the producer's closed row and prove its PR merged at the named producer SHA
-   before dispatching the consumer. Using `final:false` on that crossing would
-   strand a synthetic
+   mail between the two calls.
+
+   **For a same-project successor**, open the new `POST /api/runs` first with
+   the same `sessionId`; that immediately re-holds the producer workspace for
+   the new row. Then close the producer with `final:false`, verify the exact
+   producer closed row in `runs list --closed 1` is `done` with a full 40-hex
+   `handoffCommit`. If the consumer depends on an interface from this
+   producer, independently prove the producer PR merged at `producerSha`:
+   run `ccd pr-state --session <producer-session>`, select that session's
+   merged PR row, require its `phase` to be `merged`, and require raw
+   `headRefOid` to equal both that exact producer closed row's
+   `handoffCommit` and `producerSha`. Only then dispatch into the
+   already-held successor workspace.
+
+   **For a cross-project successor**, the procedure differs from the arm
+   above. A cross-project successor opens first without the producer's
+   `sessionId`, leaving the new row planned for fresh dispatch in the
+   target repository. Then close the producer with `final:true` so its
+   now-distinct workspace is released, require `released:true`, then
+   verify the producer's closed row is `done` with a full 40-hex
+   `handoffCommit`. If the consumer depends on an interface from this
+   producer, independently prove through `ccd pr-state --session
+   <producer-session>` that the producer PR's selected `phase` is
+   `merged` and its raw `headRefOid` equals both that `handoffCommit` and
+   `producerSha` — this is what lets the arm
+   prove its PR merged at the named producer SHA, required
+   before dispatching the consumer fresh in its target project.
+   A `done` run proves fingerprint and close, **not merge proof**; missing,
+   ambiguous, or mismatched PR evidence means report and do not dispatch.
+   Using `final:false` on that crossing would strand a synthetic
    next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
    ws-release`); nothing archives the workspace on its own after that — the
@@ -1800,6 +1829,24 @@ having one:** `deploy/ccrc-mail.token.example`'s own placeholder value line
 must actually be replaced — copying the example verbatim is refused loudly
 at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
 because that exact placeholder is committed to this public repo.
+
+**Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
+resolved at send time to that run's own session. `worker` requires a `runId` —
+a worker is per run, and there is nothing to fall back to — and one that
+resolves to no session is refused `unknown-recipient`, naming the run.
+`coordinator` keeps its fallback to the single active programme, which fails
+shut the moment a second programme is active, so carry the `runId` on both.
+Raw session-id addressing stays for ad-hoc mail. When a run's session is
+replaced, every outstanding delivery addressed to the predecessor is re-issued
+to the heir as a **new** row, freshly rendered, and the predecessor's row is
+parked — the act a reclaimed coordinator's heir has always had, generalised by
+role and funnelled through `bindSession`, the one writer of `runs.sessionId`.
+Reading it back by programme: `GET /api/mail?program=<slug>` returns only
+outstanding mail and `GET /api/mail?program=<slug>&all=1` returns full history;
+`to` and `program` are mutually exclusive — exactly one, never both and
+never neither, and naming both is refused `400 bad-request`. `GET /api/feed?program=<slug>` is
+the full event archive, with no outstanding/history split. Both join through the
+run row; an event with no run behind it is programless and shows only unfiltered.
 
 **Caps and pause.** The single-row `coordinator_state` table holds
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
