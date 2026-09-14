@@ -66,12 +66,14 @@ export const TREE_FILES = [
   // provable rather than merely plausible.
   'deploy/accounts.default.json',
   // `gen-accounts.mjs` imports the first three; `gen-wrappers.mjs` imports
-  // `wrapper.mjs` and two of the same three. They were written dependency-free
-  // for exactly this bare-`node` caller, so this is the complete transitive
-  // set — `the fixture tree is the one the generator needs` proves it by
-  // running the generator inside the fixture rather than by re-reading the
-  // imports here.
+  // `wrapper.mjs` and two of the same three. `generate.mjs` also imports
+  // `shared/models.mjs` (routing slice 1, `SUBAGENT_CLASSES`) — so the set
+  // below is the complete TRANSITIVE closure, not just the direct imports of
+  // the two generators — and `the fixture tree is the one the generator
+  // needs` proves it by running the generator inside the fixture rather than
+  // by re-reading the imports here.
   'shared/generate.mjs',
+  'shared/models.mjs',
   'shared/mark.mjs',
   // `shared/base-url.mjs` joined this list in the wave that gave
   // `shared/roster-json.mjs` its first import: the endpoint gate is IMPORTED
