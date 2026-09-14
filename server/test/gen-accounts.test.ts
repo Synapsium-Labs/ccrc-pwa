@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { parseRoster, MODEL_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
+import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 import { markGenerated, bodyDigest } from '../../shared/mark.mjs';
 import { rosterFromJson as rosterFromJsonSync } from '../../shared/roster-json.mjs';
 import { baseUrlCases } from './fixtures/baseUrlCases.js';
@@ -609,6 +610,14 @@ describe('the new roster fields do not reach accounts.sh', () => {
       .toContain('CCRC_ACCOUNTS=(claude)');
     expect(generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER)))
       .toContain('CCRC_MEASURED=(claude claude-a claude-b claude-d)');
+  });
+
+  it('projects SUBAGENT_CLASSES as CCRC_SUBAGENT_CLASSES — derived, not respelled (routing slice 1)', () => {
+    const sh = generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER));
+    expect(sh).toContain(`CCRC_SUBAGENT_CLASSES=(${SUBAGENT_CLASSES.join(' ')})`);
+    expect(sh).toContain('CCRC_SUBAGENT_CLASSES=(haiku sonnet)');
+    // ordered directly after the backend array, where ccd's header comment says the roster's arrays live
+    expect(sh.indexOf('CCRC_SUBAGENT_CLASSES=')).toBeGreaterThan(sh.indexOf('CCRC_ANTHROPIC_BACKEND='));
   });
 });
 
