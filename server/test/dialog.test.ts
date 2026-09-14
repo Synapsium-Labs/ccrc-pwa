@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
+import { hasMenu, menuPainted, parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -19,6 +19,26 @@ import { degradedReadIO } from './ioDoubles.js';
 const panesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
 const fixture = (name: string) => readFileSync(path.join(panesDir, name), 'utf8');
 
+/**
+ * A pane that is TALKING about menus, not showing one — the shape that put an
+ * un-answerable picker on the operator's console.
+ *
+ * The footer literal sits in this file rather than in `fixtures/panes/`
+ * deliberately: a session that `cat`s a fixture prints the sentence onto its
+ * own pane and raises the very picker this suite exists to refuse.
+ */
+const PROSE_PANE = [
+  '  I looked at the detector: it opens on the sentence the TUI prints,',
+  '  "Enter to confirm", and requires nothing else — no cursor, no box.',
+  '  Things for you to try on the phone:',
+  '',
+  '1. the finger drag inside the history',
+  '2. the downward drag on the live glass',
+  '3. whether the wrapping still breaks',
+  '',
+  '\u276f so this line is the input box, with a half-typed reply in it',
+].join('\n');
+
 describe('paneState', () => {
   it('classifies busy / menu / prompt / other', () => {
     expect(paneState(fixture('busy.txt'))).toBe('busy');
@@ -33,6 +53,64 @@ describe('paneState', () => {
     expect(paneState(pane)).toBe('menu');
     // A lone "❯ 1." the user typed at the prompt is NOT a menu (needs a 2nd option).
     expect(paneState('❯ 1. my note\n')).toBe('prompt');
+  });
+});
+
+// — prose is not a menu —
+//
+// `hasMenu` answers "is menu TEXT on this pane", and it fails shut for the
+// WRITERS: `inject/send.ts` must never type into a menu, so any sight of the
+// footer sentence stops it. The DISPLAY path asks a different question — "is
+// there a menu here for a human to answer?" — and answering it with `hasMenu`
+// put a picker on the operator's console, repeatedly, whenever a session was
+// DISCUSSING this repo. Quoting the footer sentence is enough to raise it, and
+// a numbered list in an ordinary answer supplies its options.
+//
+// MEASURED, live pane, 2026-09-13: five separate screens inside 1920 lines of
+// one session's scrollback matched `hasMenu` — all five on the footer sentence
+// alone, four of them parsing to ZERO options, which is a picker with nothing
+// in it and no way to answer. Not one of the five carried a selection cursor.
+// MEASURED against the nine fixtures in `fixtures/panes/`: every menu among
+// them paints the cursor on a numbered row, the partial redraw and both
+// 2-column captures included. The cursor is what tells a painted menu from
+// prose about one, and that is the whole of `menuPainted`.
+describe('menuPainted — the display path\'s stricter question', () => {
+  it('reads prose that quotes the footer and numbers its points as a menu TODAY', () => {
+    // Not the fix — the fix's premise. This is the defect, pinned where it
+    // lives, so that the day `hasMenu` is narrowed under the writers' feet
+    // this case says so out loud instead of the change passing unnoticed.
+    expect(hasMenu(PROSE_PANE)).toBe(true);
+    expect(paneOptionRows(PROSE_PANE)).toHaveLength(3);
+  });
+
+  it('paints no menu, because nothing on that pane carries the selection cursor', () => {
+    expect(menuPainted(PROSE_PANE)).toBe(false);
+  });
+
+  it('is fooled by neither half on its own — not the footer, not a numbered list', () => {
+    expect(menuPainted('Enter to select is the sentence it prints.')).toBe(false);
+    expect(menuPainted('1. one\n2. two\n3. three')).toBe(false);
+  });
+
+  it('still sees every real menu this repo has ever captured', () => {
+    // The table is the guard: tighten the predicate any further and one of
+    // these nine goes dark, which is a menu the operator never gets asked.
+    const menus = readdirSync(panesDir).filter((f) => f !== 'busy.txt').sort();
+    expect(menus.length).toBeGreaterThan(5);
+    for (const f of menus) expect([f, menuPainted(fixture(f))]).toEqual([f, true]);
+  });
+
+  it('is strictly narrower than hasMenu, never the other way round', () => {
+    // The seam's contract in one line: anything the display path shows is
+    // already something the writers refuse to type into. The reverse — text
+    // the writers refuse that the display path stays quiet about — is exactly
+    // the freedom this split buys, and PROSE_PANE is it.
+    for (const f of readdirSync(panesDir)) {
+      const pane = fixture(f);
+      if (menuPainted(pane)) expect([f, hasMenu(pane)]).toEqual([f, true]);
+    }
+    expect(hasMenu(PROSE_PANE)).toBe(true);
+    expect(menuPainted(PROSE_PANE)).toBe(false);
   });
 });
 
@@ -268,6 +346,49 @@ describe('FleetWatcher dialog detection', () => {
     expect(msgs).toHaveLength(2);
     expect(msgs[1]).toEqual({ type: 'dialog_cleared' });
     expect(fleets.at(-1)![0]!.dialogPending).toBe(false);
+  });
+});
+
+// — the console-blocking defect, end to end —
+//
+// This is the one that reached a human. The watcher captures every registered
+// pane on a timer; on a session whose pane was EXPLAINING the dialog detector,
+// it raised a dialog, marked the row `dialogPending`, and sent a push. The
+// picker it raised had no options, so nothing could answer it, and it came
+// back on every tick for as long as the text stayed on screen — the operator's
+// only escape was to print enough output to scroll their own answer away.
+describe('FleetWatcher does not raise a picker on a pane that merely TALKS about menus', () => {
+  it('stays quiet on prose, and still fires the moment a real menu is painted', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    let pane = PROSE_PANE;
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      if (args[0] === 'capture-pane') return { code: 0, stdout: pane, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() };
+    const bus = new Bus();
+    const msgs: SessionStreamMsg[] = [];
+    const fleets: FleetSession[][] = [];
+    bus.on('session:claude-a-MekWarLive', (m) => msgs.push(m));
+    bus.on('fleet', (s) => fleets.push(s));
+    const watcher = new FleetWatcher(deps, bus);
+
+    await watcher.tick();
+    expect(msgs).toEqual([]);
+    expect(fleets.at(-1)![0]!.dialogPending).toBe(false);
+    await watcher.tick(); // and it does not creep in on a later tick either
+    expect(msgs).toEqual([]);
+
+    // The other half: the narrower question must still answer YES to a menu.
+    pane = fixture('ask-user-question.txt');
+    await watcher.tick();
+    expect(msgs.map((m) => m.type)).toEqual(['dialog']);
+    expect(fleets.at(-1)![0]!.dialogPending).toBe(true);
   });
 });
 

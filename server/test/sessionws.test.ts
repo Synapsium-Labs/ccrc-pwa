@@ -433,6 +433,33 @@ describe('hook ask envelope frames', () => {
   });
 });
 
+/**
+ * The open session's own stream is what actually paints the picker on the
+ * glass, so the narrower question has to hold here too — not only in the
+ * watcher. The pane below is prose ABOUT the detector: it quotes the footer
+ * sentence and numbers its points, which between them are everything
+ * `hasMenu` asks for and nothing a painted menu needs.
+ */
+const PROSE_PANE = [
+  '  It opens on the sentence the TUI prints, "Enter to confirm", and asks for',
+  '  nothing else. Things to try on the phone:',
+  '',
+  '1. the finger drag inside the history',
+  '2. the downward drag on the live glass',
+  '',
+  '\u276f half-typed reply in the input box',
+].join('\n');
+
+describe('a pane that talks about menus is not one', () => {
+  it('sends no dialog frame for prose, and still sends one for a real menu', async () => {
+    const quiet = await streamWith({ pane: PROSE_PANE });
+    expect(quiet.frames.filter((f) => f.type === 'dialog' || f.type === 'dialog_cleared')).toEqual([]);
+
+    const real = await streamWith({ pane: fixture('ask-user-question.txt') });
+    expect(real.frames.filter((f) => f.type === 'dialog')).toHaveLength(1);
+  });
+});
+
 describe('dialog enrichment', () => {
   it('carries the structured ask when the pane and transcript agree', async () => {
     const { frames } = await streamWith({
