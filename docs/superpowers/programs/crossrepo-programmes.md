@@ -69,12 +69,25 @@ coordinator mints exactly that many, defines them in the same act, and mails the
 | 2 | Skills + PWA: the coordinator skill's project-specific succession and mandatory-plan/conditional-producer contract, the worker skill's immutable plan read and conditional producer-root read, bounded ask list/answer/release with held-list semantics, safe no-default-id examples and fenced/indented executable-corpus parity, exact generated ask IDs, canonical route IDs, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, and the mail screen's programme grouping and chip; acceptance corrections D-2545, D-2546, D-2653–D-2660, D-2680–D-2687, D-2715–D-2720 and D-2724–D-2731, plus D-2732 taken from account-pools by offer and record-only D-2733. AGENT-FIRST. | #92 | **MERGED 2026-09-14, NOT YET DEPLOYED.** Squashed to `main` as `5480fea8` at 06:15 UTC by the operator (PR #92, head `daceb52e`; `test (server)`, `test (pwa)`, `test (agent)` and `build-pwa` green on that exact sha; `test-macos` red there AND on main's own `ecd953b0` — D-2733, record-only, not this wave's defect). `main`'s tree at `5480fea8` is byte-identical to `daceb52e`'s (`54404ced`), so every gate measured on the branch measured the merged tree. Run 44 advanced `working → awaiting-review → merging` on the server's own re-measurement of `{daceb52e, #92, merged}` and closed `done` with `final:false` (hold handed to run 45, `released:false`); items 10/11 — item 238, Task 9's agent-first deploy, is deliberately left open because the deploy has not run. The fleet host still runs wave 1's `ccrc-api`, `ccrc-worker` and `ccrc-coordinator` (measured: the installed client answers `unknown-query` to `runs list --closed 1`; both installed `SKILL.md` files differ from `5480fea8`'s). The agent lane, then the server lane, ship on the operator's word — not from this coordinator unasked. |
 | 3 | Docs + the legacy flip: current README sections, byte-preservation proof for the historical Aug 11 spec, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | **OPEN.** Run 45 (`planned`) opened 2026-09-14 06:29:10 UTC on `ccrc-pwa-bright-meadow`; dispatch follows the commit that records this. |
 
-Dogfood follows as its own program after wave 2 is live: home `custom-tools`, wave 1 there, wave 2 in
-`data-internal`, on real work the operator names, opened without `sessionId`. Every foreign-plan brief
-carries `homeRepoRoot`, `planRepoPath`, and `planSha`. This dogfood consumer depends on wave 1's producer
-interface, so its brief also carries `producerRepoRoot`, `producerSourceRepoPath`, `producerSha`, and the
-inline excerpt; a no-dependency foreign-plan wave would carry none of that producer evidence. Exit criteria
-are spec §9's corrected acceptance list.
+## Dogfood exit criteria
+
+The dogfood programme runs as its **own** programme once wave 2 is live: home `custom-tools`, wave 1
+there, wave 2 in `data-internal` on real work the operator names, **opened without `sessionId`** — the
+path that spawns fresh in the target repo, which is the only path a crossing may take. Its exit
+criteria are the current build spec's §9 acceptance list with D-2684/D-2687 and D-2715/D-2716's
+provenance corrections, and this ledger is where they are measured:
+
+- the wave-2 brief carries `homeRepoRoot`, `planRepoPath`, and `planSha`, and the worker reads that exact plan blob as the requirements authority
+- because this consumer depends on wave 1's producer interface, the same brief also carries `producerRepoRoot`, `producerSourceRepoPath`, the exact full merged `producerSha`, and the inline excerpt; the worker reads that immutable producer source blob with exactly `git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`, so the producer source blob proves provenance while the inline excerpt remains the dispatched interface-shape authority; a foreign-plan wave with no producer-interface dependency carries no producer tuple and no invented excerpt
+- before consumer dispatch, the coordinator verifies the exact closed producer row is `done`, independently proves the producer PR merged, and proves the selected PR head equals that same `producerSha`; `done` alone is not merge proof
+- the board shows the crossing on the wave-2 row and the abroad line on the home card
+- the ledger's wave table records both PRs across two repos
+- no content moved by copy-paste
+- `project-mismatch` never fires in anger — its proof is a test, not an incident
+
+The last one is a claim about an ABSENCE and is therefore only as strong as the traffic behind it: it
+is satisfied by a dogfood that actually dispatched both waves, and by nothing else. Record the run ids
+beside it when the programme closes.
 
 ## Decisions & deviations
 

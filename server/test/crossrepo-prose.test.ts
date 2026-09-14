@@ -398,3 +398,92 @@ describe('README: the run lifecycle and programme mail', () => {
       .not.toContain('**Programme mail at scale.**');
   });
 });
+
+const LEDGER_PATH = 'docs/superpowers/programs/crossrepo-programmes.md';
+const BUILD_SPEC_PATH = 'docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md';
+const LEDGER = read(LEDGER_PATH);
+const BUILD_SPEC = read(BUILD_SPEC_PATH);
+
+/** The ledger's wave table alone — the `## Waves` heading to the next `## `. */
+const ledgerWaves = (): string => passage('the ledger wave table', LEDGER, '## Waves', '\n## ');
+
+describe('the programme ledger', () => {
+  it('records a merged PR for every wave this programme has shipped', () => {
+    const table = ledgerWaves();
+    const rows = new Map(['1', '2', '3'].map((n) => [
+      n, table.split('\n').find((l) => l.startsWith(`| ${n} |`)),
+    ]));
+    for (const n of ['1', '2']) {
+      const row = rows.get(n);
+      expect(row, `the ledger has no wave ${n} row`).toBeDefined();
+      // A PR NUMBER, not a dash: "the ledger's wave table records both PRs" is
+      // one of the dogfood's own exit criteria, and a programme that cannot
+      // keep its own table is in no position to hold another one to it.
+      expect(row!, `wave ${n} names no PR — the row still reads a dash`).toMatch(/#\d+/);
+      expect(row!, `wave ${n} is not closed`).toMatch(/merged/i);
+    }
+    expect(rows.get('2'), 'wave 2 does not record the allocated acceptance corrections')
+      .toMatch(/D-2680[\s\S]*D-2687[\s\S]*D-2715[\s\S]*D-2720/);
+    expect(rows.get('3'), 'wave 3 still says it edits the Aug 11 status line')
+      .not.toMatch(/Aug 11 spec's status line/i);
+    expect(rows.get('3'), 'wave 3 does not name byte-preservation of the historical Aug 11 spec')
+      .toMatch(/byte-preservation[\s\S]{0,100}?historical Aug 11 spec/i);
+    // Wave 3 is THIS wave and closes in Task 7, so it is deliberately not
+    // required to name its PR or read merged here.
+  });
+
+  it("carries the build spec's non-provenance dogfood acceptance concepts", () => {
+    // The spec paragraph is the source, but the ledger deliberately expands its
+    // corrected provenance sentence into independently mutation-pinned bullets.
+    // Ground the remaining concepts in the spec before requiring them in the ledger.
+    const para = passage("the spec's dogfood paragraph", BUILD_SPEC,
+      '**Dogfood, as its own programme', '\n---');
+    const checks: Array<[string, RegExp]> = [
+      ['the runs-screen crossing cue', /board[\s\S]{0,100}?crossing[\s\S]{0,100}?wave-2 row/i],
+      ['the home-card abroad cue', /abroad line[\s\S]{0,80}?home card/i],
+      ['both PRs across two repositories', /wave table records both PRs across two repos/i],
+      ['the no-copy rule', /no content moved by copy-paste/i],
+      ['the refusal-as-test rule', /`project-mismatch`\s+never fires in anger[\s\S]{0,80}?proof is a test/i],
+    ];
+    const section = passage('the ledger exit criteria', LEDGER,
+      '## Dogfood exit criteria', '\n## ');
+    for (const [name, pattern] of checks) {
+      expect(para, `the current spec no longer carries ${name}; update this derived guard`)
+        .toMatch(pattern);
+      expect(section, `the ledger's exit criteria drop ${name}`).toMatch(pattern);
+    }
+  });
+
+  it('names the dogfood pair and the shape of its open, so the criteria have a subject', () => {
+    const section = passage('the ledger exit criteria', LEDGER,
+      '## Dogfood exit criteria', '\n## ');
+    expect(section, 'the exit criteria do not say the wave-2 run opens without a sessionId')
+      .toMatch(/opened without `sessionId`/);
+    for (const coordinate of [
+      'homeRepoRoot', 'planRepoPath', 'planSha', 'producerRepoRoot',
+      'producerSourceRepoPath', 'producerSha',
+    ]) {
+      expect(section, `the dogfood contract does not carry ${coordinate}`).toContain(coordinate);
+    }
+    expect(section, 'the dogfood never reads the immutable plan blob')
+      .toMatch(/reads that exact plan blob/);
+    expect(section, 'the dogfood does not say why its conditional producer contract is present')
+      .toMatch(/depends on wave 1's producer interface/);
+    expect(section, 'the dogfood never reads through the producer repository root')
+      .toContain('git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"');
+    expect(section, 'the plan blob is not identified as the requirements authority')
+      .toMatch(/plan blob[\s\S]{0,80}?requirements\s+authority/);
+    expect(section, 'the dogfood never reads the immutable producer source blob')
+      .toMatch(/reads[\s\S]{0,60}?immutable producer source blob/);
+    expect(section, 'the producer source blob is not identified as provenance')
+      .toMatch(/producer source blob[\s\S]{0,80}?provenance/);
+    expect(section, 'the inline excerpt is no longer the dispatched shape authority')
+      .toMatch(/inline excerpt[\s\S]{0,100}?dispatched interface-shape authority/);
+    expect(section, 'the dogfood does not require the exact closed producer row to be done')
+      .toMatch(/closed producer row[\s\S]{0,60}?`done`/);
+    expect(section, 'the dogfood treats done as the whole producer guard')
+      .toMatch(/independently proves[\s\S]{0,100}?producer PR merged/);
+    expect(section, 'the independent merge proof is not tied to the named producer head')
+      .toMatch(/selected PR head[\s\S]{0,80}?same `producerSha`/);
+  });
+});
