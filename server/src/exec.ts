@@ -166,11 +166,26 @@ export class Tmux {
    */
   async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
     // `-J` JOINS WHAT TMUX ALREADY WRAPPED, and it is here because the reader
-    // is not the pane. A stored line was hard-wrapped at the PANE's width and
-    // tmux never reflows it, so a phone rendering that capture wraps the
-    // remainder a second time — a word broken mid-way and the continuation
-    // indented under nothing. `-J` hands back the logical line and lets the
-    // reader wrap it at their own width, once.
+    // is not the pane. A stored line was hard-wrapped at the PANE's width, so a
+    // phone rendering that capture wraps the remainder a second time — a word
+    // broken mid-way and the continuation indented under nothing. `-J` hands
+    // back the LOGICAL line and lets the reader wrap it at their own width,
+    // once.
+    //
+    // AND THE LOGICAL LINE IS THE ONE THING A RESIZE CANNOT COST (F1, spec
+    // §2). An earlier version of this comment claimed the opposite — that a
+    // stored line survives a resize untouched; that is FALSE and was measured
+    // false on a private tmux 3.4 socket —
+    // `resize-window -x 43` on a 220-column pane holding 1853 stored lines took
+    // `history_size` to 9460, and at `history-limit 2000` the next output shed
+    // ~600 lines that never came back. What survives a reflow is the logical
+    // line, which is exactly what `-J` returns, which is why the flag belongs
+    // here and why the window is PINNED at the canonical grid before any client
+    // attaches (`GET /ws/pty/:id`, spec §5.1) rather than trusted not to move.
+    // The refutation deliberately does NOT restate the claim it refutes:
+    // `pane-history-route.test.ts` scans this file for that sentence, and a
+    // comment quoting it in order to deny it is indistinguishable, to a scan,
+    // from one asserting it.
     //
     // MEASURED on a private socket against a real 200-column transcript:
     // 1882 captured lines become 1113 (-41%) for +0.05% of bytes and no

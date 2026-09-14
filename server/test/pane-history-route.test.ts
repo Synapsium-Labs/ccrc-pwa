@@ -18,6 +18,8 @@ import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const ID = 'claude-a-MekWarLive';
 
@@ -61,7 +63,7 @@ describe('GET /api/sessions/:id/pane/history', () => {
     //
     // WHY `-J` EARNS ITS PLACE, measured on a private socket against a real
     // 200-column transcript: 1882 captured lines become 1113 (-41%) for +0.05%
-    // of bytes, and a 43-column phone renders 6130 rows instead of 5861 —
+    // of bytes, and a 43-column phone renders 5861 rows instead of 6130 —
     // which also puts the read back inside the drawer's own `lines * 3`
     // scrollback budget, over which today's capture silently spills. Without
     // it the phone wraps text that tmux already wrapped, and a word breaks
@@ -177,5 +179,40 @@ describe('GET /api/sessions/:id/pane/history', () => {
     const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
 
     expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
+  });
+});
+
+// F1 FALSIFIED THE CLAIM THESE COMMENTS CARRIED, and a comment is not a
+// mechanism — so this is the mechanism. Measured on a private tmux 3.4 socket:
+// `resize-window -x 43` on a 220-column pane holding 1853 stored lines reflows
+// `history_size` to 9460; at `history-limit 2000` the next output sheds ~600
+// lines and restoring 220 leaves 1746 logical lines of 1903, oldest gone. tmux
+// REFLOWS. What `-J` actually buys is that a LOGICAL line survives that reflow
+// and the reader wraps it once, at its own width.
+describe('the shipped comments say what F1 measured', () => {
+  const root = path.resolve(__dirname, '../..');
+  const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
+  const SOURCES = ['server/src/exec.ts', 'pwa/src/session/TerminalDrawer.tsx'] as const;
+
+  it('no shipped comment claims tmux never reflows a stored line (F1)', () => {
+    const offenders = SOURCES.filter((rel) => /tmux (never|does not) reflow/i.test(read(rel)));
+    expect(offenders, 'a shipped comment still asserts what F1 falsified').toEqual([]);
+  });
+
+  it('the scan is looking at something — both files are real and mention reflow', () => {
+    for (const rel of SOURCES) {
+      expect(read(rel).length, `${rel} is empty or missing`).toBeGreaterThan(1000);
+      expect(read(rel), `${rel} lost its reflow note entirely`).toMatch(/reflow/i);
+    }
+  });
+
+  it('the -J note counts rows DOWN, not up — joining cannot render more rows', () => {
+    const src = read('server/test/pane-history-route.test.ts');
+    const m = /renders (\d+) rows instead of (\d+)/.exec(src);
+    expect(m, 'the -J row measurement went missing from this file').not.toBeNull();
+    const withJ = Number(m![1]);
+    const without = Number(m![2]);
+    expect(withJ, 'the numbers are inverted: -J joins lines, so it renders FEWER rows')
+      .toBeLessThan(without);
   });
 });

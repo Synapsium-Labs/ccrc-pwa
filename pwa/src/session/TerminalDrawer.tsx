@@ -209,11 +209,18 @@ const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines) => {
     cursorBlink: false,
     disableStdin: true,
     // DERIVED from the number of lines the server actually sent, never a second
-    // constant to keep in step with it. The factor is the WRAP: a stored line
-    // was written at the pane's width and tmux does not reflow it, so a phone
-    // renders one as several rows — measured at 500 captured lines becoming 948
-    // rows at 48 columns (1.9×), against 527 at 220. 3× leaves headroom over
-    // the narrowest phone rather than silently dropping the oldest history.
+    // constant to keep in step with it. The factor is the WRAP: the capture
+    // arrives as LOGICAL lines (`capture-pane -J`), and a phone renders one of
+    // them as several rows — measured at 500 captured lines becoming 948 rows
+    // at 48 columns (1.9×), against 527 at 220. 3× leaves headroom over the
+    // narrowest phone rather than silently dropping the oldest history.
+    //
+    // NOT because tmux holds the pane's width still: it reflows stored lines on
+    // a horizontal resize (F1, spec §2 — 1853 lines became 9460 at 43 columns
+    // on a measured private socket). An earlier version of this comment said
+    // otherwise. The pane's width is held still by the server's own pin at the
+    // canonical grid, and this factor is about the READER's width, not the
+    // pane's.
     scrollback: lines * 3,
   });
   const fit = new FitAddon();
