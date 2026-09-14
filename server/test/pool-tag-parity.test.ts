@@ -102,22 +102,94 @@ describe('ccd/ccd _project_pool_state reads every tag in POOL_TAG_CASES the same
  *  same move `pool-name-parity.test.ts` makes, and for the same reason. */
 const BASH = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim();
 
-const localeWhere = (probe: string): string | null => {
-  let names: string[];
+/** Every UTF-8 locale this box LISTS, or `null` when `locale -a` itself cannot
+ *  be run (a minimal container may ship no `locale` binary at all). Enumerated
+ *  ONCE, because the guard below has to tell "this box lists none" from "this
+ *  box lists some and the probe still found nothing" — and it cannot ask that
+ *  question of a list `localeWhere` threw away. */
+const utf8Locales = (): string[] | null => {
   try {
-    names = execFileSync('locale', ['-a'], { encoding: 'utf8' }).split('\n');
+    return execFileSync('locale', ['-a'], { encoding: 'utf8' })
+      .split('\n').map((raw) => raw.trim())
+      .filter((loc) => loc !== '' && /utf-?8$/i.test(loc));
   } catch { return null; }
-  for (const raw of names) {
-    const loc = raw.trim();
-    if (loc === '' || !/utf-?8$/i.test(loc)) continue;
+};
+const UTF8_LOCALES = utf8Locales();
+
+/** THE ONE PLACE a probe is spawned under a locale. Both the property probes
+ *  and the delivery check below ride this, deliberately: a second copy of the
+ *  `env` spread would let the delivery check pass while `localeWhere` dropped
+ *  `LC_ALL` entirely, which is a check that pins its own copy and nothing
+ *  else. */
+const runUnder = (loc: string, script: string): string =>
+  execFileSync('bash', ['-c', script], {
+    encoding: 'utf8', env: { ...process.env, LC_ALL: loc }, timeout: 10_000,
+  });
+
+const localeWhere = (probe: string): string | null => {
+  for (const loc of UTF8_LOCALES ?? []) {
     try {
-      const out = execFileSync('bash', ['-c', probe], {
-        encoding: 'utf8', env: { ...process.env, LC_ALL: loc }, timeout: 10_000,
-      }).trim();
-      if (out === 'yes') return loc;
+      if (runUnder(loc, probe).trim() === 'yes') return loc;
     } catch { /* locale unusable for this probe; try the next */ }
   }
   return null;
+};
+
+/** Did `LC_ALL` actually ARRIVE, over the same channel the probes ride? Asked
+ *  by having the shell echo back what it was handed.
+ *
+ *  THE PROBES CANNOT ANSWER THIS, and that is why it is a separate question.
+ *  `echo yes` prints `yes` in every locale, so a channel that dropped `LC_ALL`
+ *  would still report `found` — measured: a bogus `LC_ALL`, an unset one and an
+ *  empty one all print `yes`. Every locale claim in this file rides delivery,
+ *  so an undelivered `LC_ALL` would make both property probes answer about the
+ *  AMBIENT locale, skip everything they gate, and leave the suite green and
+ *  meaningless. */
+const lcAllArrivingAs = (loc: string): string => {
+  // A THROW IS AN ANSWER, not an exception to leak. `runUnder` throws when the
+  // spawn fails or bash exits non-zero, and an unhandled throw inside the `it`
+  // below would red a clean tree for a locale the box merely dislikes — which
+  // is the exact failure shape this whole change exists to remove. Reported as
+  // a value the assertion compares and names.
+  try { return runUnder(loc, 'printf %s "${LC_ALL-}"'); }
+  catch (e) { return `THREW: ${String((e as Error).message).slice(0, 120)}`; }
+};
+
+/** WHY a `localeWhere` probe came back null. THE ONE PLACE that question is
+ *  decided, and the reason it is a function of two LITERALS rather than a
+ *  branch inside the guard: a decision derived from the environment can only be
+ *  exercised on an environment that has the property, so the decision itself is
+ *  lifted out where a table can feed it every case from any box.
+ *
+ *  FOUR conditions, four values. `probe-broken` is a defect IN THIS FILE — the
+ *  box lists UTF-8 locales and a trivially satisfiable probe still matched none,
+ *  so `localeWhere` is not returning answers at all (bash unspawnable, stdout
+ *  polluted, the probe string broken) and every skip below is silently
+ *  meaningless. It does NOT mean `LC_ALL` failed to arrive: `echo yes` prints
+ *  `yes` in every locale, so no break of delivery can reach this arm — that is
+ *  a separate question, and `deliversLcAll` is where it is asked. The other two nulls are facts about the HOST, which
+ *  a hermetic suite must report as skipped and must never turn red.
+ *
+ *  The guard below folds `no-locale-tool` and `no-utf8-locale` together, and
+ *  that is deliberate rather than the rule being bent: folding two HONEST
+ *  answers loses nothing a caller acts on, while folding an honest answer into
+ *  a defect is what D-2588 was. They stay separate values so the distinction
+ *  survives for the next caller and so a failure message can name which — the
+ *  fold is the caller's choice to make, not a distinction the seam destroyed.
+ *
+ *  The first version of the guard asserted `not.toBeNull()`, which is
+ *  `probe-broken` and `no-utf8-locale` carrying one value — measured RED on a
+ *  box whose `locale -a` lists no UTF-8 locale, with the other 29 rows
+ *  correctly skipping. */
+export type ProbeVerdict = 'found' | 'no-locale-tool' | 'no-utf8-locale' | 'probe-broken';
+
+export const probeVerdict = (
+  candidates: readonly string[] | null,
+  found: string | null,
+): ProbeVerdict => {
+  if (found !== null) return 'found';
+  if (candidates === null) return 'no-locale-tool';
+  return candidates.length === 0 ? 'no-utf8-locale' : 'probe-broken';
 };
 
 /** `skipIf` gates EXECUTION, not the TYPE, so a block it guards still sees
@@ -149,6 +221,40 @@ const wideSpaceLocale = localeWhere(
   + '[[ "${v%"${v##*[![:space:]]}"}" == "pool-a" ]] && echo yes || echo no',
 );
 
+// ---------------------------------------------------------------------------
+// The skip conditions' own premise
+// ---------------------------------------------------------------------------
+// Every `skipIf` in this file reads a null from `localeWhere` as a fact about
+// the HOST. This table is what makes that reading sound, and it is fed LITERALS
+// on purpose: the guard one block down can only ever exercise the one arm THIS
+// box happens to be in, so the arm that matters on some other box would ship
+// unexecuted. Four arms, every box (D-2588).
+describe('probeVerdict tells a host without the locale from a probe that never worked', () => {
+  it.each([
+    // candidates                    found          verdict            why
+    [['en_US.utf8'],                 'en_US.utf8',  'found',           'the ordinary case'],
+    [[],                             null,          'no-utf8-locale',  'a minimal container: `locale -a` runs and lists no UTF-8 locale. HONEST — skip, never red. This is the row the shipped guard got wrong'],
+    [null,                           null,          'no-locale-tool',  '`locale` itself could not be run, so the question cannot even be asked'],
+    [['en_US.utf8', 'C.utf8'],       null,          'probe-broken',    'THE defect arm: locales are listed and a trivially satisfiable probe still matched none, so localeWhere is not returning answers at all'],
+    [[],                             'C.utf8',      'found',           'a hit outranks an empty list — pins the precedence rather than leaving it to argument order'],
+  ] as const)('%j + %j -> %s', (candidates, found, want, why) => {
+    expect(probeVerdict(candidates, found), why).toBe(want);
+  });
+
+  it('the four verdicts are distinct, so no two conditions share a value', () => {
+    // The rule this file lives under: two conditions a caller handles
+    // differently must not collapse to one value. A fold would still pass every
+    // row above if both folded arms were spelled the same way there too.
+    const all = [
+      probeVerdict(['x.utf8'], 'x.utf8'),
+      probeVerdict([], null),
+      probeVerdict(null, null),
+      probeVerdict(['x.utf8'], null),
+    ];
+    expect(new Set(all).size, `two conditions answer the same word: ${all.join(', ')}`).toBe(4);
+  });
+});
+
 describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
   let h: CcdHarness;
   beforeEach(() => {
@@ -157,13 +263,55 @@ describe('ccd/ccd _project_pool_state is LOCALE-INDEPENDENT (D-2520)', () => {
   });
   afterEach(() => { h.cleanup(); });
 
-  it('guards the guard: the locale PROBE works, whatever this box happens to have', () => {
-    // Asserts the MACHINERY, not the host. `localeWhere` returning null must
-    // mean "this box has no such locale" and never "the probe is broken", or
-    // every skip below is silently meaningless.
-    expect(localeWhere('echo yes'), 'the probe found no usable UTF-8 locale at ' +
-      'all, so a null result above cannot be read as a fact about collation')
-      .not.toBeNull();
+  it('guards the guard: a null probe is a fact about this BOX, never a broken probe', () => {
+    // Asserts the MACHINERY, not the host. The two skip conditions above read a
+    // null from `localeWhere` as "this box has no locale with that property";
+    // that reading is only sound while a null cannot ALSO mean "the probe never
+    // worked". `probeVerdict` is where the two are told apart, and only its
+    // `probe-broken` arm is a defect here — a box that lists no UTF-8 locale,
+    // or ships no `locale` binary, is answering honestly and must skip rather
+    // than red. Asserting `not.toBeNull()` here instead is exactly the fold
+    // this case exists to forbid (D-2588).
+    const verdict = probeVerdict(UTF8_LOCALES, localeWhere('echo yes'));
+    expect(verdict, `this box LISTS ${UTF8_LOCALES?.length ?? 0} UTF-8 locale(s) ` +
+      'and `echo yes` still matched none of them, so `localeWhere` is not ' +
+      'returning answers at all and every skip in this file is meaningless')
+      .not.toBe('probe-broken');
+  });
+
+  // ...and the channel really carries LC_ALL. A SEPARATE question, because the
+  // probe above cannot ask it: `echo yes` is locale-invariant, so a dropped
+  // `LC_ALL` reads as `found`. Without this, every locale claim in the file
+  // could be measuring the ambient locale and nothing would say so.
+  // THE LOCALES THIS FILE ACTUALLY MAKES CLAIMS ABOUT — the two the probes
+  // selected, plus the first candidate, which is the one the guard above
+  // reaches. Deliberately NOT every locale the box lists: the question is
+  // whether the CHANNEL carries `LC_ALL`, which one locale answers as well as
+  // two hundred, and macOS lists close to two hundred UTF-8 locales. Spawning a
+  // shell per locale to re-answer a settled question is how a guard becomes the
+  // slowest and most fragile thing in a suite.
+  const CLAIMED_LOCALES = [...new Set(
+    [(UTF8_LOCALES ?? [])[0], collatingLocale, wideSpaceLocale]
+      .filter((l): l is string => typeof l === 'string' && l !== ''),
+  )];
+
+  it.skipIf(CLAIMED_LOCALES.length === 0)(
+    'guards the guard: LC_ALL really ARRIVES over the channel the probes ride', () => {
+    for (const loc of CLAIMED_LOCALES) {
+      // Asserts the VALUE that arrived, not a boolean a helper computed. A
+      // helper returning `true` would satisfy a boolean assertion while
+      // measuring nothing — mutation showed exactly that, so the comparison
+      // lives here and `lcAllArrivingAs` only carries the value across.
+      // The message names what was OBSERVED and what follows from it, never a
+      // cause it cannot tell apart: a `THREW:` value means the spawn failed,
+      // any other mismatch means the channel dropped `LC_ALL`. Both defeat
+      // every locale claim in this file, and the received value says which.
+      expect(lcAllArrivingAs(loc), `LC_ALL=${loc} did not come back from the ` +
+        'spawned shell (a THREW: value means the spawn failed, any other ' +
+        'mismatch means the channel dropped it) — either way every locale this ' +
+        'file claims to measure would be the ambient one')
+        .toBe(loc);
+    }
   });
 
   // The rows whose verdict MOVED with the locale before the shadow landed:
