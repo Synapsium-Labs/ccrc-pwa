@@ -2494,6 +2494,17 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
       '.demo-quiet-basin.x-y.compactcard.999.compact-1-999-1-2.session-claim.tmp',
       '.demo-quiet-basin.x-y.compactions.lock-open.999.1.2',
       '.demo-quiet-basin.x-y.compactserved.compact-1-999-1-2',
+      // …AND THE NEIGHBOUR'S TWO LEGACY-GRAMMAR NAMES (r3 A-I2), which the
+      // strip alone does NOT keep out. Both transition arms begin with a bare
+      // `*`, so before the decimal-head anchor these two matched after the
+      // strip and one ordinary PreCompact for this row DELETED a live
+      // neighbour's residue — measured, and the exact hazard `_ws_private_family`
+      // was anchored against (D-2801). The positive control is the pair in
+      // `swept` above: this row's OWN `<pid>`-headed legacy names, which must
+      // still be reclaimed, so the anchor cannot be satisfied by refusing
+      // everything.
+      '.demo-quiet-basin.x-y.999.compactcard-claim.tmp',
+      '.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp',
       // …and the GRAMMAR's own subject: a name that begins `compact` and is in
       // no declared family. An over-broad `compact*) return 0` arm swallows it
       // while every other assertion here stays green.

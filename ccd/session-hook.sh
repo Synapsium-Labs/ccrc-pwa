@@ -841,8 +841,40 @@ _hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 if
     # under a validated stable lock. Nothing else legacy is admitted, and this
     # allowance is what keeps a hook killed across the upgrade from leaving a
     # permanent dot-leading file.
-    *.compactset.tmp) return 0 ;;            # `<pid>.<id>.compactset.tmp`
-    *.compactcard-claim.tmp) return 0 ;;     # `<pid>.compactcard-claim.tmp`
+    # ANCHORED ON A DECIMAL HEAD (r3 A-I2), exactly as the ccd twin
+    # `_ws_private_family` already is (D-2801). The literal `.<id>.` strip is
+    # not enough for THESE TWO ARMS: both patterns begin with a bare `*`, so a
+    # second legal id nested under this one — `demo-quiet-basin.x-y` when this
+    # row is `demo-quiet-basin`, the shape a dotted project DIRECTORY name
+    # makes legal — still matches after the strip. MEASURED before this anchor:
+    # one ordinary PreCompact for `demo-quiet-basin` deleted the neighbour's
+    # `.demo-quiet-basin.x-y.999.compactcard-claim.tmp` and
+    # `.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp`, while
+    # correctly keeping its target-family `compactpost` claim — every target
+    # arm above names its family word first, so only these two leaked. The
+    # consequence is the chain this function's header traces: the neighbour's
+    # residue gone makes its slug read FREE under the widened `_ws_slug_free`
+    # while its row may be half-purged. A legacy name's first component is the
+    # WRITER'S PID, and a nested id's first component is the rest of its id, so
+    # requiring a pure decimal head separates them.
+    #
+    # The claim grammar is pinned EXACTLY — decimal head, then the grammar and
+    # nothing else. "Exactly two components" is the WRONG exactness test here
+    # because the grammar itself carries a dot: measured on the ccd twin, that
+    # spelling rejected the real `999.compactcard-claim.tmp`. The set grammar
+    # carries the id in the MIDDLE and cannot be pinned that way, so one
+    # contrived collision remains and is STATED rather than hidden — the same
+    # one `_ws_private_family` discloses: an id whose own trailing component is
+    # all digits (project `demo-quiet-basin.99`, slug `9`) presents a decimal
+    # head after this id's strip. Legal, and its cost is one reclaimed legacy
+    # tmp of a neighbour, inside the upgrade window.
+    *.compactset.tmp)                        # `<pid>.<id>.compactset.tmp`
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
+    *.compactcard-claim.tmp)                 # `<pid>.compactcard-claim.tmp`
+      [[ "${1#*.}" == "compactcard-claim.tmp" ]] || return 1
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
   esac
   return 1
 }

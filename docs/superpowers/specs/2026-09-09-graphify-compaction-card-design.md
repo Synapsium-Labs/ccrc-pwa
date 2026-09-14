@@ -539,7 +539,10 @@ fork it does not control.
    producer migration it applies only target suffixes; during the one migration window it may additionally
    apply only §3.4's complete legacy grammar after age expiry. It does not remove live claims. `$REG/.<id>.compactions.lock` is explicitly excluded: it is never swept, repaired, replaced, or unlinked.
    This exact-prefix parse protects a second legal id such as `demo.quiet` when this id is `demo`, and vice
-   versa.
+   versa — but for the two legacy grammars it is not the strip that does it, since both patterns begin with a
+   bare `*` and a nested id's remainder still ends in the grammar: those two arms carry the same decimal-head
+   anchor as `_ws_private_family`'s (D-2801, hook copy r3 A-I2), and the one residual collision they leave is
+   stated there rather than hidden — an id whose own trailing component is all digits.
 6. Still under that lock, **the set is written here, always**, by the hook (`jq -cn --arg …`,
    temp-then-rename, the Task 9 target §3.4 private set-temp family
    `$REG/.<id>.compactset.<pid>.<nonce>.hook-write.tmp`):
@@ -1486,9 +1489,11 @@ private-family loop does not recognise stands for ever. Both legacy grammars the
 Blocking slug reuse on legacy residue — which that predicate also answers for — is CORRECT and not a side
 effect to be split away: the property it establishes is that a partially-purged id is never reused as a clean
 one, and legacy residue is residue. **The legacy arms are anchored on a DECIMAL PID** rather than a bare `*`,
-which the sweep's own matcher is not: measured, a bare `*.compactcard-claim.tmp` makes a purge of
-`demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`, a DOTTED NESTED id's legacy
-residue, because after the literal `.<id>.` strip that basename still ends in the grammar. A legacy name's
+in `_ws_private_family` and in the hook's `_hook_family_sweepable` alike — the hook's copy was anchored one
+round later (r3 A-I2), and until it was, this paragraph's claim held for the purge and not for the sweep.
+Measured on each in turn, a bare `*.compactcard-claim.tmp` makes a purge, and equally an ordinary PreCompact
+sweep, of `demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`, a DOTTED NESTED id's
+legacy residue, because after the literal `.<id>.` strip that basename still ends in the grammar. A legacy name's
 first component is the writer's pid and a nested id's is the rest of its id, which is what separates them; the
 claim grammar is pinned exactly (decimal head, then the grammar and nothing else), the set grammar carries the
 id in the middle and cannot be, so one contrived collision remains — an id whose own trailing component is all
