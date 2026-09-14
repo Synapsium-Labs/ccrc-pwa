@@ -343,9 +343,13 @@ export interface FleetSession {
    *  today after a failed spawn yesterday, and showing one as the other would be
    *  an adapter narrowing a distinction it received. */
   readonly spawnState: SpawnVerdict | null;
-  /** The usage sidecar reading (routing spec 2026-09-14 §6), or null when
-   *  none was read this sweep — absent, unreadable and malformed all fold to
-   *  null here, by `server/src/usage.ts`'s documented `readUsage` collapse. */
+  /** The reading from the most recent sweep that could read the sidecar
+   *  (routing spec 2026-09-14 §6). Absent and malformed drop to `null`; an
+   *  UNREADABLE read carries the previous reading forward with its `stale`
+   *  verdict re-derived against the current sweep (see
+   *  `FleetWatcher.sweepUsage`) rather than copied byte-for-byte, since
+   *  `stale` is a verdict computed at read time, not a property of the
+   *  sidecar itself. */
   readonly usage: SessionUsage | null;
 }
 

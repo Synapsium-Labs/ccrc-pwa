@@ -15,7 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { usageSidecarPath } from '../src/usage.js';
+import { usageSidecarPath, USAGE_FRESH_S } from '../src/usage.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 
@@ -126,5 +126,37 @@ describe('FleetWatcher usage sweep lane (routing slice 0)', () => {
     await watcher.tick();
 
     expect(watcher.currentUsage().get('demo-usage-c')).toEqual(first);
+  });
+
+  it('an UNREADABLE read re-derives the carried row\'s stale verdict against the current sweep, rather than copying it byte-for-byte forever (controller ruling R5)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-usage-d', 'claude');
+    let degrade = false;
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p, t, s) => (
+        degrade && p.includes(`${path.sep}usage${path.sep}`)
+          ? { ok: false, reason: 'unreadable' }
+          : localIO.readFileMeasured(p, t, s)
+      ),
+    };
+    const watcher = makeWatcher(home, io);
+
+    // Seed a previous reading directly, well past USAGE_FRESH_S (30 min),
+    // so a naive byte-for-byte carry would keep asserting `stale: false`
+    // forever. `ts` is in epoch seconds, the sidecar's own unit.
+    const staleTs = Math.floor(Date.now() / 1000) - (USAGE_FRESH_S + 120);
+    const prev = {
+      ts: staleTs, model: 'claude-sonnet-5', class: 'sonnet' as const, effort: 'medium', ctxPct: 40, cost: 0.5, stale: false,
+    };
+    (watcher as unknown as { usage: Map<string, typeof prev> }).usage.set('demo-usage-d', prev);
+
+    degrade = true;
+    (watcher as unknown as { lastUsageSweep: number }).lastUsageSweep = 0;
+    await watcher.tick();
+
+    const carried = watcher.currentUsage().get('demo-usage-d');
+    expect(carried).toEqual({ ...prev, stale: true });
   });
 });

@@ -11,7 +11,7 @@ import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
-import { readUsageMeasured } from './usage.js';
+import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
@@ -1509,8 +1509,13 @@ export class FleetWatcher {
    *  sidecar as fresh for USAGE_FRESH_S and one agent round-trip per session
    *  per 2-second tick would buy nothing. Rebuilt from the current listing so
    *  a purged row ages out; a row whose read came back UNREADABLE this sweep
-   *  keeps its previous reading (a transient read failure is not a change of
-   *  fact — `readUsageMeasured` tells it from absent, which drops the row). */
+   *  keeps its previous reading with its `stale` verdict RE-DERIVED against
+   *  this sweep's clock (a transient read failure is not a change of fact,
+   *  but `stale` is not a property of the sidecar — it is this sweep's own
+   *  verdict, so copying the object forward unchanged would re-assert a
+   *  freshness call nobody measured this sweep, unbounded — controller
+   *  ruling R5 — `readUsageMeasured` tells unreadable from absent, which
+   *  drops the row). */
   private async sweepUsage(records: SessionRecord[]): Promise<void> {
     const now = Date.now();
     if (this.lastUsageSweep !== 0 && now - this.lastUsageSweep < USAGE_SWEEP_MS) return;
@@ -1520,7 +1525,10 @@ export class FleetWatcher {
     await Promise.all(records.map(async (r) => {
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
       if (read.kind === 'reading') next.set(r.id, read.usage);
-      else if (read.kind === 'unreadable') { const prev = this.usage.get(r.id); if (prev) next.set(r.id, prev); }
+      else if (read.kind === 'unreadable') {
+        const prev = this.usage.get(r.id);
+        if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S });
+      }
     }));
     this.usage = next;
   }
