@@ -14,8 +14,9 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, RosterWire, RunSummary } from '../../../shared/api';
-import { accountColorVar, accountLabel, homeAbleLabelList } from '../lib/accounts';
+import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import { accountColorVar, accountLabel } from '../lib/accounts';
+import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
@@ -45,6 +46,76 @@ export const NEST_BRACKET = '└─';
  *  being spawned. And the wedge stops at "spawn never completed" here rather
  *  than adding the board's "a workspace may exist" — this card is the list of
  *  workspaces, so if one exists the operator is already looking at it. */
+/** What the chip says when the fleet host's `ccd` has no pool machinery yet
+ *  (`enforcement: 'unavailable'`). Hand-written tags still display, but nothing
+ *  on the fleet is enforcing them, so the chip stops being a control.
+ *
+ *  Exported so the suite pins the sentence rather than a paraphrase of it. */
+export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
+
+/** One project's authoritative placement read. Request state, row absence and
+ *  legacy omission stay distinct so the card never turns ignorance into a
+ *  per-account claim. */
+export type ProjectPlacementRead =
+  | { kind: 'pending' }
+  | { kind: 'failed' }
+  | { kind: 'missing' }
+  | { kind: 'legacy' }
+  | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
+
+/** The project's measured route pool as one chip. A non-measured read yields
+ *  no pool and therefore no chip. Unrecognised residue means this app is older
+ *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
+function PoolChip({ pool, project, dim, onTap }: {
+  pool: ProjectPoolWire;
+  project: string;
+  dim: boolean;
+  onTap: ((project: string) => void) | undefined;
+}): ReactNode {
+  const path = `~/.cc-sessions/pools/${project}`;
+  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
+  const word =
+    pool.state === 'tagged' ? pool.name
+    : pool.state === 'untagged' ? 'no pool'
+    : pool.state === 'malformed' ? 'pool malformed'
+    : pool.state === 'unreadable' ? 'pool unreadable'
+    : 'app older than fleet; reload';
+  const label =
+    pool.state === 'tagged' ? `project pool ${pool.name}`
+    : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
+    : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
+    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
+    : 'app bundle is older than the fleet; reload to understand this project pool';
+  const dataPool = unrecognised ? 'unrecognised' : pool.state;
+  // A span when there is nowhere to go: no handler, a fleet whose ccd would
+  // answer 501, or a newer fleet state this app cannot safely edit.
+  if (dim || onTap === undefined || unrecognised) {
+    return (
+      <span
+        className="proj-card-pool"
+        data-pool={dataPool}
+        data-dim={dim || undefined}
+        aria-label={label}
+        title={dim ? POOL_UNAVAILABLE_TEXT : label}
+      >
+        {word}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="proj-card-pool"
+      data-pool={dataPool}
+      aria-label={label}
+      title={label}
+      onClick={() => onTap(project)}
+    >
+      {word}
+    </button>
+  );
+}
+
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
   const spawn = dispatchWindow(run, nowMs);
   // Unreachable by construction — `nestFleet` emits this row only for a run
@@ -73,12 +144,15 @@ export function ProjectCard({
   selectedId = null,
   onAddWorkspace,
   projected,
+  placement = { kind: 'legacy' },
   adding = false,
   collapsed = false,
   onToggle,
   onActions,
   archivedOpen = false,
   roster = [],
+  pools = null,
+  onPool,
   runs = [],
   abroad = [],
   nowMs = Date.now(),
@@ -96,6 +170,9 @@ export function ProjectCard({
    *  (every home-able lane disabled) — collapsing the two would let "I don't
    *  know yet" and "the fleet says no" render the identical claim. */
   projected?: ProjectedHome | null;
+  /** The matching `/api/projects` row's server-computed placement, with every
+   *  way that read can be unavailable kept explicit. */
+  placement?: ProjectPlacementRead;
   /** This project's own ws-add is in flight. ccd DOES serialise concurrent
    *  ws-adds per project now (a `flock -n` in `cmd_ws_add`, refusing with
    *  `busy: …`), so this is a courtesy that saves a round trip — see
@@ -116,6 +193,12 @@ export function ProjectCard({
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
    *  `accountLabel`/`accountColorVar` already carry for an unknown wrapper. */
   roster?: readonly RosterWire[];
+  /** The fleet-level pool frame supplies enforcement capability only. Pool and
+   *  placement come together from `ProjectPlacementRead` after the route lands. */
+  pools?: ProjectPoolsWire | null;
+  /** Open the pool sheet for this project. Without it, the chip remains an
+   *  inert statement rather than a control with nowhere to go. */
+  onPool?: (project: string) => void;
   /** THIS project's ACTIVE runs (Task 4) — the programme edges the body's tree
    *  is drawn from, scoped and filtered by `FleetScreen`, which owns the store
    *  read. Defaults to `[]` so a card rendered before any `{type:'runs'}` frame
@@ -141,39 +224,45 @@ export function ProjectCard({
    *  which is the correct degrade for a card nobody is ticking. */
   nowMs?: number;
 }): ReactNode {
+  // A measured row carries pool and placement from one `/api/projects` read.
+  // Only a legacy row's forecast falls back to the global projection; no row
+  // reads a pool value from the independently paced websocket frame.
+  const pool = placement.kind === 'measured' ? placement.pool : null;
+  const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
+  const poolDim = pools?.enforcement === 'unavailable';
+
+  // A legacy server's global projection is honest only while no readable tag
+  // narrows the project. Pending/failed/missing reads make no account claim.
+  const legacySafe = pool === null || pool.state === 'untagged';
+  const forecast = placement.kind === 'measured' && placement.placement.kind === 'projected'
+    ? placement.placement
+    : placement.kind === 'legacy' && legacySafe
+      ? projected
+      : undefined;
+
   // Headroom, not load: "91% free" is the question being asked ("can this
   // workspace actually run?"), and the answer stays legible when the score is
   // above the swap ceiling — which ccd's rule permits, since it returns the
   // least-loaded account even when every account is pinned.
-  const headroom = projected ? 100 - projected.score : null;
-
-  // Three JS values, three distinct facts — collapsing any two would either
-  // invent a target (never happened here) or invent a diagnosis (the bug this
-  // task exists to fix). `undefined`: nothing is known yet (first poll still
-  // in flight, or every poll so far has failed) — the label says nothing it
-  // hasn't observed. `null`: the poll landed and the server itself found no
-  // home-able lane — that, and only that, earns this copy. It names the
-  // three HOME_ABLE lanes individually (homeAbleLabelList) rather than
-  // claiming "all accounts": gpt is never consulted for this fact, so a
-  // blanket "all" would overstate what the server actually knows. A value:
-  // name it. The button stays enabled in all three cases regardless, because
-  // ccd's die at ws-add time is the authority, not this forecast.
-  // The roster can genuinely land AFTER `projected === null` already has
-  // (they poll independently — ProjectCard's own `projected` prop comes from
-  // `useProjectedHome`, `roster` from the fleet store's separate poll), so
-  // `homeAbleLabelList` can legitimately still return `''` here (fix round 1,
-  // finding 7): `roster.filter((a) => a.homeAble)` over an empty array is
-  // empty. Naming zero accounts individually read as "New workspace on demo
-  // — all disabled" (single space, no phantom list) rather than a name
-  // list gone missing mid-sentence.
-  const homeAbleNames = homeAbleLabelList(roster);
-  const addLabel = projected
-    ? `New workspace on ${group.project} — ${accountLabel(roster, projected.wrapper)}, ${headroom}% free`
-    : projected === null
-      ? homeAbleNames === ''
-        ? `New workspace on ${group.project} — all disabled`
-        : `New workspace on ${group.project} — ${homeAbleNames} all disabled`
-      : `New workspace on ${group.project}`;
+  const headroom = forecast ? 100 - forecast.score : null;
+  const placeableNames = poolLabelList(roster, pool);
+  const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
+  const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
+  const addLabel = forecast
+    ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
+    : measuredNone || legacyNone
+      ? poolName === null
+        ? placeableNames === ''
+          ? `New workspace on ${group.project} — all disabled`
+          : `New workspace on ${group.project} — ${placeableNames} all disabled`
+        : placeableNames === ''
+          ? `New workspace on ${group.project} — nothing is in pool ${poolName}`
+          : `New workspace on ${group.project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`
+      : placement.kind === 'failed'
+        ? `New workspace on ${group.project} — placement check failed; reopen ccrc to retry`
+        : placement.kind === 'missing'
+          ? `New workspace on ${group.project} — project absent from the latest placement check; reload ccrc`
+          : `New workspace on ${group.project}`;
 
   // Status never owns the card's perimeter except for attention (the one state
   // that asks the reader to ACT). Busy lost it: on a one-session project the
@@ -283,6 +372,7 @@ export function ProjectCard({
         selected={row.session.id === selectedId}
         onActions={onActions}
         roster={roster}
+        projectPool={pool}
         onOpenRun={openRunFor(row.session)}
       />
     ) : (
@@ -324,6 +414,10 @@ export function ProjectCard({
           >
             {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
           </span>
+          {/* A fold must not hide a session stranded with no valid destination. */}
+          {group.stranded > 0 && (
+            <span className="proj-card-stranded">{group.stranded} stranded</span>
+          )}
           {/* Collapsed or not: a fold must never be able to hide a pending
               dialog, which is the one thing this screen exists to surface. */}
           {group.attention && (
@@ -343,16 +437,20 @@ export function ProjectCard({
           )}
         </button>
 
+        {/* A sibling, never a descendant of the project fold button: nested
+            controls are invalid and inaccessible to Safari/VoiceOver. */}
+        {pool !== null && (
+          <PoolChip pool={pool} project={group.project} dim={poolDim} onTap={onPool} />
+        )}
+
         {onAddWorkspace && (
           <button
             type="button"
             className="proj-card-add"
-            /* The projection lives in the accessible name and the tooltip, not
-               in the layout: it is the SAME string on every card (where the
-               next workspace lands is global, not per project), it was 41% of
-               this header's width, and it was clipped in the desktop sidebar.
-               The headroom % is dropped from the visible UI entirely — the
-               accounts strip above says it, for every account, in more detail. */
+            /* The project-specific forecast lives in the accessible name and
+               tooltip, not in the layout: its visible form took 41% of this
+               header and clipped in the desktop sidebar. The accounts strip
+               above already shows headroom for every account in more detail. */
             aria-label={addLabel}
             title={addLabel}
             onClick={() => onAddWorkspace(group.project)}
@@ -426,7 +524,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} onOpenRun={openRunFor(s)} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={pool} onOpenRun={openRunFor(s)} />
               ))}
             </div>
           )}

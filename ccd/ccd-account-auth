@@ -355,12 +355,21 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
   # BSD `script` calls `tcgetattr` on its own stdin and exits 1 when that is
   # not a terminal, and both callers hand the child a FIFO on stdin
   # (`<"$AUTH_RUN/in.child"`), overriding the pane's tty. util-linux tolerates
-  # that; BSD does not. The fit is exact — every method through `script` fails,
-  # and `login` and `paste`, which touch no `script(1)` at all, both pass, so
-  # the DEFAULT path is unaffected on either userland. The obvious fix is not
-  # mechanical: `_auth_pump` calls `_auth_forward_code`, which writes into that
-  # same FIFO, so removing the redirect unconditionally would take the code
-  # channel away from any pane method that can be asked for one.
+  # that; BSD does not. Every method through `script` fails, on both runs.
+  #
+  # WHAT DOES NOT HOLD is the corollary this comment carried until D-2662: that
+  # `login` and `paste`, touching no `script(1)`, are therefore safe. The run on
+  # `ecd953b0` — the SAME executable bytes, comments aside — hung `login`'s
+  # expiry case to the 60s hard cap against a SIX-second deadline (D-2661). So
+  # the pty-less lane has an intermittent macOS failure of its own, with a
+  # different signature, and the default path is NOT measured clean on BSD.
+  # Two failures on one platform are not automatically one bug: fix the
+  # `script` arm on its own evidence, and D-2661 on its own.
+  #
+  # The obvious fix is not mechanical either: `_auth_pump` calls
+  # `_auth_forward_code`, which writes into that same FIFO, so removing the
+  # redirect unconditionally would take the code channel away from any pane
+  # method that can be asked for one.
   if [ "$CCD_OS" = darwin ]; then
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
   else

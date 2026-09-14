@@ -970,6 +970,181 @@ describe('fleet store', () => {
     });
   });
 
+  // Account pools, wave 4. Additive on the same terms as `runs`/`coord` above:
+  // an already-deployed PWA drops this frame in `asFleetMsg` and no
+  // `FLEET_PROTO` bump is needed. What is NOT the same is persistence — this
+  // one is deliberately excluded from the offline snapshot, because a cached
+  // tag rendered as live policy would lie about what the fleet is enforcing
+  // right now.
+  describe('the `pools` frame', () => {
+    const wire = {
+      listed: true,
+      byProject: { demo: { state: 'tagged', name: 'pool-a' } },
+      enforcement: 'enforced',
+      futureEnvelopeField: { generation: 2 },
+    };
+
+    const expectPriorWireToSurvive = (pools: unknown): void => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      const prior = store.getState().pools;
+      expect(prior).toEqual(wire);
+
+      expect(() => lastSocket().message(JSON.stringify({ type: 'pools', pools }))).not.toThrow();
+      expect(store.getState().pools).toBe(prior);
+      store.getState().disconnect();
+    };
+
+    it('starts null and takes a well-formed frame without discarding additive fields', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().pools).toBeNull();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      expect(store.getState().pools).toEqual(wire);
+      store.getState().disconnect();
+    });
+
+    it('takes every listed:false enforcement value — an unlistable directory is a value, not a gap', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      for (const enforcement of ['enforced', 'unavailable', 'unknown']) {
+        const pools = { listed: false, enforcement };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+      }
+      store.getState().disconnect();
+    });
+
+    it('takes listed:true with unavailable enforcement and keeps its measured project members', () => {
+      const pools = {
+        listed: true,
+        enforcement: 'unavailable',
+        byProject: { demo: { state: 'tagged', name: 'pool-a' } },
+      };
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+
+      expect(store.getState().pools).toEqual(pools);
+      store.getState().disconnect();
+    });
+
+    it('keeps a listed:true future project member for its downstream reader to tolerate', () => {
+      // This parser owns only the outer envelope. A later reader decides what an
+      // unknown member state means; rejecting it here would turn an additive
+      // member into frame absence before that reader can apply its own policy.
+      const pools = {
+        listed: true,
+        enforcement: 'unknown',
+        byProject: { demo: { state: 'future-state', later: { revision: 2 } } },
+      };
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+      expect(store.getState().pools).toEqual(pools);
+      store.getState().disconnect();
+    });
+
+    it('silently retains the exact prior valid state for a missing, null, or primitive outer payload', () => {
+      for (const pools of [undefined, null, 'enforced', 1]) expectPriorWireToSurvive(pools);
+    });
+
+    it('silently retains the exact prior valid state for an outer array payload', () => {
+      expectPriorWireToSurvive([]);
+      expectPriorWireToSurvive([{ listed: false, enforcement: 'enforced' }]);
+    });
+
+    it('silently retains the exact prior valid state for a missing or invalid listed discriminant', () => {
+      for (const pools of [
+        { enforcement: 'enforced' },
+        { listed: 'true', enforcement: 'enforced', byProject: {} },
+        { listed: null, enforcement: 'enforced', byProject: {} },
+      ]) expectPriorWireToSurvive(pools);
+    });
+
+    it('silently retains the exact prior valid state for a missing or unrecognised enforcement value', () => {
+      for (const pools of [
+        { listed: false },
+        { listed: false, enforcement: 'future' },
+        { listed: false, enforcement: null },
+      ]) expectPriorWireToSurvive(pools);
+    });
+
+    it('silently retains the exact prior valid state for every invalid listed:true byProject shape', () => {
+      for (const pools of [
+        { listed: true, enforcement: 'enforced' },
+        { listed: true, enforcement: 'enforced', byProject: null },
+        { listed: true, enforcement: 'enforced', byProject: [] },
+        { listed: true, enforcement: 'enforced', byProject: 'projects' },
+        { listed: true, enforcement: 'enforced', byProject: 1 },
+      ]) expectPriorWireToSurvive(pools);
+    });
+
+    it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      const prior = store.getState().pools;
+      const firstSocket = lastSocket();
+
+      store.getState().disconnect();
+      expect(store.getState().pools).toBe(prior);
+      store.getState().connect();
+      expect(lastSocket()).not.toBe(firstSocket);
+      lastSocket().open();
+      expect(store.getState().pools).toBe(prior);
+
+      const next = {
+        listed: true,
+        enforcement: 'enforced',
+        byProject: { demo: { state: 'untagged' } },
+      };
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: next }));
+      expect(store.getState().pools).toEqual(next);
+      store.getState().disconnect();
+    });
+
+    it('is NOT persisted, and a fresh store starts null even with a snapshot on disk', () => {
+      // The offline snapshot is written on every `fleet` frame. Nothing pooled
+      // may ride it: `FleetSnapshot` has no field for it, and this asserts
+      // that in the two directions that matter — the bytes on disk, and what a
+      // cold store reads back.
+      const roster = TEST_ROSTER.map((account) => ({
+        ...account,
+        pool: account.id === 'claude' ? 'pool-a' : null,
+      }));
+      const store = createFleetStore({ makeSocket });
+      store.setState({ roster });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'pools', pools: wire }));
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      expect(store.getState().pools).toEqual(wire);
+      store.getState().disconnect();
+
+      const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+      expect(raw).not.toBeNull();
+      expect(raw).not.toContain('enforcement');
+      expect(Object.keys(JSON.parse(raw as string) as object).sort()).toEqual(['roster', 'savedAt', 'sessions']);
+      expect((JSON.parse(raw as string) as { roster: typeof roster }).roster).toEqual(roster);
+
+      const cold = createFleetStore({ makeSocket });
+      expect(cold.getState().sessions.map((s) => s.id)).toEqual(['s1']);  // the snapshot DID hydrate
+      expect(cold.getState().pools).toBeNull();                          // …and carried no policy with it
+    });
+  });
+
   // Review finding 18: `feed` used to have exactly two producers — the
   // catch-up tail (volatile: the mark it reads advances one-way at receipt,
   // so a reload landing after the tail already ran sees nothing left to ask

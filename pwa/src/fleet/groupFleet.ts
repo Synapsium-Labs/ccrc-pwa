@@ -48,6 +48,17 @@ export interface FleetGroup {
    *  session and `home` is non-nullable on the wire, so there is always at
    *  least one value to compare. */
   pin: string | null;
+  /** How many LIVE members carry a strand marker — ccd's `$REG/<id>.stranded`,
+   *  written when a hard-blocked session's pool (or the whole roster) has
+   *  nothing that can take it (spec §5.8). This is the LOUD count: ruling 6
+   *  turned a silence that retried every five seconds forever into a marker, a
+   *  log line and a banner, and this is the number the card wears so a fold
+   *  cannot hide it.
+   *
+   *  Scoped to `sessions` for the reason `attention`/`busy` are, and for one
+   *  more: an archived session is stopped, so a marker it still carries
+   *  describes a rescue that no longer has anything to rescue. */
+  stranded: number;
   /** Members in the `archived` BUCKET — folded out of the live list, never
    *  dropped. `/s/<id>` still resolves and the transcript still renders, so a
    *  card that omitted them entirely would leave the workspace reachable only
@@ -111,6 +122,17 @@ export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGrou
       busy: live.filter((m) => m.bucket === 'working').length,
       unseen: live.filter((m) => isUnseen(m, acks)).length,
       pin,
+      // `(m.stranded ?? null) !== null`, never a truthiness test and never a
+      // read of `m.stranded.at`. TWO reasons, both producible: the live `fleet`
+      // frame is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg`), so a row
+      // from a server predating this field has no key at runtime whatever the
+      // type says; and the registry's fail-shut arm answers `{at: 0, reason:
+      // STRANDED_UNREADABLE}` for a marker it could see and not read — a REAL
+      // strand whose date is unknown, which `at`-truthiness would drop in
+      // exactly the direction that hides a stuck session.
+      stranded: live.filter(
+        (m) => m.status !== 'dead' && (m.stranded ?? null) !== null,
+      ).length,
     });
   }
   return groups;
