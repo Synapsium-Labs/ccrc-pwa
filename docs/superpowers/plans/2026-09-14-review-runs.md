@@ -36,7 +36,7 @@
 |---|---|
 | `shared/api.ts` | L0 vocabulary: `ACTIVE_RUN_STATES` / `IDLE_RUN_STATES` / `TERMINAL_RUN_STATES`; `RunKind`, `RUN_KINDS`, `isRunKind`; `REVIEW_RUN_TRANSITIONS`, `transitionsFor(kind)`; `RunSummary.kind`, `RunSummary.reviews`; `review-in-flight` in `RunRefuseCode`; `stale-review`, `report-unreadable` in `MAIL_REJECT_CODES` + `DONE_AUTHORITY_CODES` |
 | `server/src/coord/schema.ts` | `MIGRATIONS[10]`: `runs.kind`, `runs.reviews`, index `runs_by_reviews` |
-| `server/src/coord/store.ts` | `ACTIVE_RUN_STATES_SQL`, `TERMINAL_RUN_STATES_SQL` built from L0; `capsUsage` derived; `openRun` takes `kind`/`reviews`; `reviewInFlightFor`; `advanceInner` consults `transitionsFor(kind)`; row plumbing for the two columns |
+| `server/src/coord/store.ts` | `INACTIVE_RUN_STATES_SQL`, `TERMINAL_RUN_STATES_SQL` built from L0; `capsUsage` derived; `openRun` takes `kind`/`reviews`; `reviewInFlightFor`; `advanceInner` consults `transitionsFor(kind)`; row plumbing for the two columns |
 | `server/src/coord/routes.ts` | `POST /api/runs` parses `kind`/`reviews`; `POST /api/runs/:id/advance` re-entry cap check + `review-in-flight`; transitions by kind |
 | `server/src/coord/fingerprint.ts` | `resolveDoneBranch` (extracted), `verifyReviewDone`, `ReviewClaim` |
 | `server/src/coord/close.ts` | `closeReviewRun` arm; transitions by kind |
@@ -61,6 +61,9 @@ Departures from the spec discovered while planning, each minted 2026-09-14 and d
 - **D-2798 (2026-09-14)** — **The coordinator's inverted review rule ships as a TWELFTH contract clause, pinned verbatim, in addition to the lifecycle-step rewrite.** Spec §4 says "the review clause inverts". The shipped skill has no review clause in its eleven-clause contract; the sentence "Review the handoff commit like any other commit" is lifecycle step 5 (`SKILL.md:300`). Rewriting the step alone leaves the rule in prose a coordinator reads once; the contract is the surface `coordinator-skill.test.ts` pins verbatim and the surface the skill itself calls "not advice". Consequence: every prose count of the contract ("eleven" in `SKILL.md`, `README.md`, `CLAUDE.md`, and the test's `CONTRACT` array) moves to twelve in the same commit. Task 11.
 - **D-2799 (2026-09-14)** — **On a `kind:'review'` open, `wave`, `waveOf` and `project` are DERIVED from the reviewed run, and `sessionId` is refused.** Spec §5.1 says a review run has the "same `program`, same `project`, same `claimedBy`" as the run it reviews and §5.4 says its hold carries "the worker's wave", without saying whether the request body supplies them. A body that could disagree with the reviewed row is a second writer of the same fact; so the route reads them off the reviewed run, accepts a body value only when it is identical (a differing one is `bad-request` with a detail naming the field), and refuses `sessionId` outright because a review run is always a fresh spawn on its own workspace (§5.4). Task 5.
 - **D-2800 (2026-09-14)** — **Every hand-written `('done','failed')` in `server/src/coord/store.ts` is replaced by `TERMINAL_RUN_STATES_SQL`, built from the L0 pair.** Spec §7.1 says the three lists are "defined ONCE; every consumer derives from it", and names only `capsUsage` as a consumer. `store.ts` spells the terminal pair as a SQL literal in `runs()`, `programOpenRunCount`, `openRunsForSession`, `advanceInner`'s `closedAt` CASE and others (measured in Task 1, step 1). Leaving them would make the spec's sentence false on the day it ships and leave `single-definition.test.ts` nothing to pin. The sweep is mechanical, the SQL semantics are byte-identical, and the count before and after is measured in the task. Task 1.
+- **D-2803 (2026-09-14, found executing Task 1)** — **The cap's SQL fragment is the NEGATIVE form over `IDLE_RUN_STATES ∪ TERMINAL_RUN_STATES`, not the positive `IN ACTIVE_RUN_STATES` spec §7.1 wrote.** The spec's own rationale for classifying `unknown` as active is that "an unrecognised row that counts wedges visibly … one that does not count over-dispatches silently" — but `'unknown'` is the JS-side revive artefact for a token this build cannot name (`RunState`'s docstring: NEVER WRITTEN), so a SQL `IN (…,'unknown')` matches the literal word and never a real novel token; the positive form UNDER-counts exactly the row the spec meant to count, and the brief's own Step 6 test (a planted `'x-from-a-newer-build'` state, expected to count) measured it. `capsUsage` therefore reads `state NOT IN ${INACTIVE_RUN_STATES_SQL}` with `INACTIVE_RUN_STATES_SQL` built by `.join` from `[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES]`; every consumer still derives from the three L0 lists, `ACTIVE_RUN_STATES` remains the classification the partition pin and every JS reader use, and `single-definition.test.ts` pins the built fragment. The spec's sentence "positive form is chosen because of the pin" is corrected by this entry, not by editing the spec.
+- **D-2804 (2026-09-14, found executing Task 1)** — **Three PWA comments described the old cap predicate as `('done','failed')` and are swept in Task 1.** `pwa/src/fleet/nestFleet.ts:25`, `pwa/src/fleet/runWords.ts:83`, `pwa/src/screens/RunsScreen.tsx:8` each paraphrased `capsUsage`'s negative-form literal; Task 1 changes that predicate, so the sentences became false the moment it landed, and the new single-definition scan caught them as copies. They are rewritten to name the L0 lists. Outside Task 1's files table; recorded because the scan's authority over prose is the point of the scan.
+
 
 ---
 
@@ -93,10 +96,11 @@ Each task ends green on the suites it names. Tasks 1–2 are independently shipp
 - Test: `server/test/run-states.test.ts` (create)
 - Test: `server/test/coord-store.test.ts` (the `CoordStore: caps` describe, `:409+`)
 - Test: `server/test/single-definition.test.ts` (a new `it` beside the delivery-pair scan at `:586`)
+- Modify (D-2804): the three PWA comments that paraphrase the old predicate — `pwa/src/fleet/nestFleet.ts:25`, `pwa/src/fleet/runWords.ts:83`, `pwa/src/screens/RunsScreen.tsx:8` — rewritten to name the L0 lists
 
 **Interfaces:**
 - Consumes: `RunState`, `RUN_STATES`, `RUN_TRANSITIONS` (`shared/api.ts:3664-3748`); `TERMINAL_DELIVERY_SQL`'s build idiom (`store.ts:414`).
-- Produces: `ACTIVE_RUN_STATES`, `IDLE_RUN_STATES`, `TERMINAL_RUN_STATES` (L0, `readonly RunState[]`-satisfying `as const` tuples); `ACTIVE_RUN_STATES_SQL`, `TERMINAL_RUN_STATES_SQL` (module-private in `store.ts`). Task 2 reads `IDLE_RUN_STATES`; Task 5 reads `TERMINAL_RUN_STATES_SQL`.
+- Produces: `ACTIVE_RUN_STATES`, `IDLE_RUN_STATES`, `TERMINAL_RUN_STATES` (L0, `readonly RunState[]`-satisfying `as const` tuples); `INACTIVE_RUN_STATES_SQL`, `TERMINAL_RUN_STATES_SQL` (module-private in `store.ts`). Task 2 reads `IDLE_RUN_STATES`; Task 5 reads `TERMINAL_RUN_STATES_SQL`.
 
 - [ ] **Step 1: Measure the literals you are about to replace**
 
@@ -254,17 +258,18 @@ Expected: the IDLE test FAILS at `expect(s.capsUsage(now).running).toBe(0)` afte
 
 - [ ] **Step 8: Derive the cap in `store.ts`**
 
-(a) Import. `store.ts:27` currently reads `RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,` inside the `shared/api.js` import; add `ACTIVE_RUN_STATES, TERMINAL_RUN_STATES,` to that same import list.
+(a) Import. `store.ts:27` currently reads `RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,` inside the `shared/api.js` import; add `IDLE_RUN_STATES, TERMINAL_RUN_STATES,` to that same import list.
 
 (b) Delete the private derivation at `:44-48` (the docstring "The run states nothing can leave — DERIVED from `RUN_TRANSITIONS`…" and the `const TERMINAL_RUN_STATES` that follows). The imported L0 pair takes its name. Amend the two comments that describe the old derivation — `:902` ("`TERMINAL_RUN_STATES` is DERIVED from…") and `:4371` — to say the pair is L0's `TERMINAL_RUN_STATES` (`shared/api.ts`), D-2794.
 
 (c) Beside `TERMINAL_DELIVERY_SQL` (`:414`) add the two run-state fragments:
 ```ts
-/** The cap's positive-form predicate, built from L0's `ACTIVE_RUN_STATES` the
- *  way `TERMINAL_DELIVERY_SQL` is built from its list (design 2026-09-14 §7.1).
- *  Positive form is chosen BECAUSE `run-states.test.ts` pins the partition:
- *  without that pin a negative form would be the safer default. */
-const ACTIVE_RUN_STATES_SQL = `('${ACTIVE_RUN_STATES.join("','")}')`;
+/** The cap's predicate, NEGATIVE over everything that is not active — the idle
+ *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
+ *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
+ *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
  *  names this fragment and never the literal pair (D-2800; pinned by
@@ -274,9 +279,9 @@ const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
 
 (d) `capsUsage` (`:2476-2478`): replace the SQL string with
 ```ts
-      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state IN ${ACTIVE_RUN_STATES_SQL}`,
+      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
 ```
-and extend the D-13 comment above it with one paragraph: "Since design 2026-09-14 §7.1 the predicate is POSITIVE — `state IN ACTIVE_RUN_STATES` — so a run at `awaiting-review`, `merging` or `closing` stops counting the moment it gets there: the session beneath those states is idle by contract, and an idle worker holding a fleet slot is what blocked wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at awaiting-review). D-13's principle is kept and sharpened: this names the runs whose session is WORKING."
+and extend the D-13 comment above it with one paragraph: "Since design 2026-09-14 §7.1 (as corrected by D-2803) the predicate excludes the IDLE and TERMINAL lists — `state NOT IN idle ∪ terminal` — so a run at `awaiting-review`, `merging` or `closing` stops counting the moment it gets there: the session beneath those states is idle by contract, and an idle worker holding a fleet slot is what blocked wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at awaiting-review). D-13's principle is kept and sharpened: this names the runs whose session is WORKING."
 
 (e) The sweep (D-2800): replace EVERY `('done','failed')` literal in `store.ts` you counted in Step 1 with `${TERMINAL_RUN_STATES_SQL}` — this means turning single-quoted SQL strings that contain it into template literals. Two shapes appear:
   - `"… NOT IN ('done','failed') …"` → `` `… NOT IN ${TERMINAL_RUN_STATES_SQL} …` ``
@@ -324,10 +329,10 @@ In `server/test/single-definition.test.ts`, directly after the `it('spells the d
     }
 
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
-    expect(store).toMatch(/const ACTIVE_RUN_STATES_SQL =\s*\n?\s*`\('\$\{ACTIVE_RUN_STATES\.join\("','"\)\}'\)`/);
+    expect(store).toMatch(/const INACTIVE_RUN_STATES_SQL =\s*\n?\s*`\('\$\{\[\.\.\.IDLE_RUN_STATES, \.\.\.TERMINAL_RUN_STATES\]\.join\("','"\)\}'\)`/);
     expect(store).toMatch(/const TERMINAL_RUN_STATES_SQL =\s*\n?\s*`\('\$\{TERMINAL_RUN_STATES\.join\("','"\)\}'\)`/);
     expect(store, 'capsUsage no longer reads the active fragment')
-      .toMatch(/dispatchedAt IS NOT NULL AND state IN \$\{ACTIVE_RUN_STATES_SQL\}/);
+      .toMatch(/dispatchedAt IS NOT NULL AND state NOT IN \$\{INACTIVE_RUN_STATES_SQL\}/);
     // The sweep's floor: at least six `TERMINAL_RUN_STATES_SQL` consumers in store.ts (measured in Task 1 step 1).
     expect((store.match(/\$\{TERMINAL_RUN_STATES_SQL\}/g) ?? []).length).toBeGreaterThanOrEqual(6);
   });
@@ -351,7 +356,7 @@ feat(coord): the dispatch cap counts ACTIVE runs — awaiting-review, merging, c
 
 ACTIVE_RUN_STATES / IDLE_RUN_STATES / TERMINAL_RUN_STATES are defined once in
 shared/api.ts and every RunState sits in exactly one (run-states.test.ts).
-capsUsage().running is now `dispatchedAt IS NOT NULL AND state IN <active>`;
+capsUsage().running is now `dispatchedAt IS NOT NULL AND state NOT IN <idle ∪ terminal>`;
 an idle worker no longer holds a fleet slot (design 2026-09-14 §7.1).
 
 D-2794: store.ts's private TERMINAL_RUN_STATES (derived, included `unknown`)
