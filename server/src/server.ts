@@ -1479,19 +1479,43 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // client most recently typed. A phone's pty client is a full tmux client
     // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
     // stored lines to the new width, and everything past `history-limit` is
-    // shed on the next scrolled line and never comes back (F1).
+    // shed on the next scrolled line and never comes back. That reflow is
+    // measured, not assumed (F1, private tmux 3.4 socket): `resize-window -x 43`
+    // on a 220-column pane holding 1853 stored lines takes `history_size` to
+    // 9460, and at `history-limit 2000` the next output sheds the overflow for
+    // good.
     //
-    // `resize-window` latches `window-size manual` (F3), so issuing it here —
-    // at the grid ccd spawned with — means the client that attaches an instant
-    // later cannot move the window at all. MEASURED end to end on one session
-    // (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column attach
-    // left 1046 logical of 1203 — 157 destroyed; pinned first, the window read
-    // `manual`, stayed 220 throughout, and the history was untouched.
+    // `resize-window` latches `window-size manual` (F3), so once it ARRIVES the
+    // attaching client cannot move the window. MEASURED end to end on one
+    // session (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column
+    // attach left 1046 logical of 1203 — 157 destroyed; pinned first, the window
+    // read `manual`, stayed 220 throughout, and the history was untouched.
+    //
+    // ISSUING IT FIRST IS A BIAS, NOT A BARRIER, and the difference is measured.
+    // An earlier version of this comment said the later client "cannot move the
+    // window at all"; that is too strong. Both commands are in flight at once —
+    // this one is merely started first — and a harness TIGHTER than shipped
+    // raced them 40 times and saw the attach win TWICE, with the window at 43
+    // for transients of 0.47 ms and 4.28 ms before the pin landed. It is not a
+    // data-loss defect: tmux 3.4 does not collect history during a reflow, and
+    // the narrow-then-wide round trip was measured LOSSLESS even at 3.7x the
+    // limit (1452 stored / 1502 logical at 220, out to 43 where `history_size`
+    // reads 7463, and back to 220 byte-identical). So the pin wins the race
+    // essentially always, and losing it costs a few milliseconds of clipped
+    // view rather than a line of history.
     //
     // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
     // nothing, `resizeWindow` answers a boolean this route has no branch for,
     // and a tmux that cannot be reached is a session the attach below will fail
-    // on anyway. What it must not be is LATER than the attach.
+    // on anyway. Awaiting it would ALSO put a round trip to the fleet box in
+    // front of every drawer open in remote mode, to buy back a transient that
+    // costs no history. What it must not be is LATER than the attach.
+    //
+    // WHAT THE TEST CAN SEE is issue ORDER, and only that: `pty.test.ts` drives
+    // one ordered log shared by the Runner and the spawn stub, so it pins that
+    // the pin is issued before the attach. It cannot pin arrival, because a unit
+    // test has no tmux to arrive at. The claim above about arrival is a
+    // measurement on a private socket, not something this suite re-checks.
     //
     // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
     // for every drawer, so a second drawer closing restores nothing anyone was

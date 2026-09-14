@@ -130,6 +130,20 @@ describe('pty drawer bridge', () => {
       'the window was sized to the client — wave 1 carries no per-client grid map')
       .toEqual([pin]);
 
+    // AND THE REFIT HALF, which is the half that had no guard at all. The
+    // dropped window-follow sized the window at the attach AND on every
+    // `resize` frame, and a rotation or a keyboard opening sends one. The
+    // assertion above never sent a resize frame, so it only ever saw the attach:
+    // measured, putting `void deps.tmux.resizeWindow(id, m.cols, m.rows)` back
+    // into the route's `resize` arm left EVERY test in this repo green, while
+    // the phone narrowed the window on every rotation and F14's loss returned
+    // through the half nobody pinned.
+    ws.send(JSON.stringify({ type: 'resize', cols: 43, rows: 20 }));
+    await vi.waitFor(() => expect(stub.resized).toContainEqual({ cols: 43, rows: 20 }), wait);
+    expect(log.filter((l) => l.startsWith('tmux resize-window')),
+      'a resize frame moved the window — the refit half of the window-follow is back')
+      .toEqual([pin]);
+
     ws.close();
     await vi.waitFor(() => expect(stub.killed).toBe(true), wait);
     // The close handler's restore is now a no-op against a window that never

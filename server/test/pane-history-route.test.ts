@@ -194,17 +194,41 @@ describe('GET /api/sessions/:id/pane/history', () => {
 describe('the shipped comments say what F1 measured', () => {
   const root = path.resolve(__dirname, '../..');
   const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
-  const SOURCES = ['server/src/exec.ts', 'pwa/src/session/TerminalDrawer.tsx'] as const;
+  // `server.ts` is in this list because THIS WAVE gave it a reflow claim of its
+  // own — the latch block argues from what a resize does to stored history — and
+  // a two-file frozen literal could not see it. A file that reasons about reflow
+  // and is outside the scan is exactly the shape the scan exists to catch.
+  const SOURCES = [
+    'server/src/exec.ts',
+    'server/src/server.ts',
+    'pwa/src/session/TerminalDrawer.tsx',
+  ] as const;
+
+  /** The comment body, as a scanner should see it: `//` markers dropped and all
+   *  runs of whitespace flattened, so a claim does not escape by being wrapped.
+   *  At 80 columns "tmux never\n// reflows" is the NORMAL shape in this tree, and
+   *  a raw-byte scan reads that as two unrelated fragments. */
+  const prose = (rel: string): string =>
+    read(rel).replace(/^[ \t]*\/\/ ?/gm, ' ').replace(/\s+/g, ' ');
 
   it('no shipped comment claims tmux never reflows a stored line (F1)', () => {
-    const offenders = SOURCES.filter((rel) => /tmux (never|does not) reflow/i.test(read(rel)));
+    const offenders = SOURCES.filter((rel) => /tmux (never|does not) reflow/i.test(prose(rel)));
     expect(offenders, 'a shipped comment still asserts what F1 falsified').toEqual([]);
   });
 
-  it('the scan is looking at something — both files are real and mention reflow', () => {
+  it('the scan is looking at something — each file carries F1 ITSELF, not just the word', () => {
+    // SUBSTANCE, NOT THE WORD, and the difference is not academic: the PWA-side
+    // correction was deleted wholesale by a later task, leaving one dangling
+    // cross-reference to a note that no longer existed — and the single word
+    // `reflow` inside that broken pointer was all it took to keep this assertion
+    // green while the fact it guards was gone. F1's own numbers cannot be left
+    // behind by a pointer, so they are what the anti-vacuity check demands.
     for (const rel of SOURCES) {
       expect(read(rel).length, `${rel} is empty or missing`).toBeGreaterThan(1000);
-      expect(read(rel), `${rel} lost its reflow note entirely`).toMatch(/reflow/i);
+      expect(prose(rel), `${rel} no longer says a resize reflows stored history`)
+        .toMatch(/reflow/i);
+      expect(prose(rel), `${rel} lost F1's measurement — a pointer is standing in for the fact`)
+        .toMatch(/1853[\s\S]{0,400}9460/);
     }
   });
 

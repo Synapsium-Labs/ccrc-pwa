@@ -1874,6 +1874,39 @@ describe('a failed read says why, in a sentence', () => {
       .toBe('nothing has scrolled off this pane yet');
   });
 
+  it('every declared wire token gets a sentence — including the one nobody routed', () => {
+    // `bad-session-id` is a member of PaneHistoryReply's own error union and had
+    // no branch, so the fallthrough put the raw token on the glass:
+    // `no history · bad-session-id`. Reachable from a hand-typed SPA URL. The
+    // union is the source of truth, so the test walks it rather than naming the
+    // three somebody happened to remember.
+    //
+    // EACH ONE'S OWN SENTENCE, not merely "not the token": the fallthrough below
+    // makes ANY slug readable, so asserting readability alone would pass with
+    // every dedicated branch deleted — measured, it did. What is pinned here is
+    // that each declared token gets the sentence written FOR it.
+    const said: Record<string, string> = {
+      'gone': 'this session is gone — there is no pane to read',
+      'unmeasured': 'could not read this pane',
+      'bad-session-id': 'that is not a session id this box will read',
+    };
+    for (const [token, sentence] of Object.entries(said)) {
+      expect(historyFailureSentence(token), `${token} lost the sentence written for it`)
+        .toBe(sentence);
+    }
+  });
+
+  it('an unrouted token is still made readable, and is not mistaken for a sentence', () => {
+    // The fallthrough cannot tell "already a sentence" from "a token nobody
+    // taught this function", so it decides by SHAPE. A future wire token added
+    // in wave 3 must not reach a reader as a bare slug.
+    expect(historyFailureSentence('some-future-token'))
+      .toBe('could not read this pane — the box answered some-future-token');
+    // ...while the success path's real sentences pass through untouched.
+    expect(historyFailureSentence('nothing has scrolled off this pane yet'))
+      .toBe('nothing has scrolled off this pane yet');
+  });
+
   it('an unmeasured failure with no detail still reads as a sentence', () => {
     expect(historyFailureSentence('unmeasured')).toBe('could not read this pane');
   });
@@ -1967,5 +2000,73 @@ describe('the transform credits rows that moved', () => {
     expect(lag.transform(), 'a clamped scroll still displaced the view').toBe(7);
     lag.scrolled(-3, 20);
     expect(lag.transform(), 'a real displacement stopped being credited').toBe(7 + 60);
+  });
+});
+
+// — the read the reader walked away from —
+//
+// `openHistory`'s two guards are an AND of different questions, and only one of
+// them had a test. The identity half ("is this the read I last asked for?") is
+// pinned by `the newest read wins`; the STATE half ("does the reader still want a
+// history at all?") was pinned by nothing — delete it and all 141 tests across
+// every drawer-touching suite stay green.
+//
+// They are not redundant, because there is a path that bumps NEITHER: a reader
+// who opens the history and then types to go back to live, which is the drawer's
+// own documented way out (`typed()` -> goHist({at:'live'}), wired to both
+// `term.onData` and every quick-key). The read stays the CURRENT one, so the
+// identity half admits it, and only the state half knows the reader has left.
+describe('a read the reader abandoned stays gone', () => {
+  /** Open the history and hold the answer, then hand back the gate. */
+  const openAndHold = async (): Promise<{
+    m: ReturnType<typeof mountDrawer>; settle: (r: Response) => void;
+  }> => {
+    const gates: Array<(v: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Promise<Response>((resolve) => { gates.push(resolve); })));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(gates).toHaveLength(1));
+    return { m, settle: gates[0]! };
+  };
+
+  const json = (status: number, body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status, headers: { 'content-type': 'application/json' },
+    });
+
+  it('a SUCCESS that lands after the reader typed back to live paints nothing', async () => {
+    const { m, settle } = await openAndHold();
+
+    act(() => { m.t.type('x'); });                     // the documented way out
+    await act(async () => { settle(json(200, OK_HISTORY)); await flush(); });
+
+    expect(m.h.write, 'a read the reader had abandoned painted itself over the live pane')
+      .not.toHaveBeenCalled();
+    expect(historyDoor()?.getAttribute('aria-pressed') ?? 'false',
+      'the abandoned read reopened the history door').toBe('false');
+  });
+
+  it('a FAILURE that lands after the reader typed back to live says nothing', async () => {
+    // The reject arm carries the same residual check, and it was equally
+    // unpinned: without it the reader who returned to live gets a "no history"
+    // notice over the pane they went back to, explaining a read they cancelled.
+    const { m, settle } = await openAndHold();
+
+    act(() => { m.t.type('x'); });
+    await act(async () => { settle(json(404, { ok: false, error: 'gone' })); await flush(); });
+
+    expect(screen.queryByText(/no history/),
+      'an abandoned read put its failure over the live pane').toBeNull();
+  });
+
+  it('the guard is the READER leaving, not the request changing — the control', async () => {
+    // Anti-vacuity: the same read, NOT abandoned, still paints. Without this a
+    // blanket `return` would pass both assertions above.
+    const { m, settle } = await openAndHold();
+
+    await act(async () => { settle(json(200, OK_HISTORY)); await flush(); });
+
+    expect(m.h.write, 'a read nobody abandoned failed to paint').toHaveBeenCalled();
   });
 });

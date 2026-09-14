@@ -101,6 +101,18 @@ export interface HistoryPane {
  * under-provisioned scrollback by silently dropping the oldest history, which
  * is the half of the read the reader scrolled up for.
  *
+ * AND THE WIDTH THIS DIVIDES BY IS THE READER'S, NOT THE PANE'S HELD STILL.
+ * The comment this replaces claimed the factor was safe because a stored line
+ * keeps the width it was written at — that tmux leaves it alone across a
+ * resize. That is FALSE and F1 measured it false on a private tmux 3.4 socket:
+ * `resize-window -x 43` on a 220-column pane holding 1853 stored lines took
+ * `history_size` to 9460, and at `history-limit 2000` the next output shed the
+ * overflow permanently. What actually holds the pane's width still is the
+ * server's own pin at the canonical grid before any client attaches
+ * (`GET /ws/pty/:id`, spec §5.1) — not tmux's good manners. This arithmetic is
+ * about the READER re-wrapping a logical line at its own width, which is a
+ * different question and stays true either way.
+ *
  * PURE, and exported for its own tests: jsdom cannot measure a row, so the
  * arithmetic is what can be held still.
  */
@@ -130,12 +142,22 @@ export function historyScrollback(
 export function historyFailureSentence(error: string, detail?: string): string {
   if (error === 'gone') return 'this session is gone — there is no pane to read';
   if (error === 'unreachable') return 'could not reach the box to read this pane';
+  if (error === 'bad-session-id') return 'that is not a session id this box will read';
   if (error === 'unmeasured') {
     return detail !== undefined && detail !== ''
       ? `could not read this pane — ${detail}`
       : 'could not read this pane';
   }
-  return error;
+  // ALREADY A SENTENCE, OR A TOKEN NOBODY TAUGHT THIS FUNCTION — and it cannot
+  // tell them apart, so it decides by SHAPE rather than by hope. The success
+  // path writes real sentences here ("nothing has scrolled off this pane yet"),
+  // and every wire token in `PaneHistoryReply['error']` is a single lower-case
+  // hyphenated word. Returning an unhandled token raw is how `bad-session-id`
+  // reached the glass as `no history · bad-session-id` — a declared member of
+  // the union with no branch, reachable from a hand-typed URL.
+  return /^[a-z][a-z0-9-]*$/.test(error)
+    ? `could not read this pane — the box answered ${error}`
+    : error;
 }
 
 export type MakeHistoryTerm = (host: HTMLElement, lines: number, pane?: HistoryPane) => HistoryTerm;
@@ -289,7 +311,7 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
     // scrollback at construction and `term.cols` does not exist until the addon
     // has fitted against a mounted host, so the real number is set once both
     // facts are in hand. See `historyScrollback` for what it means, and for the
-    // reflow note this comment used to get wrong.
+    // reflow claim the comment this replaces got wrong.
     scrollback: lines * 3,
   });
   const fit = new FitAddon();
@@ -351,9 +373,16 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
       // `viewportY` does not move under jsdom at all (measured — 60 lines
       // written, rows 24, baseY 37, viewportY 37 before, after, and 50 ms
       // later), because jsdom has no layout and xterm's scroll is a virtual
-      // re-render off it. The guard on this line is therefore a source scan in
-      // `terminal-scrollback.test.tsx`, not a behavioural assertion; a browser
-      // proof is its own work.
+      // re-render off it. So the guard on this line is a source scan in
+      // `terminal-scrollback.test.tsx` — it can see that this call site reads
+      // the viewport either side, not that it computes the right number.
+      //
+      // THE NUMBER IS PINNED TOO, against a FAKE Terminal that clamps the way
+      // xterm clamps: `history-term-viewport.test.tsx` (spec §11 ruling 11). An
+      // earlier version of this comment said a behavioural proof was "its own
+      // work" and still to come; it arrived in this same branch. Crediting `n`
+      // reds three of its four cases, crediting a constant reds two, and the
+      // partially-clamped case — asked for 10, moved 2 — reds either way.
       const before = term.buffer.active.viewportY;
       term.scrollLines(n);
       lag.scrolled(term.buffer.active.viewportY - before, px);
@@ -817,12 +846,24 @@ export function TerminalDrawer({
   useEffect(() => {
     if (hist.at !== 'history' || histHost === null) return undefined;
     const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines, hist.pane);
-    // THE LATCH, AND STRICTMODE IS WHY IT EXISTS. React runs every effect twice
-    // on mount in development: set up, tear down, set up. xterm's
-    // `write(data, done)` parses ASYNCHRONOUSLY, so the first mount's `done`
-    // lands after that mount's cleanup has already called `dispose()` — and
-    // `scrollLines` on a disposed Terminal throws, out of a callback nothing
-    // catches, into React's commit. A blank drawer and a TypeError.
+    // THE LATCH, AND THE READER'S OWN GESTURE IS WHY IT EXISTS. xterm's
+    // `write(data, done)` parses ASYNCHRONOUSLY, so `done` can land after this
+    // effect has been torn down and has called `dispose()` — and `scrollLines`
+    // on a disposed Terminal throws, out of a callback nothing catches, into
+    // React's commit. A blank drawer and a TypeError.
+    //
+    // THE TEAR-DOWN THAT ACTUALLY RACES IT is a keystroke: the history lands,
+    // xterm starts parsing, and the reader types to go back to live — which is
+    // the drawer's own documented way out and runs this cleanup mid-parse.
+    //
+    // NOT STRICTMODE, and saying so is the point of this paragraph. An earlier
+    // version of this comment named StrictMode's double mount as the hazard.
+    // React double-invokes an effect only on a component's INITIAL mount commit,
+    // and this effect returns early until `hist` flips to 'history' — which
+    // happens later, on a state change of an already-mounted component — so it
+    // is never double-invoked. Measured: with the guard below deleted, a
+    // StrictMode-shaped test stays GREEN. Anyone writing a test for this latch
+    // should reach for the keystroke race; `terminal-scrollback.test.tsx` has it.
     //
     // A flag rather than a try/catch: swallowing the throw would also swallow a
     // real one, and what this needs to express is "the terminal this callback
