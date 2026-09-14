@@ -4526,8 +4526,11 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 /**
  * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
  * or a forward advance can be refused with, as distinct from the ingress,
- * peer-bound and delivery families above: six for a work run's claim, two for a
- * review run's (D-2797).
+ * peer-bound and delivery families above: four a work run's claim alone
+ * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
+ * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
+ * `branch-unmeasurable`), two a review run's alone (`stale-review`,
+ * `report-unreadable`) (D-2797).
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave

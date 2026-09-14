@@ -3682,6 +3682,17 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     return { w, workId: opened.id, reviewId: r.id, report, calls };
   };
 
+  /** The review close's ONE irreversible act, pinned by WHOSE workspace it
+   *  names — not merely by its verb (Task 7 review I1). `calls.map(c => c[0])`
+   *  alone stays green when the arm releases the REVIEWED run's session by
+   *  mistake, which is a worker evicted mid-wave; the argv is where that shows.
+   *  Same idiom as `:1756`. */
+  const expectReleasedReviewerOnly = (calls: string[][]): void => {
+    expect(calls.map((c) => c[0])).toEqual(['ws-release']);        // exactly one act, and it is a release
+    expect(calls[0]!.includes('demo-r1')).toBe(true);              // the REVIEWER's own workspace
+    expect(calls.some((c) => c.includes('demo-w1'))).toBe(false);  // never the worker's
+  };
+
   it('closes a review run done when the reviewed tip is unchanged: released, no closing hop, worker untouched', async () => {
     const home = mkTmp('ccrc-runs-');
     const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
@@ -3690,7 +3701,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true });
     expect(okRun(w.coord.run(reviewId))!.state).toBe('done');
     expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');   // the coordinator rules next
-    expect(calls.map((c) => c[0])).toEqual(['ws-release']);              // its own workspace, freed
+    expectReleasedReviewerOnly(calls);
     const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
     expect(events.map((e) => e.toState)).not.toContain('closing');
   });
@@ -3730,7 +3741,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: true });
     expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
-    expect(calls.map((c) => c[0])).toEqual(['ws-release']);
+    expectReleasedReviewerOnly(calls);
   });
 
   it.each([
@@ -3759,7 +3770,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'failed', released: true });
     expect(res.statusCode).toBe(200);
     expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
-    expect(calls.map((c) => c[0])).toEqual(['ws-release']);
+    expectReleasedReviewerOnly(calls);
     const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
     expect(events.map((e) => e.toState)).not.toContain('closing');
   });

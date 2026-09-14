@@ -293,6 +293,7 @@ export type ReviewVerdict =
 export async function verifyReviewDone(
   deps: VerifyDoneDeps, work: DoneRun, claim: ReviewClaim,
 ): Promise<ReviewVerdict> {
+  // Defence only: closeReviewRun refuses a malformed reviewedTip as bad-request before this runs.
   if (!SHA.test(claim.reviewedTip)) {
     return { ok: false, code: 'stale-review', detail: 'reviewedTip must be a 40-hex sha' };
   }

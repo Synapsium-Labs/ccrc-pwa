@@ -75,7 +75,13 @@ export interface CloseRunBody {
    *  shape below — an abandon that also carries close fields is refused rather
    *  than half-honoured. */
   intent?: unknown;
-  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
+  /** The work claim's four fields and the review claim's two, in ONE optional
+   *  bag: which pair is required is decided by the run's KIND, in `closeRun`
+   *  and `closeReviewRun` respectively, never by this type. Declared here so
+   *  the accepted wire shape is readable without reading both validators
+   *  (Task 7 review m8). */
+  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown;
+                  reviewedTip?: unknown; report?: unknown };
   final?: unknown; state?: unknown; archive?: unknown;
 }
 
@@ -409,7 +415,7 @@ async function closeReviewRun(
   survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
-  const fp = b.fingerprint as { reviewedTip?: unknown; report?: unknown } | undefined;
+  const fp = b.fingerprint;
   if (b.final !== undefined || b.archive !== undefined ||
       typeof fp !== 'object' || fp === null ||
       typeof fp.reviewedTip !== 'string' || !HANDOFF_SHA.test(fp.reviewedTip) ||
@@ -459,14 +465,17 @@ async function closeReviewRun(
   if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
   const survivor = survivorOf(sibRead.siblings);
   const release = releaseIsSafe(sibRead.siblings) || survivor === null;
-  let argv;
+  // Spelled hand-over-first so the compiler narrows `survivor` on the arm that
+  // reads it, and so `argv` is a `const` carrying the `CcdArgv` brand rather
+  // than an evolving `let` (the abandon arm's own shape — Task 7 review m7).
+  let handoff: HoldReasonVerdict | null = null;
   if (!release && survivor !== null) {
-    const handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
     if (!handoff.ok) return handoff;
-    argv = CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`));
-  } else {
-    argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
   }
+  const argv = handoff !== null && handoff.ok
+    ? CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`))
+    : CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
   if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
   const res = await deps.runCcd(argv);
   if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
