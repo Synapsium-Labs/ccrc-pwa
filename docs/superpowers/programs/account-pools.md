@@ -6856,3 +6856,25 @@ operator, not an action I will take: freeing it means asking another programme t
 
 Run 47 stays `planned` with its brief and nine items composed and ready (`dispatch47.json`); the moment a
 slot frees it is one call.
+
+---
+
+## 2026-09-14 15:xx UTC — wave 6 is cap-blocked, and the block produced a spec
+
+Run 47 cannot dispatch: `cap-concurrency 7/7`. Two of the seven are `bug-fix-waves` runs 39 and 40 —
+one coordinator serialising five bundles; run 39 finished 3/3 items and sat 17 h+ with no events,
+holding a slot. The operator asked why review takes so long and whether `awaiting-review` should count.
+
+**Corrected an overstatement of my own first:** "parked 110 hours" was `dispatchedAt`, not time in
+review. Run 37 went `awaiting-review → done` in 28 seconds once its coordinator got to it; the days
+are the reading queue, not the state.
+
+Brainstormed and wrote **`docs/superpowers/specs/2026-09-14-review-runs-design.md`** on
+`spec/review-runs` (off `origin/main` `56635768`, not this branch — it is not account-pools work).
+Three forks settled with the operator: reviewer reports / coordinator rules; worker persists until
+review clears; coordinator dispatches the reviewer. `maxResidentSessions` rejected — `coord.db` sees 7 of
+31 resident sessions and must not claim to bound the whole. Build 7 §7 already said *"the coordinator
+dispatches that shape"*; `SKILL.md:300` drifted. The spec restores it.
+
+Not account-pools scope; recorded here because run 47 is what hit the wall, and because the next
+coordinator reading this ledger should know the cap will change under it.
