@@ -6797,8 +6797,31 @@ export type PaneProbe =
  * existed. Nothing here bumps `FLEET_PROTO`.
  *
  * `error` keeps `unmeasured` as the single wire token for every could-not-look
- * condition; the probe's own finer vocabulary (`unreadable` vs `unparseable`)
- * rides in `detail`, which is what the drawer renders.
+ * condition, and `detail` beside it is the CAPTURE's own message — tmux's
+ * stderr, by way of `CaptureHistory`, whose reasons are only `gone` and
+ * `unmeasured`.
+ *
+ * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
+ * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
+ * narrow a distinction it received, but nothing here carries that pair: the
+ * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
+ * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * this reply's status, and a probe that failed while the capture succeeded is a
+ * 200 with the three measured fields simply absent. Absent is the whole of what
+ * the client is told, and it is enough: the drawer's behaviour on a failed probe
+ * is uniform by design.
+ *
+ * An earlier version of this docstring said the opposite — that `unreadable` vs
+ * `unparseable` "rides in `detail`, which is what the drawer renders". It never
+ * did, and could not: `detail` exists only on the `ok:false` arm, which only the
+ * capture produces. The sentence came from spec §5.3 by way of the plan, which
+ * then overrode it in its own must-not-re-decide note; the contradiction landed
+ * here. (Its deviation number is recorded in the commit that corrected this
+ * paragraph, and not inline: this wave's plan is not a file in this tree, so a
+ * D-ref here would name a number no plan HERE defines — which
+ * `deviation-refs.test.ts` refuses, by design, until the entry lands.) If a
+ * later wave does want the probe's reason on the wire, that is a deliberate
+ * widening of this type — not something to infer from this paragraph.
  */
 export type PaneHistoryReply =
   | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
