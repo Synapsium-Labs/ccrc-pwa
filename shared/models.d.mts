@@ -33,5 +33,9 @@ export declare function availableFor(
   reg: Registry | null, catalogue: Catalogue | null, anthropic: boolean,
 ): ModelClass[];
 export declare function familyClassOf(anthropicModelId: string): ModelClass | null;
+// The ONE model-id → class table `familyClassOf` matches against — see
+// `shared/models.mjs` for the ordering rule. Exported for the usage sweep's
+// runner, which hands it to the python scanner as `--class-tokens`.
+export declare const FAMILY_TOKENS: readonly (readonly [string, ModelClass])[];
 export declare function classOfModel(reg: Registry, modelId: string): ModelClass | null;
 export declare const UNAVAILABLE_PREFIX: string;
