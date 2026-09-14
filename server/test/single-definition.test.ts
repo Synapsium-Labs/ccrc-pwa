@@ -1721,6 +1721,90 @@ describe('one ~/.ccrc/remote-control, spelled once per tool and equal across all
   });
 });
 
+describe('one ~/.ccrc/ccrc.conf, spelled once per tool and equal across both', () => {
+  // The OPERATOR'S own box preferences. Two bash files touch it and, as with
+  // the remote-control flag above, neither can share a variable with the other:
+  //
+  //   - `ccd` is the READER and the only reader. `CCRC_CONF_FILE` +
+  //     `_conf_get`, plus the three keys' accessors, all of which resolve the
+  //     path through that one constant — including the operator-facing
+  //     sentences, so a box with an unusual HOME is told where ITS file is.
+  //   - `deploy.sh` ships the deploying machine's local copy, over ssh, to a
+  //     HOME-relative destination in the box's own shell.
+  //
+  // `ccd` is NOT a shim like `ccrc`, so it cannot source a shared fragment for
+  // this (deploy.sh's own `install_ccrc_shim` comment is the argument: it is
+  // installed as one self-contained file and every `claude-session@*` unit
+  // execs it). That is exactly why the agreement has to be a mechanism here
+  // rather than a convention: a drift would mean a deploy writing one file and
+  // a supervisor reading another, silently, on a fleet whose operator believes
+  // their preferences landed.
+  const NEEDLE = '.ccrc/ccrc.conf';
+  /** Every spelling normalised to one box-relative form: `$HOME/x`, `~/x` and
+   *  the bare HOME-relative `x` that `ship_env` hands the box's shell are the
+   *  same file and MUST compare equal. */
+  const boxPath = (v: string): string =>
+    v.replace(/^\$HOME\//, '~/').replace(/^\.ccrc\//, '~/.ccrc/');
+
+  it('is touched by exactly those two files, and each is named here BY NAME', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd',          // CCRC_CONF_FILE + _conf_get — the reader, and the authority
+      'deploy/deploy.sh', // ship_env, on the agent lane, beside the ccd that reads it
+    ]);
+  });
+
+  it('both resolve to the same file', () => {
+    const src = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+
+    const reader = /^CCRC_CONF_FILE="([^"]+)"$/m.exec(src('ccd/ccd'));
+    expect(reader, 'ccd/ccd declares no CCRC_CONF_FILE').toBeTruthy();
+
+    const shipped = /^\s*ship_env ccrc\.conf (\S+)$/m.exec(src('deploy/deploy.sh'));
+    expect(shipped, 'deploy.sh never ships the preferences file').toBeTruthy();
+
+    expect([...new Set([boxPath(reader![1]!), boxPath(shipped![1]!)])])
+      .toEqual(['~/.ccrc/ccrc.conf']);
+  });
+
+  it('ships on the SAME LANE as the ccd that reads it', () => {
+    // A two-box fleet runs the server on one box and ccd on the other. Shipped
+    // from the server lane, the operator's preferences would land on a box
+    // where nothing reads them — and silently: the file would be present, the
+    // deploy would succeed, and every session would go on being placed and
+    // moved exactly as before. So the lane is part of the contract, not an
+    // implementation detail. Pinned by position: after the agent lane opens,
+    // and before the `ccd` install that lane performs.
+    const lines = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8').split('\n');
+    const at = (pred: (l: string) => boolean, what: string): number => {
+      const i = lines.findIndex(pred);
+      expect(i, `deploy.sh no longer has ${what}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const agentLane = at((l) => /^if \[ "\$TARGET" = "agent" \]; then$/.test(l), 'the agent lane');
+    const shipConf = at((l) => /^\s*ship_env ccrc\.conf /.test(l), 'the preferences shipment');
+    const installCcd = at((l) => /^\s*install_atomic ccd\/ccd /.test(l), "the ccd install");
+    expect(shipConf, 'the preferences file ships outside the agent lane').toBeGreaterThan(agentLane);
+    expect(shipConf, 'the preferences file ships after the ccd install, or on another lane')
+      .toBeLessThan(installCcd);
+  });
+
+  it('each tool spells it once — no file holds two lines of shell naming it', () => {
+    // Prose may discuss the path anywhere, and both files do at length; only a
+    // LINE OF SHELL is a toucher. One apiece is the whole point: every
+    // operator-facing sentence ccd prints about this file interpolates
+    // `$CCRC_CONF_FILE` rather than re-typing the path, which is what keeps
+    // this number at one — and what makes a box with an unusual HOME get told
+    // where ITS file is. (Deliberately not a cardinal: the count of those
+    // sentences moves whenever a message is added, and a stale number in a
+    // comment is the drift this describe exists to stop.)
+    for (const [f, want] of [['ccd/ccd', 1], ['deploy/deploy.sh', 1]] as const) {
+      const lines = codeLines(path.join(ccrcRoot, f)).filter((l) => l.includes(NEEDLE));
+      expect(lines.length, `${f} names ${NEEDLE} on ${lines.length} lines of shell:\n${lines.join('\n')}`)
+        .toBe(want);
+    }
+  });
+});
+
 // — Stage 3b, Task 1: the exposure seam —
 describe('one ~/.ccrc/exposure.env, spelled once in bash through CCRC_EXPOSURE_FILE', () => {
   // Spec D3: exposure config (CCRC_ORIGIN, CCRC_RP_ID, the DuckDNS trio) lives

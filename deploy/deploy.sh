@@ -585,9 +585,37 @@ if [ "$TARGET" = "agent" ]; then
   # Measured twice: once when CI caught this fix's first push, and again when
   # this very note quoted the token while trying to explain it.
   rsync -az --delete -e "${SSH[*]}" --exclude node_modules --exclude dist --exclude '*.env' \
-    --exclude 'ccrc-mail.token' \
+    --exclude 'ccrc-mail.token' --exclude 'ccrc.conf' \
     agent shared deploy ccd "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
+  # THE OPERATOR'S OWN PREFERENCES (`~/.ccrc/ccrc.conf`, `ccd`'s CCRC_CONF_FILE),
+  # on THIS lane because `ccd` is the only thing that reads it and `ccd` is
+  # installed here. The same "only if you keep one" rule as every other file
+  # `ship_env` carries: with no `deploy/ccrc.conf` on the deploying machine this
+  # is a silent no-op, and a box whose operator wrote their preferences on the
+  # box itself — or wrote none at all, which reads identically — is never
+  # touched. No lane generates this file; there is nothing to seed, because an
+  # absent file is already the documented "decide as you always have".
+  #
+  # `env_drop_guard` RUNS, AND THE TEMPLATE IS SHAPED SO THAT IT WORKS. The
+  # guard compares key NAMES: it refuses a shipment that would drop a line the
+  # box currently has. That is exact for this file in both directions ONLY
+  # because `deploy/ccrc.conf.example` ships every key COMMENTED OUT — an
+  # unedited copy names no keys, so it takes nothing away and the guard says so
+  # if it would. The shape the guard cannot see is a bare `KEY=`: this file
+  # reads that as "no preference" while the guard reads the name as still set,
+  # and a preference would leave the box silently. The example says so in the
+  # operator's own words and tells them to delete the line instead; there is no
+  # code fix here that would not change what the guard means for `ccrc.env` and
+  # `agent.env` as well, which is a separate argument from this feature.
+  #
+  # `export KEY=value` needs no exception either, and that is a ruling this
+  # repo already made: the guard's extractor does not count it, `_box_env_value`
+  # does not read it, systemd does not accept it, and
+  # `deploy-env-guard.test.ts` pins that agreement. `ccd`'s reader for THIS
+  # file refuses it too, loudly, rather than being the one dialect on the box
+  # that differs — see `_conf_get`'s status 4.
+  ship_env ccrc.conf .ccrc/ccrc.conf
   ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
   # THE ROSTER LANDS BEFORE ccd, and that ordering is the whole point of this
   # block. The ccd installed on the next line refuses to run AT ALL without

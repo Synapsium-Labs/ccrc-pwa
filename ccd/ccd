@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=78ce0d4a44eef9fba452e9090280bbf2f8d88ec27d7b64f32c0eb6304e122a2c
+# ccrc:generated 1 sha256=5b166ba90fad5ddedf0fdf7aaba16501a3e428861789330e35c3357352a31bd1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -987,6 +987,10 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
 SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
+                                # THIS BUILD'S default, and only that: `CCRC_SESSION_EFFORT`
+                                # in ~/.ccrc/ccrc.conf overrides it per box and, unlike this
+                                # constant, is typed ONCE per session rather than on every
+                                # pane creation (see `_inject_spawn_effort`).
                                 # ultracode is session-only by design (no settings.json key),
                                 # so injecting it at spawn is the only way to default it.
 # D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
@@ -1183,6 +1187,348 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
   [[ "${first//[[:space:]]/}" == "on" ]]
 }
 
+
+# ── THE OPERATOR'S OWN BOX PREFERENCES (~/.ccrc/ccrc.conf) ────────────────
+# A box-level file the OPERATOR writes and no lane ever overwrites, holding the
+# decisions they want taken away from the machine. `deploy/ccrc.conf.example`
+# is its documented template and the only copy of it in git.
+#
+# ABSENCE IS NOT A VALUE, and that sentence is the whole contract: an absent
+# file, an absent key and a blank value all mean "decide exactly as you did
+# before this file existed". That is what makes the file safe on a fleet whose
+# operators never open it — every default in this script stands until somebody
+# writes a line to change it, and no key here changes a default by existing.
+#
+# NEVER SOURCED. `ccd/ccrc`'s `_box_env_value` states the rule for `ccrc.env`
+# and the whole of it applies here, with one addition that makes it stricter:
+# that file is GENERATED and this one is HAND-EDITED, so sourcing it would run
+# whatever a typo produced, with ccd's privileges, on the five-second
+# supervisor tick. It is read key by key, by `_conf_get` below, and nothing
+# here is ever exported.
+#
+# NOT A SHARED FRAGMENT, which is worth stating because the obvious shape is
+# the wrong one. `ccd/ccrc` sources `ccrc-doctor-checks` and
+# `ccrc-wrapper-shape` from beside itself, and that is precisely why `ccrc` is
+# installed as a SHIM into ~/ccrc/ccd rather than copied onto PATH
+# (deploy/deploy.sh:262-285 — bash does not resolve `BASH_SOURCE` through a
+# symlink, so a lone copy leaves every sibling unfindable). `ccd` is installed
+# as ONE self-contained file (`install_atomic ccd/ccd .local/bin/ccd`), and
+# every `claude-session@*` unit on the fleet execs it. Giving ccd a sibling to
+# source would change its install shape and hand a half-finished deploy a new
+# way to break every supervisor on the box at once. So the reader lives here,
+# once. If a second caller ever needs it — `ccrc doctor` reporting what this
+# box's preferences say is the likely one — THAT is the moment to extract a
+# fragment and give ccd the shim treatment, not before; until then
+# `server/test/single-definition.test.ts` is what notices a second
+# hand-written copy of this path.
+CCRC_CONF_FILE="$HOME/.ccrc/ccrc.conf"
+
+# ONE KEY OUT OF THE PREFERENCES FILE, BY NAME, AND NOTHING ELSE.
+#
+# THE STATUS SAYS WHY THE VALUE IS EMPTY, because three different conditions
+# arrive here as an empty string and a caller must not be made to guess which
+# one it got ("no overloaded null at a seam"):
+#   0  a value was read.
+#   1  NO FILE. This box states no preferences at all.
+#   2  the file exists and does not set this key, or sets it blank.
+#   3  the file EXISTS AND COULD NOT BE READ. UNMEASURED, not absent — the
+#      operator may well have pinned this box in a file ccd just failed to
+#      open, and a caller that reads that as "no preference" hands the machine
+#      back the decision the operator took away from it. Every caller below
+#      SAYS SO rather than proceeding silently.
+#   4  the key IS IN THE FILE, in a form this reader does not accept — today
+#      that means exactly one thing, `export KEY=value`. It is refused rather
+#      than tolerated, and this repo has already ruled on why: `deploy.sh`'s
+#      `env_drop_guard` and `ccrc`'s `_box_env_value` both treat `export` as
+#      not-a-value because systemd does not accept it either, and
+#      `deploy-env-guard.test.ts` pins that agreement BY NAME. Accepting it
+#      here would make this the one file on the box with its own dialect, and
+#      the cost is not academic: the deploy's key-drop guard would go blind to
+#      a key it exists to protect, so a shipment could silently un-set a
+#      preference nobody could see the box had. So the form is refused — and
+#      because a key silently unread is the failure this whole file exists to
+#      prevent, it is refused OUT LOUD: every accessor turns rc 4 into a
+#      sentence naming the form and the fix.
+# Today's callers treat 1 and 2 alike; the distinction is returned anyway
+# because this function must not make that choice on their behalf, and because
+# "you have no conf file" and "your conf file does not set that" are different
+# sentences for whatever eventually reports this to an operator.
+#
+# RE-READ ON EVERY CALL, DELIBERATELY, rather than cached at startup: the
+# supervisor is a long-lived process (`cmd_supervise`), and an operator who
+# edits this file must not have to restart the fleet to be obeyed. The file is
+# a handful of lines and the loop forks nothing.
+#
+# THE SHAPE ACCEPTED is a hand-written operator's, not systemd's. `ccrc.env`
+# has a SECOND reader that decides what it means — systemd's own
+# `EnvironmentFile=` — and `_box_env_value` must therefore agree with it
+# exactly. Nothing decides what THIS file means except the function below.
+# (One other thing reads it: `deploy.sh`'s `env_drop_guard`, which extracts key
+# NAMES to refuse a shipment that would drop one. That is a safety check on a
+# deploy, not a second interpreter of a value, and it is deliberately looser —
+# it cannot see the `export ` form tolerated below. `deploy.sh` says so at its
+# own call site rather than leaving the gap to be found.)
+# Optional leading whitespace, then `KEY=value`. The value is trimmed of surrounding whitespace and one
+# layer of surrounding quotes. A trailing `# comment` on a value line is NOT
+# stripped — neither systemd nor a shell strips one, and a reader that did
+# would be the only thing on the box with that opinion. Every one of the three
+# accessors below therefore RECORDS a sentence when it cannot use a value, and
+# `cmd_ws_add` prints all three: without that, `CCRC_SESSION_AUTOSWAP=off  # …`
+# would read as "not a yes/no word", leave switching on, and say nothing —
+# which is the precise failure that key exists to prevent. The same machinery
+# carries rc 4, the `export` spelling, for the same reason.
+# The LAST assignment wins, as it does in a shell.
+_conf_get() {   # KEY -> prints the value; the status says why it is empty (above)
+  # `${1-}` AND A GUARD, for the reason `_conf_bool` below states in full: this
+  # file runs under `set -u`, where a bare `$1` in a function called with no
+  # argument ABORTS THE SHELL, and this one is reachable from the supervise
+  # tick through `_conf_autoswap_pinned`. No caller does that today. An empty
+  # key is answered rather than aborted on, because the alternative is worse
+  # than a wrong answer: with `key=""` the arm below reads `"="*`, which a line
+  # beginning with `=` would match, so the fold would silently return some
+  # other line's value. rc 2 — "no value this build can use" — is the honest
+  # answer for a key nobody named.
+  local key="${1-}" line v="" found=1 exported=1 rest
+  [[ -n "$key" ]] || return 2
+  [[ -f "$CCRC_CONF_FILE" ]] || return 1
+  [[ -r "$CCRC_CONF_FILE" ]] || return 3
+  # Space, tab, CR — `_box_env_value`'s set and its reasoning: a variable
+  # rather than an inline bracket expression because a tab and a CR typed
+  # inline are invisible in a diff and one stray edit from being deleted.
+  local ws=$' \t\r'
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[!$ws]*}"}"
+    case "$line" in
+      "$key="*) v="${line#"$key="}"; found=0 ;;
+      export*)
+        # NOT ACCEPTED — NOTICED. The line is left unread exactly as systemd
+        # would leave it, and remembered, so a caller can say why a key the
+        # operator can plainly see in the file had no effect at all.
+        rest="${line#export}"
+        [[ "$rest" != "${rest#[$ws]}" ]] || continue
+        rest="${rest#"${rest%%[!$ws]*}"}"
+        # `if`, NOT `&&`: this is the LAST command in the loop body, so its
+        # status becomes the `while`'s, and a non-matching line would make the
+        # loop exit 1 and the `|| return 3` below report a readable file as
+        # unreadable. Measured — the test 'an exported OTHER key is not
+        # mistaken for this one' failed with rc 3 before this line was an `if`.
+        if [[ "$rest" == "$key="* ]]; then exported=0; fi ;;
+      *) continue ;;
+    esac
+  done 2>/dev/null < "$CCRC_CONF_FILE" || return 3
+  v="${v%$'\r'}"
+  v="${v#"${v%%[!$ws]*}"}"
+  v="${v%"${v##*[!$ws]}"}"
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}" ;;
+    \'*\') v="${v#\'}"; v="${v%\'}" ;;
+  esac
+  printf '%s' "$v"
+  [[ "$found" -eq 0 && -n "$v" ]] && return 0
+  # An accepted assignment always wins: a file carrying both spellings is
+  # answered by the one this reader reads, and only a key seen SOLELY in the
+  # `export` form is reported as one.
+  [[ "$found" -ne 0 && "$exported" -eq 0 ]] && return 4
+  return 2
+}
+
+# A YES/NO PREFERENCE, GENEROUSLY SPELLED. `_rc_enabled` one screen up accepts
+# the single token `on` and reads everything else as off, and that is right for
+# ITS file: `~/.ccrc/remote-control` is seeded by an installer, so a value
+# nobody typed cannot be a typo. This file is hand-edited by definition, and
+# here the strict-token rule would fail in the one direction that matters — an
+# operator who writes `CCRC_SESSION_AUTOSWAP=false` means to pin the box and a
+# strict reader would leave the machine free to move their sessions, silently,
+# which is the exact outcome the key exists to prevent. So both directions have
+# a vocabulary, and anything OUTSIDE both vocabularies is not guessed at.
+#   0  a recognised TRUE      1  a recognised FALSE      2  unrecognised
+_conf_bool() {   # value -> 0 true | 1 false | 2 not a yes/no word at all
+  # `${1-}`, not `$1`: this file runs under `set -u`, where a bare `$1` in a
+  # function called with no argument ABORTS THE SHELL — and this one is
+  # reachable from the supervise tick, where that would take the supervisor
+  # down rather than return an answer. No caller does that today; the guard is
+  # a line, and the failure it prevents is not.
+  local v="${1-}"
+  case "${v,,}" in
+    on|1|yes|true|enabled)   return 0 ;;
+    off|0|no|false|disabled) return 1 ;;
+    *)                       return 2 ;;
+  esac
+}
+
+# THE THREE KEYS THIS BUILD READS, one accessor each, all of them SILENT.
+#
+# WHY SILENT, AND WHERE THE NOISE GOES INSTEAD. `_conf_autoswap_pinned` is
+# consulted by `_auto_swap_check` on the five-second supervise tick, for every
+# session on the box. A function that printed anything — a warning about a
+# malformed value, a note about an unreadable file — would print it twelve
+# times a minute per session into the supervisor's journal, which is the
+# storm `_strand_clear` and `_tick_undecidable` both carry explicit debounces
+# to avoid. So the accessors decide and say nothing, and the two call sites
+# that a HUMAN is standing in front of — `cmd_ws_add`, which is a typed verb,
+# and `_spawn_settle`, which runs once per pane creation rather than per tick
+# — do the talking.
+#
+# THE FALLBACK DIRECTION IS THE SAME EVERYWHERE AND IT IS DELIBERATE: a key
+# that cannot be read, or whose value this build does not recognise, leaves
+# the decision exactly where it was before the file existed. The alternative —
+# treating doubt as a pin — means one `chmod` accident silently disables the
+# rate-limit rescue on every session on the box, which is a far worse failure
+# than a preference not taken. The operator learns about it from the two loud
+# call sites above, not from the tick.
+
+# TWO OUT-PARAMS EACH, AND NOT ONE OF THEM ON STDOUT — this is the shape
+# `SPAWN_FROMSWAP` a few screens down uses, for the reason `_spawn`'s own
+# header gives it: a `$( )` runs the function in a SUBSHELL, so a global it
+# sets there dies with that subshell and the caller reads the value it had
+# before the call. An accessor that must answer BOTH "which account" and "why
+# not" cannot put one on stdout and the other in a global — the second would
+# be silently lost at every call site. So both answers are globals and the
+# accessors are called PLAINLY, never in a command substitution. (Measured, in
+# this feature's own tests: the first cut printed the value and set the
+# sentence, and every warning came back empty.)
+#
+# Each accessor CLEARS BOTH of its own before deciding. A stale sentence from
+# an earlier call, printed beside a later decision, is a lie about which one
+# failed.
+CONF_ACCOUNT=""
+CONF_ACCOUNT_WHY=""
+CONF_EFFORT=""
+CONF_EFFORT_WHY=""
+CONF_AUTOSWAP_WHY=""
+
+_conf_autoswap_pinned() {   # 0 = this box pinned its sessions; 1 = decide as always
+  # rc 3 (unreadable) and an unrecognised word both answer NOT PINNED. See the
+  # paragraph above for why doubt must never read as a pin.
+  #
+  # IT RECORDS A SENTENCE AND PRINTS NOTHING. The tick calls this twelve times
+  # a minute per session, so it may not speak; but a value this build cannot
+  # read as yes or no fails in the one direction the key exists to prevent —
+  # the operator writes something they mean as "off", the machine goes on
+  # switching, and nobody says a word. So the sentence is recorded here and
+  # printed by `cmd_ws_add`, a typed verb with a human in front of it. The
+  # commonest way to land here is a trailing comment (`off   # pin this box`),
+  # which this file's reader deliberately does not strip — see `_conf_get`.
+  local v rc
+  CONF_AUTOSWAP_WHY=""
+  # THE NO-FILE SHORT CIRCUIT, AND WHY ONLY THIS ACCESSOR HAS ONE. `$( )` is a
+  # subshell — a FORK — and it is paid before `_conf_get`'s own `-f` test is
+  # ever reached, because the substitution builds the subshell first. This
+  # accessor is the one on the five-second supervise tick, for every session on
+  # the box, so on a box that never writes the file that fork would be the
+  # whole cost of a feature it does not use. It is the same cost `_reg_set`'s
+  # header refuses a `command -v` for, and the same answer: measure once,
+  # cheaply. A missing file is one `stat`, and the accessor's answer for it is
+  # unchanged — `_conf_get` would return 1, `_conf_bool ""` would return 2, and
+  # the unrecognised arm returns 1 with no sentence, which is exactly this.
+  #
+  # The other two accessors deliberately do NOT carry this: `cmd_ws_add` is a
+  # typed verb and `_spawn_settle` runs once per pane creation, so neither is
+  # on a path where one fork is worth a line of explanation.
+  [[ -f "$CCRC_CONF_FILE" ]] || return 1
+  v="$(_conf_get CCRC_SESSION_AUTOSWAP)"; rc=$?
+  [[ "$rc" -ne 3 ]] \
+    || { CONF_AUTOSWAP_WHY="$CCRC_CONF_FILE exists but could not be read, so automatic switching was left on"; return 1; }
+  [[ "$rc" -ne 4 ]] \
+    || { CONF_AUTOSWAP_WHY="the key is written as 'export CCRC_SESSION_AUTOSWAP=...' in $CCRC_CONF_FILE, which is not a form this file accepts (systemd does not either) — drop the 'export'"; return 1; }
+  _conf_bool "$v"; rc=$?
+  case "$rc" in
+    1) return 0 ;;   # a recognised FALSE — "automatic switching: off" — is the pin
+    0) return 1 ;;   # a recognised TRUE — today's behaviour, asked for by name
+    *) [[ -z "$v" ]] \
+         || CONF_AUTOSWAP_WHY="'$v' is not a yes/no word, so automatic switching was left on"
+       return 1 ;;
+  esac
+}
+
+# THE ACCOUNT A NEW SESSION IS BORN ON. Prints the preferred account when it is
+# one this box may actually place a session on, and NOTHING otherwise — an
+# empty answer means "choose as you always have", which is what every caller
+# already does when there is no preference.
+#
+# THE GATES, AND WHY EACH ONE IS HERE RATHER THAN LEFT TO THE CALLER:
+#   `_is_valid_wrapper`  the id is in the roster this ccd started with. That
+#       snapshot is also what the re-pick's intersection rule requires, so an
+#       account that joined the roster mid-command cannot slip in this way.
+#   `_account_ok`        its wrapper exists on disk and its lane is not
+#       kill-switched. `$REG/<w>-disabled` is an operator saying "not this
+#       one"; a preference written weeks ago must not outrank today's switch.
+#   `_is_home_able`      it is an account a session may be PLACED on at all.
+#       The overflow lanes are not, by roster declaration, and naming one here
+#       is a category error rather than a choice.
+#   `_pool_ok` == 0      the project's pool admits it. The pool stays absolute:
+#       `_swap_target` refuses to return a session to a wrong-pool home
+#       (ccd:13164-13172 before this block landed) and the automatic rotation
+#       never crosses, marker or no marker. A standing box-level preference is
+#       a weaker claim than either, so it loses to the pool too. rc 2 — the tag
+#       could not be read — is NOT honoured either: honouring a preference
+#       under an unreadable tag is exactly the silent constraint-lift
+#       `_project_pool_state`'s four-word vocabulary exists to prevent.
+#
+# WHAT IT DELIBERATELY DOES NOT GATE ON: `_authdead`. That is a MEASUREMENT
+# taken by a probe, not an operator's intent, and this file already ranks it
+# last rather than excluding it (`_ws_least_loaded`'s condemned tier). An
+# operator who named an account and got a different one because a probe
+# guessed wrong would have lost the predictability the key exists to give
+# them; the dead account announces itself in the pane, where they can act.
+_conf_session_account() {   # project -> sets CONF_ACCOUNT / CONF_ACCOUNT_WHY
+  local project="${1-}" pref rc pps
+  CONF_ACCOUNT=""; CONF_ACCOUNT_WHY=""
+  pref="$(_conf_get CCRC_SESSION_ACCOUNT)"; rc=$?
+  # rc 3 IS A SENTENCE, NOT A SILENCE. The header above promises every caller
+  # says so, and returning here with an empty `_WHY` made that promise false:
+  # an operator whose file became unreadable got the automatic pick with no
+  # word at all, which is the condition this key exists to remove.
+  [[ "$rc" -ne 3 ]] \
+    || { CONF_ACCOUNT_WHY="$CCRC_CONF_FILE exists but could not be read, so no preference could be measured"; return 0; }
+  [[ "$rc" -ne 4 ]] \
+    || { CONF_ACCOUNT_WHY="the key is written as 'export CCRC_SESSION_ACCOUNT=...' in $CCRC_CONF_FILE, which is not a form this file accepts (systemd does not either) — drop the 'export'"; return 0; }
+  [[ "$rc" -eq 0 && -n "$pref" ]] || return 0
+  _is_valid_wrapper "$pref" || { CONF_ACCOUNT_WHY="'$pref' is not in this box's account roster"; return 0; }
+  _account_ok "$pref" || { CONF_ACCOUNT_WHY="'$pref' has no wrapper on this box, or its lane is switched off ($REG/$pref-disabled)"; return 0; }
+  _is_home_able "$pref" || { CONF_ACCOUNT_WHY="'$pref' is not an account sessions are placed on"; return 0; }
+  pps=$(_project_pool_state "$project")
+  _pool_ok "$pref" "$pps"
+  case "$?" in
+    0) CONF_ACCOUNT="$pref"; return 0 ;;
+    1) CONF_ACCOUNT_WHY="'$pref' is in pool '$(_acct_pool "$pref")' and project '$project' is in pool '${pps#named }'" ;;
+    *) CONF_ACCOUNT_WHY="the pool tag for project '$project' is $pps, so nothing can be proved about '$pref'" ;;
+  esac
+  return 0
+}
+# THE EFFORT LEVEL A NEW SESSION IS BORN AT. Prints it, or nothing.
+#
+# THE SHAPE GATE IS NOT COSMETIC. This value is typed LITERALLY into a live
+# pane by `_inject_spawn_effort`, after `/effort ` and before an Enter. A value
+# carrying a newline would submit whatever followed it as a second line of
+# input to a running Claude Code session; a value carrying a space would send
+# the remainder as an argument nobody wrote. So the level must look like a
+# single bare word — the only thing `/effort` ever takes — and anything else
+# is refused rather than typed. That refusal is the reason a trailing
+# `# comment` on the value line (which this file's reader deliberately does
+# not strip, see `_conf_get`) is loud instead of silently wrong.
+#
+# The typing itself is deliberately NOT quoted here. `ccd-account-pane.test.ts`
+# scans every line of this file carrying that call's own token and requires a
+# registry-derived target on it, comments included — so a comment that quotes
+# the invocation shadows the real one and reds the suite. Same shape as the
+# rsync-scan warning in `deploy/deploy.sh`, learned the same way.
+CONF_EFFORT_RE='^[A-Za-z0-9][A-Za-z0-9_-]*$'
+_conf_session_effort() {   # -> sets CONF_EFFORT / CONF_EFFORT_WHY
+  local v rc
+  CONF_EFFORT=""; CONF_EFFORT_WHY=""
+  v="$(_conf_get CCRC_SESSION_EFFORT)"; rc=$?
+  [[ "$rc" -ne 3 ]] \
+    || { CONF_EFFORT_WHY="$CCRC_CONF_FILE exists but could not be read, so no preference could be measured"; return 0; }
+  [[ "$rc" -ne 4 ]] \
+    || { CONF_EFFORT_WHY="the key is written as 'export CCRC_SESSION_EFFORT=...' in $CCRC_CONF_FILE, which is not a form this file accepts (systemd does not either) — drop the 'export'"; return 0; }
+  [[ "$rc" -eq 0 && -n "$v" ]] || return 0
+  if [[ ! "$v" =~ $CONF_EFFORT_RE ]]; then
+    CONF_EFFORT_WHY="'$v' is not a single bare word, so it is not something /effort can take"
+    return 0
+  fi
+  CONF_EFFORT="$v"
+}
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
 # The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
 # format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
@@ -1750,12 +2096,13 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 11 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 12 of
 # them call sites — the other six are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
-# with a grep anchor.
+# with a grep anchor; 18/12 once `_conf_session_account` joined, which asks
+# this same question of a box-level preference before honouring it.
 # CORRECTED (round 3): the round-2 sentence attributed its new mention to
 # `_swap_target`'s candidate loop, and the line was in `_auto_swap_check` —
 # the candidate-loop paragraph matches this grep zero times. The call-site
@@ -2049,8 +2396,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 138
-# invocations across 114 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 139
+# invocations across 115 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -2247,9 +2594,13 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # #70 added `compactnote` and `compactskip` while this round rewrote the
   # paragraph around them, so both sides were right and the cardinal belonged
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
-  # up — the same discipline this paragraph is about.
-  # The 36: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # up — the same discipline this paragraph is about. 37 now: `effortset`
+  # joined with `CCRC_SESSION_EFFORT`, and it is listed for the reason the
+  # paragraph above gives rather than because the glob needs it — the glob is
+  # shape-based and already sweeps it. An inventory that omits a file is one a
+  # future reader trusts and a future writer copies.
+  # The 37: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `compactnote`, `compactskip`, `crosspool`, `effortset`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -5048,6 +5399,52 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   [[ -n "$fresh" ]] \
     || die "no account is available for placement any more — every lane this box knew at startup is now disabled, missing or gone from the roster. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled), then adopt them with: ccd start <wrapper> $project $wt"
   hw="$fresh"
+  # ── THE OPERATOR'S DEFAULT ACCOUNT (`CCRC_SESSION_ACCOUNT`) ──────────────
+  # AFTER THE RE-PICK, NOT BEFORE, and that placement is the whole of it. This
+  # verb chooses an account twice — once in the pre-flight, once again here —
+  # because the `git fetch` and `git worktree add` between them are the widest
+  # window any account-valued write in this file has. A preference honoured at
+  # the first pick would be silently overwritten by the second, which is the
+  # class of miss the re-pick block's own note records; this is the LAST word
+  # on `$hw` before it reaches the registry, so it is the only place the
+  # preference can be the answer.
+  #
+  # THE PREMISE THE RE-PICK BLOCK STATES IS THE ONE THIS KEY CHANGES. Its
+  # argument for preferring a fresher measurement is "nobody named this
+  # account, so a fresher measurement is simply the better answer". With this
+  # key set, somebody DID name it — weeks ago, deliberately, in a file they
+  # own — and the fresher measurement is no longer the better answer, it is
+  # just a different one. Everything the re-pick protects still holds: the
+  # accessor only ever returns an account from the startup roster snapshot,
+  # which is exactly the set the intersection rule admits, so this can drop a
+  # lane the re-pick would have used but can never add one it would have
+  # refused.
+  #
+  # IT WARNS AND FALLS BACK; IT NEVER REFUSES. `ws-add` is the verb the PWA
+  # creates every session with, and a preferences file able to `die` here would
+  # let one stale account id stop session creation on the whole box — the exact
+  # opposite of what an operator reaching for predictability asked for. The
+  # accessor's gates (roster, wrapper present, lane enabled, placeable, in
+  # pool) each turn into a sentence naming which one failed, and the automatic
+  # choice stands. This is also the only place a human is standing in front of
+  # the decision, so it is where the sentence is said.
+  # PLAINLY, not in a `$( )`: see the accessors' own header for why.
+  _conf_session_account "$project"
+  if [[ -n "$CONF_ACCOUNT" ]]; then
+    hw="$CONF_ACCOUNT"
+  elif [[ -n "$CONF_ACCOUNT_WHY" ]]; then
+    echo "ccd: warn: CCRC_SESSION_ACCOUNT is set in $CCRC_CONF_FILE but was not used — $CONF_ACCOUNT_WHY. Placing $id on $hw instead." >&2
+  fi
+  # AND THE ONE KEY THAT IS OTHERWISE SILENT. `CCRC_SESSION_AUTOSWAP` is read
+  # only by the supervise tick, which may not print; a value it cannot read as
+  # yes or no therefore leaves automatic switching ON with nothing said, which
+  # is exactly the failure the key exists to prevent. Birth is the moment a
+  # human is here to be told, so this verb tells them. It is a warning about
+  # the FILE, not about this session, and it costs one read on a path that
+  # already does several.
+  _conf_autoswap_pinned || true
+  [[ -z "$CONF_AUTOSWAP_WHY" ]] \
+    || echo "ccd: warn: CCRC_SESSION_AUTOSWAP in $CCRC_CONF_FILE was not understood — $CONF_AUTOSWAP_WHY. Write just 'off' (no trailing comment) to pin this box's sessions." >&2
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
   _reg_set "$id" workspace "$slug"; _reg_set "$id" base "$base"
@@ -12802,6 +13199,17 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # Cooldown is unaffected: callers stamp `lastswap` at dispatch time, and
   # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
   # a delayed swap is still pending.
+  # THE BACKSTOP, NOT THE GATE. `_auto_swap_check`'s pin already returns above
+  # both of this function's two call sites, so on today's code this branch is
+  # unreachable and writes nothing. It is here because this function is the
+  # FUNNEL — the one mechanism in this file that starts a swap with no human —
+  # and a third automatic caller added later would otherwise walk straight past
+  # a preference the operator set. The log line is what makes such a caller
+  # visible the day it appears rather than the day somebody reads the diff.
+  if _conf_autoswap_pinned; then
+    echo "$(date '+%F %T') dispatch WITHHELD $1 -> $2: automatic account switching is off (CCRC_SESSION_AUTOSWAP)" >> "$REG/swap.log"
+    return 0
+  fi
   local jitter=0
   [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
   echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
@@ -13986,6 +14394,59 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     [[ -z "$target" && -n "$hard_blocked" ]] && _strand_mark "$id" "$wrapper" "$project"
     return 0
   fi
+  # ── THE BOX IS PINNED (`CCRC_SESSION_AUTOSWAP=off`) ──────────────────────
+  # THE ONE GATE THAT STOPS EVERY AUTOMATIC MOVE, and it is here rather than
+  # at either dispatch because BOTH arms are below this line: the hard-blocked
+  # rescue and the affinity relocation alike. `_dispatch_swap` has exactly two
+  # call sites in this file and they are both downstream of here, so a row that
+  # gets past this line is the complete set of automatic swaps ccd can make.
+  #
+  # IT MUST MARK, NOT MERELY RETURN, and that is the whole reason it sits on
+  # this exact line. A row arriving here has a REAL destination — the `-z
+  # "$target"` arm four lines up has already returned for the rows that do not
+  # — so the strand mark that arm would have written cannot fire for it. A bare
+  # `return 0` would therefore leave a pinned, hard-blocked session with no
+  # marker, no banner and no swap.log line: the silent strand that the ruling
+  # above the `-z "$target"` arm exists to have removed, reintroduced one
+  # screen below its own removal. So the pin writes its own.
+  #
+  # AND IT MUST BE ABOVE `_strand_clear`, for the same reason from the other
+  # side: that call says "a destination exists, so this row is not stranded",
+  # which is true for the machine and false for the operator. Pinned, the
+  # destination is one ccd may not use, and a session sitting blocked on a
+  # rate-limited account IS stranded until a human moves it — which is exactly
+  # the sentence the operator needs to see. The HEALTHY case is already correct
+  # without us: the tick clears the marker unconditionally further up whenever
+  # the pane is not hard-blocked, so a recovered session does not keep a stale
+  # strand from a pin.
+  #
+  # THE CAUSE IS PASSED EXPLICITLY, following `cmd_swap`'s own automatic-pick
+  # arm: `_strand_why`'s pool census would answer the wrong question here (it
+  # reports which accounts COULD take the session, and on a pinned box several
+  # of them can — that is not why it is not moving), and passing a cause also
+  # skips that census on every tick. It is free text end to end: the registry
+  # keeps `<epoch> <text>`, the server carries the text verbatim, nothing
+  # parses it. (`_strand_mark` always writes the epoch first and the server's
+  # reader splits at the FIRST space, so the text is carried whole whatever it
+  # starts with — a caution to the contrary was written here and measured
+  # false against `packedStamp`.)
+  #
+  # WHAT THIS DELIBERATELY DOES NOT STOP: the automatic `home` re-seed on a
+  # project retag, which runs far above this gate. It moves no session — it
+  # only updates where the machine WOULD pull the row back to — and leaving it
+  # running is what keeps that answer honest, so that unsetting the key later
+  # does not immediately relocate the session to a home the pool has since
+  # forbidden. A swap DISPATCHED before the key was set is not this gate's to
+  # stop — it is sleeping out `SWAP_JITTER` in its own transient unit — but it
+  # does not land either: it wakes into the on-disk `cmd_swap`, whose own
+  # `CCD_SWAP_AUTO` arm refuses it. This gate stops decisions; that one stops
+  # the ones already in flight.
+  if _conf_autoswap_pinned; then
+    [[ -n "$hard_blocked" ]] \
+      && _strand_mark "$id" "$wrapper" "$project" \
+           "automatic account switching is off on this box (CCRC_SESSION_AUTOSWAP in $CCRC_CONF_FILE), so it stays on $wrapper until you move it: ccd swap $id $target"
+    return 0
+  fi
   # A destination exists: whatever the pane says, this row is not stranded.
   _strand_clear "$id"
   _avail "$target" || return 0
@@ -14835,6 +15296,17 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
         "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+      # THE EFFORT MARKER DIES WITH THE CONVERSATION IT DESCRIBED. `--resume`
+      # found nothing, so this line starts a BRAND-NEW Claude Code session in
+      # the same registry row — and a new session is at the build's default
+      # level, whatever the old one had been switched to. `$REG/<id>.effortset`
+      # records "this session already has the operator's level", which is now
+      # false about a session that no longer exists; left in place it would
+      # silence `CCRC_SESSION_EFFORT` for the life of the row. Clearing it here
+      # is what makes the settle type the level once more, for the session that
+      # actually came up. Unconditional and harmless: with no preference set,
+      # nothing ever writes this file.
+      rm -f -- "$REG/$id.effortset"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -14925,7 +15397,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   # we watched come up — which subsumes main's "never synthesize a keystroke into an auth flow"
   # (rc 2 fails `== 0` too) rather than dropping it.
   # BACKEND, not placement: this types Claude-specific input into the TUI.
-  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname"
+  _is_anthropic_backend "$wrapper" && [[ "$prompt_rc" == 0 ]] && _inject_spawn_effort "$tname" "$id"
   # D-2231 — after the effort injection, so its local-command chatter is already
   # in the tail the detector skips. Only on a clean landing: rc 5 is hard-blocked
   # (a keystroke there is the swap's job), rc 2 is a login screen.
@@ -14958,26 +15430,68 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
   _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
-_inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
-  [[ -n "$SPAWN_EFFORT" ]] || return 0
-  local t="$1"
+_inject_spawn_effort() {   # tmuxname [id] — type the effort level once the TUI is up.
+  # THE STATUS NOW SAYS WHETHER ANYTHING WAS TYPED — 0 typed, 1 not — where
+  # the four exits used to be an undifferentiated `return 0`. That flattening
+  # had no consumer and cost nothing until this function gained a reason to
+  # RECORD what it did: stamping "the effort is set" at the call site, or on
+  # any path but the one that actually sent the keystrokes, writes a lie on
+  # exactly the panes most likely to hit a guard — a mid-limit pane with an
+  # auto-continue banner, or one restored with a draft in the box — and those
+  # are revivals, the case the whole stamp exists to get right.
+  local t="$1" id="${2:-}" level pinned="" prev
+  # THE OPERATOR'S LEVEL WINS OVER THIS BUILD'S, and choosing one also turns
+  # the RETYPING off, which is the half of this key worth having. Without it
+  # ccd types its own default on every pane creation — every supervisor
+  # revival, every swap landing, every restart after a refused swap — and
+  # never reads what is already set, so a level chosen by hand is reverted the
+  # next time anything restarts the pane. With it, the level is typed once and
+  # then belongs to whoever is sitting in front of the session.
+  _conf_session_effort
+  level="$CONF_EFFORT"
+  if [[ -n "$level" ]]; then
+    pinned=1
+  else
+    [[ -n "$CONF_EFFORT_WHY" ]] \
+      && echo "ccd: warn: CCRC_SESSION_EFFORT is set in $CCRC_CONF_FILE but was not used — $CONF_EFFORT_WHY" >&2
+    level="$SPAWN_EFFORT"
+  fi
+  [[ -n "$level" ]] || return 1
+  # ALREADY TYPED, AND STILL THE LEVEL THE FILE ASKS FOR. The comparison is
+  # against the RECORDED level rather than mere presence, so an operator who
+  # edits the key gets their new level typed once on the next pane creation
+  # instead of having to know to delete a marker. `$REG/<id>.effortset` is a
+  # dotted per-session field like every other, which is what puts it inside
+  # `_reg_purge`'s suffix glob and makes it die with the workspace; a dotless
+  # name would outlive the session forever and collide with the per-ACCOUNT
+  # switches that share this directory.
+  if [[ -n "$pinned" && -n "$id" ]]; then
+    prev=$(_reg_get "$id" effortset)
+    [[ "${prev#* }" == "$level" ]] && return 1
+  fi
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 1
   fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0
+    echo "ccd: input box not empty, skipped /effort $level" >&2; return 1
   fi
   sleep 1
-  tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
+  tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
     tmux send-keys -t "$t" Enter
   fi
+  # ONLY HERE, and only when the level came from the operator's file. This is
+  # the one exit reached by actually sending the keystrokes, so it is the only
+  # one entitled to record that the session has its level. Without the key set
+  # nothing is stamped at all and the behaviour above is unchanged, which is
+  # what keeps a box with no preferences file exactly as it was.
+  [[ -n "$pinned" && -n "$id" ]] && _reg_set "$id" effortset "$(date +%s) $level"
   return 0
 }
 
@@ -17006,6 +17520,33 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
+  # ── THE PIN, ON THE IN-UNIT SIDE (`CCRC_SESSION_AUTOSWAP=off`) ──────────
+  # THE DEPLOY-WINDOW TWIN of the gate in `_auto_swap_check`, and it closes a
+  # window that gate cannot reach. `ccd` ships to the fleet host while every
+  # `claude-session@*` supervisor is live and still running its PRE-DEPLOY
+  # inode; that supervisor's own `_auto_swap_check` has no pin in it and will
+  # go on dispatching for as long as the unit lives. Its dispatch lands HERE,
+  # in the on-disk `cmd_swap` that does have one — so this is the line that
+  # makes the operator's preference true on the box the moment ccd lands,
+  # instead of at the next supervisor sweep. The same jitter window applies to
+  # a swap dispatched seconds before the key was written.
+  #
+  # `CCD_SWAP_AUTO` IS THE WHOLE POINT OF THE CONJUNCT: it is set by
+  # `_dispatch_swap` and by nothing else, so it says "the tick chose this
+  # target, not a human". An operator's own `ccd swap` — typed, or sent from
+  # the PWA, which reaches this same function — carries no such variable and
+  # is never refused here. That is the key's contract in one line: the machine
+  # stops moving sessions, the operator does not.
+  #
+  # MARK AND THEN `die`, exactly as the cross-pool arm below does and for its
+  # reason: inside `_dispatch_swap`'s transient unit nobody reads this exit
+  # code, so a refusal that only returned would be a silent no-op. The cause
+  # is passed explicitly for the same reason it is at the tick's gate.
+  if [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _conf_autoswap_pinned; then
+    _strand_mark "$id" "$cur" "$project" \
+      "an automatic swap to $target was refused because automatic account switching is off on this box (CCRC_SESSION_AUTOSWAP in $CCRC_CONF_FILE); it stays on $cur until you move it: ccd swap $id $target"
+    die "automatic account switching is off on this box (CCRC_SESSION_AUTOSWAP in $CCRC_CONF_FILE), so this automatically-chosen swap of '$id' to $target is refused. Nothing was touched. To move it yourself: ccd swap $id $target"
+  fi
   pps=$(_project_pool_state "$project")
   _pool_ok "$target" "$pps"; prc=$?
   # UNDECIDABLE REFUSES EVEN WITH THE FLAG. `--cross-pool` says "cross from
