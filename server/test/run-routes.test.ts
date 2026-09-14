@@ -3650,4 +3650,93 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.statusCode).toBe(200);
     expect(okRun(w.coord.run(workId))!.state).toBe('working');
   });
+
+  // ---- Task 7: closing a review run (design 2026-09-14 §5.3) --------------
+
+  /** W dispatched into a fixture repo whose `ws/demo-w1` is at TIPW, positioned
+   *  at awaiting-review; R opened and dispatched against it.
+   *
+   *  The git fixture is this file's OWN `gitRoot` (`:1632`), not a second copy
+   *  of `coord-fingerprint.test.ts`'s `project()`: the two build the identical
+   *  loose ref (`<root>/<project>/.git/refs/heads/<branch>`), and the only
+   *  thing `project()` adds is a packed-refs arm nothing here needs. */
+  const TIPW = 'c'.repeat(40);
+  const reviewInFlight = async (home: string, tipNow: string = TIPW) => {
+    const root = gitRoot(PROJECT, 'ws/demo-w1', tipNow);
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
+    const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);                       // ws-add seeds demo-w1; the registry diff sees ONE new row
+    seed(home, 'demo-r1');                                    // R's row, planted AFTER W's dispatch so that diff stays unambiguous
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+    const r = (await postOpen(app, REVIEW(opened.id))).json() as { id: number };
+    w.coord.markDispatched(r.id, 'demo-r1', 'r1', 'ws/r1', false);
+    // `markDispatched` binds the session and writes four columns; it is not a
+    // transition. REVIEW_RUN_TRANSITIONS has no planned->working edge, so R
+    // takes the `dispatched` hop the store's own machine requires.
+    expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(w.coord.advance(r.id, 'working', 'test').ok).toBe(true);
+    const report = path.join(root, 'report.md'); writeFileSync(report, '# findings\n');
+    calls.length = 0;
+    return { w, workId: opened.id, reviewId: r.id, report, calls };
+  };
+
+  it('closes a review run done when the reviewed tip is unchanged: released, no closing hop, worker untouched', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('done');
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');   // the coordinator rules next
+    expect(calls.map((c) => c[0])).toEqual(['ws-release']);              // its own workspace, freed
+    const events = w.coord.db.prepare('SELECT toState FROM run_events WHERE runId = ? ORDER BY id').all(reviewId) as { toState: string }[];
+    expect(events.map((e) => e.toState)).not.toContain('closing');
+  });
+
+  it('refuses stale-review when the worker pushed after wave-done, and the run stays working', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, report, calls } = await reviewInFlight(home, 'd'.repeat(40));
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.statusCode).toBe(409);
+    // `sendCloseOutcome` spells a `doneVerdict` `{error: <code>, detail}`
+    // (`coord/routes.ts`, unchanged by this task) — `reject: {code}` is the
+    // ADVANCE route's shape, which this route has never used.
+    expect(res.json()).toMatchObject({ ok: false, error: 'stale-review' });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('working');
+    expect(calls).toEqual([]);                                            // no fleet act on a refusal
+  });
+
+  it('refuses report-unreadable when the report is not there', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId, report } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report: report + '.missing' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'report-unreadable' });
+  });
+
+  it('closes a review run failed without any re-measurement (the reviewer died)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home, 'd'.repeat(40));   // tip moved, report absent — irrelevant
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report: '/nowhere' }, state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: true });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expect(calls.map((c) => c[0])).toEqual(['ws-release']);
+  });
+
+  it.each([
+    ['final', { fingerprint: { reviewedTip: TIPW, report: '/r' }, final: true }],
+    ['archive', { fingerprint: { reviewedTip: TIPW, report: '/r' }, archive: true }],
+    ['a work fingerprint', { fingerprint: { branchTip: TIPW, handoffCommit: TIPW, prNumber: null, prPhase: 'none' }, final: true }],
+    ['a relative report path', { fingerprint: { reviewedTip: TIPW, report: 'report.md' } }],
+    ['a short tip', { fingerprint: { reviewedTip: 'abc', report: '/r' } }],
+  ])('refuses %s on a review close as bad-request', async (_what, body) => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, body);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
 });

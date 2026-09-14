@@ -1,12 +1,13 @@
+import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
+import { verifyDone, verifyReviewDone, type DoneClaim } from './fingerprint.js';
 import {
-  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult,
+  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult, type RunRow,
 } from './store.js';
 import {
   HANDOFF_SHA,
@@ -232,6 +233,9 @@ export async function closeRun(
     // re-measure against and no worker to mail a rejection back to.
     return { ok: false, kind: 'refused', code: 'not-dispatched' };
   }
+  // Design 2026-09-14 §5: a REVIEW run closes on its own claim, with no
+  // `closing` hop, no `.prhistory` and no PR check. One arm, one function.
+  if (run.kind === 'review') return closeReviewRun(deps, run, b, causedBy, siblingsOf, survivorOf);
   // A second precondition, read-only, checked BEFORE the fleet act (fix,
   // found in Task 9 review — D-48, the close-route half of D-46's same
   // ordering fix for dispatch): a run that cannot legally reach `closing`
@@ -388,4 +392,86 @@ export async function closeRun(
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
 
   return { ok: true, id, state, released };
+}
+
+/** The review-kind close (design 2026-09-14 §5.3–5.4, D-2796). Body:
+ *  `{ fingerprint: { reviewedTip, report }, state?: 'done'|'failed' }`. `final`
+ *  and `archive` are REFUSED: a review run is always final (its workspace is its
+ *  own and is released here), and archive stays a human act. `state:'failed'`
+ *  is the coordinator's "the reviewer died" — nothing is re-measured, exactly
+ *  as the work path's abandon arm (D-49). */
+async function closeReviewRun(
+  deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: 'coordinator' | 'operator',
+  siblingsOf: (sessionId: string) => OpenSiblingsResult,
+  survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
+): Promise<CloseOutcome> {
+  const coord = deps.coord;
+  const fp = b.fingerprint as { reviewedTip?: unknown; report?: unknown } | undefined;
+  if (b.final !== undefined || b.archive !== undefined ||
+      typeof fp !== 'object' || fp === null ||
+      typeof fp.reviewedTip !== 'string' || !HANDOFF_SHA.test(fp.reviewedTip) ||
+      typeof fp.report !== 'string' || !path.isAbsolute(fp.report) ||
+      (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
+    return { ok: false, kind: 'bad-request' };
+  }
+  const state: 'done' | 'failed' = b.state === 'failed' ? 'failed' : 'done';
+  if (!transitionsFor(run.kind)[run.state].includes(state)) {
+    return { ok: false, kind: 'bad-transition', from: run.state, to: state };
+  }
+  // `run.sessionId` is non-null here: `closeRun`'s own `not-dispatched` check
+  // runs before this arm is entered. The type still says `string | null`, so
+  // narrow it once for the reads below rather than re-check a fact already decided.
+  const sessionId = run.sessionId as string;
+
+  if (state !== 'failed') {
+    if (run.reviews === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: 'this review run names no reviewed run' };
+    }
+    const workRead = coord.run(run.reviews);
+    if (!workRead.ok) return { ok: false, kind: 'hold-invalid', detail: workRead.detail };
+    if (workRead.run === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${run.reviews} no longer exists` };
+    }
+    const work = workRead.run;
+    if (work.sessionId === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${work.id} has no session to measure` };
+    }
+    const verdict = await verifyReviewDone(
+      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+      { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
+      { reviewedTip: fp.reviewedTip, report: fp.report },
+    );
+    if (!verdict.ok) {
+      coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });
+      queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: run.id,
+        kind: 'status', subject: 'review-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+      return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
+    }
+  }
+
+  // The fleet act, AHEAD of the commit (D-48). A review workspace hosts one
+  // run, so the ordinary answer is a release; the sibling check is kept
+  // because it is a re-measurement, not an assumption.
+  const sibRead = siblingsOf(sessionId);
+  if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+  const survivor = survivorOf(sibRead.siblings);
+  const release = releaseIsSafe(sibRead.siblings) || survivor === null;
+  let argv;
+  if (!release && survivor !== null) {
+    const handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    if (!handoff.ok) return handoff;
+    argv = CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`));
+  } else {
+    argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
+  }
+  if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+
+  const closed = coord.closeRun({
+    runId: run.id, finalState: state, causedBy, handoffCommit: null, program: run.program,
+    viaClosing: false,   // REVIEW_RUN_TRANSITIONS has no `closing` (§5.2)
+  });
+  if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+  return { ok: true, id: run.id, state, released: release };
 }
