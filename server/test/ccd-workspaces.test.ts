@@ -212,7 +212,17 @@ describe('a partially purged registry never frees the slug', () => {
     expect(verdicts[verdicts.length - 1],
       'the purge never ran to completion, so FREE was never proved reachable')
       .toBe(`${LAST}:FREE`);
-  });
+    // THE MECHANICAL CONTROL (r3 B-M5), and it is not a wall-clock assertion.
+    // This `it` runs one measuring pass plus `LAST + 1` real `sh()`
+    // invocations, each of which now takes the row's stable lock inside
+    // `_reg_purge` — 28 of them as measured, against the 24 of the literal
+    // `FIELDS.length + 2` bound this replaced. When a future protocol step adds
+    // `rm` calls the derived bound moves, and without this the only symptom is
+    // a slower test that eventually crosses a timeout with nothing naming the
+    // cause. Asserting the iteration count makes that arrive as a NUMBER.
+    expect(verdicts.length, 'the loop ran exactly the derived bound, so a changed rm count names itself')
+      .toBe(LAST + 1);
+  }, 60_000);
 
   it('refuses ws-add on the residue the purge is documented to leave', () => {
     // The one-field residue fix3-ccd.md disclosed and called harmless: an empty
