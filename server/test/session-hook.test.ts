@@ -3723,6 +3723,29 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     } finally { holder.kill('SIGKILL'); }
   }, 40_000);
 
+  it('A FAILED canonical unlink leaves canonical\'s bytes AND ITS MTIME unchanged, and removes only the claim', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const beforeBytes = fs.readFileSync(setFile());
+    const beforeMtime = fs.statSync(setFile()).mtimeNs ?? fs.statSync(setFile()).mtimeMs;
+    // `rm` refuses exactly the canonical set and is the real `rm` for
+    // everything else — so the claim's own removal on this failure path still
+    // works and the assertion is about canonical alone.
+    stub('rm', `for a in "$@"; do case "$a" in *demo-quiet-basin.compactset) exit 1 ;; esac; done\nexec ${sh(realTool('rm'))} "$@"`);
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical survives a failed unlink').toBe(true);
+    expect(fs.readFileSync(setFile()), 'its bytes are unchanged').toEqual(beforeBytes);
+    // THE MTIME IS THE ASSERTION THAT PINS THE ORDER, and nothing else can.
+    // HARD LINKS SHARE MTIME (measured), so a `touch "$claim"` taken while the
+    // claim and canonical are still one inode ages CANONICAL too — and a
+    // sibling's overlap check would then read this settled compaction as still
+    // in flight. Unlinking first is what makes the touch unobservable here, and
+    // this row is the only place that difference reaches the disk.
+    const after = fs.statSync(setFile());
+    expect(after.mtimeNs ?? after.mtimeMs, 'canonical was never touched').toBe(beforeMtime);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+    expect(reg().filter((n) => n.includes('compactpost')), 'only the verified claim went').toEqual([]);
+  });
+
   it('NO UNLOCKED CLEANUP: a helper that says nothing usable leaves the claim and the marker as residue', () => {
     const { tree, transcript } = cycle({ serve: true });
     // The helper answers garbage, so the shape gate refuses and no record is
