@@ -1,6 +1,6 @@
 # Review runs — design
 
-**Status:** design rev 1 — three forks and scope settled with the operator 2026-09-14 (§3); awaiting operator review of this document · **Date:** 2026-09-14 · **Branch:** `spec/review-runs` (based on `origin/main` `56635768`)
+**Status:** design rev 1 — three forks and scope settled with the operator 2026-09-14 (§3); approved by the operator 2026-09-14 · **Date:** 2026-09-14 · **Branch:** `spec/review-runs` (based on `origin/main` `56635768`)
 **Parent:** `docs/superpowers/specs/2026-08-07-build7-fleet-coordination-design.md` — this spec restores that design's §7 and amends its "Wave lifecycle" bullet (§13).
 
 A coordinator that reviews inline is a serial bottleneck on a parallel fleet. This spec moves the
