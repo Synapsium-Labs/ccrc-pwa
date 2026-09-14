@@ -532,13 +532,16 @@ describe('the card from the graph (spec §3.2)', () => {
     // the hook's reacquired-lock `mv` — which renames the stage onto canonical
     // WITHOUT reading it, so a truncated stage would publish a truncated
     // canonical artifact. To observe the defect behaviourally a fixture would
-    // have to kill the helper inside `writeFileSync`, between two write(2)
-    // calls on a file small enough that node issues only one: measured, a
-    // mutant that writes the target directly and then renames it onto itself
-    // leaves every assertion in this file GREEN, because on these fixture-sized
-    // payloads the partial state has no window to exist in. A green mutation
-    // means AMBIGUOUS, not untested — so the discipline is pinned where it is
-    // decidable, in the source.
+    // have to kill the helper inside `writeFileSync`, BETWEEN two `write(2)`
+    // calls — and there are never two. MEASURED with
+    // `strace -f -e trace=write` over a `writeFileSync` of 4 KiB, 64 KiB,
+    // 256 KiB and 1 MiB: exactly ONE `write(2)` at every size, so the window
+    // does not exist at any payload this helper produces, not merely at
+    // fixture sizes. Consistent with that, a mutant that writes the target
+    // directly and then renames it onto itself leaves every assertion in this
+    // file GREEN. A green mutation means AMBIGUOUS, not untested — so the
+    // discipline is pinned where it is decidable, in the source, and the
+    // substitution is recorded as D-2802 beside its two siblings.
     const src = fs.readFileSync(HELPER, 'utf8');
     const start = src.indexOf('function writeAtomic(target, text) {');
     expect(start, 'writeAtomic exists').toBeGreaterThan(0);
