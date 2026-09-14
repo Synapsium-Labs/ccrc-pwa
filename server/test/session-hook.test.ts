@@ -3930,6 +3930,83 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     return { tree, transcript };
   };
 
+  // ── §3.4 SETTLEMENT: the claim is consumed BY IDENTITY, not by name ────
+  // "…revalidates generation and claim-FD/current-path identity, then holds it
+  // through raw JSONL validation, stage/whole-file atomic rename, and any
+  // claim/marker cleanup." Only the generation half was built: the retained
+  // claim FD was closed at the snapshot copy, and the final transaction then
+  // unlinked `$claim` BY PATHNAME with no proof the name still referred to the
+  // inode this process linked. Between the settlement release and the final
+  // reacquire the lock is NOT held — `measure` runs there by design — so the
+  // claim pathname is unguarded for exactly that window.
+  //
+  // THE FIXTURE PUTS THE REPLACEMENT WHERE THE WINDOW IS: the helper is
+  // wrapped, and the wrapper swaps the claim for a byte-identical file at the
+  // same name (a NEW inode) before delegating to the real helper. Nothing else
+  // in the test can reach that window.
+  const plantClaimSwappingHelper = (): void => {
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      "if (process.argv.includes('measure')) {",
+      '  for (const n of fs.readdirSync(REG)) {',
+      '    if (/^\\.demo-quiet-basin\\.compactpost\\..*\\.claim$/.test(n)) {',
+      '      const f = path.join(REG, n);',
+      '      const bytes = fs.readFileSync(f);',
+      '      fs.unlinkSync(f);',
+      '      fs.writeFileSync(f, bytes);',
+      '    }',
+      '  }',
+      '}',
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+  };
+
+  it('a claim REPLACED while the lock is down is left standing, and the record still commits', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    plantClaimSwappingHelper();
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    // THE RECORD STILL COMMITS: it was built from the SNAPSHOT, which is
+    // FD-derived, so a stranger at the claim pathname cannot falsify it.
+    expect(journal(), 'exactly one line, from the FD-derived snapshot').toHaveLength(1);
+    // AND THE STRANGER STANDS. Without the identity check this arm unlinks
+    // whatever now wears the name — a file it never created and has no licence
+    // to delete.
+    const left = reg().filter((n) => /^\.demo-quiet-basin\.compactpost\..*\.claim$/.test(n));
+    expect(left, 'the replaced claim was NOT unlinked by name').toHaveLength(1);
+    // The snapshot is this process's own and goes either way; so does the
+    // marker, which the identity check does not gate.
+    expect(reg().filter((n) => n.includes('compactions-snapshot')), 'our own snapshot went').toEqual([]);
+  }, 60_000);
+
+  it('CONTROL: with the claim NOT replaced, the same cycle consumes it', () => {
+    // What makes the leg above a measurement rather than a fixture that can
+    // only pass: the identical wrapper, with the swap disabled.
+    const { tree, transcript } = cycle({ serve: true });
+    const regd = path.join(home, '.cc-sessions');
+    fs.copyFileSync(HELPER_SRC, path.join(regd, 'compact-card.real.mjs'));
+    fs.writeFileSync(path.join(regd, 'compact-card.mjs'), [
+      "import { spawnSync } from 'node:child_process';",
+      "import path from 'node:path';",
+      "const REG = path.join(process.env.HOME, '.cc-sessions');",
+      "const r = spawnSync(process.execPath, [path.join(REG, 'compact-card.real.mjs'), ...process.argv.slice(2)],",
+      "  { stdio: ['inherit', 'inherit', 'inherit'] });",
+      'process.exit(r.status ?? 1);',
+      '',
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(journal()).toHaveLength(1);
+    expect(reg().filter((n) => /^\.demo-quiet-basin\.compactpost\..*\.claim$/.test(n)),
+      'an unreplaced claim IS consumed').toEqual([]);
+  }, 60_000);
+
   it('commits EXACTLY ONE sixteen-key line, and consumes the claim, the snapshot and the marker', () => {
     const { tree, transcript } = cycle({ serve: true });
     const setBytes = fs.readFileSync(setFile(), 'utf8');

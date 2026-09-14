@@ -1275,6 +1275,9 @@ _hook_compact_post() {
   [ -e "$COMPACT_CARD_OFF" ] && return 0
   local set="$REG/$id.compactset" journal="$REG/$id.compactions"
   local summary="" trig="" lockfd="" claim="" snap="" stage="" jfd="" claimfd=""
+  # Cleared on entry for the reason every out-parameter in this tree is: a
+  # value from a previous call read as this one's is the fabricated fact.
+  POST_CLAIM_FD=""
   local present=0 meas="" rec="" nonce="" served="false" tries=0 head="" old=""
   local aged=0 norm=""
   summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
@@ -1371,7 +1374,15 @@ _hook_compact_post() {
       rm -f "$snap" 2>/dev/null || true      # this process's own, and only it
       _hook_lock_release "$lockfd"; return 0
     fi
-    { exec {claimfd}<&-; } 2>/dev/null || true
+    # NOT CLOSED HERE. §3.4's settlement sentence requires the final
+    # transaction to revalidate "generation and claim-FD/current-path
+    # identity", and an FD closed at the snapshot cannot answer the second
+    # half: between the release below and the final reacquire the lock is not
+    # held — `measure` runs there by design — so the claim PATHNAME is
+    # unguarded for that window, and unlinking it by name afterwards is an
+    # unlink of whatever now wears the name. The descriptor is the only thing
+    # that still names the inode this process linked.
+    POST_CLAIM_FD="$claimfd"
   fi
   _hook_lock_release "$lockfd"; lockfd=""
 
@@ -1515,7 +1526,18 @@ _hook_compact_post() {
   mv -f "$stage" "$journal" 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
   # COMMITTED. Claim and marker cleanup happens ONLY here, under the
   # successfully reacquired and validated lock — never on a failure path.
-  [[ -z "$claim" ]] || rm -f "$claim" 2>/dev/null || true
+  #
+  # THE CLAIM IS CONSUMED BY IDENTITY, NOT BY NAME (§3.4 settlement). The
+  # retained descriptor and the current pathname must still be one regular
+  # inode; if they are not, the name was replaced while the lock was down and
+  # the occupant is a stranger's file this arm has no licence to delete. The
+  # record still commits — it was built from the snapshot, which is
+  # FD-derived — and the stranger is left exactly where it was.
+  if [[ -n "$claim" ]] && [[ -n "${POST_CLAIM_FD:-}" ]] \
+     && _hook_lock_same "$POST_CLAIM_FD" "$claim"; then
+    rm -f "$claim" 2>/dev/null || true
+  fi
+  _hook_post_claim_close
   [[ -z "$snap" ]]  || rm -f "$snap"  2>/dev/null || true
   [[ -z "$nonce" ]] || rm -f "$REG/.$id.compactserved.$nonce" 2>/dev/null || true
   _hook_lock_release "$lockfd"
@@ -1529,6 +1551,11 @@ _hook_compact_post() {
 # not do. Only this process's own snapshot goes, and only because nothing else
 # can ever read it.
 _hook_compact_post_abandon() {   # <claim> <snapshot>
+  # The retained claim descriptor goes on this path too — see
+  # `_hook_compact_post_fail`'s note. The CLAIM FILE is deliberately left:
+  # abandoning is what "leave the only verified copy as recovery residue"
+  # means, and a descriptor is not a copy.
+  _hook_post_claim_close
   [[ -z "${2-}" ]] || rm -f "$2" 2>/dev/null || true
   return 0
 }
@@ -1538,9 +1565,23 @@ _hook_compact_post_abandon() {   # <claim> <snapshot>
 # noncommit means the measurement has not been recorded and the evidence must
 # outlive the attempt.
 _hook_compact_post_fail() {   # <lockfd> <claim> <snapshot> [<stage>]
+  # THE RETAINED CLAIM DESCRIPTOR GOES HERE TOO, and it rides a named global
+  # rather than a fifth positional: this helper has fifteen call sites, and a
+  # new positional threaded through all of them is fifteen chances to pass the
+  # wrong thing. `POST_CLAIM_FD` is set beside the `exec` that opens it and
+  # cleared by whoever closes it, so "is it still open" has exactly one answer.
+  _hook_post_claim_close
   [[ -z "${4-}" ]] || rm -f "$4" 2>/dev/null || true
   [[ -z "${3-}" ]] || rm -f "$3" 2>/dev/null || true
   _hook_lock_release "${1-}"
+  return 0
+}
+
+_hook_post_claim_close() {   # close the retained claim FD, once, from anywhere
+  [[ -n "${POST_CLAIM_FD:-}" ]] || return 0
+  local fd="$POST_CLAIM_FD"
+  POST_CLAIM_FD=""
+  { exec {fd}<&-; } 2>/dev/null || true
   return 0
 }
 
