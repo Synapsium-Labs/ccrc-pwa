@@ -1622,6 +1622,18 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
     }
 
+    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
+    // under review cannot be moved back to `working` until its review run is
+    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
+    // sending W back, so a report and the tip it describes stay one pair.
+    // Checked ahead of the cap: a definite refusal before a contingent one.
+    if (to === 'working' && run.kind === 'work') {
+      const inflight = coord.reviewInFlightFor(id);
+      if (inflight !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
+      }
+    }
+
     // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
     // `capsUsage().running`, so the one legal edge back INTO an active state
     // — `awaiting-review`/`merging` -> `working`, a review sending work back

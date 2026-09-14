@@ -3633,4 +3633,21 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(w.coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
     expect(w.coord.capsUsage().running).toBe(1);              // the reviewer REPLACES the worker's slot (§5.4)
   });
+
+  it('refuses to send the worker back while its review run is open: review-in-flight (spec §9 inv. 3)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
+    const r = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    const back = () => postAdvance(app, workId,
+      { to: 'working', fingerprint: { branchTip: '', prNumber: null, prPhase: 'none', handoffCommit: '' } });
+    let res = await back();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, reject: { code: 'review-in-flight', reviewRunId: r.id } });
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');
+    // Once the review run is terminal the same send-back goes through.
+    expect(w.coord.advance(r.id, 'failed', 'test').ok).toBe(true);
+    res = await back();
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run(workId))!.state).toBe('working');
+  });
 });
