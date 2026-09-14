@@ -4445,8 +4445,8 @@ export class CoordStore {
    *  a corpse.
    *
    *  `state NOT IN ${TERMINAL_RUN_STATES_SQL}` used to be COPIED, hand-written,
-   *  from `openRunsForSession` (`:1560`) and `openCoordinatorIds`
-   *  (`:1575-1581`), deliberately never the OLD `TERMINAL_RUN_STATES`: that
+   *  from `openRunsForSession` (`:2048`) and `openCoordinatorIds`
+   *  (`:2098-2103`), deliberately never the OLD `TERMINAL_RUN_STATES`: that
    *  constant used to be derived from `RUN_TRANSITIONS`, which gives
    *  `'unknown'` an empty outgoing-edge list and so called it terminal — but
    *  every shipped session-keyed query in this file counts an `'unknown'` row

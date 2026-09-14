@@ -1700,7 +1700,8 @@ because that exact placeholder is committed to this public repo.
 
 **Caps and pause.** The single-row `coordinator_state` table holds
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
-ACTIVE state, `dispatched` or `working`; a worker at `awaiting-review`,
+ACTIVE state, `dispatched` or `working` (and any state token this build
+cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
 `merging` or `closing` is idle by contract and holds no slot — design
 2026-09-14 §7.1; the one edge back into `working` is cap-checked on
 `POST /api/runs/:id/advance`) and `maxSessionsPerDay` (default 12 —

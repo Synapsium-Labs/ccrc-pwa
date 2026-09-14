@@ -79,7 +79,7 @@ read by this session*. Its turn per mail becomes one of two short shapes:
 
 - wave-done → verify → advance `awaiting-review` → open + dispatch review run → end;
 - review-done → close review run (server re-measures, §5) → read findings → rule → advance `merging`
-  **or** advance `working` + re-dispatch worker → end.
+  **or** advance `working` + re-brief worker by mail → end.
 
 **Reviewer — reads and reports.** A new skill, `ccrc-reviewer`, parallel to `ccrc-worker`. It fetches the
 worker's tip into **its own** worktree, runs the lenses and the whole-branch pass against the plan the run
@@ -88,7 +88,9 @@ send work back, may not commit to or push the worker's branch, may not rule. A f
 ruling is *stated as such in the report*; the coordinator rules.
 
 **Worker — unchanged.** It stays resident through review. On send-back the **same** worker is
-re-dispatched to `working` and reads the findings report as its brief for the fix round. Its existing
+advanced back to `working` and RE-BRIEFED BY MAIL (a `fix-round` status mail carrying the report —
+D-2824 corrected this from "re-dispatched": dispatch is `planned`'s door only), and reads the
+findings report as its brief for the fix round. Its existing
 clause — no commit, amend or push after reporting wave-done — is what makes §5's `stale-review` a
 mechanism rather than a request.
 
@@ -185,7 +187,7 @@ coordinator wakes: POST close R {fingerprint:{reviewedTip:T, report}}
    coordinator: read report; RULE
      clean      → advance W → merging; merge; close W
      send-back  → advance W → working (cap-checked, §7; refused review-in-flight if R still open)
-                  dispatch W with the report as brief → W fixes → wave-done → new R2
+                  mail W the report as its fix-round brief (D-2824; not dispatch) → W fixes → wave-done → new R2
 ```
 
 Review runs are never reused. Every wave-done — first or after a fix round — gets a fresh review run

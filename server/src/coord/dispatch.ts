@@ -258,7 +258,7 @@ export async function dispatchRun(
   // 8 KiB means, by exactly the length of a constant in this file.
   if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
+      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + kickoff prefix ` +
         `${Buffer.byteLength(prefix, 'utf8')} bytes exceeds the ` +
         `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }

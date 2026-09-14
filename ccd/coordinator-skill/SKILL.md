@@ -305,7 +305,11 @@ not after.
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
    already open for that wave: close it first (`{"state":"failed"}` if the
-   reviewer died), then retry. Then `"$API" runs dispatch <review run id> --json -` with a
+   reviewer died), then retry. A bare `400 bad-request` with no `detail` on
+   this open means the SERVER lane has not landed yet (this branch deploys
+   server first; the plan's Task 14 says why) — wait for the next wake and
+   do NOT add `project`/`wave` to satisfy it: an older server would open a
+   second WORK run for the wave. Then `"$API" runs dispatch <review run id> --json -` with a
    brief cut from `references/review-brief.md` — the work run id, its branch
    `ws/<worker-slug>`, the plan coordinates, the task range, the lenses, the
    suites. `cap-concurrency` here is ordinary: the reviewer needs a slot and
@@ -327,9 +331,12 @@ not after.
    - **Send back:** `"$API" runs advance <work run id> --json -` with
      `{"to":"working","fingerprint":{…the wave-done fingerprint you verified…}}`
      (a retreat re-measures nothing; it may refuse `cap-concurrency` — retry on
-     the next wake — or `review-in-flight` — you skipped this step's close), then
-     `runs dispatch <work run id>` with the report's absolute path as the brief's
-     first line and your rulings beneath it. The worker's fix round ends in a new
+     the next wake — or `review-in-flight` — you skipped this step's close). Then
+     RE-BRIEF THE WORKER BY MAIL, never by `runs dispatch` — dispatch is
+     `planned`'s door only, and a run at `working` has no edge back to
+     `dispatched` (D-2824): `"$API" mail send --json -` with
+     `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
+     The idle-gated delivery lane wakes the worker; its fix round ends in a new
      wave-done and a NEW review run (step 5); review runs are never reused.
    - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
      and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1

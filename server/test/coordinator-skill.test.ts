@@ -1805,6 +1805,37 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       .toBeGreaterThan(cond);
   });
 
+  // D-2824: dispatch is `planned`'s door only (transitionsFor); a send-back
+  // arm that dispatches a run at `working` describes a call the server
+  // refuses. This pin is the class the branch lacked — an instruction
+  // checked against the transition table.
+  it('sends the worker back by mail, never by dispatch, after advancing the run', () => {
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'),
+      skill.indexOf('\n7. **Final merge:**'));
+    const start = step6.indexOf('**Send back:**');
+    expect(start, 'step 6 lost its Send back arm').toBeGreaterThanOrEqual(0);
+    const end = step6.indexOf('**Clean:**', start + 1);
+    expect(end, 'the Send back arm no longer ends where the Clean arm begins').toBeGreaterThan(start);
+    const sendBack = step6.slice(start, end);
+
+    // Not a bare `not.toContain('runs dispatch')`: the corrected prose itself
+    // names the banned call ("never by `runs dispatch`") to explain why not.
+    // What must be absent is the INVOCATION — the exact call form the old
+    // arm told the coordinator to make.
+    expect(sendBack, 'the send-back arm still tells the coordinator to `runs dispatch <work run id>`')
+      .not.toContain('runs dispatch <work run id>');
+    expect(sendBack, 'the send-back arm no longer re-briefs the worker by mail')
+      .toContain('mail send');
+    expect(sendBack, 'the send-back arm no longer sends a `fix-round` mail')
+      .toContain('fix-round');
+
+    const advanceAt = sendBack.indexOf('runs advance');
+    const mailAt = sendBack.indexOf('mail send');
+    expect(advanceAt, 'the send-back arm no longer advances the run to working').toBeGreaterThanOrEqual(0);
+    expect(mailAt, 'the mail send is no longer AFTER the advance that must precede it')
+      .toBeGreaterThan(advanceAt);
+  });
+
   // D-2730. The crossing section points BACK at step 6, and this branch rewrote
   // step 6 — so the pointer's claim ("nothing in it says so") was falsified by
   // the same commit that made it worth reading. A cross-reference is a claim
