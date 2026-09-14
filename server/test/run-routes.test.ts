@@ -1653,6 +1653,15 @@ describe('POST /api/runs/:id/close', () => {
     expect(coord.rejections().map((r) => r.code)).toContain('stale-tip');
     const due = coord.dueDeliveries(Date.now(), 60_000);
     expect(due.some((d) => d.toId === sessionId && d.envelope.includes('stale-tip'))).toBe(true);
+
+    const r = await app!.inject({ method: 'GET', url: `/api/runs/${id}/signals`, headers: tokenHeaders(TOKEN) });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ ok: true, signals: { runId: id, closeRefusals: 1, firstSubmission: null } });
+    const missing = await app!.inject({ method: 'GET', url: '/api/runs/999999/signals', headers: tokenHeaders(TOKEN) });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ ok: false, error: 'unknown-run' });
+    const bad = await app!.inject({ method: 'GET', url: '/api/runs/x/signals', headers: tokenHeaders(TOKEN) });
+    expect(bad.statusCode).toBe(400);
   });
 
   it('refuses to close when .prhistory is present-but-unreadable', async () => {

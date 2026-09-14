@@ -62,7 +62,7 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
   ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
-   'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
+   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -209,7 +209,10 @@ describe('the scanner is looking at something', () => {
     // 28 since `GET /api/asks` (Task 11, the lane's READ side) — a fleet
     // parent's cross-sibling read plus the PWA's chip source, EXEMPT-BUT-
     // AUTHENTICATED (D-149's pattern) rather than a plain box-token lane.
-    expect(scanRoutes('coord/routes.ts').length).toBe(28);
+    // 29 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) — the
+    // run's speed/quality signals, EXEMPT-BUT-AUTHENTICATED same shape as
+    // `GET /api/runs`.
+    expect(scanRoutes('coord/routes.ts').length).toBe(29);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -217,8 +220,8 @@ describe('the scanner is looking at something', () => {
     // `NOT in auth/gate.ts's EXEMPT table — session-gated when armed, open
     // dark` and `NO BOX TOKEN: this is fleet control, not a coordination
     // write` — so it raises the scanned count and the gated count and leaves
-    // the exempt one alone. 47 + 28 = 75.
-    expect(ROUTES.length).toBe(75);
+    // the exempt one alone. 47 + 29 = 76.
+    expect(ROUTES.length).toBe(76);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -349,7 +352,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 75 scanned + the static wildcard when the bundle is built.
+    // 76 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -392,22 +395,25 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 29 = /health + the 15
+    // that edits this list with a reviewer looking at it. 30 = /health + the 15
     // hard-token coordination lanes + /api/notify + login + status + the SPA shell
-    // + the two halves of the passkey door + the SEVEN exempt-BUT-authenticated
-    // GETs: GET /api/runs, GET /api/runs/:id/items, GET /api/feed,
-    // GET /api/lifecycle, GET /api/peers, GET /api/claims and GET /api/asks.
+    // + the two halves of the passkey door + the EIGHT exempt-BUT-authenticated
+    // GETs: GET /api/runs, GET /api/runs/:id/items, GET /api/runs/:id/signals,
+    // GET /api/feed, GET /api/lifecycle, GET /api/peers, GET /api/claims and
+    // GET /api/asks.
     // (13/FIVE/25 until the ask pre-emption lane's three routes met account
     // pools wave 3 in this merge; the ask lane's two POSTs joined the box-token
     // class and its GET joined D-149's.)
     //
     // It read 24 and enumerated 24 until F7 (D-1302), a few lines above the
-    // `toEqual` below, which now lists 28 keys: the tail omitted
+    // `toEqual` below, which now lists 29 keys: the tail omitted
     // `GET /api/runs/:id/items`,
     // which IS in the exempt-but-authenticated class and is the fifth member
-    // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives. A
-    // breakdown beside the list it describes is the one place a reader checks
-    // the list against, so it being wrong is worse than it being absent.
+    // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives.
+    // 30 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) joined
+    // the same class. A breakdown beside the list it describes is the one
+    // place a reader checks the list against, so it being wrong is worse than
+    // it being absent.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/asks',
@@ -421,6 +427,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/peers',
       'GET /api/runs',
       'GET /api/runs/:id/items',
+      'GET /api/runs/:id/signals',
       'GET /health',
       'POST /api/asks/:id/answer',
       'POST /api/asks/:id/release',
@@ -452,7 +459,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-two box-token lanes in EXEMPT are those coord routes, and twenty-three with notify', () => {
+  it('the twenty-three box-token lanes in EXEMPT are those coord routes, and twenty-four with notify', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -470,6 +477,10 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
+    // TWENTY-THREE since `GET /api/runs/:id/signals` (routing slice 0, Task 5)
+    // joined the same dual-credential class: the coordinator skill reads a
+    // run's speed/quality signals cookieless from the fleet host, same shape
+    // as `GET /api/runs` beside it.
     // TWENTY-TWO since `GET /api/feed` joined the same dual-credential class:
     // `ccrc-api feed list` reads cookieless from the fleet host while the PWA
     // reads with a session. TWENTY-ONE before that, when `GET /api/asks` (Task
@@ -497,7 +508,7 @@ describe('EXEMPT is complete in both directions', () => {
     // worst kind of hole.
     expect(gated.sort()).toEqual([
       'GET /api/asks', 'GET /api/claims', 'GET /api/feed', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
-      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items',
+      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items', 'GET /api/runs/:id/signals',
       'POST /api/asks/:id/answer', 'POST /api/asks/:id/release',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
       'POST /api/mail', 'POST /api/mail/:id/ack',
@@ -746,7 +757,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 72 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 73 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -810,7 +821,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 72 HTTP routes, not the 28 exempt.
+          //    is not itself flag-aware — the assertion that covers all 73 HTTP routes, not the 29 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

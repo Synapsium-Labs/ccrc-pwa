@@ -4863,6 +4863,36 @@ export interface RunSummary {
   health: RunHealth;
 }
 
+/** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
+ *  run's own events, its refused wave-dones and the WORKER session's lifecycle
+ *  rows. `wallMs` is dispatch → final state on the SERVER's clock. `holdMs` is
+ *  the worker's paired hold→release time inside that window on CCD's clock
+ *  (two NTP-disciplined boxes; the skew is bounded, not zero — a signal, not an
+ *  invoice). `swaps` COUNTS the worker's account swaps in the window and
+ *  nothing more: ccd journals a swap as one `done` row with no landing pair,
+ *  so swap wall time is structurally unmeasurable from the journal today
+ *  (pairing it needs a `swap intent` at `_swap_target` and a landing row — a
+ *  slice-3 change, if the count proves it matters). `excludedUnmeasured` is
+ *  true when a hold could not be paired OR when `swaps > 0`, so `activeMs`
+ *  (`wallMs - holdMs`) is then a ceiling, never a total. `closeRefusals` is the
+ *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  run — the rows `closeRun` writes for a refused wave-done — and
+ *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
+ *  before. */
+export interface RunSignals {
+  readonly runId: number;
+  readonly dispatchedAt: number | null;
+  readonly closedAt: number | null;
+  readonly finalState: 'done' | 'failed' | null;
+  readonly wallMs: number | null;
+  readonly holdMs: number;
+  readonly swaps: number;
+  readonly excludedUnmeasured: boolean;
+  readonly activeMs: number | null;
+  readonly closeRefusals: number;
+  readonly firstSubmission: boolean | null;
+}
+
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
  *  console calls the dispatch stalled. Deliberately >= the `ws-add` verb
  *  ceiling (`CCD_VERB_TIMEOUT_MS`, server-side) rather than a copy of it:

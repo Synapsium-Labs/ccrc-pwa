@@ -1866,6 +1866,34 @@ export function registerCoordRoutes(
     return { runs: summaries };
   });
 
+  /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
+   *  gated exactly as `GET /api/runs` above: a session cookie OR the box token
+   *  when auth is armed, because the coordinator skill reads it cookieless
+   *  from the fleet host. Nothing is written here: the refused-close count it
+   *  reports is `closeRun`'s own `recordRejection` row. */
+  app.get('/api/runs/:id/signals', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false, error: 'unauthenticated', verdict: session.verdict,
+            detail: 'GET /api/runs/:id/signals takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const signals = deps.coord.runSignals(id);
+    if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    return { ok: true, signals };
+  });
+
   /**
    * `GET /api/runs/:id/items` — the wave's declared ledger, with the item IDs.
    *

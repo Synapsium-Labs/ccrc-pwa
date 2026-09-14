@@ -32,7 +32,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
-  type RunHealth, type RunItemTally, type RunState,
+  type RunHealth, type RunItemTally, type RunSignals, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -1900,6 +1900,57 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT at, fromState, toState, causedBy, detail FROM run_events WHERE runId = ? ORDER BY id',
     ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[];
+  }
+
+  /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
+   *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
+   *  pair `hold done` with the next `release done`; a swap is ONE `done` row
+   *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
+   *  COUNTED and flagged, never timed. Refused wave-dones are the
+   *  `mail_rejections` rows `closeRun` records with a DONE_AUTHORITY code —
+   *  the same rows `runsRejectionSummary`-style queries above already count. */
+  runSignals(runId: number): RunSignals | null {
+    const run = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?').get(runId) as
+      { sessionId: string | null } | undefined;
+    if (!run) return null;
+    const events = this.runEvents(runId);
+    const transition = (to: (s: string) => boolean) => events.find((e) => e.fromState !== e.toState && to(e.toState));
+    const dispatchedAt = transition((s) => s === 'dispatched')?.at ?? null;
+    const final = transition((s) => s === 'done' || s === 'failed');
+    const closedAt = final?.at ?? null;
+    const finalState = final ? (final.toState as 'done' | 'failed') : null;
+    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    const closeRefusals = (this.db.prepare(
+      `SELECT COUNT(*) AS n FROM mail_rejections WHERE runId = ? AND code IN (${codes})`,
+    ).get(runId, ...DONE_AUTHORITY_CODES) as { n: number }).n;
+    const wallMs = dispatchedAt !== null && closedAt !== null ? closedAt - dispatchedAt : null;
+    let holdMs = 0;
+    let swaps = 0;
+    let excludedUnmeasured = false;
+    if (run.sessionId !== null && dispatchedAt !== null && closedAt !== null) {
+      const rows = this.db.prepare(
+        'SELECT at, act FROM lifecycle_events ' +
+        "WHERE sessionId = ? AND outcome = 'done' AND at IS NOT NULL AND at >= ? AND at <= ? AND act IN ('swap','hold','release') " +
+        'ORDER BY at, id',
+      ).all(run.sessionId, dispatchedAt, closedAt) as { at: number; act: string }[];
+      let holdOpenAt: number | null = null;
+      for (const r of rows) {
+        if (r.act === 'swap') swaps += 1;
+        else if (r.act === 'hold') { if (holdOpenAt === null) holdOpenAt = r.at; }
+        else if (r.act === 'release') {
+          if (holdOpenAt === null) excludedUnmeasured = true;
+          else { holdMs += r.at - holdOpenAt; holdOpenAt = null; }
+        }
+      }
+      if (holdOpenAt !== null) excludedUnmeasured = true;
+    }
+    if (swaps > 0) excludedUnmeasured = true;
+    return {
+      runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
+      activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
+      closeRefusals,
+      firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
+    };
   }
 
   /**
