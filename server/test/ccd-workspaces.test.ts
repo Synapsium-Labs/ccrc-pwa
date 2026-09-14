@@ -185,7 +185,19 @@ describe('a partially purged registry never frees the slug', () => {
     // TWO STEPS OF HEADROOM PAST THE MEASURED LAST UNLINK, which is what the
     // shipped `FIELDS.length + 2` bought and what makes the terminal FREE
     // reachable at all.
-    const LAST = measureRmCalls() + 2;
+    const RM_CALLS = measureRmCalls();
+    // THE COST RATCHET (r3 B-M5), and it has to be a LITERAL. The first form of
+    // this control asserted `verdicts.length === LAST + 1`, which is
+    // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
+    // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
+    // GREEN (measured). The number that can actually change is the purge's own
+    // unlink count, so that is the one pinned: 25 today, which makes this `it`
+    // run 28 real `sh()` invocations, each taking the row's stable lock. When
+    // this reds, the protocol gained or lost an unlink: update the literal AND
+    // re-read this fixture's cost, because it is the thing that pushed the test
+    // past vitest's 20 s default and made it a load flake.
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(25);
+    const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
     for (let k = 0; k <= LAST; k++) {
       seedFullEntry();
@@ -212,16 +224,10 @@ describe('a partially purged registry never frees the slug', () => {
     expect(verdicts[verdicts.length - 1],
       'the purge never ran to completion, so FREE was never proved reachable')
       .toBe(`${LAST}:FREE`);
-    // THE MECHANICAL CONTROL (r3 B-M5), and it is not a wall-clock assertion.
-    // This `it` runs one measuring pass plus `LAST + 1` real `sh()`
-    // invocations, each of which now takes the row's stable lock inside
-    // `_reg_purge` — 28 of them as measured, against the 24 of the literal
-    // `FIELDS.length + 2` bound this replaced. When a future protocol step adds
-    // `rm` calls the derived bound moves, and without this the only symptom is
-    // a slower test that eventually crosses a timeout with nothing naming the
-    // cause. Asserting the iteration count makes that arrive as a NUMBER.
-    expect(verdicts.length, 'the loop ran exactly the derived bound, so a changed rm count names itself')
-      .toBe(LAST + 1);
+    // AND THE LOOP REALLY RAN ITS WHOLE BOUND. This one IS relative to `LAST`
+    // on purpose and covers the other failure: a `break` or an early `return`
+    // inside the loop, which the ratchet above cannot see.
+    expect(verdicts.length, 'the loop ran its whole derived bound').toBe(LAST + 1);
   }, 60_000);
 
   it('refuses ws-add on the residue the purge is documented to leave', () => {
