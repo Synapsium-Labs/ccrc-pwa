@@ -1,0 +1,26 @@
+# Who gets pulled into a review, and why this file names a TEAM rather than people.
+#
+# Two constraints meet here. The first is `topology-clean`'s `operator residue`
+# class, which forbids the operator's own GitHub handle anywhere in the tree —
+# docs and config speak ROLES, so that a public repo is not tied to one person's
+# fleet. The second is that CODEOWNERS accepts nothing but a literal @handle or
+# @org/team. A team satisfies both: `Synapsium-Labs` is on that class's pass
+# list, and the membership lives in the org where it can change without a commit.
+#
+# It is also simply the better shape. A file listing people goes stale the first
+# time somebody joins or leaves, silently, in a way no suite can catch — the
+# entry keeps resolving to an account that has stopped reading the repo.
+#
+# GitHub auto-requests this team on every pull request, and that is the whole job
+# today: `require_code_owner_reviews` is deliberately OFF in `main`'s branch
+# protection, so the one required approval may come from ANY collaborator with
+# write access. Turning the flag on would restrict it to this team — a real
+# change with a real victim (a maintainer outside the team finds their approval
+# no longer counts), so make it on purpose, not as a side effect of this file.
+#
+# Ordering note for whoever adds the second rule: CODEOWNERS is LAST-MATCH-WINS,
+# unlike .gitignore. A later, narrower line REPLACES this one for the paths it
+# matches rather than adding to it, so an area that wants an extra owner must
+# name every owner on its own line.
+
+* @Synapsium-Labs/maintainers
