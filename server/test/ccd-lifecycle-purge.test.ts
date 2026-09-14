@@ -1493,7 +1493,14 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     deadAt('demo-aaa-basin', 'aaa-basin');
     deadAt('demo-zzz-basin', 'zzz-basin');
     plantGeneration('demo-aaa-basin');
-    const out = h.sh(`${NOFLOCK} cmd_ws_gc --prune 2>&1 || true`);
+    // IN A SUBSHELL, the idiom this file already uses for the arms that `die`:
+    // the mutant this leg exists to catch (`_lc_refuse_return` retyped as
+    // `_lc_refuse`) ends the sweep with an `exit`, which in the SOURCING shell
+    // would kill the snippet before any assertion could read the registry —
+    // reporting a failed command instead of the property that failed. Contained
+    // here, the sweep's death is survivable and the assertions below say what
+    // it cost: the second row was never reached.
+    const out = h.sh(`${NOFLOCK} ( cmd_ws_gc --prune ) 2>&1 || true`);
 
     // ROW ONE DECLINED, positively.
     expect(out, 'the first row is reported as declined').toContain('declined');
