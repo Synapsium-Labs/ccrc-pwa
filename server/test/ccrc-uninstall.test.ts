@@ -118,23 +118,29 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
-  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  // graphify Task 10/fix-round F2: another `_inst_bins` executable. NO
+  // ORDINALS here either — the sweep's two names below landed in the middle of
+  // this list and made every number after them wrong, which is the same defect
+  // `_uninst_tree_bins`' own census just retired. What matters is that every
+  // name `_inst_bins` writes is planted here, so the uninstall can be measured
+  // removing it.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
   // Routing slice 0 Task 7: the usage-accounting sweep's runner and scanner,
   // on the sweep's exact terms — a bash driver plus its Python engine.
   writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
-  // spec 2026-09-07 §C: the sixth `_inst_bins` executable (account-health,
-  // just above, already took the fifth).
+  // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
-  // The account wave's SEVENTH, and UNMARKED exactly as the six above are:
+  // The account wave's own, and UNMARKED exactly as every name above is:
   // `_inst_atomic` copies and chmods, it never stamps, so a real box's copy
   // carries no marker either. It is also the only one `_inst_bins` places on
   // BOTH platform arms.
   writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
-  // ── the EIGHTH name in ~/.local/bin, and the only one that is not a ccrc
-  // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
+  // ── the one name in ~/.local/bin that is not a ccrc binary (it read
+  // "the EIGHTH" while the list above had grown to nine; `_uninst_tree_bins`
+  // retired its own ordinals for the same reason, routing slice 0)
+  // (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
   // pinned venv's own engine. The venv is planted too, because the proof this
   // link is ccrc's is its TARGET — the uninstall reads it with a one-hop
   // `readlink` and compares it against the exact literal the install writes.

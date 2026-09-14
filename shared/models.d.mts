@@ -36,6 +36,23 @@ export declare function familyClassOf(anthropicModelId: string): ModelClass | nu
 // The ONE model-id → class table `familyClassOf` matches against — see
 // `shared/models.mjs` for the ordering rule. Exported for the usage sweep's
 // runner, which hands it to the python scanner as `--class-tokens`.
+//
+// A DEPARTURE FROM THE PLAN (routing slice 0, Task 6, ruled accepted): the
+// brief added `FAMILY_TOKENS` to `shared/models.mjs` alone, and
+// `typecheck-tests` reds without this ambient declaration beside it — the
+// suite imports the table from the `.mjs`, and a runtime export this
+// hand-written twin does not declare is invisible to a TypeScript caller.
+// Declaring it here is this file's whole job ("the names and the shape are
+// `shared/models.ts`'s exactly", above), so the departure is in WHICH FILE the
+// wave touched, never in the rule.
+//
+// D-TBD-family-tokens-ambient: the ledger number for this departure was not
+// minted. The final fix wave that wrote this sentence is forbidden from
+// allocating (`POST /api/ledger/deviations` MINTS, and a number written
+// without being ISSUED seals its own band for ever), so it is reported to the
+// orchestrator to allocate with the rest of the slice's numbers and spell in
+// here at that point. A `D-TBD-<slug>` is the shape CLAUDE.md prescribes for
+// exactly this, and it is deliberately not a number.
 export declare const FAMILY_TOKENS: readonly (readonly [string, ModelClass])[];
 export declare function classOfModel(reg: Registry, modelId: string): ModelClass | null;
 export declare const UNAVAILABLE_PREFIX: string;

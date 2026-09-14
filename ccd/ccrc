@@ -11571,33 +11571,35 @@ _uninst_graphify_skills() {
 _uninst_tree_bins() {
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
-  # `ccd-cap-scopes` is `_inst_bins`' third executable: an uninstall that
-  # removed its units (above) and left the binary would strand an orphan on
-  # PATH for ever (spec §7 predates the third bin; the ledger records this).
-  # `ccd-graph-sweep` is the fourth (graphify Task 10/fix-round F2, same
-  # reasoning exactly — its own units were already removed by `_uninst_units`
-  # above, and leaving the binary behind orphans it the same way).
-  # `ccd-account-health` is the FIFTH ccrc-OWNED executable, `ccd-telemetry-
-  # keepalive` the SIXTH and `ccd-account-auth` the SEVENTH, and the rule the
-  # four above them follow binds here identically: an uninstall that removed
-  # its units and left the binary orphans it on PATH for ever. (`graphify`,
-  # below, keeps its own rule and its own paragraph — it is the EIGHTH entry
-  # in this census and the only one that is not ccrc's own binary.)
+  # ONE RULE, and the `rm -f` below IS the census: every executable
+  # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
+  # uninstall that removed a binary's units (above) and left the binary itself
+  # strands an orphan on PATH for ever. That covers `ccd-cap-scopes` (spec §7
+  # predates it), `ccd-graph-sweep` (graphify Task 10/fix-round F2),
+  # `ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-account-auth` and the
+  # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
+  # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
+  # must therefore be removed as two. (`graphify`, below, keeps its own rule
+  # and its own paragraph: it is the one name in this census that is not
+  # ccrc's own binary.)
   #
-  # This census is HAND-KEPT and has now been caught stale twice (D-2594):
-  # D-1347 the
-  # first time, and again at the account wave's merge, where main had added
-  # `ccd-telemetry-keepalive` to the `rm` below without amending the sentence
-  # that counts it — so the paragraph said SIXTH about a list of seven. The
-  # uninstall suite measures the LIST; nothing measures these ORDINALS, which
-  # is why only a reader catches them.
+  # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
+  # was hand-kept and was caught stale THREE times (D-1347; again at the
+  # account wave's merge, where main added `ccd-telemetry-keepalive` to the
+  # `rm` without amending the sentence that counted it, D-2594; and again in
+  # routing slice 0, where the sweep's two names landed in the `rm` and the
+  # paragraph still said SEVENTH-then-EIGHTH). The uninstall suite measures the
+  # LIST and nothing can measure a spelled-out ordinal, so the numbering was a
+  # standing request for a reader to do a machine's job. A rule that names no
+  # count cannot go stale when the list grows; the NAMES above are redundant
+  # with the `rm`, checkable by eye against it in one line.
   rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
     "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-health" \
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py and the ccrc launcher removed from \$HOME/.local/bin"
-  # ── the EIGHTH entry, and the only one that is not ccrc's own binary ─────
+  # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
   # uninstall that removed the engine's home (`--purge` takes `~/.ccrc` whole,
@@ -11605,8 +11607,8 @@ _uninst_tree_bins() {
   # first on every session's PATH — strictly worse than the box was before
   # ccrc, because the pip shim that used to answer there was copied aside by
   # the install and never put back (`_uninst_keep_asides` prints that `mv`).
-  # D-1347: the install grew a fifth name and this census did not, because it
-  # is hand-kept.
+  # D-1347: the install grew a name and this census did not, because it was
+  # hand-kept — the defect whose third recurrence retired the ordinals above.
   #
   # ONLY IF IT IS OURS, which is `_uninst_wrappers`' rule one function up:
   # "everything ccrc could not prove it wrote was left in place". Proof here is

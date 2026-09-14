@@ -406,14 +406,15 @@ describe('EXEMPT is complete in both directions', () => {
     // class and its GET joined D-149's.)
     //
     // It read 24 and enumerated 24 until F7 (D-1302), a few lines above the
-    // `toEqual` below, which now lists 29 keys: the tail omitted
+    // `toEqual` below, which now lists 30 keys: the tail omitted
     // `GET /api/runs/:id/items`,
     // which IS in the exempt-but-authenticated class and is the fifth member
     // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives.
     // 30 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) joined
-    // the same class. A breakdown beside the list it describes is the one
-    // place a reader checks the list against, so it being wrong is worse than
-    // it being absent.
+    // the same class — and this sentence said 29 about a 30-key array for
+    // exactly one wave, the same hand-kept-count defect one paragraph up. A
+    // breakdown beside the list it describes is the one place a reader checks
+    // the list against, so it being wrong is worse than it being absent.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/asks',

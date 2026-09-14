@@ -23,7 +23,10 @@ UNPRICED, not free: its records are excluded from every apiUsd sum and
 reported separately per account (`fableShare.unpricedRecords` /
 `.unpricedClasses`) so "not priced" never silently reads as "cost nothing".
 A malformed `usage` value (wrong type, non-numeric count) counts as one
-`parseErrors`, never aborts the run. `--reap-orphans`, the tool's only
+`parseErrors`, never aborts the run. The `"type":"assistant"` byte test is a
+PREFILTER only: a line is counted in `assistantLines` after the PARSE agrees it
+is an assistant record, and a prefilter hit the parse contradicts (or a line
+that is not a JSON object at all) is counted in `prefilterNotAssistant`. `--reap-orphans`, the tool's only
 destructive path, never deletes a sidecar whose `ts` it cannot read — that is
 skipped and counted in `orphansSkippedUnreadable`, not treated as old.
 """
@@ -122,16 +125,36 @@ def scan(dirs, tokens, now, days, stats, carried):
                         for raw in f:
                             if b'"type":"assistant"' not in raw:
                                 continue
-                            stats["assistantLines"] += 1
                             try:
                                 d = json.loads(raw)
                             except Exception:
                                 stats["parseErrors"] += 1
                                 continue
-                            ts = d.get("timestamp") or ""
+                            # The byte test above is a PREFILTER, not a verdict:
+                            # those bytes can sit anywhere on a line (a quoted
+                            # transcript inside a user message, a tool result
+                            # echoing one), so `assistantLines` is only counted
+                            # once the parsed line SAYS it is one. Lines the
+                            # prefilter matched and the parse contradicts are
+                            # counted separately, never folded into
+                            # `parseErrors` (the line parsed fine) and never
+                            # dropped in silence, so the block still reconciles.
+                            # `isinstance` first: a JSONL line may be any JSON
+                            # value, and `.get` on a list or a string raised an
+                            # AttributeError that no `except OSError` below
+                            # catches -- one odd line aborted the whole run.
+                            if not isinstance(d, dict) or d.get("type") != "assistant":
+                                stats["prefilterNotAssistant"] += 1
+                                continue
+                            stats["assistantLines"] += 1
+                            ts = d.get("timestamp")
+                            if not isinstance(ts, str):
+                                ts = ""
                             if ts[:19] < cutoff_iso:
                                 continue
-                            msg = d.get("message") or {}
+                            msg = d.get("message")
+                            if not isinstance(msg, dict):
+                                msg = {}
                             usage = msg.get("usage")
                             mid = msg.get("id")
                             if not usage or not mid:
@@ -268,7 +291,8 @@ def main():
     if not isinstance(tokens, list) or not all(isinstance(t, list) and len(t) == 2 for t in tokens):
         print("usage-sweep: --class-tokens must be a JSON array of [substring, class] pairs", file=sys.stderr)
         return 2
-    stats = {"files": 0, "filesInWindow": 0, "assistantLines": 0, "parseErrors": 0, "records": 0, "duplicatesRemoved": 0}
+    stats = {"files": 0, "filesInWindow": 0, "assistantLines": 0, "prefilterNotAssistant": 0,
+             "parseErrors": 0, "records": 0, "duplicatesRemoved": 0}
     carried = {}
     records = scan(dirs, tokens, now, a.days, stats, carried)
     uuid_map = read_uuid_map(a.registry)

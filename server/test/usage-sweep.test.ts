@@ -192,6 +192,39 @@ describe('ccd-usage-sweep.py', () => {
     expect(existsSync(path.join(f.home, '.cc-sessions', 'usage', 'corrupt-id.json'))).toBe(true);
   });
 
+  // The `"type":"assistant"` byte test is a PREFILTER: those bytes sit inside
+  // any line that QUOTES a transcript, and a JSONL line need not even be an
+  // object. Before the post-parse check, the first shape inflated
+  // `assistantLines` with lines that are not assistant records, and the second
+  // aborted the whole run — `.get` on a list raises AttributeError, which the
+  // file loop's `except OSError` does not catch.
+  it('a prefilter hit the parse contradicts is counted, never counted as an assistant line and never fatal', () => {
+    const home = mkTmp('ccrc-usage-sweep-prefilter-');
+    const a = path.join(home, '.claude');
+    const proj = path.join(a, 'projects', '-w-demo'); mkdirSync(proj, { recursive: true });
+    writeFileSync(path.join(proj, 'mixed.jsonl'),
+      // a USER line carrying a NESTED assistant object — the prefilter's false
+      // positive, and the bytes are unescaped here exactly as they would be in
+      // a tool result that embeds a transcript record
+      JSON.stringify({ type: 'user', timestamp: iso(NOW - 3600), echoed: { type: 'assistant', message: { id: 'nested', usage: { input_tokens: 9 } } } }) + '\n'
+      // a line that is not an object at all, carrying the same bytes
+      + '["type":"assistant"]\n'
+      + '[{"type":"assistant","message":{"id":"x"}}]\n'
+      // an assistant line whose `message` is a STRING and one whose
+      // `timestamp` is a NUMBER: both are `.get`/slice on the wrong type, the
+      // same abort one field further in
+      + '{"type":"assistant","timestamp":"' + iso(NOW - 3600) + '","message":"not-an-object"}\n'
+      + '{"type":"assistant","timestamp":1800000000,"message":{"id":"msg-numeric-ts","usage":{"output_tokens":5}}}\n'
+      + line({ message: { id: 'msg-good' } }));
+    stamp(path.join(proj, 'mixed.jsonl'), NOW - 3600);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    const s = runSweep({ home, dirs: { [a]: 'claude' } });
+    expect(s['scan']).toMatchObject({
+      records: 1, assistantLines: 3, prefilterNotAssistant: 2, parseErrors: 1,
+    });
+  });
+
   it('a malformed usage value counts as a parse error instead of aborting the whole sweep', () => {
     const home = mkTmp('ccrc-usage-sweep-badusage-');
     const a = path.join(home, '.claude');
