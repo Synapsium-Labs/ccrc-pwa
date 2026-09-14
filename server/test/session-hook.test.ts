@@ -3584,6 +3584,75 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(stages(), 'neither the stage nor its .part survives').toEqual([]);
   });
 
+  // ── The step-12 reacquire's regular-file guard (r3 A-I1) ───────────────
+  // The canonical pathname is unguarded across the helper window BY DESIGN —
+  // step 9 releases the lock — so the object step 11 reacquires over may be
+  // anything a same-UID stranger left there. A FIFO is the one shape whose
+  // failure has no bound: `open(2)` BLOCKS on it rather than failing, so the
+  // hook's `2>/dev/null` silences nothing and the process parks inside the
+  // HELD stable lock for ever, taking `_reg_purge` (and so ws-rm, forget,
+  // ws-gc --prune, ws-reap and the slug's ws-add/start) with it. Both legs
+  // run the SAME instrument; only the object at `$set` differs.
+  /** One hook process with a wall-clock bound of its own, which `runFull` has
+   *  no reason to carry: every other fixture in this file asserts what a hook
+   *  WROTE, and these two assert that it RETURNED. `spawnSync`'s `timeout`
+   *  kills the blocked bash rather than letting vitest's own deadline stop
+   *  the file, so the mutant's failure text names the signal instead of the
+   *  suite. */
+  const runBounded = (payload: object, ms: number): { status: number | null; signal: string | null; ms: number } => {
+    const t0 = Date.now();
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(payload), encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
+    });
+    return { status: r.status, signal: r.signal, ms: Date.now() - t0 };
+  };
+  /** Is the row's mutex free to a stranger? `flock -n` answers without waiting;
+   *  0 is FREE, 1 is HELD. The lock file outlives every arm by design, so its
+   *  presence is not the question — who holds it is. */
+  const mutexFree = (): boolean =>
+    spawnSync('flock', ['-n', lockFile(), 'true'], { encoding: 'utf8' }).status === 0;
+
+  it('A NON-REGULAR CANONICAL SET AT THE REACQUIRE: the arm refuses inside its bound and leaves the row mutex FREE', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // THE SUBSTITUTION LANDS IN THE WINDOW THE HOOK ITSELF OPENS, with no
+    // external timing at all: the stub IS the helper, so the FIFO replaces
+    // canonical strictly between step 9's release and step 11's reacquire.
+    // Exit 0, so the hook takes its PUBLISHING arm and the step-12 read is
+    // what has to be reached.
+    stub('node', [
+      'rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      'mkfifo "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
+      'exit 0',
+    ].join('\n'));
+    const r = runBounded(preCompact(tree, transcript), 15_000);
+    // RETURNED, not killed. Without the guard this is `signal: 'SIGKILL'` at
+    // the full 15 s; the bound is an order of magnitude above the ~1 s the
+    // control leg measures and still two thirds under this `it`'s deadline.
+    expect(r.signal, 'the hook was not killed at its bound — it returned on its own').toBe(null);
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect(r.ms, 'the refusal is prompt, not a wait').toBeLessThan(10_000);
+    // PUBLISHES NOTHING, and leaves none of its own residue behind.
+    expect(fs.existsSync(cardFile()), 'no canonical card is published over a slot that is not ours').toBe(false);
+    expect(stages(), 'this process removed its own stages').toEqual([]);
+    // AND THE CONSEQUENCE THE FINDING IS ABOUT: the row's destruction path is
+    // still open to everybody else.
+    expect(mutexFree(), 'the stable lock is released, so `_reg_purge` and every later arm can still run').toBe(true);
+  });
+
+  it('THE CONTROL for the same instrument: an ordinary helper over a REGULAR set returns fast and frees the same mutex', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runBounded(preCompact(tree, transcript), 15_000);
+    expect(r.signal, 'nothing was killed').toBe(null);
+    expect(r.status).toBe(0);
+    expect(r.ms, 'the ordinary path is ~1 s, so the leg above measures the FIFO and not the fixture').toBeLessThan(10_000);
+    expect(mutexFree(), 'and the mutex is free here too — so a HELD mutex above would be the FIFO').toBe(true);
+  });
+
   it('CLOSE-BEFORE-FORK, BY EFFECT: the helper can take the row\'s lock while it runs', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });

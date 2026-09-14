@@ -1228,6 +1228,33 @@ _hook_compact_pre() {
     rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
     _hook_lock_release "$lockfd"; return 0
   fi
+  # STEP 12, SECOND HALF: WHAT THE CANONICAL PATHNAME NOW HOLDS, asked before
+  # it is opened (r3 A-I1). Across the helper window this arm holds no lock by
+  # design, so the object at `$set` on reacquire may be anything a same-UID
+  # stranger left there — and `2>/dev/null` silences NOTHING for the read
+  # below: a FIFO blocks in open(2) rather than failing, so the redirection
+  # never returns. Measured, that parks this process INSIDE the held stable
+  # lock for ever, and because Task 9 put `_reg_purge` under the same lock it
+  # takes the row's whole destruction path with it — every later PreCompact,
+  # PostCompact and compact SessionStart, plus `ccd ws-rm`, `ccd forget`,
+  # `ccd ws-gc --prune`, `ccd ws-reap` and `ws-add`/`start` for that slug,
+  # refuse that row permanently. That is the wedge §3.4's fail-open ruling
+  # exists to prevent, reached by an unbounded hang instead of a refusal.
+  # The sibling arms already ask exactly this — PostCompact's settlement
+  # (`[[ -f "$set" && ! -L "$set" && -r "$set" ]]`) and the serve arm's
+  # `[[ -f "$set" && -r "$set" ]]` — and this was the only arm without it and
+  # the only one whose failure had no bound.
+  #
+  # A FAILURE HERE READS "THE SLOT IS NOT OURS", the same disposition as the
+  # nonce miss below: drop this process's own stages and publish nothing. An
+  # ABSENT set keeps today's semantics EXACTLY rather than gaining a new one —
+  # the redirection already failed silently, `ownhead` already stayed empty and
+  # the nonce test below already published nothing — the arm simply now says so
+  # before the open rather than after it.
+  if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
   # STEP 12. THE COMPARE-AND-SWAP. Re-read the canonical set's HEAD with the
   # bounded, fork-free `read -N` idiom this file already uses on the serve side
   # and require the nonce to still be ours. Bash has no `slotIsMine`
