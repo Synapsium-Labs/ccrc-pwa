@@ -66,7 +66,7 @@ coordinator mints exactly that many, defines them in the same act, and mails the
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | #75, #86 | **MERGED AND DEPLOYED 2026-09-11.** Squashed to main as `cbeb682d` at 22:56 UTC by the operator (PR #86, head `e1311026`, all five CI legs green on that exact sha). Deployed AGENT-FIRST: the agent lane reports `ccd cbeb682d (HEAD, built 22:58:32Z)` with every `claude-session@*` supervisor verified active, then the server lane, whose own final gate `/health` answers `{"sha":"cbeb682d...","dirty":false}` at 23:03:09Z. The full correction history — PR #75's premature merge, D-2505..D-2508, the D-2518 slug budget and the acceptance review that closed it — is in this ledger's git history at `d745d11f` and earlier. The D-2545 and D-2546 carries that review assigned to wave 2 are now implemented there, not still open here. |
-| 2 | Skills + PWA: the coordinator skill's project-specific succession and mandatory-plan/conditional-producer contract, the worker skill's immutable plan read and conditional producer-root read, bounded ask list/answer/release with held-list semantics, safe no-default-id examples and fenced/indented executable-corpus parity, exact generated ask IDs, canonical route IDs, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, and the mail screen's programme grouping and chip; acceptance corrections D-2545, D-2546, D-2653–D-2660, D-2680–D-2687, D-2715–D-2720 and D-2724–D-2731, plus D-2732 taken from account-pools by offer and record-only D-2733. AGENT-FIRST. | #92 | **MERGED 2026-09-14, NOT YET DEPLOYED.** Squashed to `main` as `5480fea8` at 06:15 UTC by the operator (PR #92, head `daceb52e`; `test (server)`, `test (pwa)`, `test (agent)` and `build-pwa` green on that exact sha; `test-macos` red there AND on main's own `ecd953b0` — D-2733, record-only, not this wave's defect). `main`'s tree at `5480fea8` is byte-identical to `daceb52e`'s (`54404ced`), so every gate measured on the branch measured the merged tree. Run 44 advanced `working → awaiting-review → merging` on the server's own re-measurement of `{daceb52e, #92, merged}` and closed `done` with `final:false` (hold handed to run 45, `released:false`); items 10/11 — item 238, Task 9's agent-first deploy, is deliberately left open because the deploy has not run. The fleet host still runs wave 1's `ccrc-api`, `ccrc-worker` and `ccrc-coordinator` (measured: the installed client answers `unknown-query` to `runs list --closed 1`; both installed `SKILL.md` files differ from `5480fea8`'s). The agent lane, then the server lane, ship on the operator's word — not from this coordinator unasked. |
+| 2 | Skills + PWA: the coordinator skill's project-specific succession and mandatory-plan/conditional-producer contract, the worker skill's immutable plan read and conditional producer-root read, bounded ask list/answer/release with held-list semantics, safe no-default-id examples and fenced/indented executable-corpus parity, exact generated ask IDs, canonical route IDs, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, and the mail screen's programme grouping and chip; acceptance corrections D-2545, D-2546, D-2653–D-2660, D-2680–D-2687, D-2715–D-2720 and D-2724–D-2731, plus D-2732 taken from account-pools by offer and record-only D-2733. AGENT-FIRST. | #92 | **MERGED 2026-09-14, DEPLOYED BOTH LANES THE SAME DAY** (agent 11:51:42Z, server 11:58:46Z, as part of `main` at `bb8cc111`, which contains `5480fea8`; run 44's deploy item 238 settled). Squashed to `main` as `5480fea8` at 06:15 UTC by the operator (PR #92, head `daceb52e`; `test (server)`, `test (pwa)`, `test (agent)` and `build-pwa` green on that exact sha; `test-macos` red there AND on main's own `ecd953b0` — D-2733, record-only, not this wave's defect). `main`'s tree at `5480fea8` is byte-identical to `daceb52e`'s (`54404ced`), so every gate measured on the branch measured the merged tree. Run 44 advanced `working → awaiting-review → merging` on the server's own re-measurement of `{daceb52e, #92, merged}` and closed `done` with `final:false` (hold handed to run 45, `released:false`); items 11/11 — item 238, Task 9's agent-first deploy, was deliberately left open for most of wave 3 because the deploy had not run (measured then: the installed client answered `unknown-query` to `runs list --closed 1`; both installed `SKILL.md` files differed from `5480fea8`'s), and it is settled now: the agent lane shipped 11:51:42Z and the server lane 11:58:46Z on 2026-09-14, both at `bb8cc111`, on the operator's word — not from this coordinator unasked. Re-measured from the fleet host by wave 3's worker: `ccd version` answers `bb8cc111…` built `2026-09-14T11:51:42Z`, `ccd` and `ccrc-api` both stamped 11:51, and the installed client carries wave 2's `asks list` and `runs list --closed` verbs. |
 | 3 | Docs + the legacy flip: current README sections, byte-preservation proof for the historical Aug 11 spec, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | worker branch `ws/bright-meadow`; flip deferred — legacy_7d = 1, opens_7d = 11 on 2026-09-14; PR number and merged sha are recorded by the boundary commit of the wave that carries the flip |
 
 ## Dogfood exit criteria
@@ -129,11 +129,11 @@ beside it when the programme closes.
   fresh coordinator resuming from `GET /api/runs` while the committed ledger still read "Wave 3 remains unopened" would
   have re-opened and re-reviewed. The closed-row proof (`runs list --closed 1`, run 44 `state:"done"`) was taken through
   the merged client at `origin/main:ccd/ccrc-api` copied to scratch, because the installed wave-1 client has no
-  `--closed` key — the first thing the undeployed agent lane cost; the coordinator drives `asks list`/`asks release`
-  through that same copy until the lane ships.
-- **Wave 2 merged, not deployed (2026-09-14, coordinator):** the deploy is an outward act on the live fleet — the agent lane
+  `--closed` key — the first thing the undeployed agent lane cost; the coordinator drove `asks list`/`asks release`
+  through that same copy until the lane shipped at 11:51:42Z.
+- **Wave 2 merged, then deployed the same day (2026-09-14, coordinator) — the decision below is why it was asked for rather than assumed, and it was discharged at 11:51:42Z (agent) and 11:58:46Z (server):** the deploy is an outward act on the live fleet — the agent lane
   restarts the agent and `try-restart`s every supervisor — and is not covered by the standing authorisation to raise the PR;
-  it is requested from the operator, not assumed. Until the agent lane ships, the installed skills and client are wave 1's;
+  it is requested from the operator, not assumed. Until the agent lane shipped, the installed skills and client were wave 1's;
   wave 3's worker reads its contracts from the repository at `5480fea8`, and its work (docs, one constant) exercises none of
   wave 2's new client rows.
 - **D-2070 (the flip as its own PR) — ruling deferred, deliberately (2026-09-14, coordinator):** decided by the
@@ -227,28 +227,38 @@ so **the gate is closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEP
   least one run opened over seven consecutive days, both read by the operator on the server box because no
   route exposes `run_events` (D-2066, D-2067). Wave 3 records both numbers either way.
 - **Wave 1 is live before wave 2 ships** — the guard exists before the skill tells coordinators to cross.
-- **Wave 2 is merged before wave 3 is dispatched, but its agent lane has NOT shipped** (2026-09-14): the fleet host's
-  installed `ccrc-worker`, `ccrc-coordinator` and `ccrc-api` are wave 1's. Wave 3 reads the wave-2 contracts from the
-  repository at `5480fea8`; nothing in wave 3 needs a wave-2 client row. The deploy is the operator's or the coordinator's
-  act on the operator's word, and item 238 on run 44 stays open until it runs.
-- **E1. The flip's gate cannot reliably clear until wave 2's agent lane is deployed — no longer a prediction, it
-  has bitten twice in three days:** the fleet still runs wave 1's coordinator skill and client, and every RUN
+- **Wave 2 is merged before wave 3 is dispatched, and its agent lane shipped while wave 3 was closing** (2026-09-14,
+  agent 11:51:42Z, server 11:58:46Z, both at `bb8cc111`): for most of wave 3 the fleet host's installed `ccrc-worker`,
+  `ccrc-coordinator` and `ccrc-api` were wave 1's, so wave 3 read the wave-2 contracts from the repository at
+  `5480fea8` and needed no wave-2 client row. The deploy was the operator's act on the operator's word; item 238 on
+  run 44 is settled.
+- **E1. The flip's gate could not clear until wave 2's agent lane was deployed — a dependency that was never a
+  prediction, because it bit twice in three days, and that was DISCHARGED on 2026-09-14 at 11:51:42Z (fleet host)
+  and 11:58:46Z (server box), both at `bb8cc111`:** while the fleet ran wave 1's coordinator skill and client, every RUN
   opened with no `homeProject` in the body writes another `legacy-home-project` event and resets the seven-day
   clock, regardless of whether the programme itself is new (`homeProjectVerdict` decides an absent body by
   `legacyAccepted` alone, not by whether the programme already has a stored home) — run 43
   (`2026-09-11T12:02:33Z`) and run 47 (`2026-09-14T11:34:24Z`, `account-pools` wave 6/6, measured from the runs
-  list, not `run_events`) are both that shape. So the rule is not "clears on the 18th" but **clears seven days
-  after the LAST wave-1 open, which cannot happen while the fleet runs wave 1's skill.** Deploy first — the date
-  is not knowable until then — then wait seven days, then re-take the read — on the SERVER box, via the node
-  fallback, never on the fleet box's stub.
+  list, not `run_events`) are both that shape. The rule is therefore not "clears on the 18th" but **clears seven
+  days after the LAST open that omitted `homeProject`** — and the deploy is what makes that date knowable at all.
+  Measured now: the installed coordinator skill reached the fleet host at 11:51:42Z, seventeen minutes AFTER the
+  last wave-1-client open (run 47, 11:34:24Z), **so the window clears at `2026-09-21T11:34:24Z` provided no open
+  after 11:51Z omits `homeProject`.** The installed skill now sends it; a coordinator session that loaded the old
+  skill before 11:51Z must still add it by hand, and the `account-pools` coordinator has committed to that — a
+  commitment, not a mechanism, which is why the date is a floor and not a guarantee. Then re-take the read — on
+  the SERVER box, via the node fallback, never on the fleet box's stub.
 - **OPEN ITEM (no deviation number) — terminal-programme home backfill:** `setProgramHome`'s fill-only `UPDATE programs
   SET homeProject = ? WHERE slug = ? AND homeProject IS NULL` runs only from the open route's backfill branch, so the
-  four ACTIVE legacy programmes self-heal on their next open and need nothing, while the five TERMINAL ones will never
-  open again and stay `NULL` forever: `build4` → `ccrc-pwa`, `program-leverage` → `ccrc-pwa`, `registry-durability` →
+  ACTIVE legacy programmes self-heal on their next open and need nothing, while the TERMINAL ones — **five today (the
+  four `done` plus the one `abandoned`), with `account-pools` → `ccrc-pwa` joining as the sixth when its wave 6 closes**,
+  because run 47 is its LAST run and the self-healing arm therefore never fires for it — will never open again and stay
+  `NULL` forever: `build4` → `ccrc-pwa`, `program-leverage` → `ccrc-pwa`, `registry-durability` →
   `ccrc-pwa`, `promise-backfill` → `expoAI-assistant`, `claude-tooling-consolidation` → `custom-tools`. Measured
   2026-09-14: 10 programmes, 1 with a home, 9 `NULL`, and every one of the nine has run in exactly one project — zero
   ambiguous cases. Backfilling them needs a new write surface or a direct server-box write, a scope decision for a
-  later wave.
+  later wave. The per-run remedy was offered and declined on 2026-09-14: abandoning run 47 and re-opening it with a
+  `homeProject` would heal `account-pools` alone at the cost of a `failed` row for a run that did nothing, and the
+  legacy event of 11:34:24Z stays written either way — so the write surface is the only fix for all six.
 - **OPEN ITEM (no deviation number) — README states the programme-mail facts twice, 280 lines apart:**
   `README.md`'s cross-repo subsection ("Mail finds a role, not a session." / "Finding a programme's traffic.") and
   its "Programme mail at scale." paragraph restate the same heir-inheritance and outstanding-read facts, and this
@@ -271,4 +281,4 @@ the flip's own PR and goes green in that same PR when the constant moves, then h
 shut thereafter; it does not make the deferral visible on `main`. The deferral's visibility comes
 from this ledger's `## Measurements` block and the wave-3 row, not from a red suite.
 
-The flip's gate depends on the wave-2 agent-lane deploy — see Carried constraints (E1).
+The wave-2 agent-lane deploy the flip's gate depended on landed 2026-09-14; the window it restarted clears no earlier than 2026-09-21T11:34:24Z — see Carried constraints (E1).
