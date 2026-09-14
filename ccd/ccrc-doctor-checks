@@ -4332,8 +4332,18 @@ _check_routing() {
     _dr_pass routing "0 Anthropic lane(s): no roster projection at \$HOME/.ccrc/accounts.sh, so no settings.json can override the routing record's spawn env (the wrappers check owns the roster's health)"
     return 0
   fi
-  raw="$( . "$sh" 2>/dev/null && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 \
-        && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )" || raw=""
+  # An unsourceable projection (corrupt file, `.` fails) and a projection that
+  # sources fine but predates `CCRC_ANTHROPIC_BACKEND` (`declare -p` fails) are
+  # NOT "the roster declares no Anthropic-backend account" — that PASS is
+  # reserved for an array that IS declared, with zero elements. Folding all
+  # three into one empty `raw` would report green having measured nothing, so
+  # this is its own probe, done first and separately from building `raw`.
+  if ! ( . "$sh" 2>/dev/null && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 ); then
+    _dr_warn routing "could not read the roster projection at \$HOME/.ccrc/accounts.sh" \
+      "re-run ccrc install to regenerate it, or check the Anthropic lanes' settings.json by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    return 2
+  fi
+  raw="$( . "$sh" 2>/dev/null && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )"
   if [ -z "$raw" ]; then
     _dr_pass routing "0 Anthropic lane(s): the roster declares no Anthropic-backend account, so no settings.json can override the routing record's spawn env"
     return 0

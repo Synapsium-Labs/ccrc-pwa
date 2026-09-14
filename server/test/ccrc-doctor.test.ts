@@ -6268,6 +6268,43 @@ describe('ccrc doctor: accounts', () => {
     const home = healthy('ccrc-doctor-routing-noroster-');
     expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^PASS routing: 0 Anthropic lane\(s\).*no roster projection/);
   });
+  it('routing: a roster with only non-Anthropic lanes PASSES vacuously naming the reason', () => {
+    const home = healthy('ccrc-doctor-routing-gptonly-');
+    // parseRoster requires exactly one `exec.kind: 'upstream'` account, so the
+    // single lane here is upstream — that is a launcher-identity question,
+    // orthogonal to `telemetry`, which is what `_check_routing` actually reads.
+    seedAccountsSh(home, { version: 1, accounts: [
+      { ...ROUTING_ROSTER.accounts[1], exec: { kind: 'upstream' } },
+    ] });
+    expect(lineFor(runDoctor(home).stdout, 'routing'))
+      .toMatch(/^PASS routing: 0 Anthropic lane\(s\).*declares no Anthropic-backend/);
+  });
+  it.skipIf(process.getuid?.() === 0)(
+    'routing: WARNS, never silently PASSES, when a lane\'s settings.json exists but cannot be read', () => {
+      const home = routingBox('ccrc-doctor-routing-unreadable-settings-');
+      writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+      const p = join(home, '.claude', 'settings.json');
+      chmodSync(p, 0o000);
+      try {
+        expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
+  it('routing: WARNS (never a silent vacuous PASS) when accounts.sh fails to source', () => {
+    const home = healthy('ccrc-doctor-routing-corrupt-sh-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'this is not bash (\n');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing')).toMatch(/^WARN routing: could not read/);
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+  it('routing: WARNS when the projection predates CCRC_ANTHROPIC_BACKEND', () => {
+    const home = healthy('ccrc-doctor-routing-stale-projection-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+  });
 
   const COMPATIBLE: RosterEntry = {
     id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
