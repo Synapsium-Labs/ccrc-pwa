@@ -725,14 +725,22 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
     // printing it is its entire job. It is the stand-in for `claude
     // setup-token` itself, not an artifact the helper wrote; filtering it is
     // what keeps this assertion about the helper.
-    // BOUNDED, and the bound is the point (D-2739). This is the suite's only
-    // unbounded recursive walk, and it runs over a tree the helper puts FIFOs
-    // in. A reader that does not skip devices blocks on one for ever: the
-    // 2026-09-12 macOS job was cancelled at 25 minutes with a `grep` still
-    // alive in its orphan cleanup. GNU grep skips devices under -r; BSD grep
-    // is unmeasured. A timeout turns a silent 25-minute wedge into a failure
-    // that says so.
-    const found = execFileSync('grep', ['-rl', CANARY_TOKEN, h.home], { encoding: 'utf8', timeout: 30_000 })
+    // `find -type f`, NOT `grep -r`, and that is now measured rather than
+    // cautious (D-2739). BSD grep -r BLOCKS on a FIFO with a live writer —
+    // measured on macos-latest — and the helper puts three FIFOs under
+    // `$HOME/.cc-sessions/.auth/<id>.run/`. That is what cancelled the
+    // 2026-09-12 macOS job at 25 minutes with a `grep` alive in its orphan
+    // cleanup. GNU grep skips devices under -r, which is why this never
+    // reproduced here. A timeout alone would only turn a silent wedge into a
+    // loud one; `-type f` means the walk cannot reach a device at all, which
+    // is the property this assertion actually wants. The timeout stays as a
+    // backstop. Catch: `-exec ... +` exits non-zero when nothing matched.
+    const found = ((): string => {
+      try {
+        return execFileSync('find', [h.home, '-type', 'f', '-exec', 'grep', '-l', CANARY_TOKEN, '{}', '+'],
+          { encoding: 'utf8', timeout: 30_000 });
+      } catch (e) { return (e as { stdout?: string }).stdout ?? ''; }
+    })()
       .split('\n').filter(Boolean)
       .filter((p) => p !== path.join(harnessBin(h.home), 'claude'))
       .sort();

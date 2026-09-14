@@ -87,21 +87,24 @@ export const DEFAULT_TEST_ROSTER = {
       // gpt; }`, and `_codex_lanes`' pre-CCRC_CODEX_BACKEND fallback). Rename
       // it here and every gpt-lane test goes dark.
       //
-      // `telemetry: 'codex'` CORRECTED 2026-09-14. This row read `'none'` from
-      // the day the field was added, and that is how a stale `ccd ls` trailer
-      // survived a test suite this size: `none` asserts "this lane reports no
-      // usage at all", while a Codex lane reports a weekly figure through
-      // ccgpt-usage — the figure `_codex_lane_status` prints and `_limit_score`
-      // ranks it on. A roster that mis-states the backend cannot fail a test
-      // about the backend.
+      // `telemetry: 'none'`, and it STAYS that way — reverted 2026-09-14, the
+      // same day it was briefly flipped to `'codex'` to make a `ccd ls` trailer
+      // assertion green. That flip was backwards. `'none'` is not a misstatement
+      // about a Codex lane: it is exactly what `ccrc account declare` and the
+      // adopt path WRITE for an `exec.kind: 'external'` account
+      // (`deploy/account-op.mjs`'s `declaredEntry`, pinned byte-for-byte by
+      // ccrc-account.test.ts, and adopt.test.ts's `expect(gpt.telemetry)
+      // .toBe('none')`). Nothing in this repo ever writes `'codex'`; a roster
+      // only carries it after an operator edits it by hand, which is how the
+      // live fleet's gpt/gpt2 got theirs on 2026-09-11.
       //
-      // `homeAble` stays FALSE here, unlike the live roster (where both Codex
-      // lanes became placeable on 2026-09-11), and that is deliberate: it keeps
-      // this roster's placement set stable for every pool test, and it makes
-      // the trailer assertions prove the thing that actually changed — the
-      // Codex trailer follows `telemetry`, never home-ability.
+      // So this row is the shape the PRODUCT can actually produce, and bending
+      // it to the post-edit value left the declare-shaped case guarded by
+      // nothing while costing 11 unrelated tests that count this roster.
+      // Coverage for a `'codex'` lane belongs in a purpose-built roster —
+      // ccd-backend-vs-placement.test.ts has three of them — not here.
       id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
-      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'codex',
+      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none',
     },
     {
       id: 'claude-d', label: 'claude-d', configDirSuffix: '.claude-d',
