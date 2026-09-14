@@ -1167,7 +1167,10 @@ _hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST refer
 # built for `_reg_purge` and then REFUSED on the measurement, because that
 # function has no placement where the check both helps and stays truthful:
 #
-#   - Before its unconditional `_lc_done purge` emit is the only spot where a
+#   - Before its unconditional purge-done journal emit (named in ccd, never
+#     here: `ccd-lifecycle-sites.test.ts` forbids this file from containing a
+#     lifecycle-emitter identifier at all, comments included, because its
+#     exit-0 contract is absolute) is the only spot where a
 #     refusal can honestly answer 1 ("nothing deleted, no purge fact"), and
 #     there it is ADJACENT to the acquire's own post-`flock` identity check —
 #     nothing runs between them, so it closes a zero-width window.
