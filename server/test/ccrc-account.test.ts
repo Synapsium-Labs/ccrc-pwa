@@ -5074,7 +5074,7 @@ describe('ccrc account remove', () => {
     writeFileSync(offMarker(home, 'alt-max'), '');
     writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
     }
     mkdirSync(join(cfg, 'projects'), { recursive: true });
@@ -5109,7 +5109,7 @@ describe('ccrc account remove', () => {
     const cfg = join(home, '.claude-alt-max');
     expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
       .toBe('the operator history\n');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify']) {
       expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
     }
     const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));
