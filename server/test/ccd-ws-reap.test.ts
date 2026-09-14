@@ -2686,15 +2686,17 @@ describe('a branch another checkout is standing on', () => {
 // `_reg_purge` runs. So a refusal there is a FAILURE, never a refusal, and the
 // message names what completed and what still stands.
 //
-// THERE IS NO NEGATIVE FIXTURE HERE, AND THAT IS BY DESIGN, NOT AN OMISSION.
-// The other governed condition — the lock MECHANISM being absent — cannot
-// reach this branch at all: `cmd_ws_reap` dies at its own `command -v flock`
-// gate long before the tail runs, and `_lc_refuse` "EMITS, THEN DIES. Never
-// returns." So on a flock-less box this branch is unreachable, a leg asserting
-// a third `_lc_fail` in the mechanism-absence matrix is UNSATISFIABLE, and the
-// only condition this branch ever answers is CONTENTION — which is exactly
-// what the positive fixture below produces, with a real holder on the real
-// mutex for longer than `COMPACT_LOCK_WAIT`.
+// THE MECHANISM-ABSENCE LEG WAS CALLED UNSATISFIABLE HERE, AND IT IS NOT
+// (r3 A-I3). What stood in this place said "the lock MECHANISM being absent
+// cannot reach this branch at all", on the ground that `cmd_ws_reap` dies at
+// its own `command -v flock` gate and `_lc_refuse` "EMITS, THEN DIES. Never
+// returns." The premise is true and the conclusion overshoots it: that gate
+// names `flock` ALONE, while `_compact_lock_acquire` answers mechanism-absent
+// for `flock`, `mktemp` OR `link`. MEASURED on a generation-present row, each
+// of the three absent on its own makes `_reg_purge` answer 2 — so a box
+// carrying `flock` and missing `mktemp` reaches the tail with that status, and
+// the third `_lc_fail` is an ordinary fixture. Both conditions are below, and
+// the property that matters is that they are two records, not one.
 describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () => {
   it('reaps everything, then FAILS with purge-refused — no done, and the registry row STANDS', async () => {
     const { main, wt } = ready();
@@ -2730,5 +2732,35 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
       expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
       expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
     } finally { release(); }
+  }, 60000);
+
+  it('and on a box whose MECHANISM is absent it fails with the OTHER token — reachable through mktemp, which ws-reap does not gate', () => {
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    // `mktemp`, not `flock`: the verb's own gate refuses a flock-less box
+    // before the tail runs, so `flock` is the one absence that CANNOT produce
+    // this record. `command` is shimmed rather than PATH emptied, the idiom
+    // this file already uses — and the shim only defeats the `command -v`
+    // PROBE, so every real `mktemp` elsewhere still runs.
+    const NOMKTEMP = 'command() { [[ "${1-}" == -v && "${2-}" == mktemp ]] && return 1;'
+      + ' builtin command "$@"; };';
+    // IN A SUBSHELL, like the flock-absence leg above: the tail's report path
+    // ends in a non-zero return, and the sourcing shell must survive it.
+    h.sh(`${GH_STUB} ${ARCH} ${NOMKTEMP} `
+      + `( cmd_ws_reap --expect ${tok} --session demo-quiet-basin ) >out3.json 2>err3.txt; echo "exit=$?"`);
+    const reaps = eventsOf(h.home, 'reap');
+    const failed = reaps.find((e) => e['outcome'] === 'failed');
+    expect(failed, 'the tail closed its transaction with a FAILURE').toBeTruthy();
+    expect(failed!['refusal'], 'mechanism absence is not contention').toBe('purge-mechanism-absent');
+    const detail = String(failed!['detail'] ?? '');
+    // NEITHER OF CONTENTION'S TWO CLAUSES, which are false on this box.
+    expect(detail, 'no lock file is blamed — none was consulted').not.toContain('was unavailable');
+    expect(detail, 'and no wait is prescribed for a compaction that cannot run')
+      .not.toContain('once the compaction settles');
+    expect(detail, 'the cause is named').toContain('MECHANISM is absent');
+    // AND THE REAP ITSELF RAN, so this is the tail and not an early refusal.
+    expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'and the registry row still stands').not.toBeNull();
   }, 60000);
 });

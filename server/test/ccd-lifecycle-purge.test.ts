@@ -1398,6 +1398,16 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     expect(tx).not.toBe('');
     const terminal = destroys.filter((e) => e['tx'] === tx && e['outcome'] !== 'intent');
     expect(terminal.map((e) => e['outcome']), 'exactly one, and it is the refusal').toEqual(['refused']);
+    // AND IT IS THE MECHANISM-ABSENT REFUSAL, not contention's (r3 A-I3). The
+    // DISPOSITION is unchanged — this caller still declines, because it still
+    // reaches the purge before anything irreversible — so only the token and
+    // the sentence can carry the difference, and without this assertion folding
+    // the status-2 arm back into `!= 0` stayed GREEN here (measured).
+    expect(terminal[0]!['refusal'], 'the NOFLOCK shim is mechanism absence, not a busy lock')
+      .toBe('purge-mechanism-absent');
+    const gcDetail = String(terminal[0]!['detail'] ?? '');
+    expect(gcDetail, 'no lock file is blamed — none was consulted').not.toContain('was unavailable');
+    expect(gcDetail, 'the cause is named').toContain('MECHANISM is absent');
     expect(purges(), 'no purge-done').toBe(0);
     expect(h.reg(id, 'uuid'), 'the row stands').not.toBeNull();
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.generation`)),
