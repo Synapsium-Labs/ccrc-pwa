@@ -6892,3 +6892,17 @@ the same transition table as the first.
 Next: the implementation plan, via writing-plans, on the same `spec/review-runs` branch as a sibling
 under `docs/superpowers/plans/`. Run 47 stays `planned`, still cap-blocked; nothing here changes
 account-pools' own state.
+
+---
+
+## 2026-09-14 16:xx UTC — review-runs implementation plan written
+
+`docs/superpowers/plans/2026-09-14-review-runs.md` on `spec/review-runs` (`2d766e50`, sibling of the
+spec, in PR #103's branch): fourteen tasks, each ending green on its own suites, every guard with a
+measured mutant step. Seven deviations minted for departures found while planning, **D-2794..D-2800**
+(floor now 2801) — the largest is D-2794: `store.ts` already had a private `TERMINAL_RUN_STATES`
+derived from `RUN_TRANSITIONS` that counted `unknown` as terminal; the L0 pair replaces it.
+
+Tasks 1–2 alone (the cap classification and the re-entry check) would have freed runs 39 and 40's
+slots and let run 47 dispatch. Run 47 is still `planned`, still `cap-concurrency 7/7` at the last
+retry (15:29 UTC). Execution mode is the operator's call; nothing here changes account-pools' state.
