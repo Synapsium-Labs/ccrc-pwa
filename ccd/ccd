@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9548ae9fddc0c1a65ab2c530ebaa6da756163831db9524f3f0ee79ca95c767a9
+# ccrc:generated 1 sha256=654a461f2c7c5d6c85a5b55dc03f51a8e3368d7acab269c9f4e2da5c9d554260
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -986,9 +986,15 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
-SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
-                                # ultracode is session-only by design (no settings.json key),
-                                # so injecting it at spawn is the only way to default it.
+SPAWN_EFFORT="ultracode"        # /effort sent at settle to a session with NO routing record
+                                # ("" disables) — a pre-slice-1 session, exactly today's
+                                # behaviour. A session WITH a record never gets this keystroke:
+                                # its own effort field rides `--effort`/`--settings` on the
+                                # spawn argv instead (`_spawn_start`, routing spec §5.2).
+                                # ultracode DOES have `--settings` keys (measured Claude Code
+                                # 2.1.270, D-2809) — the old premise here (no settings.json key)
+                                # was wrong; `/effort ultracode` was measured NOT to persist a
+                                # per-model pin either (D-2810). Never CLAUDE_CODE_EFFORT_LEVEL.
 # D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
 # On `--resume`, Claude Code classifies a tail whose last turn died in an API
 # error (a limit banner) as an interrupted turn, writes a META user prompt
@@ -14985,8 +14991,28 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # says what was not applied rather than pretending.
     if _is_anthropic_backend "$wrapper"; then
       [[ -n "$rsub" ]] && routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"
+      # `--settings` BEFORE `--effort` in `routeflags` — deliberately, not
+      # alphabetical: `ccd-route-spawn.test.ts`'s ruled-form test asserts
+      # `--model X --settings Y --` as one contiguous substring, so a flag
+      # between `--model` and `--settings` would break it (measured against
+      # the test, not chosen first). `auto` composes NEITHER — the lane
+      # decides — and is the one word `_route_effort_for` can hand back
+      # un-transformed for a non-haiku class (Task 7's --settings ruling,
+      # controller ruling S1-R8).
+      if [[ "$rwf" == on ]]; then
+        if [[ "$reff" == ultracode ]]; then
+          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
+        else
+          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
+        fi
+      fi
+      [[ -n "$reff" && "$reff" != auto ]] && routeflags="${routeflags:+$routeflags }--effort $reff"
     else
-      [[ -n "$reff" ]] && inert="effort"
+      # RAW, not `$reff` post-haiku-filtering: a haiku+effort PAIR is already
+      # refused (nothing was ever going to apply, on any backend, so it is not
+      # "inert" here either) but `auto` means the lane already decides on its
+      # own — S1-R6 — so it is excluded the same way `--effort` above is.
+      [[ -n "$reff" && "$reff" != auto ]] && inert="effort"
       [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
     fi
     if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
@@ -15166,21 +15192,39 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
   _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
-_inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
-  [[ -n "$SPAWN_EFFORT" ]] || return 0
-  local t="$1"
+_inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the TUI is up.
+  # The id is the tmux name with `cc-` stripped (`_tmux`), so the signature the
+  # settle calls with stays (`ccd-backend-vs-placement.test.ts` pins the call).
+  # THE RECORD DECIDES (routing spec 2026-09-14 §5.2, controller ruling S1-R8,
+  # Lever B): a session with ANY routing field never gets this keystroke —
+  # whatever its effort holds (a level, `auto`, or nothing at all) it was
+  # either already applied on the spawn argv (`_spawn_start`'s `--effort`/
+  # `--settings`) or deliberately left for the lane to decide. Only a session
+  # with NO record at all — a pre-slice-1 session — gets `SPAWN_EFFORT` here,
+  # exactly as before. `_route_effort_for` is still called on the record path,
+  # for its JOURNALING side effect only (the haiku+effort refusal note and the
+  # unrecognised-value reject note) — its return value is never typed, so
+  # nothing unrecognised reaches a keystroke because nothing recognised does
+  # either.
+  local t="$1" id="${1#cc-}" level
+  if _route_any "$id"; then
+    _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
+    return 0
+  fi
+  level="$SPAWN_EFFORT"
+  [[ -n "$level" ]] || return 0
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
   fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0
+    echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
   fi
   sleep 1
-  tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
+  tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then

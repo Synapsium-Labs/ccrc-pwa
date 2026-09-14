@@ -51,17 +51,16 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(retry).toBe(today(`--session-id '${UUID}'`));
   });
 
-  it('class and subagent: --model and the env on BOTH lines, the retry pinned on its own; effort is not an argv matter here', () => {
+  it('class and subagent: --model and the env on BOTH lines, the retry pinned on its own; ultracode rides --settings and --effort too (Task 8)', () => {
     seed('myid');
     h.sh(`_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid subagent sonnet`);
     const [primary, retry] = spawnBoth('myid');
     const env = h.sh('_resume_env');
     const expected = (sidflag: string): string =>
       `cd '${h.home}' && exec env COLORTERM=truecolor ${env} CLAUDE_CODE_SUBAGENT_MODEL=sonnet '${h.home}/.local/bin/claude' `
-      + `--model opus ${sidflag} --dangerously-skip-permissions`;
+      + `--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode ${sidflag} --dangerously-skip-permissions`;
     expect(primary).toBe(expected(`--resume '${UUID}'`));
     expect(retry).toBe(expected(`--session-id '${UUID}'`));
-    expect(primary).not.toContain('--settings');   // Task 8's, after Task 7 measures the key
     expect(h.reg('myid', 'inert')).toBeNull();
   });
 
@@ -76,11 +75,37 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(fs.readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8')).toMatch(/route-reject myid: field class/);
   });
 
-  it('the effort override env is never composed, whatever the record says', () => {
+  it('the effort override ENV is never composed; the record\'s level rides --effort instead (Task 8)', () => {
     seed('myid'); h.sh(`_reg_set myid class opus; _reg_set myid effort max`);
     const [a] = spawnBoth('myid');
     expect(a).not.toMatch(/CLAUDE_CODE_EFFORT/);
+    expect(a).toContain('--effort max');
+  });
+
+  it('effort high alone (no workflow) rides --effort on BOTH lines, no --settings', () => {
+    seed('myid'); h.sh(`_reg_set myid class opus; _reg_set myid effort high`);
+    const [primary, retry] = spawnBoth('myid');
+    for (const l of [primary, retry]) {
+      expect(l).toContain('--effort high');
+      expect(l).not.toContain('--settings');
+    }
+  });
+
+  it('effort auto composes neither --effort nor --settings — the lane decides', () => {
+    seed('myid'); h.sh(`_reg_set myid class opus; _reg_set myid effort auto`);
+    const [a] = spawnBoth('myid');
     expect(a).not.toContain('--effort');
+    expect(a).not.toContain('--settings');
+  });
+
+  // arm 3 honoured both keys (controller ruling S1-R8):
+  it('effort ultracode composes --settings with both keys on BOTH lines; workflow on alone composes enableWorkflows only', () => {
+    seed('myid'); h.sh(`_reg_set myid class opus; _reg_set myid effort ultracode`);
+    const [p1, r1] = spawnBoth('myid');
+    for (const l of [p1, r1]) expect(l).toContain(`--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --`);
+    h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up"; _reg_set myid effort high; _reg_set myid workflow on`);
+    const [p2] = spawnBoth('myid');
+    expect(p2).toContain(`--model opus --settings '{"enableWorkflows":true}' --`);
   });
 
   it('a swap landing (lastswap within 300s) carries every field — the continuity the operator ruled', () => {
@@ -123,6 +148,19 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     seed('myid', 'gpt'); h.sh(`_reg_set myid effort high`);
     spawnBoth('myid');
     expect(h.reg('myid', 'inert')).toBe('effort');
+  });
+
+  it('a non-Anthropic lane with effort auto stamps no inert (S1-R6): there is nothing not applied', () => {
+    seedAccountsSh(h.home, {
+      version: 1, accounts: [
+        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
+      ],
+    });
+    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    seed('myid', 'gpt'); h.sh(`_reg_set myid effort auto`);
+    spawnBoth('myid');
+    expect(h.reg('myid', 'inert')).toBeNull();
   });
 
   it('inert is CLEARED again on an Anthropic lane (a rehome back)', () => {
