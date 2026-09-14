@@ -133,4 +133,76 @@ describe('ccd-usage-sweep.py', () => {
     const f = fixture(); runSweep(f);
     expect(existsSync(path.join(f.home, '.cc-sessions', 'usage', 'stale-id.json'))).toBe(true);
   });
+
+  // --- fix round 1 fixtures (review findings #1-#4) ---
+
+  it('carriedAcrossDirs counts the record once even when the carried id repeats across many lines', () => {
+    const home = mkTmp('ccrc-usage-sweep-carry-');
+    const a = path.join(home, '.claude'); const b = path.join(home, '.claude-two');
+    const projA = path.join(a, 'projects', '-w-demo'); mkdirSync(projA, { recursive: true });
+    const projB = path.join(b, 'projects', '-w-demo'); mkdirSync(projB, { recursive: true });
+    // dir A owns msg-1; dir B (sorts after A) carries it back across THREE lines,
+    // the shape a streamed reply's repeated message.id produces.
+    const ownerFile = path.join(projA, 'sess-1.jsonl');
+    writeFileSync(ownerFile, line({ message: { id: 'msg-1' } }));
+    stamp(ownerFile, NOW - 3600);
+    const carriedFile = path.join(projB, 'sess-2.jsonl');
+    writeFileSync(carriedFile, line({ message: { id: 'msg-1' }, sessionId: 'sess-2' }).repeat(3));
+    stamp(carriedFile, NOW - 3600);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    const s = runSweep({ home, dirs: { [a]: 'claude', [b]: 'two' } });
+    expect(s['scan']).toMatchObject({ records: 1, duplicatesRemoved: 3 });
+    const acct = s['perAccount'] as Record<string, Record<string, unknown>>;
+    expect(acct['claude']).toMatchObject({ carriedAcrossDirs: 1 });
+  });
+
+  it('excludes unpriced classes from apiUsd sums and reports them in fableShare, nulling estimate when nothing is priced', () => {
+    const home = mkTmp('ccrc-usage-sweep-unpriced-');
+    const mixed = path.join(home, '.claude-mixed');
+    const projMixed = path.join(mixed, 'projects', '-w-demo'); mkdirSync(projMixed, { recursive: true });
+    writeFileSync(path.join(projMixed, 'mixed.jsonl'),
+      line({ message: { id: 'msg-p1', model: 'claude-fable-5-1' } })
+      + line({ message: { id: 'msg-u1', model: 'gpt-5-codex' } }));
+    stamp(path.join(projMixed, 'mixed.jsonl'), NOW - 3600);
+    const gptOnly = path.join(home, '.claude-gptonly');
+    const projGpt = path.join(gptOnly, 'projects', '-w-demo'); mkdirSync(projGpt, { recursive: true });
+    writeFileSync(path.join(projGpt, 'gpt.jsonl'), line({ message: { id: 'msg-u2', model: 'gpt-5-codex' }, sessionId: 'sess-g' }));
+    stamp(path.join(projGpt, 'gpt.jsonl'), NOW - 3600);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    const s = runSweep({ home, dirs: { [mixed]: 'mixedacct', [gptOnly]: 'gptonly' } });
+    const perAccount = s['perAccount'] as Record<string, Record<string, unknown>>;
+    const mixedAcct = perAccount['mixedacct']!;
+    const mixedShare = mixedAcct['fableShare'] as Record<string, unknown>;
+    expect(mixedShare).toMatchObject({ estimate: 1, unpricedRecords: 1, unpricedClasses: ['other'] });
+    expect(mixedShare['basis']).toContain('PRICED');
+    const gptAcct = perAccount['gptonly']!;
+    const gptShare = gptAcct['fableShare'] as Record<string, unknown>;
+    expect(gptShare).toMatchObject({ estimate: null, unpricedRecords: 1, unpricedClasses: ['other'] });
+    expect(gptAcct['apiUsd']).toBe(0);
+  });
+
+  it('--reap-orphans skips (and counts) a sidecar whose ts is unreadable rather than deleting it', () => {
+    const f = fixture();
+    writeFileSync(path.join(f.home, '.cc-sessions', 'usage', 'corrupt-id.json'), '{not valid json');
+    const s = runSweep(f, ['--reap-orphans']);
+    expect(s['orphansReaped']).toEqual(['stale-id']);
+    expect(s['orphansSkippedUnreadable']).toBe(1);
+    expect(existsSync(path.join(f.home, '.cc-sessions', 'usage', 'corrupt-id.json'))).toBe(true);
+  });
+
+  it('a malformed usage value counts as a parse error instead of aborting the whole sweep', () => {
+    const home = mkTmp('ccrc-usage-sweep-badusage-');
+    const a = path.join(home, '.claude');
+    const proj = path.join(a, 'projects', '-w-demo'); mkdirSync(proj, { recursive: true });
+    writeFileSync(path.join(proj, 'bad.jsonl'),
+      line({ message: { id: 'msg-bad', usage: 'not-an-object' } })
+      + line({ message: { id: 'msg-good' } }));
+    stamp(path.join(proj, 'bad.jsonl'), NOW - 3600);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    const s = runSweep({ home, dirs: { [a]: 'claude' } });
+    expect(s['scan']).toMatchObject({ parseErrors: 1, records: 1 });
+  });
 });

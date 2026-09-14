@@ -11,16 +11,29 @@ streamed reply is split across lines that repeat the same `message.id`, so the
 ONLY correct total is a GLOBAL dedupe by message id across every dir scanned
 (85% of raw assistant lines were duplicates in the 30-day survey). Dirs are
 walked in SORTED order so a carried record is attributed the same way on every
-run, and the carry is COUNTED per account. The `effort` field is top-level on
-the line. Subagent transcripts live under a `subagents/` path segment and/or
-carry `isSidechain`. The model-id → class table is NOT here: it is
-`shared/models.mjs`'s `FAMILY_TOKENS`, passed in as `--class-tokens`.
+run, and the carry is COUNTED per account ONCE PER RECORD — a streamed reply's
+repeated `message.id` still costs `duplicatesRemoved` once per line, but
+`carriedAcrossDirs` credits the id only on its first sighting from a dir other
+than the one that owns it. The `effort` field is top-level on the line.
+Subagent transcripts live under a `subagents/` path segment and/or carry
+`isSidechain`. The model-id → class table is NOT here: it is
+`shared/models.mjs`'s `FAMILY_TOKENS`, passed in as `--class-tokens`. A class
+absent from `PROXY_RATES_USD_PER_MTOK` (e.g. a non-Anthropic lane's model) is
+UNPRICED, not free: its records are excluded from every apiUsd sum and
+reported separately per account (`fableShare.unpricedRecords` /
+`.unpricedClasses`) so "not priced" never silently reads as "cost nothing".
+A malformed `usage` value (wrong type, non-numeric count) counts as one
+`parseErrors`, never aborts the run. `--reap-orphans`, the tool's only
+destructive path, never deletes a sidecar whose `ts` it cannot read — that is
+skipped and counted in `orphansSkippedUnreadable`, not treated as old.
 """
 import argparse, json, os, sys, time
 
 # A PROXY, labelled as such in the output: the subscription's per-class window
 # weights are unpublished (research note 2026-09-13 §6). USD per MTok:
-# (input, output, cache_read, cache_write). None = not published for that class.
+# (input, output, cache_read, cache_write). None = not published for that
+# FIELD within a priced class. A class with NO ROW here at all (e.g. "other")
+# is UNPRICED, not free — see api_usd().
 PROXY_RATES_USD_PER_MTOK = {
     "fable":  (10.0, 50.0, 1.00, None),
     "opus":   (5.0,  25.0, 0.50, 6.25),
@@ -43,9 +56,13 @@ def class_of(model, tokens):
 
 
 def api_usd(cls, inp, out, cread, cwrite):
+    """USD for one record, or None when `cls` has no row in the rate table —
+    UNPRICED, never priced at 0.0 (a class outside the table is not free; it
+    is simply not costed here). Callers must skip a None result rather than
+    add it, so 'not priced' and 'cost nothing' never collapse."""
     r = PROXY_RATES_USD_PER_MTOK.get(cls)
     if r is None:
-        return 0.0
+        return None
     total = inp / 1e6 * r[0] + out / 1e6 * r[1]
     if r[2] is not None:
         total += cread / 1e6 * r[2]
@@ -59,19 +76,26 @@ def bucket():
 
 
 def add(b, rec):
+    """`rec['apiUsd']` is None for an unpriced class (see api_usd()) — every
+    apiUsd sum (perModel, perClass, perAccount, perSession) adds only PRICED
+    records; an unpriced record still counts toward n/input/output/etc."""
     b["n"] += 1
     b["input"] += rec["input"]; b["output"] += rec["output"]
     b["cacheRead"] += rec["cacheRead"]; b["cacheWrite"] += rec["cacheWrite"]
-    b["apiUsd"] += rec["apiUsd"]
+    if rec["apiUsd"] is not None:
+        b["apiUsd"] += rec["apiUsd"]
 
 
 def scan(dirs, tokens, now, days, stats, carried):
     """dirs: {configDir: accountId}. Returns {messageId: record}, deduped globally,
-    dirs walked in sorted order; `carried[account]` counts records whose id was
-    already seen from an earlier dir."""
+    dirs walked in sorted order; `carried[account]` counts each carried-across-dirs
+    RECORD once — on the id's first sighting from a dir other than the one that
+    owns it — never once per duplicate LINE (a streamed reply repeats the same
+    message id across many lines; `duplicatesRemoved` still counts every one)."""
     cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - days * 86400))
     mtime_cutoff = now - days * 86400
     records = {}
+    carried_ids = set()
     for cfg_dir in sorted(dirs):
         account = dirs[cfg_dir]
         carried.setdefault(account, 0)
@@ -114,16 +138,24 @@ def scan(dirs, tokens, now, days, stats, carried):
                                 continue
                             if mid in records:
                                 stats["duplicatesRemoved"] += 1
-                                if records[mid]["account"] != account:
-                                    carried[records[mid]["account"]] += 1
+                                owner = records[mid]["account"]
+                                if owner != account and mid not in carried_ids:
+                                    carried[owner] += 1
+                                    carried_ids.add(mid)
                                 continue
-                            model = msg.get("model")
-                            cls = class_of(model, tokens)
-                            inp = int(usage.get("input_tokens") or 0)
-                            out = int(usage.get("output_tokens") or 0)
-                            cread = int(usage.get("cache_read_input_tokens") or 0)
-                            cwrite = int(usage.get("cache_creation_input_tokens") or 0)
-                            effort = d.get("effort")
+                            try:
+                                model = msg.get("model")
+                                cls = class_of(model, tokens)
+                                inp = int(usage.get("input_tokens") or 0)
+                                out = int(usage.get("output_tokens") or 0)
+                                cread = int(usage.get("cache_read_input_tokens") or 0)
+                                cwrite = int(usage.get("cache_creation_input_tokens") or 0)
+                                effort = d.get("effort")
+                            except (AttributeError, TypeError, ValueError):
+                                # a malformed usage value (wrong type, non-numeric
+                                # count) costs one record, never the whole run.
+                                stats["parseErrors"] += 1
+                                continue
                             records[mid] = {
                                 "model": model, "class": cls, "input": inp, "output": out,
                                 "cacheRead": cread, "cacheWrite": cwrite,
@@ -170,13 +202,19 @@ def read_seven(limits, account):
 
 
 def reap_orphans(registry, now):
-    """Remove usage/<id>.json (+ <id>.agents/) when no $REG/<id>.uuid exists and the row is older than a day."""
+    """Remove usage/<id>.json (+ <id>.agents/) when no $REG/<id>.uuid exists and the
+    row is older than a day. This is the tool's ONLY destructive path, so an id
+    whose `ts` is absent, unreadable or malformed is NOT reapable — collapsing
+    "unreadable" with "older than a day" would delete on a guess. Such an id is
+    skipped and counted in the returned skippedUnreadable, never removed.
+    Returns (reaped: [id, ...], skippedUnreadable: int)."""
     reaped = []
+    skipped_unreadable = 0
     usage_dir = os.path.join(registry, "usage")
     try:
         names = os.listdir(usage_dir)
     except OSError:
-        return reaped
+        return reaped, skipped_unreadable
     for n in sorted(names):
         if not n.endswith(".json") or n.startswith("."):
             continue
@@ -188,7 +226,10 @@ def reap_orphans(registry, now):
                 ts = (json.load(f) or {}).get("ts")
         except (OSError, ValueError):
             ts = None
-        if isinstance(ts, (int, float)) and now - ts <= ORPHAN_AGE_S:
+        if not isinstance(ts, (int, float)):
+            skipped_unreadable += 1
+            continue
+        if now - ts <= ORPHAN_AGE_S:
             continue
         try:
             os.remove(os.path.join(usage_dir, n))
@@ -206,7 +247,7 @@ def reap_orphans(registry, now):
             try: os.rmdir(agents)
             except OSError: pass
         reaped.append(sid)
-    return reaped
+    return reaped, skipped_unreadable
 
 
 def main():
@@ -233,20 +274,27 @@ def main():
     uuid_map = read_uuid_map(a.registry)
 
     per_model, per_class, per_effort, per_account, per_session = {}, {}, {}, {}, {}
+    unpriced_records, unpriced_classes = {}, {}
     for rec in records.values():
         add(per_model.setdefault(rec["model"] or "(none)", bucket()), rec)
         add(per_class.setdefault(rec["class"], bucket()), rec)
         pe = per_effort.setdefault(rec["effort"], {"n": 0, "output": 0})
         pe["n"] += 1; pe["output"] += rec["output"]
         acct = per_account.setdefault(rec["account"], {"n": 0, "apiUsd": 0.0, "perClass": {}})
-        acct["n"] += 1; acct["apiUsd"] += rec["apiUsd"]
+        acct["n"] += 1
+        if rec["apiUsd"] is not None:
+            acct["apiUsd"] += rec["apiUsd"]
+        else:
+            unpriced_records[rec["account"]] = unpriced_records.get(rec["account"], 0) + 1
+            unpriced_classes.setdefault(rec["account"], set()).add(rec["class"])
         add(acct["perClass"].setdefault(rec["class"], bucket()), rec)
         sid = rec["sessionId"] or "(none)"
         s = per_session.setdefault(sid, {"ccdId": uuid_map.get(sid), "account": rec["account"], "project": rec["project"],
                                          "n": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "apiUsd": 0.0,
                                          "subagentN": 0, "models": {}, "efforts": {}})
         s["n"] += 1; s["output"] += rec["output"]; s["cacheRead"] += rec["cacheRead"]; s["cacheWrite"] += rec["cacheWrite"]
-        s["apiUsd"] += rec["apiUsd"]
+        if rec["apiUsd"] is not None:
+            s["apiUsd"] += rec["apiUsd"]
         if rec["subagent"]:
             s["subagentN"] += 1
         s["models"][rec["model"] or "(none)"] = s["models"].get(rec["model"] or "(none)", 0) + 1
@@ -255,21 +303,28 @@ def main():
     for account in sorted(set(dirs.values())):
         acct = per_account.setdefault(account, {"n": 0, "apiUsd": 0.0, "perClass": {}})
         acct["carriedAcrossDirs"] = carried.get(account, 0)
+        # acct["apiUsd"] is already PRICED-only (add()/the manual accumulation
+        # above both skip a None apiUsd), so this ratio is fable-priced over
+        # all-priced — never let an unpriced class read as "cost nothing".
         fable = acct["perClass"].get("fable", {}).get("apiUsd", 0.0)
         estimate = (fable / acct["apiUsd"]) if acct["apiUsd"] > 0 else None
         seven, seven_ts = read_seven(a.limits, account)
         acct["fableShare"] = {"estimate": estimate,
-                              "basis": "fable apiUsd / all apiUsd in the window (a PROXY, see rates.label)",
+                              "basis": ("fable apiUsd / all PRICED apiUsd in the window (unpriced classes "
+                                        "excluded and listed; a PROXY, see rates.label)"),
                               "sevenPct": seven, "sevenTs": seven_ts,
-                              "carriedAcrossDirs": carried.get(account, 0)}
+                              "carriedAcrossDirs": carried.get(account, 0),
+                              "unpricedRecords": unpriced_records.get(account, 0),
+                              "unpricedClasses": sorted(unpriced_classes.get(account, set()))}
 
-    reaped = reap_orphans(a.registry, now) if a.reap_orphans else []
+    reaped, orphans_skipped_unreadable = reap_orphans(a.registry, now) if a.reap_orphans else ([], 0)
 
     out = {"schema": 1, "startedAt": started, "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "windowDays": a.days, "now": now, "scan": stats, "attribution": ATTRIBUTION,
            "rates": {"label": RATES_LABEL, "table": {k: list(v) for k, v in PROXY_RATES_USD_PER_MTOK.items()}},
            "perModel": per_model, "perClass": per_class, "perEffort": per_effort,
-           "perAccount": per_account, "perSession": per_session, "orphansReaped": reaped}
+           "perAccount": per_account, "perSession": per_session, "orphansReaped": reaped,
+           "orphansSkippedUnreadable": orphans_skipped_unreadable}
     tmp = a.out + ".tmp"
     with open(tmp, "w") as f:
         json.dump(out, f, indent=1, sort_keys=True)
