@@ -3402,6 +3402,17 @@ forbid. The worker refused it and reported, which is the protocol working agains
   grandfathering — an `INHERITED_GROUNDS` entry naming `.term-histbar`'s own background, gate
   passing 12.32 dark / 10.41 light against a 4.5 floor. A first attempt using `GROUNDS` was
   correctly refused by the gate.
+- **D-2771** (Task 8 / §5.3): this plan CONTRADICTS ITSELF about what a probe failure puts on the
+  wire. Lines 1036-1038 dictate, verbatim, a `PaneHistoryReply` docstring saying the probe's
+  `unreadable` vs `unparseable` vocabulary "rides in `detail`, which is what the drawer renders" —
+  inherited from spec §5.3's "`unreadable`/`unparseable` → 502 with `detail`". Line 1391's "A note
+  the implementer must not re-decide" then OVERRIDES it: the capture alone decides the status, and a
+  probe that failed while the capture succeeded is a 200 with the three measured fields absent. The
+  worker transcribed the earlier text faithfully, so the L0 contract shipped documenting the
+  opposite of what the route does. Closed by correcting the docstring — the vocabulary is
+  ADAPTER-LOCAL, sizing the capture and feeding wave 3's floor server-side, and deliberately does
+  not reach the wire. **Spec §5.3 still carries the original sentence; wave 4's docs pass owns it.**
+
 - **D-2770** (Task 16): `pwa/test/history-term-viewport.test.tsx`, the fake-`Terminal` wiring half
   of spec §11 ruling 11. This plan silently substituted a source scan for it — on the correct
   measurement that a REAL `Terminal`'s `viewportY` does not move under jsdom — and recorded

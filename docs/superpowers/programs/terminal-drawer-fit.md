@@ -12,7 +12,7 @@ scrollback it exists to render.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) | **fix round 1** |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) — 6/6 CI green | **fix round 1** |
 | 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
 | 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
@@ -73,7 +73,32 @@ refused and reported. That refusal is the protocol working against a bad instruc
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
 
-**Eleven of the sixteen remain unspent.**
+**D-2771** was assigned during fix round 1, when the worker disagreed with a coordinator ruling and
+was right (below). **Ten of the sixteen remain unspent.**
+
+### The one ruling this session got wrong, and how it was caught
+
+Fix round 1's item F4 ordered the probe's `detail` carried through to the wire. The worker replied
+with a `finding` **before doing the work**, as the round invited, and disagreed with the remedy while
+agreeing the defect was real. All five of its measurements verified:
+
+1. The coordinator's own parenthetical — "the type already has `detail?`" — was false. `detail?` is
+   on `PaneHistoryReply`'s `ok:false` arm only; carrying it through meant widening the wire.
+2. Two red-first tests pin the exact body with `toEqual`; the change would have edited tests to match
+   a change rather than the reverse.
+3. Plan line 1391 forbids exactly that re-decision.
+4. **Both of this session's own refuters had named the docstring fix as the remedy** — one wrote "do
+   NOT give probe failures a status path or a wire `detail`". The coordinator carried the finding
+   forward because it survived refutation, and did not carry the refuters' remedy with it. That is
+   the failure the refute pass exists to prevent, committed by the session running it.
+5. The load-bearing half of the ruling — "wave 3 is told to build on that contract" — is false. Spec
+   §7.1 is `probe = paneProbe(id)` then `fitFloor(probe, clientCols)`: wave 3 consumes the
+   `PaneProbe` VALUE server-side, where all four arms are intact, and never reads
+   `PaneHistoryReply`.
+
+F4 was reversed to the worker's proposal and dropped from major to minor. **A survived finding
+carries its refuters' remedy, not just its claim** — the review harness had the right answer and the
+coordinator read only half of it.
 
 ### The pattern worth carrying
 
