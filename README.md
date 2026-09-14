@@ -1355,7 +1355,10 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
-`server/test/worker-skill.test.ts`), which carries no `references/` of its own
+`server/test/worker-skill.test.ts`), and the `ccrc-reviewer` skill
+(`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
+`server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
+workspace and reports — it never rules, which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
 account drifts on swap — so `ccd/install-coordinator-skill.sh` and
