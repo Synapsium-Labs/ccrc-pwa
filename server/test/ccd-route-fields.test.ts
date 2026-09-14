@@ -26,6 +26,9 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
   it('_route_get: absent → empty, rc 0; a vocabulary value → itself', () => {
     seed();
     expect(get('class')).toBe('|rc=0');
+    // absent must NOT be treated as an unrecognised value: no journal line, no floor marker
+    expect(swapLog()).toBe('');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routenoteclass`))).toBe(false);
     h.sh(`_reg_set ${ID} class opus`);
     expect(get('class')).toBe('opus|rc=0');
   });
