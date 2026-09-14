@@ -3047,4 +3047,19 @@ describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
     expect(s.advance(a.id, 'dispatched', 'test'))
       .toEqual({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
   });
+
+  it('reviewInFlightFor: null with no reviewer, the review id while non-terminal, null again once terminal (Task 5 review m8)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'ccrc-pwa', wave: 1, waveOf: 5,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // planned
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // dispatched
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // working
+    expect(s.advance(r.id, 'failed', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
+  });
 });

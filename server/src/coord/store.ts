@@ -790,12 +790,6 @@ export class CoordStore {
         if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
           return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
         }
-        // Design 2026-09-14 §5.1: one review run per work run at a time. Inside
-        // the transaction so two opens cannot both pass the read.
-        if (input.kind === 'review') {
-          const inflight = this.reviewInFlightFor(input.reviews ?? -1);
-          if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
-        }
         // Idempotent retry (fix — review findings 19/32): a run already open,
         // `planned`, and claimed by the SAME coordinator for this exact
         // (program, wave, waveOf) is REUSED rather than duplicated. Without
@@ -835,6 +829,13 @@ export class CoordStore {
             state: isRunState(dup.state) ? dup.state : 'unknown',
             holdReason: hold.reason,
           };
+        }
+        // Design 2026-09-14 §5.1: one review run per work run at a time. Inside
+        // the transaction so two opens cannot both pass the read; AFTER the dup
+        // arm so a retried open of the same planned review row stays idempotent.
+        if (input.kind === 'review') {
+          const inflight = this.reviewInFlightFor(input.reviews ?? -1);
+          if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
         }
         const now = Date.now();
         this.db.prepare(

@@ -3544,10 +3544,29 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       reason: `program:${OPEN_BODY.program} wave:1/3 run:${id}` });
   });
 
-  it('refuses a second non-terminal review run for the same work run: review-in-flight', async () => {
+  it('opens a review run whose program agrees with the reviewed run only after shaping (Task 5 review I2)', async () => {
     const home = mkTmp('ccrc-runs-');
-    const { workId } = await workAtReview(home);
+    const { w, workId } = await workAtReview(home);
+    const res = await postOpen(app, REVIEW(workId, { program: ` ${OPEN_BODY.program} ` }));
+    expect(res.statusCode).toBe(200);
+    const { id } = res.json() as { id: number };
+    expect(okRun(w.coord.run(id))!.program).toBe(OPEN_BODY.program);
+  });
+
+  it('is idempotent for a retry while the review is still planned, then refuses review-in-flight once dispatched (Task 5 review m10)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId } = await workAtReview(home);
     const first = (await postOpen(app, REVIEW(workId))).json() as { id: number };
+    // The identical retry reuses the SAME planned row — `openRun`'s dup arm
+    // runs before the review-in-flight check (m10), so an HTTP retry of a
+    // successful review open stays idempotent rather than 409ing itself.
+    const retry = await postOpen(app, REVIEW(workId));
+    expect(retry.statusCode).toBe(200);
+    expect((retry.json() as { id: number }).id).toBe(first.id);
+    w.coord.markDispatched(first.id, 'demo-r1', 'r1', 'ws/r1', false);
+    expect(w.coord.advance(first.id, 'dispatched', 'test').ok).toBe(true);
+    // No longer `planned`, so the dup arm no longer matches — the
+    // review-in-flight check is what refuses a genuinely second reviewer.
     const res = await postOpen(app, REVIEW(workId, { title: 'Again' }));
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, refused: 'review-in-flight', by: String(first.id) });
@@ -3566,19 +3585,22 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     ['reviews on a work run', (id: number) => ({ ...OPEN_BODY, wave: 2, reviews: id }), 'reviews'],
     ['kind unknown', (id: number) => REVIEW(id, { kind: 'unknown' }), 'kind'],
     ['a sessionId', (id: number) => REVIEW(id, { sessionId: 'demo-w1' }), 'sessionId'],
-    ['a different project', (id: number) => REVIEW(id, { project: 'elsewhere' }), 'project'],
-    ['a different wave', (id: number) => REVIEW(id, { wave: 2 }), 'wave'],
-    ['a different program', (id: number) => REVIEW(id, { program: 'other' }), 'program'],
-    ['a different claimedBy', (id: number) => REVIEW(id, { claimedBy: 'ccrc-pwa-other' }), 'claimedBy'],
+    // Task 5 review m7: these five assert the exact "must be the reviewed
+    // run's" wording, not merely that the field name appears somewhere.
+    ['a different project', (id: number) => REVIEW(id, { project: 'elsewhere' }), "project must be the reviewed run's"],
+    ['a different wave', (id: number) => REVIEW(id, { wave: 2 }), "wave must be the reviewed run's"],
+    ['a different waveOf', (id: number) => REVIEW(id, { waveOf: 9 }), "waveOf must be the reviewed run's"],
+    ['a different program', (id: number) => REVIEW(id, { program: 'other' }), "program must be the reviewed run's"],
+    ['a different claimedBy', (id: number) => REVIEW(id, { claimedBy: 'ccrc-pwa-other' }), "claimedBy must be the reviewed run's coordinator"],
     ['a run that does not exist', () => REVIEW(999_999), 'reviews'],
-  ])('refuses %s as bad-request, naming the field', async (_what, body, field) => {
+  ])('refuses %s as bad-request, naming the field', async (_what, body, detailSubstring) => {
     const home = mkTmp('ccrc-runs-');
     const { workId } = await workAtReview(home);
     const res = await postOpen(app, body(workId));
     expect(res.statusCode).toBe(400);
     const j = res.json() as { ok: boolean; error: string; detail: string };
     expect(j).toMatchObject({ ok: false, error: 'bad-request' });
-    expect(j.detail).toContain(field);
+    expect(j.detail).toContain(detailSubstring);
   });
 
   it('refuses to review a run that is not at awaiting-review, naming its state', async () => {

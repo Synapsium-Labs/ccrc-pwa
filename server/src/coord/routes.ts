@@ -1176,6 +1176,19 @@ export function registerCoordRoutes(
     if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
     }
+    // A programme names one ledger file, so separators, dot components, and
+    // display-label punctuation are refused before the value reaches storage or
+    // `ledgerPath`. Every programme consumer below reads this one shaped value —
+    // MOVED above the review arm (Task 5 review I2): `program` compared raw
+    // against the reviewed run's own (already-shaped, since every open shapes
+    // it) `program` let a whitespace-padded slug pass a work open and fail an
+    // otherwise-identical review open of the same programme.
+    const programShape = shapeProgramSlug(program);
+    if (!programShape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
+    }
+    const programSlug = programShape.slug;
+
     // A review run's project, wave and waveOf are the REVIEWED run's — read off
     // its row, never off this body, which may only agree (D-2799). The body's
     // own shape guard above already accepted `project`/`wave` as it always
@@ -1191,21 +1204,13 @@ export function registerCoordRoutes(
       const t = target.run;
       if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
       if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
-      if (t.program !== program) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
+      if (t.program !== programSlug) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
       if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
       if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
       if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
       if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
       project = t.project; wave = t.wave; waveOfBody = t.waveOf;
     }
-    // A programme names one ledger file, so separators, dot components, and
-    // display-label punctuation are refused before the value reaches storage or
-    // `ledgerPath`. Every programme consumer below reads this one shaped value.
-    const programShape = shapeProgramSlug(program);
-    if (!programShape.ok) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
-    }
-    const programSlug = programShape.slug;
 
     // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
     // `setProgramHome` (through the verdict's own `home`), the response —
@@ -1628,6 +1633,7 @@ export function registerCoordRoutes(
     if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
       const { overConcurrency } = capsMeasured(coord);
       if (overConcurrency !== null) {
+        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
         return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
           limit: overConcurrency.limit, running: overConcurrency.running } });
       }
