@@ -277,6 +277,12 @@ jobs:
       # The spawn must TERMINATE — the D-2734 property, asked on the platform
       # whose arm it is. These cases force `CCD_OS` themselves, so they are red
       # on Linux too; running them here checks the real userland agrees.
+      # THE TWO QUESTIONS D-2614's work left open, and neither can be asked on
+      # Linux. Placed FIRST because they are pure measurement: they change no
+      # shipped code, and if a later step reds we still get their answer.
+      - name: Platform hazards — the deadline, and grep over a FIFO (D-2661, D-2739)
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/platform-hazards.test.ts --reporter=verbose
       - name: The pane-bound spawn terminates (D-2734..D-2737)
         working-directory: server
         run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'spawn has to END'

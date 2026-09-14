@@ -19518,6 +19518,17 @@ no box here can run, verifiable only through a ~35-minute CI cycle.
 
 ### D-2661 — the pty-less `login` lane hung to the hard cap against a six-second deadline, on macOS, intermittently — OPEN
 
+> **STILL OPEN, and now open for a BETTER REASON — both stated candidates are REFUTED (2026-09-14).**
+> Measured on macos-latest by `server/test/platform-hazards.test.ts`, asking the shim DIRECTLY rather
+> than through the helper, because D-2736's backstop masks the symptom: **(a) the deadline DOES fire** —
+> `_auth_timeout 2 sleep 60` returned 124 in 2 109 ms; **(b) EOF DOES arrive** on the output FIFO after
+> it fires, in 2 143 ms, even with a descendant that outlives its parent holding the inherited stdout.
+> Neither "it never fires" nor "a descendant holds the FIFO" is the cause. Taken with D-2738's refutation
+> of the missing-`gtimeout` theory, **all three hypotheses this entry has carried are now dead**, and the
+> original 60 046 ms observation has no explanation. What the probe found instead is a REAL and separate
+> defect, D-2764 — the shim never escalates to KILL — which is not this, because the fixture's launcher
+> was never shown to ignore TERM. Do not close D-2661 on D-2764's evidence.
+
 D-2614 established that both PANE-BOUND methods fail on macOS and reasoned that `login` and `paste`,
 which drive a plain pipe and touch no `script(1)`, were therefore unaffected. **The next macOS run
 falsified the second half.**
@@ -19838,4 +19849,58 @@ still alive 23.8 minutes after the last test output. GNU grep 3.11 skips devices
 returns immediately); **BSD grep is UNMEASURED** and is the prime suspect, with `-r` following symlinks a
 second candidate. D-2737 removes the FIFOs that are the suspected input, and the call is now bounded
 (`timeout: 30_000`) so the same situation reports a failure instead of consuming a 25-minute job
-silently. What is NOT closed: why BSD grep stalls there, which still wants the one-line probe.
+silently.
+
+**ANSWERED AND CLOSED 2026-09-14, measured on macos-latest (`server/test/platform-hazards.test.ts`):
+BSD `grep -r` BLOCKS on a FIFO with a live writer.** The walk never returned and the harness cut it at
+**20 026 ms**, where GNU returns in **83 ms** over the identical tree. The suspicion was right, and the
+symlink candidate was measured NEGATIVE — BSD `-r` did not leave the tree, so the FIFO is the whole
+story.
+
+**The remedy changed as a result, and the change matters.** A `timeout` on the caller converts a silent
+25-minute wedge into a loud one and still reads no files — it never made the assertion work. The canary
+walk is now `find <home> -type f -exec grep -l …`, which **cannot reach a device at all**; the timeout
+stays as a backstop rather than as the mechanism. The platform fact is pinned so it goes red the day BSD
+grep changes, instead of leaving the remedy silently over-applied.
+
+
+### D-2764 — the deadline shim never escalates to KILL, so a TERM-ignoring child outlives it FOREVER — on every platform. BOOKED, NOT FIXED
+
+`_plat_timeout` (and `_auth_timeout`, pinned byte-for-byte to it) runs `timeout`/`gtimeout` with no
+`-k`. Those send SIGTERM at the deadline and **never** escalate. A child that ignores or blocks TERM is
+therefore never ended, and the "deadline" is a signal rather than a bound.
+
+    child                          Linux                       macOS
+    plain sleeper                  rc 124 @ 2s                 rc 124 @ 2.1s
+    bash blocked in a fg child     rc 124 @ 2s                 -
+    ignores SIGTERM                NEVER RETURNED (cut 25s)    NEVER CUT (40s)
+
+`timeout -k 1 2` on the same child answers **rc 137 at 3 s**, so the remedy is known and one flag wide —
+but the pure-bash fallback arm has the same gap and needs its own, since it `kill -TERM`s and then
+`wait`s forever.
+
+**Deliberately not fixed in the PR that found it.** `_auth_timeout` is pinned byte-for-byte to
+`_plat_timeout`, which lives in four shipped files — `ccd`, `ccrc`, `ccrc-doctor-checks`,
+`ccd-account-auth` — behind ccd's tmux liveness probe, its two `gh pr` queries and the doctor's `gh auth
+status` check. That is deployed code with a wide caller population and an agent-first deploy; it belongs
+in its own change with its own review, not inside a measurement PR. `platform-hazards.test.ts` PINS the
+present behaviour so the fix goes red here and cannot land without someone deliberately inverting it.
+
+### D-2765 — a probe framed a UNIVERSAL defect as a platform one, because only one platform's case was written
+
+The case above was first written as `itDarwin('BSD: it still ends a child that IGNORES SIGTERM')`. It
+red on macOS, and read as "BSD cannot cut a TERM-ignoring child" — a platform finding, which is how it
+was first reported. **The Linux control was never written**, and when it was, Linux behaved identically:
+never returned, cut at 25 s.
+
+This is the same error as the one D-2614 already taught, arriving from the other side.
+`reading-upstream-source-is-not-measuring-the-syscall` was about asserting a platform fact from reading;
+this is about asserting a platform fact from measuring **one** platform. A single-platform measurement
+cannot distinguish "this platform does X" from "everything does X" — only the control can, and the
+control is the cheap half.
+
+**The rule:** a case named for a platform (`itDarwin`/`itLinux`) is making a comparative claim, and owes
+the other platform's case in the same commit. Where the other platform genuinely cannot run it, the name
+must say what was actually measured rather than implying a contrast that was never tested. The file's
+own header already required the answer to travel in the assertion message; this extends it — the
+CONTROL has to exist before the message can be trusted to mean what it says.
