@@ -5417,9 +5417,9 @@ describe('the compaction card — every canonical write is on the list (spec §5
       return { label, code, fns: fnsOf(code) };
     });
     const defined = new Set(files.flatMap((f) => f.fns.map((x) => x.name)));
-    const canonVars = new Map<string, Set<string>>();   // `${label} ${fn}`
+    const canonVars = new Map<string, Set<string>>();   // `${label}\0${fn}`
     const canonPos = new Map<string, Set<number>>();    // fn name -> positions
-    const vkey = (l: string, f: string): string => `${l} ${f}`;
+    const vkey = (l: string, f: string): string => `${l}\0${f}`;
     for (const f of files) {
       for (const { name, a, b } of f.fns) {
         const body = f.code.slice(a, b);
