@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3a301c50ce44c392e52bf8c6d05ad3ee77bd2e20fb4ed40d56c4fa155070a39a
+# ccrc:generated 1 sha256=3c86df1965045e75e454a73b4b3c0295554987e95d701702dea290e2cd20926d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1879,9 +1879,13 @@ _reg_generation_valid() {   # <value> -> 0 iff exactly the 36-byte lowercase UUI
 # CLASSIFY THE PATHNAME BEFORE READING IT. Genuine absence is the ONLY condition
 # that may mint, so it has to be distinguishable from every present-invalid one
 # — and a DANGLING SYMLINK is present-and-invalid, never absent, which is why
-# `-L` is asked beside `-e` (the same one-expression pairing `_reg_field_state`
-# uses). Folding it into absence would let a mint clobber a name somebody else
-# owns.
+# `-L` is asked beside `-e` — the same one-expression pairing `_reg_read`
+# (`grep -n '^_reg_read()' ccd/ccd`) uses to classify a field before it reads
+# it, and the concrete form `_compact_lock_acquire` spells for canonical. (This
+# sentence used to credit `_reg_field_state`, a name that has never existed on
+# either tree, so the argument rested on a precedent a reader could not check;
+# the argument itself is unchanged and stands on its own.) Folding `-L` into
+# absence would let a mint clobber a name somebody else owns.
 #
 # The value is read through an OWNED HARD-LINK ALIAS on a retained FD, never
 # `_reg_get`, `_reg_read` or a bare `cat`: those name the canonical path twice
@@ -2374,7 +2378,7 @@ _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
   # NON-ZERO now means one thing only: python3 could not be RUN. Callers must
   # check it — a bare `$(_json_str …)` inside a printf argument list swallows the
   # status by construction, which is how the hole above got printed — and both
-  # callers that build a whole record (`_ws_manifest`, `cmd_ws_audit`) probe once
+  # callers that build a whole record (`_ws_archive_manifest`, `cmd_ws_audit`) probe once
   # up front and refuse rather than checking nineteen substitutions.
   #
   # MUTATION SURVIVOR, disclosed and measured: `LC_ALL=C.UTF-8` can be deleted
@@ -2896,7 +2900,7 @@ _lc_json() {   # cap uid ns act outcome id tx badact badoutcome obsjson [k v]...
   # The only OTHER python3 encoder in this block is `_lc_obs_json`, which builds
   # the obs FRAGMENT once per process. A third is a defect.
   #
-  # NO `_json_str probe … || die` up front, unlike `_ws_manifest` and
+  # NO `_json_str probe … || die` up front, unlike `_ws_archive_manifest` and
   # `cmd_ws_audit`: D7 forbids this path from dying, and the caller's own
   # non-zero branch already covers the same condition.
   LC_ALL=C.UTF-8 python3 -c '
@@ -9679,7 +9683,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `_ws_manifest` (ccd:4054). Nineteen `_json_str` substitutions
+  # same reason, as `_ws_archive_manifest` (ccd:4054). Nineteen `_json_str` substitutions
   # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
   # and an empty argument, i.e. `"path":,` — a document that authorises deletions
   # and does not parse, at exit 0. Bytes can no longer fail the encode (see
@@ -10623,7 +10627,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]    || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:6345) and `_ws_manifest` (ccd:4054).
+  # same reason, as `cmd_ws_audit` (ccd:6345) and `_ws_archive_manifest` (ccd:4054).
   # This is the THIRD caller that builds a whole record, and the record it
   # builds is the TOMBSTONE: the one document that outlives the workspace, and
   # the only thing left naming the transcript once step (i) has removed the

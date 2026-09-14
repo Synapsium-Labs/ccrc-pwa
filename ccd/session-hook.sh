@@ -1689,9 +1689,12 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   # the pathname for exactly one racer; a losing `mv` (ENOENT — another racer
   # already claimed it) serves nothing. The claim is PROVISIONAL: a crossed
   # pair or a body-less nonce restores the card (spec's "the card stays")
-  # through the same regular-placeholder-then-no-clobber-`link` idiom
-  # `_hook_compact_rollback_card` already uses; only a matching, non-empty
-  # pair keeps the claim consumed. Dot-prefixed, pid-scoped and named to the
+  # through the same regular-placeholder-then-no-clobber-`link` idiom this
+  # function itself uses below — the `( set -C; : > "$claim" )` placeholder and
+  # the `link "$claim" "$f"` restore beside it. (This sentence used to point at
+  # `_hook_compact_rollback_card`, a function D-2605 deleted along with its one
+  # call site; a reader following the pointer found nothing.) Only a matching,
+  # non-empty pair keeps the claim consumed. Dot-prefixed, pid-scoped and named to the
   # §3.4 target grammar, so an orphaned claim (this process killed mid-read) is
   # reclaimed, AGED and under a held lock, by `_hook_family_sweepable`'s
   # `compactcard.*.session-claim.tmp` arm. This sentence used to say such a

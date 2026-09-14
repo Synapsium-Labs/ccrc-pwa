@@ -4017,6 +4017,105 @@ describe('the compaction card — the two documents say what the code does (spec
       'a retraction marker does not license an UNQUOTED claim beside it').toBeGreaterThan(0);
   });
 
+  // ── THE DANGLING-IDENTIFIER SCAN (fix round 2, B-M1 / B-M2) ────────────
+  // Two comments in this range pointed at functions that do not exist:
+  // `ccd/session-hook.sh` named `_hook_compact_rollback_card`, whose definition
+  // and one call site this range DELETED, and a line `ccd/ccd` ADDED cited
+  // `_reg_field_state` as the precedent for a `-e`/`-L` pairing — a name that
+  // has never existed on either tree. A reader following either pointer finds
+  // nothing, and a future editor copying the cited shape has nothing to copy.
+  // Neither is visible to the needle-driven describe above, which has an arm
+  // per sentence it knows about.
+  //
+  // THE RULE: a backticked lower-case `_name` on a COMMENT line of either
+  // shipped shell file is a function reference, and must resolve to a `name() {`
+  // definition somewhere in `ccd/`. Three exemptions, each a mechanism rather
+  // than a list: a name that is also a VARIABLE in the scanned files, a name on
+  // the measured allow-list below, and a name inside a comment block carrying a
+  // RETRACTION marker — because a correction that names what it corrects is the
+  // record this project keeps rather than deletes.
+  const SHELL_CORPUS = (): Array<[string, string]> => {
+    const dir = path.resolve(__dirname, '../../ccd');
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]);
+  };
+  const SCANNED = ['session-hook.sh', 'ccd'];
+  /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
+   *  was in the way. Both are declared by the GENERATED roster projection
+   *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
+   *  does not ship as a file under `ccd/`, so no definition can be found here. */
+  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool'];
+
+  /** A comment BLOCK, normalised the way `paragraphs` normalises prose and for
+   *  the same measured reason: a retraction is hard-wrapped, so a line-scoped
+   *  marker test never sees one that straddles a wrap. (Measured: the retired
+   *  `_lc_refused` spelling's own retraction reads "The earlier\n  # spelling",
+   *  and a line-scoped rule reported it as dangling.) */
+  const RETRACT = /used to|no longer|never existed|has never|deleted|superseded|replaces|retract|earlier spelling/i;
+
+  const danglers = (corpus: Array<[string, string]>): string[] => {
+    const defined = new Set<string>();
+    for (const [, text] of corpus) {
+      for (const m of text.matchAll(/^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)[ \t]*\{/gm)) defined.add(m[1]!);
+    }
+    const vars = new Set<string>();
+    for (const [name, text] of corpus) {
+      if (!SCANNED.includes(name)) continue;
+      for (const m of text.matchAll(/^[^#\n]*?\b([A-Za-z_][A-Za-z0-9_]*)=/gm)) vars.add(m[1]!);
+      for (const m of text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) vars.add(m[1]!);
+    }
+    const out: string[] = [];
+    for (const [name, text] of corpus) {
+      if (!SCANNED.includes(name)) continue;
+      const lines = text.split('\n');
+      const isComment = (l: string | undefined): boolean => l !== undefined && /^\s*#/.test(l);
+      for (let i = 0; i < lines.length; i++) {
+        if (!isComment(lines[i])) continue;
+        let a = i; while (a > 0 && isComment(lines[a - 1])) a--;
+        let b = i; while (b < lines.length - 1 && isComment(lines[b + 1])) b++;
+        const block = lines.slice(a, b + 1).map((l) => l.replace(/^\s*#\s?/, '').trim()).join(' ');
+        if (RETRACT.test(block)) continue;
+        for (const m of lines[i]!.matchAll(/`(_[a-z][a-z0-9_]*[a-z0-9])`/g)) {
+          const id = m[1]!;
+          if (defined.has(id) || vars.has(id) || NOT_A_FUNCTION.includes(id)) continue;
+          out.push(`${name}:${i + 1}: ${id}`);
+        }
+      }
+    }
+    return out.sort();
+  };
+
+  it('every backticked _identifier in a shell comment resolves to a function that exists', () => {
+    const corpus = SHELL_CORPUS();
+    // NON-VACUITY, both halves: the corpus really is the shell files, and the
+    // scan really is finding identifiers to check.
+    expect(corpus.map(([n]) => n), 'both scanned files are in the corpus')
+      .toEqual(expect.arrayContaining(SCANNED));
+    const anyId = corpus.filter(([n]) => SCANNED.includes(n))
+      .flatMap(([, t]) => [...t.matchAll(/^\s*#.*`(_[a-z][a-z0-9_]*)`/gm)]);
+    expect(anyId.length, 'the scan has subjects at all').toBeGreaterThan(100);
+    expect(danglers(corpus), 'a comment points at a function that does not exist').toEqual([]);
+  });
+
+  it('CONTROL: a made-up name reds, and the same name inside a retraction does not', () => {
+    const corpus = SHELL_CORPUS();
+    const withFake: Array<[string, string]> = corpus.map(([n, t]) =>
+      (n === 'ccd' ? [n, `# see \`_a_function_nobody_wrote\` for the shape\n${t}`] : [n, t]));
+    expect(danglers(withFake).some((d) => d.includes('_a_function_nobody_wrote')),
+      'the scan sees a made-up name').toBe(true);
+    const withRetraction: Array<[string, string]> = corpus.map(([n, t]) =>
+      (n === 'ccd' ? [n, `# this used to say \`_a_function_nobody_wrote\`, which was deleted\n${t}`] : [n, t]));
+    expect(danglers(withRetraction).some((d) => d.includes('_a_function_nobody_wrote')),
+      'a retraction that names what it corrects is the record, not a defect').toBe(false);
+    // AND THE TWO REAL ONES: re-inserting either survivor reds.
+    for (const gone of ['_hook_compact_rollback_card', '_reg_field_state']) {
+      const restored: Array<[string, string]> = corpus.map(([n, t]) =>
+        (n === 'ccd' ? [n, `# the same one-expression pairing \`${gone}\` uses\n${t}`] : [n, t]));
+      expect(danglers(restored).some((d) => d.includes(gone)), `${gone} reds`).toBe(true);
+    }
+  });
+
   it('CONTROL: pattern 2 reds on the restored rule and not on this document\'s quotation of it', () => {
     const restored = 'On such a box `_reg_purge` and its four callers keep working exactly as they do today.\n';
     expect(scan([['spec', restored], ['plan', '']], P2).live.length).toBeGreaterThan(0);
@@ -6225,6 +6324,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // exists to find rather than a fix for it. They are the stale-by-
     // construction debt D-2758 parks in Task 11.)
     //
+    // 130 -> 131 on the B-M1/B-M2 comment repairs, for the same mechanical
+    // reason: correcting `_ws_manifest` to `_ws_archive_manifest` and the two
+    // dangling-identifier sentences lengthens lines and shifts `ccd/ccd` under
+    // one more drifted anchor. Re-measured with the same audit.)
+    //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
     // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
@@ -6232,7 +6336,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 130,
+      'ccd/ccd': 131,
       'ccd/session-hook.sh': 41,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
