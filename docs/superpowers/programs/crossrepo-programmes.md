@@ -101,7 +101,8 @@ beside it when the programme closes.
   review-notes → prompt loop, cross-repo programmes) this one is built first — the spec and rulings
   existed, and the four seams re-measured today were open exactly as the Aug draft described them.
 - **Mail addressing (2026-09-08, operator):** the Aug 11 proposal adopted IN FULL — role addressing for
-  both roles, a replacement occupant inherits its predecessor's undelivered mail, a programme filter on
+  both roles, a replacement occupant inherits its predecessor's outstanding mail (corrected, D-2747 — not
+  "undelivered": a delivered-but-unacked row is outstanding too), a programme filter on
   mail, feed and the mail screen. The mechanism is the one the tree already has: resolution at send time,
   and at occupant change the D-1425 act (a fresh delivery row to the heir, the predecessor's row parked)
   generalised by role and funnelled through `bindSession`, the one writer of `runs.sessionId`. Stated
@@ -280,5 +281,11 @@ when `legacy_7d = 0` with `opens_7d > 0`, change `HOME_PROJECT_LEGACY_ACCEPTED` 
 the flip's own PR and goes green in that same PR when the constant moves, then holds the constant
 shut thereafter; it does not make the deferral visible on `main`. The deferral's visibility comes
 from this ledger's `## Measurements` block and the wave-3 row, not from a red suite.
+
+Two test forms are pre-approved (coordinator ruling, mail 1100) so the flip wave does not re-derive
+them: the run-count assertion is `okRuns(w.coord.runs({ includeClosed: true })).length` (D-2743), and
+the required-`homeProject` refusal body assertion is the `toEqual` carrying
+`detail: 'homeProject is required'` (D-2744). D-2070 — whether the flip commit rides this wave's own
+PR or gets cherry-picked onto its own — is decided then, not here.
 
 The wave-2 agent-lane deploy the flip's gate depended on landed 2026-09-14; the window it restarted clears no earlier than 2026-09-21T11:34:24Z — see Carried constraints (E1).

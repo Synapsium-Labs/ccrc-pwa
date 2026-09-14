@@ -1559,7 +1559,8 @@ not be replayed.
 
 **Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers the
 **outstanding** mail on that programme's runs — queued, delivered-but-unacked,
-and any delivery this build parked after giving up retrying it; add `&all=1` —
+and any `rejected` delivery this build gave up retrying, unless it was a
+deliberate cancel or its run is already `done`/`failed`; add `&all=1` —
 exactly `GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
 are mutually exclusive — exactly one, never both and never neither; a request
 naming both is refused `400 bad-request`, because a mailbox and a programme
@@ -1579,7 +1580,7 @@ when its coordinator is not among that card's live sessions (a rule-3 orphan)
 its row reads `<program> wave n/N`, with `· home <project>` appended only when
 the measured home differs from the card's own project. The home project's own
 card gains an `abroad` line, one sentence per wave working elsewhere
-("wave 2 in `<other project>`").
+("`<program>` wave 2/3 in `<other project>`").
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched,
@@ -1589,9 +1590,10 @@ undispatched consumer uses no running-worker slot. Each actual producer or
 consumer dispatch still consumes the rolling daily dispatch budget. A
 `cap-concurrency` or `cap-daily` refusal remains authoritative when that measured
 counter is exhausted; it is not inferred from the number of live workspaces.
-`$REG/coordinator-paused` is global and still stops everything; the hold reason
-still names programme, wave and run id and never a project, because the run row
-is what carries the project.
+`$REG/coordinator-paused` is global but narrow: it refuses every dispatch on
+that box and stops nothing else — mail keeps flowing, and `$REG/mail-disabled`
+is the mail switch. The hold reason still names programme, wave and run id and
+never a project, because the run row is what carries the project.
 
 ### Workspace holds & programs
 
@@ -1847,10 +1849,11 @@ replaced, every outstanding role-addressed (`toId:'worker'`) delivery on that
 run is re-issued to the heir as a **new** row, freshly rendered, and the
 predecessor's row is parked — the act a reclaimed coordinator's heir has
 always had, generalised by role and funnelled through `bindSession`, the one
-writer of `runs.sessionId`.
+writer that re-binds it.
 Reading it back by programme: `GET /api/mail?program=<slug>` returns the
-**outstanding** mail — queued, delivered-but-unacked, and any delivery this
-build parked after giving up retrying it — and
+**outstanding** mail — queued, delivered-but-unacked, and any `rejected`
+delivery this build gave up retrying, unless it was a deliberate cancel or
+its run is already `done`/`failed` — and
 `GET /api/mail?program=<slug>&all=1` returns full history;
 `to` and `program` are mutually exclusive — exactly one, never both and
 never neither, and naming both is refused `400 bad-request`. `GET /api/feed?program=<slug>` is

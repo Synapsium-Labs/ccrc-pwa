@@ -65,12 +65,23 @@ describe('README: cross-repo programmes', () => {
       .toContain('"by"');
   });
 
-  it('names the response fields the open route actually sends', () => {
-    for (const field of ['homeProject', 'ledgerRepo', 'ledgerAbsPath']) {
+  it("names the open response's own fields, and homeProject as the request field it actually is", () => {
+    // D-2754: this loop used to include `homeProject`, which is never a key
+    // in the open route's response object (`routes.ts:1299-1315` sends `ok`,
+    // `id`, `program`, `state`, `ledgerPath`, `ledgerRepo`, `ledgerAbsPath`) —
+    // it is the REQUEST body field the route destructures off `body`
+    // (`:1142`). The loop passed anyway because `ROUTES` contains both uses
+    // of the literal and `crossSection()` names `homeProject` for an
+    // unrelated reason (the open call's own request contract, README:1488).
+    for (const field of ['ledgerPath', 'ledgerRepo', 'ledgerAbsPath']) {
       expect(ROUTES, `${field} is not in coord/routes.ts — this loop is over nothing`)
         .toContain(field);
       expect(crossSection(), `the cross-repo section does not name ${field}`).toContain(field);
     }
+    expect(ROUTES, 'homeProject is not read off the open request body — this assertion is over nothing')
+      .toContain('homeProject');
+    expect(crossSection(), 'the cross-repo section does not name homeProject as a request field')
+      .toContain('homeProject');
   });
 
   it('pins the mandatory plan read and the dependency-gated producer proof', () => {
@@ -325,7 +336,11 @@ describe('README: the run lifecycle and programme mail', () => {
     const crossClosed = cross.indexOf('closed row');
     const crossDependency = cross.indexOf('If the consumer depends');
     const crossMerge = cross.indexOf('independently prove');
-    const crossDispatch = cross.lastIndexOf('dispatch');
+    // D-2740 fact (1), closed this fix round: `lastIndexOf('dispatch')`
+    // resolved to the trailing caveat's "report and do not dispatch", never to
+    // any of the arm's own three `dispatch` occurrences. Derived from the gate
+    // sentence itself instead, which the arm states exactly once.
+    const crossDispatch = cross.indexOf('Only then dispatch');
     for (const [marker, at] of [
       ["without the producer's sessionId", crossOpen], ['`final:true`', crossClose],
       ['`released:true`', crossRelease], ['closed row', crossClosed],
