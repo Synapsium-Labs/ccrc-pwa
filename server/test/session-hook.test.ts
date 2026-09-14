@@ -4429,3 +4429,145 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
     expect(fs.readFileSync(cardFile()), 'and so is the card it could not claim').toEqual(cardBytes);
   });
 });
+
+// ── D-2605: the FIRST held section's fork multiset (spec §3.1 leg (b)) ────
+// The companion to this file's two source-order pins, and the one of the three
+// that no reading of the source can supply: `find` counted by grep cannot see a
+// child of any OTHER shape appearing or vanishing, and §3.1's enumeration of
+// what the section forks is prose until something measures it. So this runs the
+// arm under `strace -f -e trace=clone,clone3,fork,vfork,execve` and compares the
+// MULTISET of children the arm's own shell takes between the acquire and the
+// release against the section as built.
+//
+// THE MULTISET IS STATED PER SCENARIO, because several members are
+// branch-conditional and no single run produces all of them: a single expected
+// list naming every conditional member is RED on a correct tree, which is the
+// weakening this pin exists to prevent.
+describe('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
+  /** One fork the arm's own shell took, named by the first command its subtree
+   *  execs — or `(subshell)` when it execs nothing at all, which is what a
+   *  `$( )` around a builtin-only function is. Naming by the SUBTREE rather
+   *  than by the direct child is what makes this stable across bash's own
+   *  choice to fork once or twice for a command substitution; what it counts is
+   *  the children the ARM takes, not bash's implementation of them. */
+  type Fork = string;
+
+  const straceRun = (payload: object): { forks: Fork[]; raw: string } => {
+    const trace = path.join(home, 'trace.txt');
+    const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork,execve', 'bash', HOOK], {
+      input: JSON.stringify(payload), encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
+    });
+    expect(r.status, `the hook exits 0 under strace. stderr: ${r.stderr}`).toBe(0);
+    const raw = fs.readFileSync(trace, 'utf8');
+    const lines = raw.split('\n');
+
+    // PARSE. Two shapes matter: a `clone` that returns a child pid, and a
+    // SUCCESSFUL `execve`. An `execve` returning -1 is the PATH walk, not a
+    // command that ran.
+    const parent = new Map<string, string>();
+    const firstExec = new Map<string, string>();
+    const events: Array<{ i: number; kind: 'clone' | 'exec'; pid: string; child?: string; name?: string }> = [];
+    lines.forEach((ln, i) => {
+      const c = /^(\d+)\s+(?:clone3?|v?fork)\(.*\)\s*=\s*(\d+)$/.exec(ln);
+      if (c) {
+        parent.set(c[2]!, c[1]!);
+        events.push({ i, kind: 'clone', pid: c[1]!, child: c[2]! });
+        return;
+      }
+      const e = /^(\d+)\s+execve\("([^"]+)".*\)\s*=\s*0$/.exec(ln);
+      if (e) {
+        const name = e[2]!.split('/').pop()!;
+        if (!firstExec.has(e[1]!)) firstExec.set(e[1]!, name);
+        events.push({ i, kind: 'exec', pid: e[1]!, name });
+      }
+    });
+    expect(events.length, 'strace produced a trace — a silent empty one proves nothing').toBeGreaterThan(5);
+    const root = events[0]!.pid;
+
+    /** The first command executed anywhere under `pid`, in trace order. */
+    const under = (pid: string): string | null => {
+      for (const ev of events) {
+        if (ev.kind !== 'exec') continue;
+        let p: string | undefined = ev.pid;
+        for (let hop = 0; p !== undefined && hop < 8; hop++) {
+          if (p === pid) return ev.name!;
+          p = parent.get(p);
+        }
+      }
+      return null;
+    };
+
+    // THE WINDOW. The acquire's LAST child is its `flock`, so the section opens
+    // straight after the first one; it closes at the helper fork (the first
+    // child after the release) or, on an arm that releases and returns, at the
+    // end of the trace. `_hook_compact_pre` is the last statement in the file,
+    // so "end of trace" really is "end of the arm".
+    const flockAt = events.findIndex((e) => e.kind === 'exec' && e.name === 'flock');
+    expect(flockAt, 'the arm took the row mutex').toBeGreaterThan(-1);
+    // THE END IS THE CLONE, NOT ITS EXEC. `timeout`'s `execve` happens in the
+    // child, i.e. AFTER the parent's `clone` line, so a window ending at the
+    // exec swallows the helper fork itself — measured, that was this pin's
+    // first draft and it reported a seventh member.
+    const ENDERS = ['timeout', 'gtimeout', 'node', 'flock'];
+    const endAt = events.findIndex((e, k) => k > flockAt && e.kind === 'clone' && e.pid === root
+      && ENDERS.includes(under(e.child!) ?? ''));
+    const last = endAt === -1 ? events.length : endAt;
+
+    const forks = events.slice(flockAt + 1, last)
+      .filter((e) => e.kind === 'clone' && e.pid === root)
+      .map((e) => under(e.child!) ?? '(subshell)');
+    return { forks, raw };
+  };
+
+  const tally = (forks: Fork[]): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const f of forks.slice().sort()) out[f] = (out[f] ?? 0) + 1;
+    return out;
+  };
+
+  it('strace is present — a pin that cannot run is not a pin', () => {
+    // ASSERTED, never skipped. A `describe.skipIf` here would turn a box with
+    // no `strace` into a silent green, which is the one answer this section has
+    // no other guard for.
+    const r = spawnSync('strace', ['-V'], { encoding: 'utf8' });
+    expect(r.status, 'strace -V').toBe(0);
+  });
+
+  it('the ORDINARY publishing run forks exactly: the generation alias pair, two finds, the epoch substitution, the jq and the publishing mv', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const { forks } = straceRun(preCompact(tree, transcript));
+    // EVERY MEMBER IS §3.1's, and the count beside each is what makes adding or
+    // deleting ANY child red — not only a third `find`:
+    //   link + rm  — step 5's generation-read hard-link alias and its unlink,
+    //                the two children Task 9 ADDS to this section;
+    //   find × 2   — the overlap check and the exact-family sweep. The scope
+    //                `find`s are NOT here: they run at step 2, before the
+    //                acquire, and folding them in would inflate the section's
+    //                p95 that `COMPACT_LOCK_WAIT` is set from;
+    //   (subshell) — `at=$(_hook_epoch_ms)`, which forks even though the
+    //                `EPOCHREALTIME` fast path is builtin-only and execs
+    //                NOTHING. It stays inside the section because step 7 mints
+    //                the nonce from `at`, and `at` is the publication timestamp
+    //                the nonce embeds;
+    //   jq         — the initial set document;
+    //   mv         — `_hook_write_atomic`'s publishing rename.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 });
+  }, 60_000);
+
+  it('the AMBIGUOUS run forks the same set PLUS the conditional card removal, and nothing else', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree), parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('x')], age: LIVE }] });
+    const { forks } = straceRun(preCompact(tree, transcript, 'auto'));
+    // The ambiguous-card `rm -f "$cardf"` fires ONLY on this branch, and this
+    // arm releases at step 8 and never opens the second section — so the window
+    // runs to the end of the trace here, where the publishing run's ends at the
+    // helper fork. A SINGLE expected list carrying this member would be red on
+    // the ordinary run, which is why the multiset is stated per scenario.
+    expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
+  }, 60_000);
+});
