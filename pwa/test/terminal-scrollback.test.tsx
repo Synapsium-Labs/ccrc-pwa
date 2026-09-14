@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, historyFailureSentence, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 afterEach(() => {
   cleanup();
@@ -1895,5 +1897,75 @@ describe('a failed read says why, in a sentence', () => {
     await screen.findByText(/this session is gone — there is no pane to read/);
     expect(screen.queryByText(/no history · gone$/), 'the raw wire token is still on the glass')
       .toBeNull();
+  });
+});
+
+// — the transform stands in only for rows that actually moved —
+//
+// xterm CLAMPS `scrollLines` at both ends of its buffer. A throw that reaches
+// the oldest line goes on asking for rows for the rest of its curve, and every
+// one of those asks was credited to the transform — so the view slid by a
+// displacement the rows were never going to make, and then snapped back when
+// xterm's own `onRender` finally cleared it. That is the tail of the throw
+// shaking, at the top of the history, where a reader is most likely to be
+// looking.
+//
+// WHY THIS IS A SOURCE SCAN AND NOT A BEHAVIOURAL TEST, measured rather than
+// assumed: `term.buffer.active.viewportY` does not move in jsdom. Against a
+// real Terminal with 60 lines written (rows 24, baseY 37), `scrollLines(-3)`
+// leaves viewportY at 37 before the call, after the call, and after a 50 ms
+// settle — jsdom has no layout and xterm's scroll is a virtual re-render off
+// it. So the DEFECT is visible here (crediting `n` paints translateY(200000px)
+// against a clamp) but the FIX's correct half is not (crediting the delta
+// paints nothing, for every scroll). A test asserting the fixed behaviour in
+// jsdom would pass for the wrong reason. What can go red is the call site
+// itself, and the arithmetic underneath it.
+describe('the transform credits rows that moved', () => {
+  const drawerSrc = (): string =>
+    readFileSync(path.resolve(__dirname, '../src/session/TerminalDrawer.tsx'), 'utf8');
+
+  /** The history terminal's own `scrollLines`, as source. */
+  const scrollLinesBody = (): string => {
+    const m = /scrollLines: \(n\) => \{([\s\S]*?)\n {4}\},/.exec(drawerSrc());
+    if (m === null) throw new Error('defaultMakeHistoryTerm has no scrollLines block to scan');
+    return m[1]!;
+  };
+
+  it('reads the viewport either side of the scroll, and credits the difference', () => {
+    const body = scrollLinesBody();
+    expect(body, 'the call site does not read the viewport at all')
+      .toContain('term.buffer.active.viewportY');
+    expect(body, 'the viewport is read once — a delta needs it either side of the scroll')
+      .toMatch(/viewportY[\s\S]*scrollLines\(n\)[\s\S]*viewportY/);
+    expect(body, 'the ROWS ASKED FOR are still being credited — xterm clamps, so `n` is a request')
+      .not.toMatch(/lag\.scrolled\(\s*n\s*,/);
+  });
+
+  it('the scan is looking at something — the block is real and still calls paintLag', () => {
+    const body = scrollLinesBody();
+    expect(body.length, 'the scrollLines block came back empty').toBeGreaterThan(50);
+    expect(body, 'the block no longer credits paintLag at all').toContain('lag.scrolled(');
+    expect(body, 'the block no longer scrolls').toContain('term.scrollLines(n)');
+  });
+
+  it('the terminal sets its scroll instant explicitly, so the delta is one frame`s worth', () => {
+    // A smooth scroll would not have arrived when the second read happens. This
+    // terminal is dragged and thrown by hand at 60 Hz and wants none of xterm's
+    // own easing.
+    expect(drawerSrc(), 'the history terminal inherits whatever xterm defaults to')
+      .toContain('smoothScrollDuration: 0');
+  });
+
+  it('a ZERO credit moves the transform by nothing — the arithmetic underneath', () => {
+    // The pure half, and the reason the call site's change means anything: a
+    // clamped scroll now hands `0` down here, and `0` must leave the standing
+    // transform exactly where it was rather than adding to it.
+    const lag = paintLag();
+    lag.sub(7);
+    expect(lag.transform()).toBe(7);
+    lag.scrolled(0, 20);
+    expect(lag.transform(), 'a clamped scroll still displaced the view').toBe(7);
+    lag.scrolled(-3, 20);
+    expect(lag.transform(), 'a real displacement stopped being credited').toBe(7 + 60);
   });
 });

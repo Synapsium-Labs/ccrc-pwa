@@ -200,11 +200,21 @@ const glass = () => ({
  * invariant is the whole of the fix and jsdom cannot see a pixel.
  */
 export interface PaintLag {
-  /** The terminal was told to scroll — `rows` is the number handed to
-   *  `scrollLines` verbatim, and `rowPx` the row height at that moment. The
-   *  sign lives HERE rather than at the call site: `scrollLines(-1)` moves the
-   *  CONTENT down by a row, and a helper that took "px, downward" would put
-   *  that flip in an adapter no test can reach. */
+  /** The terminal scrolled — `rows` is the displacement the VIEWPORT actually
+   *  made, and `rowPx` the row height at that moment.
+   *
+   *  MEASURED, NOT REQUESTED, and that distinction is the whole of one fix:
+   *  xterm CLAMPS `scrollLines` at both ends of the buffer, so a throw that
+   *  reaches the oldest line goes on asking for rows for the rest of its curve.
+   *  Crediting the ASK made the transform stand in for a displacement the rows
+   *  were never going to make, and the view slid and snapped back for the whole
+   *  tail of the throw. The call site reads `term.buffer.active.viewportY`
+   *  either side of the scroll and hands the difference here.
+   *
+   *  The sign lives HERE rather than at the call site: a viewport moving toward
+   *  OLDER output is a negative `viewportY` delta and the content moves DOWN,
+   *  so a helper that took "px, downward" would put that flip in an adapter no
+   *  test can reach. */
   scrolled(rows: number, rowPx: number): void;
   /** The sub-row remainder the drag wants shown, positive downward. */
   sub(px: number): void;
@@ -268,6 +278,13 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
     ...glass(),
     cursorBlink: false,
     disableStdin: true,
+    // ZERO, EXPLICITLY, because a measurement leans on it: the call site below
+    // reads `viewportY` either side of `scrollLines`, and a smooth scroll would
+    // not have arrived when the second read happens. xterm's own default is
+    // already 0; saying it here keeps a future default change from silently
+    // un-synchronising the read. This terminal is dragged and thrown by hand at
+    // 60 Hz and wants none of xterm's easing either way.
+    smoothScrollDuration: 0,
     // A FIRST GUESS, replaced by a measurement below. xterm needs some
     // scrollback at construction and `term.cols` does not exist until the addon
     // has fitted against a mounted host, so the real number is set once both
@@ -328,8 +345,18 @@ export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
       // reads the rendered cell, which must be the one the rows were standing
       // at when they were asked to move.
       const px = cellHeight();
+      // AND THE DISPLACEMENT IS MEASURED, NOT ASSUMED. xterm clamps at both
+      // ends of the buffer, so `n` is a REQUEST and `viewportY`'s delta is the
+      // answer — see `PaintLag.scrolled`. NOTE FOR ANYONE TESTING THIS:
+      // `viewportY` does not move under jsdom at all (measured — 60 lines
+      // written, rows 24, baseY 37, viewportY 37 before, after, and 50 ms
+      // later), because jsdom has no layout and xterm's scroll is a virtual
+      // re-render off it. The guard on this line is therefore a source scan in
+      // `terminal-scrollback.test.tsx`, not a behavioural assertion; a browser
+      // proof is its own work.
+      const before = term.buffer.active.viewportY;
       term.scrollLines(n);
-      lag.scrolled(n, px);   // the same `n`, so nothing here can get the sign wrong
+      lag.scrolled(term.buffer.active.viewportY - before, px);
       paint();
     },
     offset: (px) => {
