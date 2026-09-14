@@ -977,6 +977,52 @@ describe('one terminal fact per minted transaction (spec §3.4)', () => {
     } finally { release(); }
   }, 60_000);
 
+  // ── §5's FIRST NAMED MUTANT, and the arm it names had no fixture at all ──
+  // §5's row `emit two terminal facts for one CALLER act` names two mutants and
+  // says "the guard reds" for both. The SECOND — dropping the `die` after
+  // `cmd_ws_rm`'s purge-refused `_lc_fail` — reds two legs above. The FIRST —
+  // flattening `_ws_gc_prune_row`'s ORPHAN `if`/`else` so a `done` and a
+  // `failed` both fire under one `$lctx` — stayed GREEN, measured, across
+  // ccd-lifecycle-purge, ccd-ws-gc, ccd-ws-reap and ccd-workspaces: `assertGuard`
+  // was called from five legs and not one of them drove the orphan arm.
+  //
+  // A REAL ORPHAN, not a stub: a workspace built by `cmd_ws_add` whose `.uuid`
+  // is then removed, which is the state `_ws_gc_scan` classifies `orphan`. The
+  // arm's own rungs (dirty, detached HEAD, unmerged branch, nested checkouts)
+  // all have to pass before it mints a transaction at all, so the fixture has
+  // to be a genuinely reclaimable tree — a stub would leave the guard as
+  // unexercised as it was.
+  const orphanRow = (): { main: string; wt: string } => {
+    const main = h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-mesa');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'));
+    return { main, wt };
+  };
+
+  it('the ORPHAN arm closes its transaction once — reclaimed, and when git refuses', () => {
+    const { wt } = orphanRow();
+    h.sh(`_ws_gc_prune_row orphan demo quiet-mesa "${wt}" 0`);
+    assertGuard('ws-gc orphan, reclaimed');
+    expect(eventsOf(h.home, 'destroy').map((e) => e['outcome']),
+      'the successful removal closes it with exactly one done').toEqual(['intent', 'done']);
+    expect(fs.existsSync(wt), 'and the worktree really went').toBe(false);
+
+    // THE OTHER SIDE OF THE SAME `if`. `git worktree lock` makes
+    // `git worktree remove` refuse for real — no `--force` on this arm — so
+    // the `else` branch runs against a genuine git refusal rather than a stub.
+    h = makeCcdHarness('ccrc-lc-purge-');
+    const second = orphanRow();
+    h.git(second.main, 'worktree', 'lock', second.wt);
+    h.sh(`_ws_gc_prune_row orphan demo quiet-mesa "${second.wt}" 0`);
+    assertGuard('ws-gc orphan, git refused');
+    const outs = eventsOf(h.home, 'destroy');
+    expect(outs.map((e) => e['outcome']),
+      'the failure closes it — not a second done, and not silence').toEqual(['intent', 'failed']);
+    expect(outs[1]!['refusal']).toBe('worktree-remove-failed');
+    expect(fs.existsSync(second.wt), 'and the locked worktree stands').toBe(true);
+  }, 60_000);
+
   it('GREEN CONTROL: ws-restore\'s empty-tx done/fail pair passes — and a guard admitting "" reds it', () => {
     // A LANDED UNDO PLUS A FAILED SPAWN: `_lc_done restore` fires when the
     // archive stamps come off, and `_lc_fail restore` when the session does not
