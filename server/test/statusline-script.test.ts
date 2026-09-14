@@ -19,7 +19,7 @@
 // fix could regress into a different silence.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -247,14 +247,43 @@ function tmuxHanging(home: string): string {
   return bin;
 }
 
+/** A PATH with NO `timeout` on it, the macOS shape. Symlinks only the binaries
+ *  this hook actually runs (`jq`, `date`, `mkdir`, `mv`, `rm`, `cat` — the rest
+ *  of its calls are bash builtins) out of the real PATH, so nothing else leaks
+ *  in; `gtimeout` is planted only when asked, which is how a macOS box with
+ *  coreutils differs from one without. Returns the PATH string to use WHOLE —
+ *  appending the ambient PATH would put /usr/bin's `timeout` back and measure
+ *  nothing. */
+function pathWithoutTimeout(home: string, opts: { gtimeout: boolean }): string {
+  const bin = path.join(home, '.fakepath');
+  mkdirSync(bin, { recursive: true });
+  // `bash` and `sleep` are here for the HARNESS, not the hook: vitest spawns
+  // the script as `bash <path>` and resolves that name on this PATH, and the
+  // hanging-tmux fixture is a `sleep` — with either missing the run dies for a
+  // reason that has nothing to do with the bound.
+  for (const cmd of ['bash', 'sleep', 'jq', 'date', 'mkdir', 'mv', 'rm', 'cat']) {
+    const real = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim();
+    if (real) symlinkSync(real, path.join(bin, cmd));
+  }
+  expect(spawnSync('bash', ['-c', 'command -v timeout'], { encoding: 'utf8', env: { ...process.env, PATH: bin } }).status,
+    'the fixture PATH must not resolve `timeout` — otherwise this test measures the GNU arm again').not.toBe(0);
+  if (opts.gtimeout) {
+    const real = spawnSync('bash', ['-c', 'command -v timeout'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(path.join(bin, 'gtimeout'), `#!/bin/sh\nexec ${real} "$@"\n`, { mode: 0o755 });
+  }
+  return bin;
+}
+
 interface UsageRun { out: string; code: number }
-function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string } = {}): UsageRun {
+function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string; basePath?: string } = {}): UsageRun {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
   delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE'];
   env['CLAUDE_CONFIG_DIR'] = opts.cfgDir ?? path.join(home, '.zeta');
   if (opts.pane !== false) env['TMUX_PANE'] = '%3';
-  if (opts.tmuxHangs === true) env['PATH'] = `${tmuxHanging(home)}:${env['PATH'] ?? ''}`;
-  else if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${env['PATH'] ?? ''}`;
+  const rest = opts.basePath ?? env['PATH'] ?? '';
+  if (opts.tmuxHangs === true) env['PATH'] = `${tmuxHanging(home)}:${rest}`;
+  else if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${rest}`;
+  else if (opts.basePath !== undefined) env['PATH'] = rest;
   const r = spawnSync('bash', [SCRIPT], { input: payload, encoding: 'utf8', env });
   return { out: r.stdout ?? '', code: r.status ?? -1 };
 }
@@ -283,6 +312,36 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     expect(elapsed).toBeLessThan(15_000);
     // No ccd id could be derived, so the sidecar is simply not written — the
     // same silence as a pane outside tmux, never a stall.
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  }, 60_000);
+
+  // `timeout` is GNU. macOS ships it only as `gtimeout` (coreutils), and this
+  // file is installed ALONE into ~/.claude with no ccd to source, so it carries
+  // the SELECTION arm of `_plat_timeout` rather than the shim. Bare, the bound
+  // was also a macOS-only outage of the whole sidecar: no `timeout` on PATH
+  // means the substitution never runs tmux at all, so every macOS session went
+  // sidecar-less and silently — the shape `macos-platform.test.ts` refuses in
+  // the source and these two cases measure in the behaviour.
+  it('bounds the tmux call with gtimeout where that is the only spelling on the box, and still writes the sidecar', () => {
+    const home = seed('ccrc-statusline-gtimeout-'); seedReg(home);
+    const base = pathWithoutTimeout(home, { gtimeout: true });
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-bsd-box', basePath: base });
+    expect(r.code).toBe(0);
+    expect(usageFile(home, 'demo-bsd-box.json')).toMatchObject({ model: 'claude-opus-5', account: 'zeta' });
+  }, 60_000);
+
+  it('with neither spelling on the box the render still prints and the call is SKIPPED, never run unbounded', () => {
+    const home = seed('ccrc-statusline-nogtimeout-'); seedReg(home);
+    const base = pathWithoutTimeout(home, { gtimeout: false });
+    // the tmux here HANGS: with no bound available the only safe act is not to
+    // call it, so the render must come back fast and sidecar-less rather than
+    // wait the hang out.
+    const t0 = Date.now();
+    const r = runUsage(home, usagePayload(), { tmuxHangs: true, basePath: base });
+    const elapsed = Date.now() - t0;
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('👤 zeta·one');
+    expect(elapsed).toBeLessThan(15_000);
     expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
   }, 60_000);
 

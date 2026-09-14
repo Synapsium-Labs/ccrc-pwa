@@ -277,14 +277,31 @@ fi
 #    this block introduced and the sentence above promised it would not. Two
 #    seconds is far beyond a healthy `display-message` and far below anything a
 #    person would watch; on expiry `tname` is empty, which is the same silent
-#    no-sidecar path as a pane outside tmux. If `timeout` itself is missing the
-#    substitution fails and `tname` is empty — the same silence again, never a
-#    stall. (`session-hook.sh` carries the unguarded idiom deliberately: it runs
-#    per hook EVENT, not per render.)
+#    no-sidecar path as a pane outside tmux. If NEITHER spelling of the bound is
+#    on the box the call is SKIPPED, not run unguarded: `tname` is empty — the
+#    same silence again, never a stall. (`session-hook.sh` carries the unguarded
+#    idiom deliberately: it runs per hook EVENT, not per render.)
+#
+#    AND THE BOUND IS SPELLED PORTABLY. `timeout` is GNU; macOS ships it only as
+#    `gtimeout` (coreutils). This file is installed ALONE into ~/.claude with no
+#    `ccd` to source, so it carries the SELECTION arm of ccd's `_plat_timeout`
+#    rather than the shim itself — the "explicit template" allowance
+#    `macos-platform.test.ts` makes for a file that cannot source the platform
+#    block. Bare, the bound was a macOS-only outage of the whole sidecar and a
+#    silent one: no `timeout` on PATH means the substitution never reaches tmux,
+#    so every session on such a box wrote no sidecar, ever. `_plat_timeout`'s
+#    third arm (the background watcher) is deliberately NOT copied: it costs a
+#    fork and a stamp file on every render, and skipping one tmux question is
+#    the cheaper honest answer here.
 usage_dir="$HOME/.cc-sessions/usage"
 ccd_id=""
 if [ -n "${TMUX_PANE:-}" ] && [ -d "$HOME/.cc-sessions" ]; then
-  tname=$(timeout 2 tmux display-message -p '#S' 2>/dev/null)
+  sl_timeout=""
+  for sl_bin in timeout gtimeout; do
+    if command -v "$sl_bin" >/dev/null 2>&1; then sl_timeout="$sl_bin"; break; fi
+  done
+  tname=""
+  [ -n "$sl_timeout" ] && tname=$("$sl_timeout" 2 tmux display-message -p '#S' 2>/dev/null)
   case "$tname" in cc-?*) ccd_id="${tname#cc-}" ;; esac
   case "$ccd_id" in *[!A-Za-z0-9._-]*) ccd_id="" ;; esac
 fi
