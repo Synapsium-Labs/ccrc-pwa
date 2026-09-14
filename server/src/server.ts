@@ -1492,18 +1492,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const cols = dim(q.cols, 80);
     const rows = dim(q.rows, 24);
     const p = spawnPty(id, cols, rows);
-    // THE WINDOW FOLLOWS THE CLIENT, and it has to be said out loud because
-    // tmux would otherwise do it by itself: the close handler below has always
-    // run `resize-window`, and that verb sets `window-size manual` — measured
-    // on this fleet, every live window now reads `manual`, a value nothing in
-    // this tree writes on purpose. A pinned window stops sizing itself to
-    // whoever attaches, so a drawer whose grid is not the spawn's 220x50 gets
-    // a CLIPPED viewport: the right of every line cut, the status row hidden
-    // under the key bar, and tmux's dotted filler wherever the client is the
-    // larger of the two. The history read renders that same pane at the
-    // DRAWER's width, so the two views also wrapped differently — one defect
-    // wearing a second face.
-    void deps.tmux.resizeWindow(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
@@ -1511,9 +1499,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         if (m.type === 'input' && typeof m.data === 'string') p.write(m.data);
         else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
-          // Same reason as the attach above: a rotation or a keyboard opening
-          // moves the client, and a pinned window would not follow it.
-          void deps.tmux.resizeWindow(id, m.cols, m.rows);
         }
       } catch { /* ignore malformed frames */ }
     });
