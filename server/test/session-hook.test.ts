@@ -13,10 +13,20 @@ const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
 const sh = (text: string): string => `'${text.replace(/'/g, "'\"'\"")}'`;
 
+/** THE ROW'S GENERATION, and this pane's copy of it — exactly what ccd's row
+ *  creation mints and `_spawn_start` exports. Every compaction arm validates
+ *  the two against each other under the lock and FAILS CLOSED on a mismatch or
+ *  an absence, so a fixture without them is a session whose whole compaction
+ *  lifecycle is inert — which is a real state (a pre-D-2605 row), and one this
+ *  file tests deliberately below, but not the ordinary one. */
+const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 let home: string;
 beforeEach(() => {
   home = mkTmp('ccrc-hook-');
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  // EXACTLY 36 BYTES, NO TERMINAL LF — the contract the ccd writer keeps, and a
+  // 37-byte file here would wedge the fixture the same way it wedges a row.
+  fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.generation'), GENERATION);
   const bin = path.join(home, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho "cc-demo-quiet-basin"\n', { mode: 0o755 });
@@ -35,6 +45,7 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
       ...process.env, HOME: home,
       PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+      CCRC_SESSION_GENERATION: GENERATION,
       ...env,
     },
   });
@@ -55,7 +66,8 @@ const runFull = (payload: object, env: Record<string, string> = {}, opts: { allo
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify(payload), encoding: 'utf8',
     env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', ...env },
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+      CCRC_SESSION_GENERATION: GENERATION, ...env },
   });
   if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
@@ -73,7 +85,8 @@ const runConcurrent = (payload: object, n: number, opts: { allowNonZeroExit?: bo
   Promise.all(Array.from({ length: n }, () => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn('bash', [HOOK], {
       env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+        CCRC_SESSION_GENERATION: GENERATION },
     });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
@@ -487,14 +500,21 @@ describe('subagents', () => {
 });
 
 describe('the fleet gate and failure polarity', () => {
+  /** What the HOOK put in the registry — never the row's `.generation`, which
+   *  ccd's row creation mints before any hook runs and the harness plants for
+   *  the same reason. It is an INPUT to every arm, so a "wrote nothing" scan
+   *  that counted it would be red for a reason that has nothing to do with the
+   *  gate under test. */
+  const written = (): string[] =>
+    fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n !== 'demo-quiet-basin.generation');
   it('no TMUX_PANE → writes nothing, exits 0', () => {
     run({ hook_event_name: 'Stop' }, { TMUX_PANE: '' });
-    expect(fs.readdirSync(path.join(home, '.cc-sessions'))).toEqual([]);
+    expect(written()).toEqual([]);
   });
   it('a foreign tmux session name → writes nothing', () => {
     fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "main"\n', { mode: 0o755 });
     run({ hook_event_name: 'Stop' });
-    expect(fs.readdirSync(path.join(home, '.cc-sessions'))).toEqual([]);
+    expect(written()).toEqual([]);
   });
   it('a corrupt existing state file is overwritten, not crashed on', () => {
     fs.writeFileSync(stateFile(), '{nope');
@@ -3136,7 +3156,10 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     // and `<id>.hookstate.json` is the `working` stamp, which lands BEFORE any
     // of this and is not gated on the mutex at all. A scan counting either
     // would be red for a reason that has nothing to do with the lock.
-    expect(regNames().filter((n) => /^\.?demo-quiet-basin\.(compact|generation)/.test(n))).toEqual([]);
+    // `<id>.generation` is excluded: it is the row's AUTHORIZATION, minted by
+    // ccd before any hook runs, and an input to this arm rather than anything
+    // it published.
+    expect(regNames().filter((n) => /^\.?demo-quiet-basin\.compact/.test(n))).toEqual([]);
     expect(readState().state, 'the working stamp is NOT gated on the mutex').toBe('working');
     expect(fs.existsSync(lockFile()), 'not even the permanent lock is minted').toBe(false);
   });
@@ -3731,5 +3754,115 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     // rename, under the retained FD and the validated lock.
     expect(post).toContain('mv -f "$stage" "$journal"');
     expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
+  });
+});
+
+// ── D-2605: the generation gate, in all three arms (spec §3.1 step 5, §3.3) ─
+describe('the compaction card — the row generation authorizes every arm (spec §3.4)', () => {
+  const genFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.generation');
+  const reg = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+  /** Compaction ARTIFACTS only. The PERMANENT LOCK is excluded by name: it is
+   *  minted by the acquire itself, BEFORE the generation gate can run, and it
+   *  deliberately spans row generations and safe reuse — its presence proves
+   *  history, never that anything was published. (Measured: without this
+   *  exclusion every inert-arm assertion below is red on a correct tree, for a
+   *  file the arm is supposed to create.) */
+  const published = (): string[] => reg()
+    .filter((n) => /^\.?demo-quiet-basin\.compact/.test(n) && n !== '.demo-quiet-basin.compactions.lock');
+  const SUMMARY = '1. Task\ndid a thing\n';
+
+  /** Every compaction arm, in order, against one fixture — so a leg that goes
+   *  inert is visible as "nothing was published" rather than as one arm's
+   *  silence. */
+  const allThree = (env: Record<string, string> = {}): void => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript), env)).toEqual({ stdout: '', stderr: '' });
+    expect(runFull(compactStart(tree, transcript), env).stderr).toBe('');
+    expect(runFull(postCompact(tree, transcript, SUMMARY), env)).toEqual({ stdout: '', stderr: '' });
+  };
+
+  it('with the pane\'s generation matching the row\'s, all three arms run', () => {
+    allThree();
+    expect(published().length, 'the lifecycle published').toBeGreaterThan(0);
+    expect(fs.existsSync(journalFile()), 'and committed its record').toBe(true);
+  });
+
+  it('NO generation in the environment — a pre-D-2605 pane — publishes NOTHING, and says nothing', () => {
+    // The disclosed cost, stated as a test rather than as prose: a session
+    // whose spawn could not hand it a generation is inert for its whole life,
+    // until its next respawn. That is exactly the property ccd's fail-open at
+    // `_reg_purge` is gated on — no hook on that row ever ran the lifecycle, so
+    // a destructive verb has nothing to race.
+    allThree({ CCRC_SESSION_GENERATION: '' });
+    expect(published(), 'not a set, not a card, not a stage, not a claim').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'and no journal line').toBe(false);
+    // The hookstate write is NOT gated on it — that lands on every event and is
+    // what the server reads a session's health from. `done` because PostCompact
+    // is the LAST of the three arms this helper runs, and PostCompact's state
+    // is `done`: the point is that a hook whose whole compaction lifecycle is
+    // inert still keeps its session visible and healthy to the fleet.
+    expect(readState().state).toBe('done');
+    expect(readState().event).toBe('PostCompact');
+  });
+
+  it('NO generation on the ROW — the file absent — publishes nothing either', () => {
+    fs.rmSync(genFile());
+    allThree();
+    expect(published()).toEqual([]);
+    expect(fs.existsSync(journalFile())).toBe(false);
+  });
+
+  it('a MISMATCH — the row purged and re-created under a pane that outlived it — publishes nothing', () => {
+    // This is the case the file half of the check exists for: the environment
+    // value is what this PANE was authorized with, the file is what the ROW is
+    // authorized with NOW, and publishing on a stale pane's authority would
+    // write one session's measurement into another's slot.
+    fs.writeFileSync(genFile(), '0189abcd-1234-5678-9abc-ffffffffffff');
+    allThree();
+    expect(published()).toEqual([]);
+    expect(fs.existsSync(journalFile())).toBe(false);
+  });
+
+  it('every present-INVALID generation refuses, and none of them is repaired or removed', () => {
+    for (const [name, bytes] of [
+      ['uppercase', '0189ABCD-1234-5678-9ABC-0123456789AB'],
+      ['trailing LF', '0189abcd-1234-5678-9abc-0123456789ab\n'],
+      ['empty', ''],
+      ['multiline', '0189abcd-1234-5678-9abc-0123456789ab\nmore\n'],
+      ['malformed', 'not-a-uuid'],
+    ] as const) {
+      fs.rmSync(path.join(home, '.cc-sessions'), { recursive: true, force: true });
+      fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      fs.writeFileSync(genFile(), bytes);
+      allThree({ CCRC_SESSION_GENERATION: bytes });
+      expect(published(), `${name} publishes nothing`).toEqual([]);
+      // NEVER repaired, replaced or removed — that is what makes "genuine
+      // absence is the only mint condition" a mechanism on the ccd side.
+      expect(fs.readFileSync(genFile(), 'utf8'), `${name} is left exactly as found`).toBe(bytes);
+    }
+  });
+
+  it('the gate is read through an owned alias and leaves none behind, and the arms validate UNDER the lock', () => {
+    allThree();
+    expect(reg().filter((n) => n.includes('generation-read')), 'no read alias survives').toEqual([]);
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // NEVER a bare `cat` on a pathname that can be replaced between the test
+    // and the read: the value comes off a retained FD whose inode is rechecked.
+    expect(code).toContain('link "$p" "$al"');
+    expect(code).toContain('_hook_lock_same "$fd" "$p"');
+    expect(code, 'no bare read of the canonical generation').not.toMatch(/cat\s+"\$REG\/\$id\.generation"/);
+    // AND IT IS ALWAYS INSIDE A HELD SECTION: every call site sits after an
+    // acquire and before that section's release.
+    for (const fn of ['_hook_compact_pre() {', '_hook_compact_card() {', '_hook_compact_post() {'] as const) {
+      const body = code.slice(code.indexOf(fn));
+      const fnBody = body.slice(0, body.indexOf('\n}\n'));
+      const acq = fnBody.indexOf('_hook_lock_acquire');
+      const gate = fnBody.indexOf('_hook_generation_ok');
+      expect(acq, `${fn} acquires`).toBeGreaterThan(-1);
+      expect(gate, `${fn} validates the generation`).toBeGreaterThan(-1);
+      expect(gate, `${fn}: the gate is inside the held section`).toBeGreaterThan(acq);
+    }
   });
 });

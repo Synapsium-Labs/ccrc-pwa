@@ -950,6 +950,53 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   return 0
 }
 
+# ── THE GENERATION GATE (spec §3.1 step 5, §3.3, §3.4) ───────────────────
+# `$REG/<id>.generation` is the row's AUTHORIZATION, minted once by ccd's row
+# creation and handed to this process in its environment by `_spawn_start`.
+# Every lifecycle arm validates the two against each other UNDER THE LOCK,
+# before it inspects, reads, claims, deletes, emits or publishes anything.
+#
+# IT FAILS CLOSED, and the cost is disclosed rather than hidden: a session
+# whose spawn could not read a generation — a pre-D-2605 row, or a spawn whose
+# acquire was contended — publishes NO compaction artifact for its whole life,
+# until its next respawn. That is the property ccd's own fail-open at
+# `_reg_purge` is gated on: absence of the generation proves no hook on that row
+# ever received one, so no hook arm ever ran the lifecycle and there is nothing
+# for a destructive verb to race.
+#
+# WHY THE ENVIRONMENT AND THE FILE BOTH: the environment value is what this
+# PANE was authorized with, the file is what the ROW is authorized with now, and
+# a mismatch means the row was purged and re-created under a pane that outlived
+# it. Publishing then would write one session's measurement into another's slot.
+# The read goes through the same owned hard-link alias ccd's side uses — never a
+# bare `cat` on a pathname that can be replaced between the test and the read.
+_hook_generation_ok() {   # -> 0 iff this pane's generation is the row's current one
+  local want="${CCRC_SESSION_GENERATION:-}" p="$REG/$id.generation" al="" fd="" tries=0 got=""
+  [[ -n "$want" ]] || return 1
+  [[ "$want" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  [[ -f "$p" && ! -L "$p" && -r "$p" ]] || return 1
+  command -v link >/dev/null 2>&1 || return 1
+  while (( tries < 8 )); do
+    al="$REG/.$id.generation-read.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$p" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  { exec {fd}<"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  # 37, not 36: a 37-character read SEES a trailing LF or a longer file, where a
+  # 36-character one would silently accept the first 36 bytes of either.
+  IFS= read -r -N 37 got <&"$fd" 2>/dev/null || true
+  # STILL THE SAME INODE: a canonical replaced since the `link` is a different
+  # row's authorization wearing this name.
+  if ! _hook_lock_same "$fd" "$p"; then { exec {fd}<&-; } 2>/dev/null; return 1; fi
+  { exec {fd}<&-; } 2>/dev/null || true
+  [[ "$got" == "$want" ]] || return 1
+  return 0
+}
+
 _hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST reference closes
   local fd="${1-}"
   # An empty operand is `ambiguous redirect` (measured), so the guard is real
@@ -988,6 +1035,8 @@ _hook_compact_pre() {
   # lock-free concurrency regime" true.
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
   lockfd="$HOOK_LOCK_FD"
+  # STEP 5: the generation, validated UNDER the lock and before any inspection.
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
   # OVERLAP (spec §3.0). One slot per session id, and every context of the
   # session writes it. An unconsumed set still inside the in-flight window
   # means another compaction is in flight (or failed inside the window), and
@@ -1068,6 +1117,13 @@ _hook_compact_pre() {
   # publishes nothing — never an unlocked rename.
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
   lockfd="$HOOK_LOCK_FD"
+  # STEP 12, first half: the generation AGAIN. The row can be purged and
+  # re-created while the helper runs, and a rename taken on that authority
+  # would publish this pane's measurement into another session's slot.
+  if ! _hook_generation_ok; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
   # STEP 12. THE COMPARE-AND-SWAP. Re-read the canonical set's HEAD with the
   # bounded, fork-free `read -N` idiom this file already uses on the serve side
   # and require the nonce to still be ours. Bash has no `slotIsMine`
@@ -1128,6 +1184,7 @@ _hook_compact_post() {
   # ── SETTLEMENT, under the row's mutex ──────────────────────────────────
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
   lockfd="$HOOK_LOCK_FD"
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
   if [ -e "$set" ] || [ -L "$set" ]; then present=1; fi
   if (( present )); then
     if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then _hook_lock_release "$lockfd"; return 0; fi
@@ -1207,6 +1264,8 @@ _hook_compact_post() {
   # ── THE FINAL TRANSACTION, under a reacquired lock ──────────────────────
   _hook_lock_acquire "$COMPACT_LOCK_WAIT" || { _hook_compact_post_abandon "" "$snap"; return 0; }
   lockfd="$HOOK_LOCK_FD"
+  # REVALIDATED before the one act no later sweep can repair.
+  _hook_generation_ok || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
   # `served` IS MARKER-DERIVED, never copied from a set: looked up here, under
   # the final lock, from the separately validated safe nonce this claim
   # carries. An unsafe or missing nonce forms no marker path and reads false.
@@ -1358,6 +1417,9 @@ _hook_compact_card() {   # sets CARD_COMPACT; silent on every path
   local lockfd=""
   _hook_lock_acquire "$COMPACT_LOCK_WAIT_SERVE" || return 0
   lockfd="$HOOK_LOCK_FD"
+  # Validated under the lock and BEFORE the first existence or age inspection,
+  # which is what "before any lifecycle observation or mutation" means here.
+  if ! _hook_generation_ok; then _hook_lock_release "$lockfd"; return 0; fi
   _hook_compact_card_locked || true
   # THE LOCK IS RETAINED PAST THIS RETURN only when a card is actually going to
   # be printed: the marker that records the fact of serving belongs to the same
