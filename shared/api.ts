@@ -5166,7 +5166,10 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *
  *  Named here only since the operator dial shipped (D-1209): before that the
  *  shape existed solely as an inline structural type on one method, because
- *  `dispatchRun` was its only reader and never had to name it. */
+ *  `dispatchRun` was its only reader and never had to name it.
+ *
+ *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
+ *  `ACTIVE_RUN_STATES`. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel

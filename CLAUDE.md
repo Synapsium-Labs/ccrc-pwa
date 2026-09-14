@@ -179,6 +179,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
   Don't assume — read the guards.
+- **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
+  `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`
+  from an idle state is cap-checked (design 2026-09-14 §7). `run-states.test.ts` pins that every `RunState` is
+  classified exactly once; never add a state without placing it.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
