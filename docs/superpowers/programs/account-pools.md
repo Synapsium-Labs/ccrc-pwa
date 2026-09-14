@@ -6805,3 +6805,54 @@ with no sibling left, is what actually frees the workspace.**
 
 Standing from here: run 47 untouched; the null home recorded as PERMANENT and why; `homeProject` on any
 future open from this coordinator; and the deploy carried to the operator as the class fix.
+
+---
+
+## 2026-09-14 11:5x UTC — BOTH LANES DEPLOYED at `bb8cc111`; wave 6's dispatch is CAP-BLOCKED
+
+Operator: "deploy and dispatch wave 6 in parallel." Deployed; the dispatch is refused by the fleet cap,
+which is nobody's fault and not mine to clear.
+
+**Sequenced rather than run literally in parallel, for a measured reason.** `deploy/deploy.sh:989` runs
+`systemctl --user try-restart "claude-session@*"`, gated at `:986` by a mandatory `KillMode=process`
+preflight that REFUSES the sweep otherwise. Dispatching first would have raced the worker's `/clear` and
+brief injection against a supervisor restart. So: **agent lane → dispatch → server lane**, which also
+honours AGENT-FIRST (#92 touched `ccd/ccrc-api`, both skills and the coordinator's `references/`).
+
+**Deployed from a clean detached `origin/main` worktree, not this ledger branch** — this branch carries
+main plus my ledger commits, and a deploy should ship exactly what merged.
+
+| lane | result |
+|---|---|
+| agent (11:51:42Z) | `ccd bb8cc111… (HEAD)`; `ccrc-agent.service` active; slice `MemoryHigh=infinity` verified; **all 31 `claude-session@*` units verified active with stable MainPIDs across 5s AFTER the sweep** — the preflight held and no pane was lost |
+| server (11:58:46Z) | `/health` → `{"sha":"bb8cc111…","ref":"HEAD","dirty":false}`; `ccrc.service` active |
+
+**The class fix landed and is verified, not assumed.** The installed `~/.local/bin/ccrc-api` now answers
+`runs list --closed` (49 rows) and the `asks` group, and the installed coordinator skill's
+`wave-lifecycle.md` carries `homeProject` six times. So the legacy-shaped open that cost run 45 its
+seven-day clock is closed **at the source for every coordinator on this host**, not just by my promising
+to remember a field. Run 45 informed.
+
+### Wave 6 cannot dispatch: `cap-concurrency`, limit 7, running 7
+
+    {"ok":false,"refused":"cap-concurrency","limit":7,"running":7}
+
+Retried after the server lane; unchanged. The seven, measured:
+
+| run | programme | state | session |
+|---|---|---|---|
+| 31 | battlescape-operational | working | MekWarLive-swift-harbor |
+| 39 | bug-fix-waves | **awaiting-review** | expoAI-assistant-warm-cove |
+| 40 | bug-fix-waves | **awaiting-review** | expoAI-assistant-still-summit |
+| 45 | crossrepo-programmes | dispatched | ccrc-pwa-bright-meadow |
+| 46 | qdrant-consolidation | dispatched | intake-platform-still-prairie |
+| 48 | qdrant-consolidation | dispatched | custom-tools-soft-ridge |
+| 49 | qdrant-consolidation | dispatched | data-internal-swift-basin |
+
+**None are mine and I am not touching another programme's runs to make room.** Worth noting for whoever
+can: **39 and 40 are `awaiting-review`** — holding two of the seven while waiting on their coordinator
+rather than doing work, which is the cheapest capacity on the board. That is an observation for the
+operator, not an action I will take: freeing it means asking another programme to reprioritise.
+
+Run 47 stays `planned` with its brief and nine items composed and ready (`dispatch47.json`); the moment a
+slot frees it is one call.
