@@ -130,6 +130,7 @@ describe('the coordinator skill: its contract', () => {
     expect(skill).not.toContain('review the handoff commit');
     expect(flat(skill)).toContain('never read by this session');
     expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
+    expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -1766,15 +1767,15 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(start, 'SKILL.md no longer carries step 6').toBeGreaterThanOrEqual(0);
     const end = skill.indexOf('\n7. **Final merge:**', start + 1);
     expect(end, 'step 6 no longer ends where step 7 begins').toBeGreaterThan(start);
-    const step5 = skill.slice(start, end);
+    const step6 = skill.slice(start, end);
 
-    const sameAt = step5.indexOf('**Same project:**');
-    const crossAt = step5.indexOf('**Different project:**');
+    const sameAt = step6.indexOf('**Same project:**');
+    const crossAt = step6.indexOf('**Different project:**');
     expect(sameAt, 'step 6 no longer has a same-project arm').toBeGreaterThanOrEqual(0);
     expect(crossAt, 'step 6 no longer has a cross-project arm').toBeGreaterThan(sameAt);
 
-    const same = flat(step5.slice(sameAt, crossAt));
-    const cross = flat(step5.slice(crossAt));
+    const same = flat(step6.slice(sameAt, crossAt));
+    const cross = flat(step6.slice(crossAt));
 
     for (const [name, arm, closeWith] of [
       ['the same-project arm', same, '`final:false`'],
@@ -1815,10 +1816,10 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     const end = skill.indexOf('\n## ', start + 1);
     const section = flat(skill.slice(start, end === -1 ? undefined : end));
 
-    const step5 = skill.slice(skill.indexOf('6. **Rule on the report**'),
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'),
       skill.indexOf('\n7. **Final merge:**'));
     for (const arm of ['**Same project:**', '**Different project:**']) {
-      expect(step5, `step 6 lost its ${arm} arm`).toContain(arm);
+      expect(step6, `step 6 lost its ${arm} arm`).toContain(arm);
       expect(section, `the crossing section does not name step 6's ${arm} arm`)
         .toContain(arm);
     }

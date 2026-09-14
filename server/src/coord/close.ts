@@ -408,22 +408,41 @@ export async function closeRun(
  *  and `archive` are REFUSED: a review run is always final (its workspace is its
  *  own and is released here), and archive stays a human act. `state:'failed'`
  *  is the coordinator's "the reviewer died" — nothing is re-measured, exactly
- *  as the work path's abandon arm (D-49). */
+ *  as the work path's abandon arm (D-49). On `state:'failed'` the fingerprint
+ *  is optional — a dead reviewer has none, and an abandon asserts no claim
+ *  (D-2812); a fingerprint that IS present on a `failed` close is still
+ *  shape-checked — malformed is refused, never silently ignored. */
 async function closeReviewRun(
   deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: 'coordinator' | 'operator',
   siblingsOf: (sessionId: string) => OpenSiblingsResult,
   survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
-  const fp = b.fingerprint;
   if (b.final !== undefined || b.archive !== undefined ||
-      typeof fp !== 'object' || fp === null ||
-      typeof fp.reviewedTip !== 'string' || !HANDOFF_SHA.test(fp.reviewedTip) ||
-      typeof fp.report !== 'string' || !path.isAbsolute(fp.report) ||
       (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
     return { ok: false, kind: 'bad-request' };
   }
   const state: 'done' | 'failed' = b.state === 'failed' ? 'failed' : 'done';
+  // `state:'done'` (the default) always requires the fingerprint, shape-checked
+  // exactly as before D-2812. `state:'failed'` makes it OPTIONAL: an absent one
+  // (the reviewer never wrote one) skips the shape check entirely; a
+  // fingerprint PRESENT on a `failed` close is still shape-checked — malformed
+  // is refused, never silently ignored. `validFp` is computed ONCE, here,
+  // rather than re-derived at its one read site below (D-2812) — the
+  // non-null assertion there is justified by `fpRequired`'s own condition
+  // repeating `state !== 'failed'`, never by trusting the wire shape twice.
+  const fp = b.fingerprint;
+  const fpRequired = state === 'done' || fp !== undefined;
+  const validFp: { reviewedTip: string; report: string } | null = fpRequired
+    ? (typeof fp === 'object' && fp !== null &&
+       typeof fp.reviewedTip === 'string' && HANDOFF_SHA.test(fp.reviewedTip) &&
+       typeof fp.report === 'string' && path.isAbsolute(fp.report))
+      ? { reviewedTip: fp.reviewedTip, report: fp.report }
+      : null
+    : null;
+  if (fpRequired && validFp === null) {
+    return { ok: false, kind: 'bad-request' };
+  }
   if (!transitionsFor(run.kind)[run.state].includes(state)) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: state };
   }
@@ -448,7 +467,10 @@ async function closeReviewRun(
     const verdict = await verifyReviewDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
       { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
-      { reviewedTip: fp.reviewedTip, report: fp.report },
+      // Non-null: `state !== 'failed'` here means `state === 'done'`, and
+      // `fpRequired` above was true in exactly that case — the guard already
+      // refused a null `validFp` on that path.
+      validFp!,
     );
     if (!verdict.ok) {
       coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });

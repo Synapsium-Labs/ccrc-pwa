@@ -3769,6 +3769,25 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expectReleasedReviewerOnly(calls);
   });
 
+  it('closes a review run failed with NO fingerprint at all — a dead reviewer wrote none (D-2812)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { w, reviewId, calls } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId, { state: 'failed' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, state: 'failed', released: true });
+    expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
+    expectReleasedReviewerOnly(calls);
+  });
+
+  it('still refuses a PRESENT but malformed fingerprint on a failed review close (D-2812)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { reviewId } = await reviewInFlight(home);
+    const res = await postClose(app, reviewId,
+      { state: 'failed', fingerprint: { reviewedTip: 'abc', report: '/r' } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
   it.each([
     ['final', { fingerprint: { reviewedTip: TIPW, report: '/r' }, final: true }],
     ['archive', { fingerprint: { reviewedTip: TIPW, report: '/r' }, archive: true }],

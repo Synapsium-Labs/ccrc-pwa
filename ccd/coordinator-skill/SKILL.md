@@ -304,8 +304,8 @@ not after.
    `{"program":"<slug>","title":"Review wave N","kind":"review","reviews":<work run id>,"claimedBy":"<your id>","homeProject":"<home>"}`
    — `project`, `wave` and `waveOf` are the reviewed run's and are derived
    server-side; do not send them. `review-in-flight` means a review run is
-   already open for that wave: close it first (`state:'failed'` if the reviewer
-   died), then retry. Then `"$API" runs dispatch <review run id> --json -` with a
+   already open for that wave: close it first (`{"state":"failed"}` if the
+   reviewer died), then retry. Then `"$API" runs dispatch <review run id> --json -` with a
    brief cut from `references/review-brief.md` — the work run id, its branch
    `ws/<worker-slug>`, the plan coordinates, the task range, the lenses, the
    suites. `cap-concurrency` here is ordinary: the reviewer needs a slot and
@@ -317,10 +317,11 @@ not after.
    (no `final`, no `archive` — a review run is always final and its workspace
    is released by this close). `stale-review` means the worker pushed after
    its wave-done: the report is evidence about a tip that is gone — do not
-   rule on it; mail the worker the code and detail verbatim, and once its
-   re-measured wave-done arrives, open a NEW review run (step 5). `report-unreadable`
+   rule on it; close the review run with `{"state":"failed"}`, mail the worker
+   the code and detail verbatim, and once its re-measured wave-done arrives,
+   open a NEW review run (step 5). `report-unreadable`
    means the path the reviewer named cannot be opened: close the review run
-   `state:'failed'` and open a new one. Once the close answers `ok`, read the
+   with `{"state":"failed"}` and open a new one. Once the close answers `ok`, read the
    report — findings are the reviewer's, rulings are yours (clause 10 for any
    deviation the report surfaces). Then ONE of two moves:
    - **Send back:** `"$API" runs advance <work run id> --json -` with
