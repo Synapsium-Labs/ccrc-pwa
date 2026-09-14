@@ -2804,6 +2804,68 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(again).not.toContain('graphify card');
   });
 
+  it('EEXIST at the marker is idempotent ONLY after the incumbent validates (§3.3 step 5)', () => {
+    // The arm published its marker with `link "$src" "$marker" || true` and
+    // then dropped the source UNCONDITIONALLY. If the pathname is already
+    // occupied by something that is not a marker — a symlink, a directory — the
+    // `link` fails EEXIST, the source is discarded, NO marker is published, and
+    // PostCompact's bare `[ -e … ]` lookup then derived `served` from that
+    // object: `true` for a symlink to anything, `false` for a dangling one.
+    // Both ends now spell one definition of what a marker IS.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    // A SYMLINK TO A REAL FILE, so a bare `-e` would answer TRUE — the
+    // direction that fabricates `served:true` for a compaction nobody served.
+    const decoy = path.join(home, '.cc-sessions', 'decoy');
+    fs.writeFileSync(decoy, 'x');
+    fs.symlinkSync(decoy, markerFile(nonce));
+    cardChecked(compactStart(tree, transcript));
+    // The occupant is untouched — this arm never replaces, repairs or unlinks
+    // what it did not publish.
+    expect(fs.lstatSync(markerFile(nonce)).isSymbolicLink(), 'the occupant stands').toBe(true);
+    // AND NO SOURCE IS LEFT: the disjoint private name goes on every handled
+    // result, EEXIST included.
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.includes('compactserved-source')))
+      .toEqual([]);
+  });
+
+  it('…and a following PostCompact reads that occupant as served:false', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    const decoy = path.join(home, '.cc-sessions', 'decoy');
+    fs.writeFileSync(decoy, 'x');
+    fs.symlinkSync(decoy, markerFile(nonce));
+    cardChecked(compactStart(tree, transcript));
+    const SUM = ['1. Task', 'did a thing', '', '3. Files and Code Sections:',
+      '- server/src/pane/statusline.ts was edited', '', '4. Errors and fixes', 'none', ''].join('\n');
+    expect(runFull(postCompact(tree, transcript, SUM))).toEqual({ stdout: '', stderr: '' });
+    const j = fs.readFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions'), 'utf8')
+      .split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(j, 'the record still commits').toHaveLength(1);
+    expect(j[0]!['served'], 'a symlink is not a marker, whatever it points at').toBe(false);
+  });
+
+  it('CONTROL: an ordinary serve publishes a REGULAR marker and reads back served:true', () => {
+    // Without this the two legs above could be an arm that never publishes and
+    // a lookup that never answers true.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    cardChecked(compactStart(tree, transcript));
+    expect(fs.lstatSync(markerFile(nonce)).isFile(), 'a regular file, not a symlink').toBe(true);
+    const SUM = ['1. Task', 'did a thing', '', '3. Files and Code Sections:',
+      '- server/src/pane/statusline.ts was edited', '', '4. Errors and fixes', 'none', ''].join('\n');
+    expect(runFull(postCompact(tree, transcript, SUM))).toEqual({ stdout: '', stderr: '' });
+    const j = fs.readFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.compactions'), 'utf8')
+      .split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(j[0]!['served']).toBe(true);
+  });
+
   // fix-round M1: a bare read-then-`rm` lets every one of N concurrent
   // SessionStart(compact) racers read the card before the first deletes it —
   // the main thread and its own live subagents can all hit this arm close
@@ -4580,7 +4642,13 @@ describe('the compaction card — no test reads `served` off a set (plan Task 9)
     // against the post-Task-9 file: the plan's own eleven/nine/seven were
     // measured on the pre-Task-9 line set, where the seven were the assertions
     // this task deleted.
-    expect(a.raw.length, 'raw union matches').toBe(8);
+    // 8 -> 11 (fix round 2, A-M1): three PROSE/TITLE mentions of `served:` in
+    // the new EEXIST-idempotence legs — two `it(…)` titles and one comment
+    // naming the value a bare `-e` lookup would fabricate. All three are
+    // excluded from SCOPE by the title/prose rules, which is why the three
+    // numbers below are unchanged; `raw` moving alone is the scan saying the
+    // file grew prose about the member and not a read of it.
+    expect(a.raw.length, 'raw union matches').toBe(11);
     expect(a.scoped.length, 'in SET scope — the three `it(…)` titles and two prose lines are excluded BY THE SCOPE').toBe(3);
     expect(a.scoped.filter((r) => r.klass === 1).length, 'class (1), the planting fixtures').toBe(2);
     expect(a.scoped.filter((r) => r.klass === 2).length, 'class (2), journal-record assertions').toBe(1);

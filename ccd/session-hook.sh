@@ -1443,8 +1443,17 @@ _hook_compact_post() {
     IFS= read -r -N 4096 head 2>/dev/null < "$snap"
     if [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]]; then
       nonce="${BASH_REMATCH[1]}"
+      # `-f` AND NOT `-L`, never a bare `-e`: this is the READING end of the
+      # marker the compact SessionStart arm publishes, and a bare existence
+      # test answers `served:true` for a symlink to anything and `served:false`
+      # for a dangling one — a durable claim about a compaction derived from an
+      # object that is not a marker. The two ends spell one definition. (The
+      # publishing function is deliberately NOT named here: a scan beside the
+      # retained-serve-lock pin asserts that no function body in this file
+      # mentions it, which is how "its only call site is top level" is
+      # measured.)
       if [[ "$nonce" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] \
-         && [ -e "$REG/.$id.compactserved.$nonce" ]; then served="true"; fi
+         && [[ -f "$REG/.$id.compactserved.$nonce" && ! -L "$REG/.$id.compactserved.$nonce" ]]; then served="true"; fi
     fi
   fi
   # THE SIXTEEN-KEY RECORD: the helper's measurement ENRICHED with the six
@@ -1767,6 +1776,18 @@ _hook_compact_mark_served() {
   src=$( umask 077; mktemp "$REG/.$id.compactserved-source.$COMPACT_SERVE_NONCE.XXXXXX" 2>/dev/null ) || return 0
   [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 0; }
   link "$src" "$marker" 2>/dev/null || true
+  # EEXIST MEANS VALIDATE THE INCUMBENT — §3.3 step 5's "same-nonce extant
+  # marker is idempotent ONLY AFTER it validates as a regular, non-symlink
+  # final marker under this lock", and §3.4's marker-source row, which unlinks
+  # the source "on `EEXIST` after validating the exact same-nonce final
+  # marker". Unvalidated, an occupant that is a symlink or a directory makes
+  # `link` fail EEXIST, the source is discarded, NO marker is published — and
+  # PostCompact's lookup then derives `served` from an object that is not a
+  # marker: `served:true` for a symlink to anything, `served:false` for a
+  # dangling one. The two ends now agree on what a marker IS, here and at the
+  # lookup. Reachable only through an out-of-contract same-UID writer, which is
+  # why the arm still returns 0 and publishes nothing rather than complaining.
+  [[ -f "$marker" && ! -L "$marker" ]] || { rm -f "$src" 2>/dev/null || true; return 0; }
   # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure —
   # so the disjoint name never becomes residue of its own.
   rm -f "$src" 2>/dev/null || true
