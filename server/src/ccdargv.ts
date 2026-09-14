@@ -345,6 +345,15 @@ export const CCD_ARGV = {
                       argv(['project-pool', '--project', project, '--pool', pool]),
   projectPoolClear: (project: string) =>
                       argv(['project-pool', '--project', project, '--clear']),
+
+  /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
+   *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
+   *  picks a field and a value, and `field`/`value` reach ccd UNVALIDATED —
+   *  `_route_valid` on the box is the authority and refuses before writing.
+   *  No `--apply` form exists in this slice: the coordinator never types into
+   *  another session's pane, and the server's own apply path is slice 4's. */
+  route: (id: string, field: string, value: string) =>
+           argv(['route', '--session', id, '--set', `${field}=${value}`]),
 } as const;
 
 /**
@@ -395,6 +404,15 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  introduced the token before those wave-3 consumers; this paragraph describes
  *  their composed contract now that both stages are present. */
 export const POOLS_CAP = 'pools-v1';
+
+/** The `ccd caps` token that says this box implements `ccd route` and reads
+ *  the routing record at settle (routing spec 2026-09-14 §5.3). Spelled ONCE
+ *  in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain` line. It gates ONE
+ *  decision, in slice 4: whether dispatch may pass a wave's routing on the
+ *  `ws-add` argv — absent, the flag is OMITTED, the actor-flags-v1 shape. */
+export const ROUTE_CAP = 'route-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
