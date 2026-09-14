@@ -41,11 +41,36 @@ const REFUSAL = DONE_AUTHORITY_CODES[0]!;   // the vocabulary's own first member
 describe('CoordStore.runSignals', () => {
   it('unknown run → null', () => { expect(open().runSignals(999)).toBeNull(); });
 
-  it('an open run has no wall time yet and firstSubmission is null', () => {
+  // R7-1's open question, answered in the fix wave and pinned here: an OPEN run
+  // counts as UNSCANNED. Its window has no end to scan to, so nothing reads a
+  // lifecycle row for it and `holdMs: 0, swaps: 0` are initialisers. This
+  // expectation was `excludedUnmeasured: false` as the plan's Step 2 wrote it —
+  // an affirmative "measured, held nothing" about a window never opened.
+  it('an open run has no wall time yet, firstSubmission is null, and its UNSCANNED window says so', () => {
     const coord = open(); const id = seedRun(coord);
     const s = coord.runSignals(id)!;
     expect(s.dispatchedAt).toEqual(expect.any(Number));
-    expect(s).toMatchObject({ closedAt: null, finalState: null, wallMs: null, activeMs: null, closeRefusals: 0, firstSubmission: null, holdMs: 0, swaps: 0, excludedUnmeasured: false });
+    expect(s).toMatchObject({ closedAt: null, finalState: null, wallMs: null, activeMs: null, closeRefusals: 0, firstSubmission: null, holdMs: 0, swaps: 0, excludedUnmeasured: true });
+  });
+
+  // The other two windows nobody scans (R7-1). Both used to answer
+  // `excludedUnmeasured: false` — the overloaded null CLAUDE.md names, because
+  // "measured, no holds" and "never examined" are what §6's arm attribution
+  // must tell apart.
+  it('a RECONSTRUCTED run — no run_events, so no dispatched transition — is unmeasured, never a measured zero', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.advance(id, 'closing', 'coordinator'); coord.advance(id, 'done', 'coordinator');
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'hold', at: 1_100_000 });
+    coord.db.prepare('DELETE FROM run_events WHERE runId = ?').run(id);   // what `reconstruct` leaves behind
+    expect(coord.runSignals(id)).toMatchObject({ dispatchedAt: null, closedAt: null, wallMs: null, activeMs: null, holdMs: 0, swaps: 0, excludedUnmeasured: true });
+  });
+
+  it('a closed run whose worker is unknown (sessionId null) is unmeasured', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.advance(id, 'closing', 'coordinator'); coord.advance(id, 'done', 'coordinator');
+    setEventAt(coord, id, 'dispatched', 1_000_000); setEventAt(coord, id, 'done', 1_600_000);
+    coord.db.prepare('UPDATE runs SET sessionId = NULL WHERE id = ?').run(id);
+    expect(coord.runSignals(id)).toMatchObject({ wallMs: 600_000, holdMs: 0, swaps: 0, excludedUnmeasured: true });
   });
 
   it('a done run: wall time from dispatch to done; the WORKER\'s paired holds subtracted; swaps counted, not timed', () => {
@@ -81,6 +106,54 @@ describe('CoordStore.runSignals', () => {
     lifecycle(coord, { sessionId: 'demo-worker', act: 'release', at: 1_150_000 });
     lifecycle(coord, { sessionId: 'demo-worker', act: 'hold', at: 1_500_000 });      // never released in-window
     expect(coord.runSignals(id)).toMatchObject({ holdMs: 50_000, excludedUnmeasured: true });
+  });
+
+  // R7-2, the swallowed direction: ccd pairs `hold done` with the next
+  // `release done`, so a SECOND hold while one is open is a fact this pairing
+  // cannot model. The row used to be dropped in silence, leaving a hold total
+  // that omits whatever it meant and an `excludedUnmeasured` still false.
+  it('a SECOND hold while one is open flags the window; holdMs stays the first pairing, a floor', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.advance(id, 'closing', 'coordinator'); coord.advance(id, 'done', 'coordinator');
+    setEventAt(coord, id, 'dispatched', 1_000_000); setEventAt(coord, id, 'done', 1_600_000);
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'hold', at: 1_100_000 });
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'hold', at: 1_120_000 });      // a second, while the first is open
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'release', at: 1_150_000 });
+    expect(coord.runSignals(id)).toMatchObject({ holdMs: 50_000, swaps: 0, excludedUnmeasured: true, activeMs: 550_000 });
+  });
+
+  // R7-2, the other direction: `at IS NULL` is "ccd could not stamp the line"
+  // (schema.ts), and the window query filters those rows out — so an
+  // unstampable swap reported `swaps: 0` and read as measured. It is COUNTED,
+  // never inferred from the filtered result set, and unbounded by the window
+  // because a row with no `at` cannot be placed in time at all.
+  it('a hold/release/swap row ccd could not timestamp makes the window unmeasurable', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.advance(id, 'closing', 'coordinator'); coord.advance(id, 'done', 'coordinator');
+    setEventAt(coord, id, 'dispatched', 1_000_000); setEventAt(coord, id, 'done', 1_600_000);
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'hold', at: 1_100_000 });
+    lifecycle(coord, { sessionId: 'demo-worker', act: 'release', at: 1_150_000 });
+    expect(coord.runSignals(id)).toMatchObject({ swaps: 0, excludedUnmeasured: false });   // the control
+    coord.db.prepare(
+      'INSERT INTO lifecycle_events (gen, ingestedAt, act, outcome, sessionId, tx, at, raw) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run('0000000000000000002', 1, 'swap', 'done', 'demo-worker', null, null, '{}');
+    expect(coord.runSignals(id)).toMatchObject({ holdMs: 50_000, swaps: 0, excludedUnmeasured: true });
+  });
+
+  // R7-3: ONE statement behind two surfaces. `GET /api/runs` ships
+  // `RunHealth.doneRejects`; `GET /api/runs/:id/signals` ships
+  // `closeRefusals`; both were hand-written counts of the same rows, and
+  // nothing compared them. `single-definition.test.ts` cannot see this — it
+  // scans for known fragments, not for a second COUNT of one table.
+  it('closeRefusals and RunHealth.doneRejects are the same measurement, for the same run', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRejection({ code: REFUSAL, runId: id, toId: 'demo-worker', detail: 'the tip moved' });
+    coord.recordRejection({ code: REFUSAL, runId: id, toId: 'demo-worker', detail: 'and again' });
+    const signals = coord.runSignals(id)!;
+    const health = coord.runHealth([id], []).get(id)!;
+    expect(signals.closeRefusals).toBe(2);
+    expect(health.doneRejects).toBe(signals.closeRefusals);
+    expect(health.lastRejectCode).toBe(REFUSAL);
   });
 
   it('a refused wave-done — the row closeRun writes through recordRejection — is counted; firstSubmission false once done', () => {

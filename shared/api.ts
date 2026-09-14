@@ -4872,9 +4872,22 @@ export interface RunSummary {
  *  nothing more: ccd journals a swap as one `done` row with no landing pair,
  *  so swap wall time is structurally unmeasurable from the journal today
  *  (pairing it needs a `swap intent` at `_swap_target` and a landing row — a
- *  slice-3 change, if the count proves it matters). `excludedUnmeasured` is
- *  true when a hold could not be paired OR when `swaps > 0`, so `activeMs`
- *  (`wallMs - holdMs`) is then a ceiling, never a total. `closeRefusals` is the
+ *  slice-3 change, if the count proves it matters).
+ *
+ *  `excludedUnmeasured` IS THE DEFAULT, not the exception: it is false ONLY for
+ *  a window that was actually scanned end to end with everything in it paired.
+ *  True when `swaps > 0`; when a hold could not be paired (no release, a
+ *  release with no open hold, or a SECOND hold arriving while one is open);
+ *  when the worker session carries a hold/release/swap row ccd could not
+ *  timestamp, which no window query can place in time; AND for every window
+ *  nobody scanned — a run with no `sessionId` yet, a RECONSTRUCTED run (no
+ *  `run_events`, so no `dispatched` transition), and every OPEN run. An open
+ *  run is deliberately in that list: `holdMs: 0, swaps: 0` on a window with no
+ *  end yet are initialisers, not readings, and §6's arm attribution — the
+ *  consumer that must never average an unmeasured run into an arm's mean —
+ *  would otherwise have to test `closedAt` as a second condition to know which
+ *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
+ *  whenever this is true, and a total only when it is false. `closeRefusals` is the
  *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
