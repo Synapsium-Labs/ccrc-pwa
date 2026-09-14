@@ -201,6 +201,24 @@ describe('README: cross-repo programmes', () => {
     expect(caps, 'the cross-repo accounting was moved into the count-free caps paragraph')
       .not.toMatch(/\btwo\b/i);
   });
+
+  it('the heir inherits outstanding mail, grounded in the worker-arm predicate it reuses (D-2747)', () => {
+    // D-2747: the paragraph used to say "undelivered", which
+    // OUTSTANDING_STATES_SQL (`('queued','delivered')`, store.ts:400) refutes
+    // — a `delivered`-but-unacked row IS outstanding, not undelivered.
+    // `bindSession` calls `requeueAbandonedMail` with role 'worker', whose
+    // source predicate for THAT arm is this exact literal; the coordinator
+    // arm (`ABANDONED_PARK_SQL`) is a different predicate and is unreachable
+    // from `bindSession`, so the claim is grounded in the worker arm only,
+    // never generalised to the whole private method.
+    expect(STORE, "the worker-arm requeue predicate is not 'd.state IN ${OUTSTANDING_STATES_SQL}' — this claim is over nothing")
+      .toContain('d.state IN ${OUTSTANDING_STATES_SQL}');
+    const s = crossSection();
+    expect(s, 'the section does not say the heir inherits outstanding mail')
+      .toMatch(/outstanding/i);
+    expect(s, 'the section still calls outstanding mail undelivered')
+      .not.toMatch(/undelivered/i);
+  });
 });
 
 /** The run-lifecycle numbered list alone — its own bold lead-in to the mail-bus
@@ -264,6 +282,17 @@ describe('README: the run lifecycle and programme mail', () => {
     expect(sameClose).toBeLessThan(sameClosed);
     expect(sameClosed).toBeLessThan(sameDispatch);
 
+    // D-2745: this passage (the run-lifecycle list, steps 1-6) is pinned
+    // TWICE, by two suites in two files with different slicers, and neither
+    // is discoverable from the other. This file's `lifecyclePassage()`
+    // ('**Run lifecycle**' → '\n**The mail bus') pins the MECHANISM names
+    // (response fields, refusal codes, evidence tokens) over the whole list.
+    // `server/test/readme-holds.test.ts`'s D-2680 describe pins the
+    // operator-visible SENTENCES as literals over the same region, via its
+    // own `lifecycleSection()` ('**Run lifecycle**' → '**The mail bus and
+    // its token.**') and a further '\n6. ' sub-slice on the crossing. An
+    // edit to this passage must be run against BOTH files.
+    //
     // D-2740 fix round 1 (Fix 4): bounded at step 6, exactly as
     // `readme-holds.test.ts:62` bounds its own `crossing` slice — an unbounded
     // slice ran past step 5 into step 6 and beyond, and mutation 5b measured a
@@ -276,8 +305,6 @@ describe('README: the run lifecycle and programme mail', () => {
       .toMatch(/closed row[\s\S]{0,100}?`done`/i);
     expect(cross, '`done` is incorrectly treated as merge proof')
       .toMatch(/`done`[\s\S]{0,180}?not[\s\S]{0,40}?merge proof/i);
-    expect(cross, 'cross-project succession makes merge proof universal instead of dependency-gated')
-      .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove[\s\S]{0,200}?producerSha/i);
     // D-2740: the brief's literal `cross.indexOf("without the producer's
     // \`sessionId\`")` never matches this passage — the prescribed prose wraps
     // that phrase across a line, so the literal reads -1. The sibling assertion
@@ -305,20 +332,23 @@ describe('README: the run lifecycle and programme mail', () => {
     expect(crossDependency).toBeLessThan(crossMerge);
     expect(crossMerge).toBeLessThan(crossDispatch);
 
-    // D-2740 fix round 1 (Fix 3): scoped PER ARM, not once over the whole
-    // passage `p`. Measured by the reviewer: replacing `headRefOid` with plain
-    // text in the cross arm ALONE left every predicate below green, because
-    // the same-project arm's own copy of the evidence still satisfied both the
-    // containment loop and the SHA-chain regex — the two arms were alibiing
-    // each other. Mutation row W3-2 requires "a dependency-bearing arm loses
-    // its conditional same-SHA merge proof" to go red for EACH arm
-    // independently; checking `p` once cannot detect a single-arm mutation.
+    // D-2746 fix round 2: scoped THREE predicates PER ARM, not once over the
+    // whole passage `p` (round 1 only scoped two of the three). Measured by
+    // the coordinator: 8 arm-local mutations left every p-wide predicate
+    // green, because each arm's own copy alibied the other's mutation. The
+    // THIRD hole round 1 missed: the dependency-gate regex below was left
+    // cross-only — deleting "If the consumer depends on an interface from
+    // this producer," from the SAME-project arm left every scoped assertion
+    // green, because nothing checked that arm's own dependency gate. All
+    // three predicates now run over `same` and over `cross` independently.
     for (const [armName, arm] of [['same-project', same], ['cross-project', cross]] as const) {
       for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'phase', 'headRefOid', 'producerSha']) {
         expect(arm, `${armName} producer merge proof does not name ${evidence}`).toContain(evidence);
       }
       expect(arm, `${armName}'s named producer SHA is not pinned to the closed row and raw PR row`)
         .toMatch(/`headRefOid`[\s\S]{0,160}?`handoffCommit`[\s\S]{0,120}?`producerSha`/);
+      expect(arm, `${armName} succession makes merge proof universal instead of dependency-gated`)
+        .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove[\s\S]{0,200}?producerSha/i);
     }
   });
 

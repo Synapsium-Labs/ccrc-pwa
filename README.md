@@ -1551,10 +1551,11 @@ is nothing to fall back to; one that resolves to no session is refused
 `unknown-recipient`, naming the run. Carry the `runId` on coordinator mail too:
 the runId-less form resolves only while exactly one programme is active, and
 fails shut the moment a second is. Raw session-id addressing stays for ad-hoc
-mail. When a run's session is replaced, the replacement inherits its
-predecessor's outstanding mail as a **new** delivery row, freshly rendered, and
-the predecessor's row is parked — an envelope that names the corpse may not be
-replayed.
+mail. When a run's session is replaced, the replacement inherits every
+outstanding delivery addressed to its predecessor — queued *and*
+delivered-but-unacked — as a **new** delivery row, freshly rendered, and
+the predecessor's row is parked — an envelope that names the corpse may
+not be replayed.
 
 **Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers only
 outstanding mail on that programme's runs; add `&all=1` — exactly
@@ -1690,12 +1691,11 @@ buy.
    notice. A second coordinator on the same program is refused. The body also
    carries `homeProject`, the programme's home repo, stored on the programme
    row at first insert: a later open naming a *different* one is refused
-   `home-mismatch` (**409**, `by:` the stored value) *before the row is
-   opened*, exactly like the guard below, so a refusal leaves no `planned`
-   orphan here either; a stored home that is still null is backfilled from
-   the body instead. A `sessionId` whose earlier runs belong to another
-   project is refused `project-mismatch` (**409**, `by:` that
-   project) *before the row is opened*, so a refusal leaves no `planned` orphan.
+   `home-mismatch` (**409**, `by:` the stored value), while a stored home
+   that is still null is backfilled from the body. A `sessionId` whose
+   earlier runs belong to another project is refused `project-mismatch`
+   (**409**, `by:` that project). Both `-mismatch` refusals are decided
+   *before the row is opened*, so neither leaves a `planned` orphan.
    The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
    `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims
@@ -1753,12 +1753,13 @@ buy.
    A cross-project successor opens first without the producer's
    `sessionId`, leaving the new row planned for fresh dispatch in the
    target repository. Then close the producer with `final:true` so
-   its now-distinct workspace is released, require `released:true`,
-   then verify the exact producer closed row is `done` with a full
-   40-hex `handoffCommit`. If the consumer depends on an interface
-   from this producer, independently prove through `ccd pr-state --session
-   <producer-session>` that the selected `phase` is `merged` and raw
-   `headRefOid` equals both that `handoffCommit` and `producerSha` —
+   its now-distinct workspace is released, require `released:true`
+   in the close response, then verify the exact producer closed row
+   is `done` with a full 40-hex `handoffCommit`. If the consumer depends
+   on an interface from this producer, independently prove
+   through `ccd pr-state --session <producer-session>` that the
+   selected `phase` is `merged` and raw `headRefOid` equals both that
+   `handoffCommit` and `producerSha` —
    prove its PR merged at the named producer SHA
    before dispatching the consumer. Only then dispatch the consumer
    fresh in its target project.
