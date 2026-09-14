@@ -29,7 +29,7 @@
 // alive in its orphan cleanup. GNU grep 3.11 skips devices under `-r` (measured
 // here, returns at once); BSD is UNMEASURED and is the suspect. The call is
 // already bounded so it reports instead of eating a job — this asks WHY.
-import { describe, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -73,19 +73,25 @@ describe('a recursive grep over a tree that contains a FIFO (D-2739)', () => {
     exec 9<&-; rm -rf "$D"
   `;
 
-  itDarwin('BSD: it TERMINATES — if this reds, the FIFO is why the macOS job was cancelled', () => {
-    const r = bash(program());
+  // ANSWERED 2026-09-14, and the answer is the one this case was written to
+  // rule out: BSD grep -r BLOCKS. Measured on macos-latest — the walk never
+  // returned and the harness cut it at 20 026 ms, where GNU returns in 83 ms.
+  // So D-2739's suspected mechanism is confirmed, and a TIMEOUT on the caller
+  // was never the right remedy: it converts a silent wedge into a loud one and
+  // still reads no files. `ccd-account-auth.test.ts`'s canary walk now uses
+  // `find -type f`, which cannot reach a device at all.
+  //
+  // This PINS the platform fact, so it stays green while the behaviour holds
+  // and goes red the day BSD grep changes — at which point the remedy can be
+  // revisited rather than silently over-applied.
+  itDarwin('BSD: grep -r BLOCKS on a FIFO with a live writer — D-2739, measured', () => {
+    const r = bash(program(), 10_000);
     expect(
       r.cut,
-      'BSD grep -r BLOCKED on a FIFO with a live writer. That is D-2739\'s mechanism, and it means any\n'
-      + 'recursive read of a tree the helper has touched can wedge until something kills it.\n'
-      + `  elapsed: ${r.ms}ms (cut by the harness)\n  output so far: ${r.stdout.slice(0, 200)}`,
-    ).toBe(false);
-    expect(
-      field(r.stdout, 'RC'),
-      `BSD grep -r returned non-zero over the tree.\n  rc=${field(r.stdout, 'RC')}\n`
-      + `  err=${field(r.stdout, 'ERR')}\n  full: ${r.stdout.slice(0, 200)}`,
-    ).toBe('0');
+      'BSD grep -r COMPLETED over a tree containing a live FIFO. That contradicts the 2026-09-14\n'
+      + 'measurement (cut at 20026ms) and means D-2739\'s remedy may no longer be needed.\n'
+      + `  elapsed: ${r.ms}ms  output: ${r.stdout.slice(0, 200)}`,
+    ).toBe(true);
   });
 
   itDarwin('BSD: does -r follow a SYMLINK out of the tree? (the second D-2739 candidate)', () => {
@@ -150,18 +156,30 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     ).toBe('124');
   });
 
-  itDarwin('BSD: it still ends a child that IGNORES SIGTERM', () => {
-    const r = bash(shim('2', 'trap "" TERM; sleep 60'), 40_000);
+  // NOT A PLATFORM QUESTION, and calling it one was the error (D-2765). This
+  // case first ran only on darwin and red there, which read as "BSD cannot cut
+  // a TERM-ignoring child". The Linux control that would have discriminated
+  // was never written — and when it was, Linux behaved IDENTICALLY: the shim
+  // never returned and the harness cut it at 25 s. `timeout`/`gtimeout` send
+  // TERM and, without `-k`, never escalate to KILL.
+  //
+  // So this is a defect in the shim, on every platform, BOOKED AS D-2764 and
+  // deliberately not fixed here: `_auth_timeout` is pinned byte-for-byte to
+  // `_plat_timeout`, which lives in four shipped files behind ccd's tmux
+  // liveness probe, its gh queries and the doctor's checks. That is a change
+  // to deployed code and belongs in its own PR, not in a measurement one.
+  //
+  // IT PINS TODAY'S BEHAVIOUR ON PURPOSE. When D-2764 lands, this case goes
+  // RED — which is the mechanism that forces whoever fixes it to come here and
+  // invert it, rather than leaving a stale assertion behind.
+  it('the deadline does NOT escalate to KILL — on BOTH platforms (D-2764, booked)', () => {
+    const r = bash(shim('2', 'trap "" TERM; sleep 30'), 8_000);
     expect(
       r.cut,
-      `a TERM-ignoring child was never cut on macOS (harness cut at ${r.ms}ms).\n`
-      + `  picked: ${field(r.stdout, 'PICKED')}\n  A deadline that only TERMs cannot end this — D-2661 candidate.`,
-    ).toBe(false);
-    expect(
-      field(r.stdout, 'ELAPSED'),
-      `MEASURED: a TERM-ignoring child under a 2s deadline took ${field(r.stdout, 'ELAPSED')}s`
-      + ` and returned rc=${field(r.stdout, 'RC')} (picked ${field(r.stdout, 'PICKED')}).`,
-    ).not.toBe('(absent)');
+      'the shim ENDED a TERM-ignoring child. If D-2764 has been fixed, invert this case;\n'
+      + 'if it has not, the shim changed underneath us and that is worth knowing.\n'
+      + `  elapsed: ${r.ms}ms  picked: ${field(r.stdout, 'PICKED')}  rc: ${field(r.stdout, 'RC')}`,
+    ).toBe(true);
   });
 
   itDarwin('BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)', () => {
