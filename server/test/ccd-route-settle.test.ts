@@ -51,6 +51,21 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     seed(); h.sh('_reg_set myid effort ""'); settle();
     expect(typed()).toEqual([]);
   });
+  it('an effort file `_reg_get` cannot CAT still counts as present — presence is the filesystem\'s answer, not a read\'s exit code', () => {
+    // THE DUTY `ccd-crosspool.test.ts` HANDS THE FIRST rc-CONSUMING CALLER.
+    // This branch used to read `if _reg_get "$id" effort` and take the exit
+    // code for presence. `_reg_get` guards with `-f`, so a field that is a
+    // symlink to `/dev/null` — the one input whose rc that suite measures as
+    // having MOVED — answered rc 1 with the file plainly there, and the settle
+    // typed `SPAWN_EFFORT` over a session whose operator had chosen an effort.
+    // `[[ -e ]]` is the same question `_route_any` asks, so the two presence
+    // readers now differ only in WHICH files they look at, which is all
+    // S1-R11 ever said.
+    seed();
+    h.sh('_reg_set myid effort high; ln -sf /dev/null "$HOME/.cc-sessions/myid.effort"');
+    settle();
+    expect(typed()).toEqual([]);
+  });
   it('class haiku with an effort on disk: types nothing and notes the PAIR', () => {
     seed(); h.sh('_reg_set myid class haiku; _reg_set myid effort high'); settle();
     expect(typed()).toEqual([]);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=40bf7d20315be4aaedfea5475a74ddb6c78423fca35a310f891a0e5220f315c1
+# ccrc:generated 1 sha256=439fcb8e4b0edcedad669e2032bfaf3961f9783df49fe6cf9eeea9b54360f5b5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2075,8 +2075,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 138
-# invocations across 114 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 142
+# invocations across 118 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -6647,7 +6647,11 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class"
   for kv in "${sets[@]}"; do
     f="${kv%%=*}"; v="${kv#*=}"
-    raw=$(_reg_get "$id" "$f" 2>/dev/null) || raw=""
+    # NO `|| raw=""`: `_reg_get` prints nothing on every failing arm, so the
+    # fallback assigned what the capture had already produced while making this
+    # line read as though it branched on an exit code it never used
+    # (`ccd-crosspool.test.ts` enumerates the two sites that really do).
+    raw=$(_reg_get "$id" "$f" 2>/dev/null)
     old=$(_route_get "$id" "$f")
     if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
     _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
@@ -15332,16 +15336,26 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # `_route_any` is true for all seven files, two of which (`degraded`, `inert`)
   # ccd writes ITSELF: slice 3's degradation stamp alone would then have read as
   # "the record carried an effort" and silently switched off the box default on
-  # a session whose operator never chose an effort at all. `_reg_get` answers
-  # the presence question directly and an EMPTY `effort` file still counts as
-  # present — a field somebody wrote is a field somebody meant.
+  # a session whose operator never chose an effort at all. So this asks about
+  # ONE file — and it asks the FILESYSTEM, with the same `[[ -e ]]` test
+  # `_route_any` uses, so an EMPTY `effort` file still counts as present: a
+  # field somebody wrote is a field somebody meant.
+  #
+  # NOT `if _reg_get "$id" effort`, which is what stood here and is the reason
+  # `ccd-crosspool.test.ts`'s "no call site can see that rc" case redded at the
+  # tip. That case exists to hand the duty to the first caller that branches on
+  # `_reg_get`'s exit code, and the duty is real: `_reg_get` guards with `-f`,
+  # so a field that is a symlink to `/dev/null` — the one input that suite
+  # measures as having MOVED — answered rc 1 with the file plainly there, and
+  # this branch then typed `SPAWN_EFFORT` over a session whose operator had
+  # chosen an effort. Presence is not a read's exit code.
   #
   # `_route_effort_for` is still called on the record path for its JOURNALING
   # side effect only (the haiku+effort refusal note and the unrecognised-value
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
   local t="$1" id="${1#cc-}" level
-  if _reg_get "$id" effort >/dev/null; then
+  if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
     return 0
   fi
