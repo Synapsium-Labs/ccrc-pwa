@@ -801,6 +801,90 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
       .toEqual(['got1', 'got2']);
   }, 30_000);
 
+  // ── §5: "both primary/retry child envs carry EXACT generation" ─────────
+  // The only pin this row had was a source COUNT of the interpolation
+  // (`expect(matchAll(/exec env \$\{genenv\}COLORTERM=truecolor/g)).toHaveLength(2)`),
+  // which is a statement about the tmux command's TEXT and says nothing about
+  // what computes `genenv`. MEASURED GREEN under two mutants: replacing the
+  // retry's whole acquire-and-revalidate block with a bare `genenv=""` (so a
+  // session rescued by the retry has an inert compaction lifecycle for its
+  // entire life), and dropping the retry's `_reg_generation_read` + equality
+  // (so it re-exports the STALE primary value — the exact "authorize this pane
+  // against a row it does not belong to" hazard the shipped comment names).
+  // `CCRC_SESSION_GENERATION` appeared in exactly one other line of this file,
+  // a fail-open warning string, so nothing else could catch either.
+  //
+  // WHAT THE FIXTURE HAS TO SEE is the resolved command, per invocation, so
+  // `_tmux_new_session` — which already stands in for the daemon — records `$*`.
+  const CAPTURE = `
+      _tmux_new_session() {
+        printf '%s\n' "$*" >> "$HOME/cmds"
+        case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac
+      };
+      tmux() { case "\${1:-}" in has-session) [[ -e "$HOME/pane-up" ]] ;; *) : ;; esac; };`;
+
+  /** A row with a MINTED generation, through ccd's own path — the retry's
+   *  revalidation compares against what row creation wrote, so a fixture that
+   *  typed the bytes itself would be testing its own literal. */
+  const spawnRow = (id: string): string => {
+    h.sh(`_reg_set ${id} wrapper claude
+      _reg_set ${id} workdir "$HOME"
+      _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+    const r = h.sh(`_compact_lock_acquire ${id} 5 || { echo LOCKFAIL; exit 0; }
+      fd="$COMPACT_LOCK_FD"
+      if _reg_generation_init ${id}; then echo OK; else echo REFUSED; fi
+      _compact_lock_release "$fd"`);
+    expect(r, 'the row was minted the way creation mints it').toBe('OK');
+    return fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.generation`), 'utf8');
+  };
+
+  const capturedCommands = (): string[] =>
+    fs.readFileSync(path.join(h.home, 'cmds'), 'utf8').trim().split('\n');
+
+  it('BOTH spawn commands carry the generation BY VALUE — not merely the interpolation', () => {
+    const id = 'demo-still-river';
+    const gen = spawnRow(id);
+    expect(gen, 'the fixture measured a real generation').toMatch(/^[0-9a-f-]{36}$/);
+    h.sh(`${CAPTURE} sleep() { :; }; _spawn_start ${id} resume 2>/dev/null`);
+    const cmds = capturedCommands();
+    // BOTH forks — the `--resume` line and the `--session-id` retry that
+    // replaces it. The retry is the copy that gets forgotten.
+    expect(cmds, 'the primary spawned and the retry replaced it').toHaveLength(2);
+    expect(cmds[0], 'the primary is the --resume line').toContain('--resume');
+    expect(cmds[1], 'the retry is the --session-id line').toContain('--session-id');
+    for (const [i, c] of cmds.entries()) {
+      expect(c, `command ${i + 1} carries the row's OWN generation bytes`)
+        .toContain(`CCRC_SESSION_GENERATION='${gen}' `);
+    }
+  }, 30_000);
+
+  it('a row RE-MINTED between the two spawns leaves the retry with NO generation at all', () => {
+    // The retry takes its own acquisition and REQUIRES the same value this
+    // invocation already saw, because a row purged and re-created in the gap
+    // has a different generation and exporting that one would authorize this
+    // pane against a row it does not belong to. The gap is exactly the `sleep`,
+    // so the stub that stands in for it is where the row is re-minted — a
+    // fixture is the only thing that can produce this state deterministically.
+    const id = 'demo-still-river';
+    const gen = spawnRow(id);
+    const OTHER = 'ffffffff-1111-4222-8333-444444444444';
+    expect(OTHER, 'the re-mint must differ, or the leg proves nothing').not.toBe(gen);
+    h.sh(`${CAPTURE}
+      sleep() { printf '%s' '${OTHER}' > "$REG/${id}.generation"; };
+      _spawn_start ${id} resume 2>/dev/null`);
+    const cmds = capturedCommands();
+    expect(cmds).toHaveLength(2);
+    expect(cmds[0], 'the primary carried what it read before the gap')
+      .toContain(`CCRC_SESSION_GENERATION='${gen}' `);
+    // NOT the stale value, and NOT the new one either: the retry may only
+    // export a generation it re-read AND matched, so a row it no longer
+    // recognises leaves it with none.
+    expect(cmds[1], 'the retry does not carry the stale value').not.toContain(gen);
+    expect(cmds[1], '…nor the row\'s new one, which it was never handed').not.toContain(OTHER);
+    expect(cmds[1], 'the retry carries no generation at all').not.toContain('CCRC_SESSION_GENERATION');
+    expect(cmds[1], 'and it is still the retry line').toContain('--session-id');
+  }, 30_000);
+
   it('CONTROL: a second, never-closed reference to the same lock leaves both children BLOCKED', () => {
     // What makes the leg above a measurement rather than a fixture that cannot
     // fail: the same probe, with the row's mutex genuinely held across the
