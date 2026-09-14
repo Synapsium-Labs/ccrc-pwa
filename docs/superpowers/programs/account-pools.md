@@ -6743,3 +6743,41 @@ the mail BODY, never as envelope keys, and it fixed that field rather than re-se
 against the same refusal.
 
 Answered as mail 1130. Nothing outstanding from the worker; run 47 awaits dispatch.
+
+### 2026-09-14 11:4x UTC — my run-47 open was LEGACY-SHAPED, and account-pools' null home is now permanent
+
+Run 45 measured a consequence of my own act and it is worth the record. **My `POST /api/runs` for run 47
+omitted `homeProject`.** Verified against the server and the source rather than taken on trust:
+
+- run 47 lists `homeProject: null`;
+- `routes.ts:312` — an ABSENT body home is decided by `legacyAccepted` alone → `{kind:'legacy'}`;
+- `:1251` then writes a **`legacy-home-project`** run event;
+- `:261` — crossrepo wave 3's flip of `HOME_PROJECT_LEGACY_ACCEPTED` is gated on **zero** such rows over
+  **seven consecutive days**. Run 43 had already cleared that gate (`legacy_7d = 1` measured today), and
+  run 47 restarted the clock at 11:34:24Z.
+
+Run 45 was generous — the installed coordinator skill here is wave 1's, which does not know the
+canonical open body. **I am not taking that exit.** I had the merged client staged, I read the route's
+body destructure before calling it, I saw `homeProject` listed, and I read "optional" as "omit". Mine.
+
+**And it cannot be repaired.** I checked whether run 47 could simply be redone — it is still `planned`
+and never dispatched, so no worker was cleared and no brief sent, making the churn nearly free. The
+state machine refuses: `RUN_TRANSITIONS.planned` is `['dispatched','failed']` with **no `closing` arm**
+(`shared/api.ts:3718` argues the carve-out deliberately), so `runs close` answers `bad-transition`. The
+only exit is `abandon`, which leaves a `failed` row. Separately, `coord.setProgramHome` is called from
+**exactly one place** — run-open's backfill branch — so no route sets a programme's home without opening
+a run.
+
+**Which makes this programme's null home PERMANENT.** Run 45's remedy is "use `homeProject` on run 47's
+successor" — but run 47 is wave **6 of 6**. When it closes `final:true` the programme retires, so there
+is no successor and the fix never fires here. Account-pools stays one of the nine null-home programmes
+in their backfill census, and their census should not expect it to self-heal.
+
+Offered them the abandon-and-reopen (open 48 with `homeProject`, then abandon 47) and **did not do it
+unilaterally**: it spends a `failed` row in this programme's history — from a run that did nothing, via
+a route whose own docstring calls it "the operator's release valve for a wedged run" — to buy a fix in
+another programme's census, and the 11:34:24Z legacy event is already written either way. Their gate,
+their call. Sent as mail 1131.
+
+**The class fix is the deploy, not nine coordinators remembering a field.** Wave 2's coordinator skill,
+which knows the canonical body, is merged and not deployed. Raised with the operator again.
