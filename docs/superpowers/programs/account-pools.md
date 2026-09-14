@@ -6712,3 +6712,34 @@ run 47 with wave 6's title rewrote run 43's displayed title too. Historical runs
 integration already merged main into it, so the merge-base is current despite the squash.
 
 Merged sha sent to run 45 as mail 1125, with both traps above.
+
+### 2026-09-14 11:4x UTC — the worker's wave-done arrived AFTER the close, and caught my unattributed write
+
+Mail 1122, a corrected re-send. Three things in it worth keeping.
+
+**It caught me.** The worker noticed its workspace branch had moved and said so: *"That fast-forward is in
+the reflog as `merge 175668b0: Fast-forward` and it is not mine."* Correct — it was **mine**, at
+11:37:08Z, for the `ours:false` reason above. Its own last write really was `e9dd490a` on 2026-09-13 at
+18:54:55Z, so clause 9 was intact and it was right to prove that rather than assume nobody would ask.
+**I should have mailed it when I made the change** instead of leaving it to find an unexplained mutation
+in its own reflog and spend a paragraph establishing its innocence. Checking the fast-forward was safe
+before making it was necessary and not sufficient; telling the owner was the other half.
+
+**Its fingerprint was byte-identical to the one I closed with** — `branchTip = handoffCommit =
+175668b0`, `prNumber 95`, `prPhase merged` — arrived at independently, a few minutes after run 43 was
+already `done`. So the wave-done is correct and simply overtaken. It also kept the distinction the ledger
+keeps: `e9dd490a` is the wave's AUTHORED handoff, `175668b0` that plus an integration merge it did not
+write, and it declined to claim mine as its own.
+
+**And it verified the landing by CONTENT, not ancestry** — predicting that
+`merge-base --is-ancestor e9dd490a origin/main` answers NO *by construction* because `bb8cc111` is a
+one-parent squash, and reading that as a property of the merge rather than evidence of loss. Reproduced
+independently here: one parent, is-ancestor NO, and both `FleetScreen.tsx`'s
+`if (read.kind !== 'measured') return selected;` and its pin present on main. That is the right method
+and the inverse of the mistake this program has seen elsewhere.
+
+Its own diagnosis of the earlier rejection was also right: the fingerprint travels as a JSON object in
+the mail BODY, never as envelope keys, and it fixed that field rather than re-sending the same numbers
+against the same refusal.
+
+Answered as mail 1130. Nothing outstanding from the worker; run 47 awaits dispatch.
