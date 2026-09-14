@@ -3750,7 +3750,10 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
   it('A FAILED canonical unlink leaves canonical\'s bytes AND ITS MTIME unchanged, and removes only the claim', () => {
     const { tree, transcript } = cycle({ serve: true });
     const beforeBytes = fs.readFileSync(setFile());
-    const beforeMtime = fs.statSync(setFile()).mtimeNs ?? fs.statSync(setFile()).mtimeMs;
+    // NANOSECONDS, through the `bigint` overload — `mtimeNs` exists only on
+    // `BigIntStats`, and `mtimeMs` is a float whose resolution is coarse enough
+    // that a `touch` landing inside the same millisecond would be invisible.
+    const beforeMtime = fs.statSync(setFile(), { bigint: true }).mtimeNs;
     // `rm` refuses exactly the canonical set and is the real `rm` for
     // everything else — so the claim's own removal on this failure path still
     // works and the assertion is about canonical alone.
@@ -3764,8 +3767,8 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     // sibling's overlap check would then read this settled compaction as still
     // in flight. Unlinking first is what makes the touch unobservable here, and
     // this row is the only place that difference reaches the disk.
-    const after = fs.statSync(setFile());
-    expect(after.mtimeNs ?? after.mtimeMs, 'canonical was never touched').toBe(beforeMtime);
+    const after = fs.statSync(setFile(), { bigint: true });
+    expect(after.mtimeNs, 'canonical was never touched').toBe(beforeMtime);
     expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
     expect(reg().filter((n) => n.includes('compactpost')), 'only the verified claim went').toEqual([]);
   });
