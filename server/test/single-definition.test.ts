@@ -1559,15 +1559,24 @@ describe('the model files, and who reads each one', () => {
     // and SIX of them walk it: the TypeScript source, its bare-`node` twin,
     // the materialiser, the verbs' node half, `ccd/ccrc` (whose bash walk
     // is what answers a class typo at exit 2), and — since the routing
-    // record (routing spec 2026-09-14 §5.1) — `ccd/ccd`: `ROUTE_CLASSES`
-    // (the `class` field's closed vocabulary, `fable opus sonnet haiku
-    // default`) and the `degraded` arm of `_route_valid` (`fable opus sonnet
-    // haiku`, no `default` — a session cannot degrade TO "no override") each
-    // walk the four class names through `_route_word_in`'s `for x in $2`
-    // loop, the same shape as `ccd/ccrc`'s own bash holder above and needed
-    // for the identical reason: a shape check run in bash needs the
-    // vocabulary IN bash, not just in the TypeScript definition the PWA and
-    // node tooling read.
+    // record (routing spec 2026-09-14 §5.1) — `ccd/ccd`, which holds the four
+    // names ONCE, in `ROUTE_CLASSES` (`fable opus sonnet haiku default`), and
+    // WALKS them through `_route_word_in`'s `for x in $2` loop to answer the
+    // `class` field's vocabulary question. The `degraded` arm walks the same
+    // sequence minus `default` — a session cannot degrade TO "no override" —
+    // and DERIVES it (`${ROUTE_CLASSES% default}`, controller ruling S1-R3)
+    // rather than re-typing it three lines below the first.
+    //
+    // THE RULE IS THE WALK, NOT THE LANGUAGE. An earlier version of this
+    // rationale said a shape check run in bash needs the vocabulary "in bash,
+    // not just in the TypeScript definition" — which routing slice 1's Task 1
+    // falsified in this very file's neighbourhood: `SUBAGENT_CLASSES` is read
+    // in bash by the same `_route_word_in` loop and is NOT spelled in bash at
+    // all, because `ccrc install` PROJECTS it into `$HOME/.ccrc/accounts.sh`
+    // (`single-definition` pins that list at exactly two languages for that
+    // reason). A projection is available to every holder listed here, so
+    // "bash needs its own copy" is not the argument that admits any of them.
+    // What admits a file is that it walks the sequence in order.
     //
     // The seventh, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
     // file — the spec names it three times as the CURRENT hardcoded picker

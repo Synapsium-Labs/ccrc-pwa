@@ -41,6 +41,19 @@ describe('routing env census (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(holders).toEqual([]);
     expect(count(read('ccd/ccrc-doctor-checks'), 'CLAUDE_CODE_EFFORT_LEVEL'), 'the doctor check names it').toBeGreaterThan(0);
   });
+  it('the ccd/ corpus is its OWN control — the vacuity guard above cannot see it emptied', () => {
+    // `shipped` above is a CONCATENATION of five roots, and `> 20` is satisfied
+    // by `server/src` alone: an emptied `CCD_SHIPPED` — a `readdirSync` that
+    // stopped matching, a filter that inverted — would leave the census green
+    // while scanning none of the files this check exists for. So the derived
+    // list gets its own floor and its own named members.
+    expect(CCD_SHIPPED.length, 'ccd/ must yield its own corpus').toBeGreaterThanOrEqual(15);
+    for (const f of ['ccd/ccd', 'ccd/ccrc', 'ccd/session-hook.sh', 'ccd/statusline-command.sh']) {
+      expect(CCD_SHIPPED, `${f} is a shipped script and must be censused`).toContain(f);
+    }
+    // and the one deliberate exemption is still exempt, in both directions
+    expect(CCD_SHIPPED).not.toContain('ccd/ccrc-doctor-checks');
+  });
   it('ccd composes CLAUDE_CODE_SUBAGENT_MODEL in exactly one place, from the routing record', () => {
     const ccd = read('ccd/ccd');
     expect(count(ccd, 'CLAUDE_CODE_SUBAGENT_MODEL=')).toBe(1);
