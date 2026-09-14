@@ -20,7 +20,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, checkReentryCapConcurrency } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -1580,10 +1580,11 @@ export function registerCoordRoutes(
     // exclusion is a bypass. `dispatched -> working` is not checked: that run
     // is already counted. The refusal carries the numbers, as dispatch's does.
     if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
-      const capCheck = checkReentryCapConcurrency(coord);
-      if (!capCheck.ok) {
+      const caps = coord.caps();
+      const usage = coord.capsUsage();
+      if (usage.running >= caps.maxConcurrentWorkers) {
         return reply.code(409).send({ ok: false,
-          reject: { code: capCheck.code, limit: capCheck.limit, running: capCheck.running } });
+          reject: { code: 'cap-concurrency', limit: caps.maxConcurrentWorkers, running: usage.running } });
       }
     }
 
