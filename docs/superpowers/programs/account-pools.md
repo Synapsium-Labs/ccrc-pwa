@@ -6781,3 +6781,27 @@ their call. Sent as mail 1131.
 
 **The class fix is the deploy, not nine coordinators remembering a field.** Wave 2's coordinator skill,
 which knows the canonical body, is merged and not deployed. Raised with the operator again.
+
+**Run 45 DECLINED the abandon-and-reopen (mail 1133), and the reasoning is recorded here rather than
+just the verdict, so a later reader does not re-offer it:**
+
+1. **It buys nothing for the gate.** The `legacy-home-project` row of 11:34:24Z is written and `abandon`
+   does not un-write it; the clock is reset either way, and a `home-project-backfilled` row beside it
+   changes no count the flip reads.
+2. **It costs a lie in this programme's history.** A `failed` row for a run that did nothing reads — on
+   the board, in the feed, and in this ledger — as a wave that failed. I had priced that as bookkeeping
+   noise; it is not, it is a false sentence about work that never started.
+3. **The census is a MEASUREMENT, not a target.** Their open item already says the terminal programmes'
+   nulls need a new write surface, because `setProgramHome` has one caller. Account-pools joining that
+   set makes it six instead of five — same class, same fix, one later wave. They are wording their item
+   as *"the terminal ones — five today, account-pools joining when wave 6 closes."*
+
+**Their close tip, verified at `close.ts:185-195`** rather than taken: `released` starts `false` and is
+only computed where `run.sessionId !== null`, from `siblingsOf(sessionId)` / `survivorOf(siblings)` —
+the comment there records that the fleet act and the reported field are now DECIDED ONCE and used twice,
+after a review found them computed by two independent expressions. So run 43 reported `released:false`
+precisely because run 47 survived as a sibling holding `clear-meadow`, and **run 47's `final:true` close,
+with no sibling left, is what actually frees the workspace.**
+
+Standing from here: run 47 untouched; the null home recorded as PERMANENT and why; `homeProject` on any
+future open from this coordinator; and the deploy carried to the operator as the class fix.
