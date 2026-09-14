@@ -3136,3 +3136,166 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     expect(fs.existsSync(lockFile()), 'not even the permanent lock is minted').toBe(false);
   });
 });
+
+// ── D-2605 option A: the four staging-only-helper controls ───────────────
+// These replace the twenty-three deleted rollback/slot-check race tests. Their
+// subject is not "what does the helper do when its canonical write loses a
+// race" — the helper HAS no canonical write — but the three properties that
+// make that true: it cannot reach canonical, the hook's reconfirm-then-rename
+// is one compare-and-swap inside one held section, and a stage exists iff it
+// is complete.
+describe('the compaction card — option A, the staging-only helper (spec §3.1 protocol steps 9-14)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const stages = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => n.includes('.stage'));
+
+  it('THE CAS: a sibling that publishes its own verdict while the helper runs keeps it — this arm publishes nothing', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // The BARRIER. `timeout` is the hook's own deadline wrapper, so this fires
+    // exactly between the release (protocol step 9) and the reacquire (step
+    // 11) — the window round 6's helper-side check could not close, because
+    // its check and its act were two separate steps with this gap between
+    // them. The sibling publishes a DIFFERENT nonce and removes the card,
+    // which is what a second PreCompact of the same session does when it
+    // reaches the overlap rule.
+    const sibling = '{"v":1,"at":9,"nonce":"compact-9-9-9-9","scope":"ambiguous","agent":null,"transcript":null,"parentLive":null,"liveAgents":null,"cwd":null,"built":null,"fresh":null,"steered":false,"files":null,"stats":null}\n';
+    stub('timeout', [
+      'shift; "$@"; rc=$?',
+      `printf '%s' ${sh(sibling)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
+      'rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactcard"',
+      'exit $rc',
+    ].join('\n'));
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the sibling\'s verdict survives byte-for-byte').toBe(sibling);
+    expect(fs.existsSync(cardFile()), 'and no card was published over it').toBe(false);
+    // ONLY THIS PROCESS'S OWN STAGES are gone — nothing else was touched.
+    expect(stages(), 'the losing arm removed its own stages and published neither').toEqual([]);
+  });
+
+  it('NO CANONICAL PATHNAME IN THE HELPER\'S ARGV, and with both canonical files present it writes neither', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // Record the argv the hook actually built, then run the real helper under
+    // it — so this is the shipped call site, not a reconstruction of it.
+    stub('timeout', ['printf \'%s\\n\' "$*" > "$HOME/helper-argv"', 'shift; exec "$@"'].join('\n'));
+    run(preCompact(tree, transcript));
+    const argv = fs.readFileSync(path.join(home, 'helper-argv'), 'utf8');
+    expect(argv).toContain('--set-stage ');
+    expect(argv).toContain('--card-stage ');
+    expect(argv).toContain('--parent-live ');
+    expect(argv).toContain('--live-agents ');
+    expect(argv, 'no --out').not.toContain('--out ');
+    // WORD-EXACT: a bare `not.toContain('--set')` would be satisfied by
+    // `--set-stage` and so could never red the mutation it exists for.
+    expect(argv, 'no --set').not.toMatch(/--set(?!-stage)/);
+    expect(argv, 'no canonical set pathname anywhere in the argv').not.toContain(setFile());
+    expect(argv, 'no canonical card pathname anywhere in the argv').not.toContain(cardFile());
+    // AND THE EFFECT, with both canonical names already occupied by a stranger:
+    // the helper is handed neither, so neither moves.
+    const strangerSet = '{"v":1,"at":9,"nonce":"compact-9-9-9-9","scope":"main","files":null}\n';
+    fs.writeFileSync(setFile(), strangerSet);
+    fs.writeFileSync(cardFile(), 'compact-9-9-9-9\nstranger card\n');
+    const helperArgs = argv.trim().split(' ').slice(2);   // drop `<seconds> node`
+    const r = spawnSync('node', helperArgs, { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    expect(r.status, 'the helper ran on its own, outside the hook').toBe(0);
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the stranger\'s canonical set is byte-identical').toBe(strangerSet);
+    expect(fs.readFileSync(cardFile(), 'utf8')).toBe('compact-9-9-9-9\nstranger card\n');
+  });
+
+  it('STAGE COMPLETENESS: a helper killed between its `.part` write and its rename publishes nothing', () => {
+    const tree = cardTree();
+    // A helper that writes only the `.part` and dies — the exact mid-write
+    // state `writeAtomic`'s temp-then-rename exists to make unobservable.
+    // Exit 0, so the hook takes its PUBLISHING arm and the rename is what has
+    // to fail: a fixture that exited nonzero would be testing the other branch.
+    stub('node', [
+      'for a in "$@"; do case "$prev" in --set-stage) printf partial > "$a.part" ;; esac; prev="$a"; done',
+      'exit 0',
+    ].join('\n'));
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    plantHelper();
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(cardFile()), 'no canonical card').toBe(false);
+    expect(readSet().files, 'the canonical set is still the hook\'s initial one').toBeNull();
+    expect(stages(), 'neither the stage nor its .part survives').toEqual([]);
+  });
+
+  it('CLOSE-BEFORE-FORK, BY EFFECT: the helper can take the row\'s lock while it runs', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // A held `{fd}<>` descriptor is NOT close-on-exec — measured, an exec'd
+    // child's `/proc/self/fd` lists the parent's lock fd — so a shape-only
+    // "the release statement precedes the fork" pin cannot tell a real release
+    // from a descriptor that merely went out of scope. This asks the CHILD,
+    // which is the only party that can answer: it tries the mutex itself with
+    // a one-second bound and records what it got.
+    // A FIXED descriptor number, not bash's `{var}<>`: `stub()` writes
+    // `#!/bin/sh`, and varredir is a bash-ism dash does not have — measured,
+    // the stub silently produced no file at all under it, which would have
+    // read as "the child never ran" rather than as a broken fixture.
+    stub('timeout', [
+      'exec 9<>"$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock" 2>/dev/null || { echo noopen > "$HOME/child-lock"; shift; exec "$@"; }',
+      'if flock -w 1 9; then echo got > "$HOME/child-lock"; else echo blocked > "$HOME/child-lock"; fi',
+      'exec 9>&-',
+      'shift; exec "$@"',
+    ].join('\n'));
+    run(preCompact(tree, transcript));
+    expect(fs.readFileSync(path.join(home, 'child-lock'), 'utf8').trim(),
+      'the arm released before forking the helper').toBe('got');
+    expect(fs.existsSync(lockFile())).toBe(true);
+  });
+});
+
+// ── D-2605: the two source-order pins §3.1 assigns to Task 9 ─────────────
+// Both exist because the properties they assert are UNPINNABLE by behaviour.
+// Moving the acquire above the scope call changes no observable output on an
+// uncontended box; swapping the two renames leaves the post-arm state
+// byte-identical under either order, because they are adjacent inside ONE held
+// lock and Plan A runs neither of the stage-2 acts that would sit between
+// them. An unpinned outcome is the defect class the round-10 split existed to
+// close, so these are source-offset assertions and say so.
+describe('the compaction card — PreCompact source order (spec §3.1)', () => {
+  const preBody = (): string => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('_hook_compact_pre() {');
+    expect(start, '_hook_compact_pre exists').toBeGreaterThan(0);
+    const end = src.indexOf('\n}\n', start);
+    return src.slice(start, end);
+  };
+
+  it('the acquire sits AFTER scope and graph measurement and BEFORE the overlap find', () => {
+    const b = preBody();
+    const scope = b.indexOf('_hook_compact_scope "$tp" "$trig"');
+    const measure = b.indexOf('_hook_graph_measure ||');
+    const acquire = b.indexOf('_hook_lock_acquire "$COMPACT_LOCK_WAIT"');
+    const overlap = b.indexOf('find "$REG" -maxdepth 1 \\( -name "$id.compactset"');
+    const release = b.indexOf('_hook_lock_release "$lockfd"; lockfd=""');
+    const helper = b.indexOf('_hook_timeout "$COMPACT_HELPER_TIMEOUT" node');
+    for (const [n, v] of Object.entries({ scope, measure, acquire, overlap, release, helper })) {
+      expect(v, `${n} was found`).toBeGreaterThan(-1);
+    }
+    // Moving the acquire above the scope call is the mutation that would
+    // reverse round 8's I8 correction: it would hold the row's mutex across
+    // work that reads no lifecycle artifact and has nothing to exclude,
+    // serialising every sibling context of this session behind it.
+    expect(acquire, 'after the scope call').toBeGreaterThan(scope);
+    expect(acquire, 'after the graph measurement').toBeGreaterThan(measure);
+    expect(acquire, 'before the overlap find').toBeLessThan(overlap);
+    expect(release, 'and the release precedes the helper fork').toBeLessThan(helper);
+  });
+
+  it('the card-stage rename precedes EVERY set-stage rename, and the counts are pinned beside the order', () => {
+    const b = preBody();
+    const cardMvs = [...b.matchAll(/mv -f "\$cardstage" "\$cardf"/g)].map((m) => m.index!);
+    const setMvs = [...b.matchAll(/mv -f "\$setstage" "\$set"/g)].map((m) => m.index!);
+    // THE COUNTS ARE PART OF THE PIN. Protocol step 13 has two publishing arms
+    // (rc 0 renames card then set; rc 3 renames set alone), so a per-arm
+    // `case`/`if` factoring has TWO set-stage renames and "the set-stage mv's
+    // offset" would otherwise be undefined. Either factoring is allowed; this
+    // records which shipped, and splitting or merging that rename reds.
+    expect(cardMvs, 'exactly one card-stage rename').toHaveLength(1);
+    expect(setMvs, 'exactly two set-stage renames — the rc 0 arm and the rc 3 arm').toHaveLength(2);
+    for (const s of setMvs) expect(cardMvs[0], 'card before set, every time').toBeLessThan(s);
+  });
+});
