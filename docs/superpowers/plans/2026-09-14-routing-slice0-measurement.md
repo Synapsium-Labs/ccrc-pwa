@@ -1510,7 +1510,7 @@ git commit -m "feat(sweep): transcript accounting scanner — global dedupe, ord
 
 **Interfaces:**
 - Consumes: `~/.ccrc/accounts.sh` (`CCRC_ACCOUNTS`, `_ccrc_cfg_dir`), Task 6's scanner and `FAMILY_TOKENS` (read with `node` from the deployed tree, `${CCRC_TREE:-$HOME/ccrc}/shared/models.mjs` — `~/ccrc` is where `ccrc install` puts the tree; `_check_accounts` reaches `deploy/` the same way).
-- Produces: `~/.cc-sessions/usage/sweep/latest.json` (the scanner's output, agent-readable under the `.cc-sessions/` root), `~/.ccrc/usage-sweep.json` (a census of the last 10 passes, the graph sweep's shape), a `--user` timer every 30 minutes.
+- Produces: `~/.cc-sessions/usage/sweep/latest.json` (the scanner's output, agent-readable under the `.cc-sessions/` root), `~/.ccrc/usage-sweep.json` (a census of the last 10 passes, the graph sweep's shape), a `--user` timer every 4 hours.
 
 - [ ] **Step 1: Write the failing runner test**
 
@@ -1685,7 +1685,7 @@ fi
 
 ```ini
 [Unit]
-Description=Run the usage accounting sweep every 30 minutes (routing spec 2026-09-14 §6)
+Description=Run the usage accounting sweep every 4 hours (routing spec 2026-09-14 §6)
 [Timer]
 # `OnActiveSec=`, for ccd-telemetry-keepalive.timer's reason: this unit is first
 # armed by a deploy on a box that has been up for days, and the first pass should
@@ -1693,7 +1693,19 @@ Description=Run the usage accounting sweep every 30 minutes (routing spec 2026-0
 # stakes are lower than the keepalive's; the anchor is still the honest one for a
 # unit in the per-user manager.
 OnActiveSec=5min
-OnUnitActiveSec=30min
+# Four hours, not the 30 minutes this unit shipped with. A pass costs 7m07s warm
+# and 3m39s of CPU (MEASURED 2026-09-14, see the .service), so a half-hourly
+# cadence spent a quarter of the box's wall clock re-reading a corpus that had
+# barely changed. Nothing downstream wants it sooner: what this sweep feeds is
+# the SEVEN-DAY window of spec §6 — a gate that needs days of data, not minutes —
+# and the live per-session signal is the statusline sidecar, which is rewritten
+# on every render and does not wait for a sweep at all.
+# SUPERSEDES THE PLAN, for the reason the .service's budget block gives at
+# length: Task 7 of
+# docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md still writes
+# this key as OnUnitActiveSec=30min. Ruling R13 (2026-09-14) is the change, and
+# the measured pass cost above is its whole argument.
+OnUnitActiveSec=4h
 AccuracySec=1min
 [Install]
 WantedBy=timers.target
@@ -1707,13 +1719,35 @@ Description=Usage accounting sweep — de-duplicated transcript totals (routing 
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/ccd-usage-sweep
-# budget: a full 7-day scan of every lane's transcripts is well under a minute on
-# the fleet box (the 30-day survey took ~4 minutes single-threaded); a pass past
-# this is wedged, not slow.
-TimeoutStartSec=900
-# the scanner holds one dict of deduped records; the 30-day survey peaked well
-# under 1G. A sweep must never be the thing that OOMs the fleet host.
-MemoryMax=2G
+# Budget, MEASURED on this fleet 2026-09-14 (the numbers that shipped with the
+# unit — "well under a minute", "well under 1G" — were extrapolated from a
+# 30-day single-lane survey and were both wrong). The seven-day corpus here is
+# 32563 transcript files / 48.3 GB (45.0 GiB), which does not fit the box's page
+# cache, so every pass re-reads most of it from disk. The first four passes:
+#   cold (first after the deploy): 12m46s wall, 3m15s CPU, 1.9G peak  [2G cap]
+#   warm (18 minutes later):        7m07s wall, 3m39s CPU             [2G cap]
+#   warm (again):                   7m48s wall, 3m45s CPU, 2.2G peak  [2G cap]
+#   warm, first under this budget:  7m27s wall, 3m48s CPU, 2.4G peak  [3G cap]
+# The third pass is why these two keys moved. It peaked ABOVE the MemoryMax=2G
+# it was running under — the cgroup survived it only because most of that peak
+# is reclaimable page cache, which is luck, not headroom — and the cold pass
+# spent 766s of a 900s TimeoutStartSec, so one busier day of transcripts
+# SIGTERMs a pass mid-write. A pass past this timeout is wedged, not slow.
+# WATCH THE PEAK: it has risen 1.9G -> 2.2G -> 2.4G across the first four passes
+# as the window filled, so 3G is roughly 0.6G of headroom, not a comfortable
+# multiple. The fix when it runs out is NOT another gigabyte: it is making the
+# scanner incremental, so a pass costs the delta rather than the whole corpus
+# (a later slice's change). Until then the honest budget is what a pass costs.
+# SUPERSEDES THE PLAN. Task 7 of the routing slice-0 plan
+# (docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md) writes this
+# unit with TimeoutStartSec=900 and MemoryMax=2G, and its timer's cadence as
+# OnUnitActiveSec=30min. Those are the intent recorded BEFORE the
+# first pass was measured; ruling R13 (2026-09-14) replaced them with the four
+# passes above. Said here because the plan is a snapshot and this file is what
+# runs: a reader who finds the two disagreeing must not have to guess which way
+# the change went, or read the shipped budget as drift.
+TimeoutStartSec=1800
+MemoryMax=3G
 ```
 
 - [ ] **Step 4: Wire the installer**
@@ -1866,14 +1900,25 @@ Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`)
   `tmux display-message -p '#S'` unguarded on EVERY render of every session — the first tmux call the
   hook ever made — while its own comment promised it could never cost the status bar; a tmux server the
   client cannot reach (this fleet's measured `substrate` failure class) would stall the render and
-  blind the status line the server reads back. Now `timeout 2 tmux …`; `session-hook.sh`'s same idiom
+  blind the status line the server reads back. Now the call is bounded through `timeout` or `gtimeout`
+  and SKIPPED when neither exists (2ed94adc, a branch-red the full suite found on the BSD arm); `session-hook.sh`'s same idiom
   runs per hook event, not per render, and is left alone. Whole-branch review finding #4.
 - **D-2792 (2026-09-14)** — **The scanner's whole per-line body sits inside the guard.** After D-2786 the
   timestamp slice, the `message`/`usage` access and the id hash still sat outside the per-line guard, so
   one line whose `message` is not an object aborted the pass (measured: `AttributeError` at
-  `ccd-usage-sweep.py:135`, exit 1, no output — and deterministic, so every 30-minute pass would die the
+  `ccd-usage-sweep.py:135`, exit 1, no output — and deterministic, so every pass would die the
   same way with no ccrc surface reporting it). The guard now covers the body; such a line costs one
   `parseErrors`. Ruling R11, applied in Task 8 before the deploy.
+- **D-2806 (2026-09-14)** — **The sweep unit's budget and cadence follow the first measured passes, against the
+  plan's own text.** Task 7's fenced units mandated `TimeoutStartSec=900`, `MemoryMax=2G` and
+  `OnUnitActiveSec=30min`, extrapolated from a 30-day single-lane survey before any pass had run. The first
+  four passes on this fleet (recorded in the `.service` and in research-note §6): cold 12m46s / 1.9G, warm
+  7m07s, warm 7m48s / 2.2G — above the 2G cap it ran under — and 7m27s / 2.4G; the cold pass spent 766 s of
+  its 900 s timeout over a 48.3 GB seven-day corpus that a 30-minute cadence re-reads whole. Ruling R13
+  shipped `TimeoutStartSec=1800`, `MemoryMax=3G`, `OnUnitActiveSec=4h`, pinned by
+  `server/test/usage-sweep-deploy-ship.test.ts`; both unit files carry a SUPERSEDES THE PLAN block naming
+  the values this section replaced, and the fenced blocks above now state the shipped values. The peak is
+  rising pass over pass, so the next fix is an incremental scanner, not another gigabyte.
 
 ## Self-review against the spec
 
