@@ -1778,16 +1778,28 @@ _hook_compact_mark_served() {
   link "$src" "$marker" 2>/dev/null || true
   # EEXIST MEANS VALIDATE THE INCUMBENT — §3.3 step 5's "same-nonce extant
   # marker is idempotent ONLY AFTER it validates as a regular, non-symlink
-  # final marker under this lock", and §3.4's marker-source row, which unlinks
-  # the source "on `EEXIST` after validating the exact same-nonce final
-  # marker". Unvalidated, an occupant that is a symlink or a directory makes
-  # `link` fail EEXIST, the source is discarded, NO marker is published — and
-  # PostCompact's lookup then derives `served` from an object that is not a
-  # marker: `served:true` for a symlink to anything, `served:false` for a
-  # dangling one. The two ends now agree on what a marker IS, here and at the
-  # lookup. Reachable only through an out-of-contract same-UID writer, which is
-  # why the arm still returns 0 and publishes nothing rather than complaining.
-  [[ -f "$marker" && ! -L "$marker" ]] || { rm -f "$src" 2>/dev/null || true; return 0; }
+  # final marker under this lock". THE VALIDATION IS AT THE READING END, and
+  # that placement is measured rather than chosen for convenience.
+  #
+  # Written HERE it can have no effect, because §3.4's own marker-source rule
+  # unlinks the source "on success, on `EEXIST` after validating …, and on
+  # every handled failure" — all three — so validate-then-unlink and unlink do
+  # the same thing to the same file, and this arm returns 0 either way.
+  # MEASURED, in a throwaway copy: a mutant deleting a
+  # `[[ -f "$marker" && ! -L "$marker" ]] || { rm -f "$src"; return 0; }`
+  # placed here leaves the suite GREEN, while the control mutant in the same
+  # run — loosening the reading end back to a bare `-e` — reds. A guard no
+  # input can distinguish is not a guard; it is a comment with a semicolon.
+  #
+  # What the requirement is ABOUT is real and is enforced where it bites: an
+  # occupant that is a symlink or a directory makes this `link` fail EEXIST and
+  # NO marker is published, and a bare `[ -e … ]` at the lookup then derives a
+  # durable `served` from that object — `true` for a symlink to anything,
+  # `false` for a dangling one. `_hook_compact_post`'s lookup asks
+  # `-f && ! -L`, so the two ends spell one definition of what a marker IS.
+  # Reachable only through an out-of-contract same-UID writer, which is why
+  # neither end complains: this one publishes nothing and returns 0.
+  #
   # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure —
   # so the disjoint name never becomes residue of its own.
   rm -f "$src" 2>/dev/null || true
