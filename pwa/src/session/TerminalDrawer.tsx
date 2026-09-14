@@ -733,6 +733,19 @@ export function TerminalDrawer({
     // callback does not.
     let alive = true;
     term.fit();
+    // AND AGAIN WHENEVER THE GLASS CHANGES SHAPE. Fitted once, the history kept
+    // whatever grid it was born with: a phone rotated while reading went on
+    // wrapping against columns it no longer had, and the keyboard opening did
+    // the same thing a softer way. The live terminal has refit on both events
+    // since it shipped (`refit`, in the attach effect); this is the same pair,
+    // for the layer that exists to be read.
+    //
+    // No grid comparison here, unlike the live one: there is no resize frame to
+    // send and nothing downstream to spare, so a fit that changes nothing is
+    // cheaper than the bookkeeping to avoid it.
+    const refitHistory = (): void => { term.fit(); };
+    window.addEventListener('resize', refitHistory);
+    window.visualViewport?.addEventListener('resize', refitHistory);
     // ARMED BEFORE THE DEPARTURE IT LATCHES. `onBottom` fires only for a
     // reader who has been AWAY from the newest line, and the opening scroll
     // below is that departure. Registered after it, the latch never saw it, so
@@ -990,6 +1003,8 @@ export function TerminalDrawer({
       histHost.removeEventListener('touchmove', touchMove, true);
       histHost.removeEventListener('touchend', touchEnd, true);
       histHost.removeEventListener('touchcancel', touchEnd, true);
+      window.removeEventListener('resize', refitHistory);
+      window.visualViewport?.removeEventListener('resize', refitHistory);
       stopGlide();
       // Before `dispose()` because that is the order that states the intent — but
       // the ordering carries NO mechanism, and saying so here is the honest half:

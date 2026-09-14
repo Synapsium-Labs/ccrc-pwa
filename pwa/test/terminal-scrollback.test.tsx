@@ -160,6 +160,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   const scrolled: number[] = [];
+  const fits: number[] = [];
   /** Every sub-row shift the drawer asked to be RENDERED, in order. The whole
    *  point of the remainder is that it is shown, so a stub that only recorded
    *  `scrollLines` could not tell a pixel-smooth glide from a stepped one. */
@@ -174,6 +175,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
     write,
     dispose,
     scrolled,
+    fits,
     offsets,
     madeWith,
     order,
@@ -191,7 +193,10 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
           if (defer) parses.push(done);
           else done?.();
         },
-        fit: () => ({ cols: 48, rows: 20 }),
+        fit: () => {
+          fits.push(fits.length + 1);
+          return { cols: 48, rows: 20 };
+        },
         rowHeight: () => ROW_PX,
         offset: (px: number) => {
           offsets.push(px);
@@ -1746,5 +1751,55 @@ describe('the newest read wins', () => {
 
     expect(screen.queryByText(/no history/), 'a stale failure covered a live history').toBeNull();
     expect(historyDoor()?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('a rotation while reading refits the history', () => {
+  const open = async () => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+    return m;
+  };
+
+  it('a window resize refits it, the way the live terminal already does', async () => {
+    // Fitted once at mount and never again: a phone rotated while reading kept
+    // the portrait grid, so xterm went on wrapping against columns the glass no
+    // longer had — text off the right edge of a layer whose entire job is to be
+    // readable. The live terminal has refit on `resize` since it shipped; the
+    // history one never learned it.
+    const { h } = await open();
+    const before = h.fits.length;
+
+    act(() => { window.dispatchEvent(new Event('resize')); });
+
+    expect(h.fits.length, 'the history terminal kept a grid the glass no longer has')
+      .toBeGreaterThan(before);
+  });
+
+  it('the visual viewport moving — a keyboard opening — refits it too', async () => {
+    const { h } = await open();
+    const before = h.fits.length;
+
+    act(() => { window.visualViewport?.dispatchEvent(new Event('resize')); });
+
+    // jsdom may not implement visualViewport; when it does not, the listener
+    // cannot be under test and the assertion is skipped rather than faked.
+    if (window.visualViewport) {
+      expect(h.fits.length, 'the keyboard opening left the history at the old grid')
+        .toBeGreaterThan(before);
+    }
+  });
+
+  it('leaving the history removes the listeners it added', async () => {
+    const { h, t } = await open();
+    act(() => { t.type('x'); });                 // a keystroke returns to live
+    await waitFor(() => expect(h.dispose).toHaveBeenCalled());
+    const after = h.fits.length;
+
+    act(() => { window.dispatchEvent(new Event('resize')); });
+
+    expect(h.fits.length, 'a disposed history terminal is still being refitted').toBe(after);
   });
 });
