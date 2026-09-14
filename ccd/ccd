@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f639735842cdd24cbca86d0ce3ed0eebd6f6aebf0e22c7cc4e3685ec89b374c9
+# ccrc:generated 1 sha256=9548ae9fddc0c1a65ab2c530ebaa6da756163831db9524f3f0ee79ca95c767a9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -14958,6 +14958,41 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # which only ever names a Claude Code JSONL) fails closed there regardless —
   # so gating this line would buy nothing and cost a second home-ability check.
   resenv=$(_resume_env)
+  # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
+  # `--model` from `class`, and the subagent floor into the SAME `env` line
+  # `_resume_env` composes. Computed ONCE, here, above BOTH spawn lines —
+  # exactly as `$rcflag` is, and for the same reason: the retry may not spawn a
+  # differently-shaped pane than the attempt it replaces. EMPTY when the
+  # session has no record, so a pre-slice-1 session's argv is byte-identical
+  # to today's (`ccd-spawn-split.test.ts` pins that string;
+  # `ccd-route-spawn.test.ts` pins this one). `default` passes no flag — the
+  # lane's settings.json decides. Effort is NOT an argv matter here: the
+  # settle types it (`_inject_spawn_effort`), and the one env variable that
+  # would pin it is the override `_check_routing` refuses — never composed.
+  # `--settings` for ultracode/workflows lands only once the slice's own
+  # measurement has said the keys are honoured (see the settle function).
+  local routeflags="" routeenv="" rclass rsub rwf reff inert=""
+  if _route_any "$id"; then
+    rclass=$(_route_get "$id" class); reff=$(_route_effort_for "$id" "$rclass")
+    rsub=$(_route_get "$id" subagent); rwf=$(_route_get "$id" workflow)
+    [[ "$reff" == ultracode ]] && rwf=on
+    [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
+    # BACKEND, not placement: the subagent env is Claude Code's own; on another
+    # backend the lane's settings.json materialiser owns the subagent (spec
+    # §5.2 "Non-Anthropic lanes"), the settle's keystroke is gated to Anthropic
+    # lanes (`_spawn_settle`), and workflows have no switch — so on such a lane
+    # `effort` and `workflow` are stamped INERT by field name, and the record
+    # says what was not applied rather than pretending.
+    if _is_anthropic_backend "$wrapper"; then
+      [[ -n "$rsub" ]] && routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"
+    else
+      [[ -n "$reff" ]] && inert="effort"
+      [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
+    fi
+    if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
+  fi
+  resenv="$resenv${routeenv:+ $routeenv}"
+  local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -14965,7 +15000,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -15000,13 +15035,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
-      # `$rcflag`, the SAME value the primary line above used — computed once,
-      # before either spawn, so the retry cannot spawn a differently-shaped
+      # `$launchflags`, the SAME value the primary line above used — computed
+      # once, before either spawn (it carries `$rcflag` plus the routing
+      # record's `--model`), so the retry cannot spawn a differently-shaped
       # pane than the attempt it is replacing. (This is the copy that gets
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
