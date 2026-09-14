@@ -1103,10 +1103,11 @@ Note: `postOpen(app, body)` passes `body` through `as Record<string, unknown>`; 
 ```
 (Note the `null` on an unrepresentable id: a wedge that cannot be named is still a wedge — so in `openRun` below the check is `!== null`, and a malformed row reads as NOT in flight, which UNDER-refuses. Record that as a known narrowing in the docstring's last line: "An unrepresentable id answers null — D-2545's family; the route's `run()` read of the same row will refuse first on every path that reaches it.")
 
-(c) In `openRun`, inside the `tx` after the `claimed-by-another` check (`:764-766`) and BEFORE the dup lookup, add:
+(c) In `openRun`, inside the `tx` AFTER the idempotent dup lookup (so a retry naming the same `(program, wave, waveOf, claimedBy, kind:'review', planned)` row reuses it, as the route's docstring promises) and BEFORE the INSERT, add:
 ```ts
         // Design 2026-09-14 §5.1: one review run per work run at a time. Inside
-        // the transaction so two opens cannot both pass the read.
+        // the transaction so two opens cannot both pass the read; AFTER the dup
+        // arm so a retried open of the same planned review row stays idempotent.
         if (input.kind === 'review') {
           const inflight = this.reviewInFlightFor(input.reviews ?? -1);
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
