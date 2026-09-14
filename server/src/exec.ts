@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import type { PaneProbe } from '../../shared/api.js';
 
 /**
  * THE VOCABULARY FOR "WE DID NOT MEASURE THIS", stated once here and used
@@ -117,6 +118,17 @@ export type CaptureHistory =
   | { ok: false; reason: 'gone' }
   | { ok: false; reason: 'unmeasured'; detail: string };
 
+/** The six per-pane formats one `list-panes` answers with, in the order the
+ *  parser below reads them (F8 — all six are per-pane formats under a verb the
+ *  agent already grants, so this opens no new door). Exported because the test
+ *  pins the string itself: a reordering would silently swap two of the numbers
+ *  for each other and every guard downstream would go on believing them. */
+export const PANE_PROBE_FORMAT =
+  '#{pane_active} #{history_size} #{history_limit} #{pane_width} #{pane_height} #{alternate_on}';
+
+/** One row of `PANE_PROBE_FORMAT`: active flag, four counts, alt flag. */
+const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
@@ -144,6 +156,70 @@ export class Tmux {
   async captureAnsi(id: string): Promise<string | null> {
     const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
+  }
+  /**
+   * ONE MEASUREMENT OF THE PANE the drawer is about to read, and the four
+   * answers it can honestly give (spec §5.2).
+   *
+   * THE ACTIVE ROW, NOT THE FIRST (F7). `list-panes -t <session>` lists every
+   * pane of the current window, while `capture-pane -t <session>` reads the
+   * ACTIVE one — so a probe that took row `[0]` would describe a pane the
+   * capture never read. Measured on a private tmux 3.4 socket against a split
+   * window: pane 0 answered `0 278 2000 220 25 0` and pane 1
+   * `1 5 2000 220 24 1`, and the capture returned pane 1. This is the exact
+   * defect PR #96 shipped.
+   *
+   * THE `gone` LITERAL IS `list-panes`' OWN, and it is NOT `capture-pane`'s.
+   * Measured, tmux 3.4: `list-panes -t cc-nope` answers `can't find window:
+   * cc-nope` where `capture-pane` answers `can't find pane: cc-nope`. Matching
+   * on the wrong one would make a dead session read as `unreadable` forever.
+   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
+   * message that means gone and call everything else unknown, so an
+   * unrecognised future tmux error reads as "we could not look" rather than as
+   * death.
+   *
+   * AND `unparseable` IS ITS OWN ARM, not a flavour of `unreadable`. tmux
+   * answering rc 0 with no active row is a different fact from tmux refusing:
+   * the server is up and reachable, and what failed is this adapter's reading
+   * of it. A caller shows a different sentence for each, so folding them would
+   * be an adapter narrowing a distinction it received.
+   */
+  async paneProbe(id: string): Promise<PaneProbe> {
+    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', PANE_PROBE_FORMAT]);
+    if (r.code !== 0) {
+      if (r.stderr.includes("can't find window")) return { ok: false, reason: 'gone' };
+      const msg = r.stderr.trim();
+      return {
+        ok: false,
+        reason: 'unreadable',
+        detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
+      };
+    }
+    const rows = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    const active = rows.find((l) => l.startsWith('1 '));
+    if (active === undefined) {
+      return {
+        ok: false,
+        reason: 'unparseable',
+        detail: `list-panes returned ${rows.length} row(s), none active`,
+      };
+    }
+    const m = PANE_PROBE_ROW.exec(active);
+    if (m === null) {
+      return {
+        ok: false,
+        reason: 'unparseable',
+        detail: `active row did not match the six-field shape: ${active}`,
+      };
+    }
+    return {
+      ok: true,
+      history: Number(m[2]),
+      limit: Number(m[3]),
+      width: Number(m[4]),
+      height: Number(m[5]),
+      alternate: m[6] === '1',
+    };
   }
   /**
    * The drawer's scrollback read: the pane's stored history AND its live
@@ -212,36 +288,6 @@ export class Tmux {
       reason: 'unmeasured',
       detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
     };
-  }
-  /**
-   * What a reader who scrolls up can actually be given, as the two facts that
-   * decide it — and `null` for "we could not look", which is NOT the same as
-   * zero. A measured zero means the drawer should say there is no history; an
-   * unmeasured one must leave today's behaviour alone, or an unreachable tmux
-   * would start reporting empty panes.
-   *
-   * `alternate` is context, NOT the reason a pane is empty — measured on a
-   * private tmux 3.4 socket, because the obvious guess is wrong: entering the
-   * alternate screen does not drop the scrollback. At `alternate_on=1` with
-   * `history_size=454`, `capture-pane -S -2000` still returned all 453 stored
-   * lines. What the alternate screen changes is the FUTURE: nothing scrolls
-   * into the history while a full-screen app holds the pane. What actually
-   * empties one is the application's own `ESC[3J` — measured, 454 to 0 in a
-   * single write — which is what a `claude --resume` does when it repaints.
-   * So the refusal below turns on the COUNT, and this flag only explains why
-   * a zero is going to stay zero for now.
-   *
-   * One `list-panes -F`, the same verb (and the same whitelist entry)
-   * `panePid` already runs — no new door into the exec surface.
-   */
-  async paneScrollback(id: string): Promise<{ lines: number; alternate: boolean } | null> {
-    const r = await this.run('tmux',
-      ['list-panes', '-t', target(id), '-F', '#{history_size} #{alternate_on}']);
-    if (r.code !== 0) return null;
-    const first = r.stdout.split('\n')[0]?.trim() ?? '';
-    const m = /^(\d+) ([01])$/.exec(first);
-    if (m === null) return null;
-    return { lines: Number(m[1]), alternate: m[2] === '1' };
   }
   async sendLiteral(id: string, text: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
