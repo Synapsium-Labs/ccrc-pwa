@@ -13,15 +13,20 @@
 // Plain node, `node:*` imports only — the `shared/mark.mjs` class: a
 // deploy-side script the PWA never bundles, importable by vitest directly
 // (types in the hand-written `compact-card.d.mts` beside it). Reads only the
-// files it is given; writes only `--out` and `--set`, each through a
-// dot-prefixed temp name and a rename — the hook's own idiom.
+// files it is given; writes only the two PRIVATE STAGE paths the hook names —
+// `--set-stage` and `--card-stage` — each through its own `<stage>.part` temp
+// and a rename, so a stage exists iff it is complete. NO CANONICAL PATHNAME
+// REACHES THIS PROCESS'S ARGV (round 7, option A): there is no `--out` and no
+// `--set`, this helper cannot open or rename a canonical artifact, and every
+// ownership decision and canonical publication is the hook's, under a lock it
+// reacquires after this process has exited.
 //
 // Exit codes (spec §3.2): 0 written; 3 empty working set (the set is written
 // with `files: []`, no card); 2 usage; 1 any failure. `card` prints nothing on
 // stdout; `measure` prints exactly one JSON object. Every failure names itself
 // on stderr, which the hook discards — the hook's contract is silence.
-import { openSync, readSync, closeSync, fstatSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync, lstatSync, realpathSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { openSync, readSync, closeSync, fstatSync, readFileSync, writeFileSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -416,11 +421,21 @@ export function renderCard(set, graph, labels, opts) {
   return text;
 }
 
-// ── THE TWO FILES ────────────────────────────────────────────────────────
-/** Dot-prefixed temp beside the target, then rename: the hook's own idiom.
- *  Nothing partial is ever left at the target's name. */
+// ── THE TWO STAGE FILES (spec §3.4, "helper stage set/card") ─────────────
+/** `<stage>.part`, then rename onto `<stage>`: A STAGE EXISTS IFF IT IS
+ *  COMPLETE, which is the property the hook's reacquired-lock rename depends
+ *  on — it renames a stage onto canonical without reading it, so a half-written
+ *  stage would publish a truncated canonical artifact.
+ *
+ *  The temp carries NO helper pid: `<stage>` already carries the HOOK's pid and
+ *  the nonce, so the name is already private to one compaction and a second
+ *  component would only make the exact-family grammar wider. Every target this
+ *  function can receive is a stage path the hook NAMED — no canonical pathname
+ *  reaches this process's argv at all (round 7, option A), which is why these
+ *  two primitives are excluded from the canonical-write scan by its filter
+ *  rather than by an allow-list entry. */
 function writeAtomic(target, text) {
-  const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`);
+  const tmp = `${target}.part`;
   try {
     writeFileSync(tmp, text);
     renameSync(tmp, target);
@@ -430,142 +445,30 @@ function writeAtomic(target, text) {
   }
 }
 
-/** THE SLOT CHECK (spec §3.0, overlap). `at` is a measurement, not an
- *  identity: two hooks can share one millisecond. The hook generates one
- *  collision-resistant `nonce`; it is carried by the set and on card line 1.
- *  Read the slot's exact bytes with its parsed value so rollback can restore
- *  the hook document byte-for-byte, but only while this nonce still owns it. */
-function ownedSlot(setPath, nonce) {
-  try {
-    const text = readFileSync(setPath, 'utf8');
-    const set = JSON.parse(text);
-    return set && typeof set === 'object' && typeof nonce === 'string' && nonce !== '' && set.nonce === nonce
-      ? { set, text } : null;
-  } catch {
-    return null;
-  }
-}
-
-export function slotIsMine(setPath, nonce) {
-  return ownedSlot(setPath, nonce)?.set ?? null;
-}
-
-/** A failed card write must not turn `files:null` into a false mining result.
- * Claiming moves a live pathname to a private regular file before inspecting it.
- * The claimed inode is the only thing this rollback ever decides to unlink; a
- * foreign claimed inode stays available through the stale-temp sweep. */
-function rollbackClaimPath(target, nonce, kind) {
-  const tag = createHash('sha256').update(nonce).digest('hex').slice(0, 16);
-  return join(dirname(target), `.${basename(target)}.${process.pid}.${tag}.${randomUUID()}.${kind}.tmp`);
-}
-
-function reserveClaim(claim) {
-  try {
-    // A regular placeholder rejects rename(directory, regular-file), so rollback
-    // cannot relocate a live directory while attempting to claim it.
-    writeFileSync(claim, '', { flag: 'wx', mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasCanonicalOwner(target) {
-  try { lstatSync(target); return true; } catch { return false; }
-}
-
-function firstCardLine(card) {
-  const nl = card.indexOf('\n');
-  return nl < 0 ? null : card.slice(0, nl);
-}
-
-function firstSetNonce(text) {
-  try {
-    const set = JSON.parse(text);
-    return set && typeof set === 'object' && typeof set.nonce === 'string' ? set.nonce : null;
-  } catch {
-    return null;
-  }
-}
-
-function rollbackSet(setPath, nonce, original, hook) {
-  // When the helper already left the exact hook document in place, do not
-  // create a later destructive action after this harmless observation.
-  try {
-    if (readFileSync(setPath, 'utf8') === original) return;
-  } catch { /* claim path handles an absent or unreadable entry */ }
-
-  const claim = rollbackClaimPath(setPath, nonce, 'compactset');
-  const restore = rollbackClaimPath(setPath, nonce, 'compactset-restore');
-  if (!reserveClaim(claim)) return;
-  try { writeFileSync(restore, original, { flag: 'wx', mode: 0o600 }); } catch {
-    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
-    return;
-  }
-  try { hook?.('setBeforeClaim', claim); } catch { /* a test seam cannot change rollback */ }
-  try { renameSync(setPath, claim); } catch {
-    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
-    try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
-    return;
-  }
-
-  let ours;
-  try { ours = firstSetNonce(readFileSync(claim, 'utf8')) === nonce; } catch { return; }
-  try { hook?.('setClaimed', claim); } catch { /* a test seam cannot change rollback */ }
-  if (ours) {
-    let restored = false;
-    try { linkSync(restore, setPath); restored = true; } catch { /* later owner remains at setPath */ }
-    if (restored || hasCanonicalOwner(setPath)) {
-      try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
-      try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
-    }
-    try { hook?.('setRestored', claim); } catch { /* a test seam cannot change rollback */ }
-    return;
-  }
-
-  // B/C owns the claimed set: recreate only an absent canonical entry, then
-  // retain the claim so a later C replacement cannot make B's bytes disappear.
-  try { linkSync(claim, setPath); } catch { /* later owner remains at setPath */ }
-  try { unlinkSync(restore); } catch { /* preserve the primary failure */ }
-  try { hook?.('setRestored', claim); } catch { /* a test seam cannot change rollback */ }
-}
-
-function rollbackCard(outPath, nonce, hook) {
-  const claim = rollbackClaimPath(outPath, nonce, 'compactcard');
-  if (!reserveClaim(claim)) return;
-  try { hook?.('cardBeforeClaim', claim); } catch { /* a test seam cannot change rollback */ }
-  try { renameSync(outPath, claim); } catch {
-    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
-    return;
-  }
-
-  let ours;
-  try { ours = firstCardLine(readFileSync(claim, 'utf8')) === nonce; } catch { return; }
-  try { hook?.('cardClaimed', claim); } catch { /* a test seam cannot change rollback */ }
-  if (ours) {
-    try { unlinkSync(claim); } catch { /* preserve the primary failure */ }
-    return;
-  }
-
-  // `link` is an atomic create: EEXIST retains both the newer live card and
-  // this displaced one. Keep the claim after success for a third-writer race.
-  try { linkSync(claim, outPath); } catch { /* later owner remains at outPath */ }
-  try { hook?.('cardRestored', claim); } catch { /* a test seam cannot change rollback */ }
-}
-
-function rollbackPair(setPath, outPath, nonce, original, hook) {
-  rollbackSet(setPath, nonce, original, hook);
-  rollbackCard(outPath, nonce, hook);
-}
-
-/** `card`: window → tokens → staged card → set file → card. Key ORDER in the
- *  set is part of the contract: `at`, `nonce`, and `transcript` sit in the
- *  first 4 KiB, where the hook reads them with a bounded, fork-free `read -N`
- *  (spec §3.3 step 2). `at` stays the hook's epoch-ms measurement; `nonce`
- *  pairs a card to its set and owns every rollback seam. `parentLive`,
- *  `liveAgents` and `served` are the hook's and are CARRIED; `steered` is
- *  always false here — the hook stamps it after the print (Plan C), never the
- *  helper. A refused slot throws, which `main` reports as exit 1. */
+/** `card`: window → tokens → the two PRIVATE STAGE FILES. Round 7's option A:
+ *  no canonical pathname appears in this process's argv at all, so the helper
+ *  cannot open, read, rename or roll back a canonical artifact, and every
+ *  ownership decision and canonical publication belongs to the bash arm, under
+ *  a lock it reacquires. That is why there is no slot check here any more: the
+ *  old one was a CHECK whose ACT was a separate canonical write — check-then-act,
+ *  never a compare-and-swap — so a sibling could publish between the two and
+ *  have its verdict destroyed by this process's later write.
+ *
+ *  Key ORDER in the set is part of the contract: `at`, `nonce` and `transcript`
+ *  sit in the first 4 KiB, where the hook re-reads them with a bounded,
+ *  fork-free `read -N` (spec §3.3 step 2, and the reconfirm at protocol step
+ *  12 — that head parse IS the ownership check now).
+ *
+ *  `parentLive` and `liveAgents` are COPIED VERBATIM from the hook's own
+ *  already-computed §3.0 values, which now arrive as flags: with `--set` gone
+ *  the helper has no other channel to learn them, and deriving them from
+ *  `scope` would be a different measurement wearing the same name. "Verbatim"
+ *  constrains the VALUE, not the spelling — the wire carries strings and the
+ *  set carries a JSON boolean/integer or null, so `main` converts
+ *  exhaustively before calling here. `steered` is always false; in Plan A the
+ *  hook publishes that staged value unchanged. `served` is NOT written at all
+ *  any more (D-2605: the canonical set is never rewritten, and `served` is
+ *  marker-derived at measure time). */
 export function cardCommand(o) {
   const graph = loadGraph(o.graph);
   const labels = loadLabels(o.labels);
@@ -573,27 +476,17 @@ export function cardCommand(o) {
   const re = tokenRegex(extensionsOf(graph.files));
   const tokens = mineTokens(win.text, re);
   const { files, stats } = workingSet(tokens, graph.index, o.cwd);
-  const mine = ownedSlot(o.set, o.nonce);
-  if (!mine) throw new Error(`set ${o.set} is no longer this helper's slot`);
   const set = { v: 1, at: o.at, nonce: o.nonce, scope: o.scope, agent: o.agent ?? null, transcript: o.transcript,
-    parentLive: typeof mine.set.parentLive === 'boolean' ? mine.set.parentLive : null,
-    liveAgents: Number.isInteger(mine.set.liveAgents) ? mine.set.liveAgents : null,
-    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, served: mine.set.served === true, files, stats };
+    parentLive: o.parentLive, liveAgents: o.liveAgents,
+    cwd: o.cwd, built: o.built || null, fresh: o.fresh || null, steered: false, files, stats };
   // Rendering is intentionally complete before the helper first names a target.
   const card = files.length === 0 ? null : `${o.nonce}\n${renderCard(set, graph, labels, {
     maxChars: o.maxChars, maxFiles: o.maxFiles, built: o.built, fresh: o.fresh,
     scope: o.scope, agent: o.agent ?? null })}\n`;
   const write = o.writeAtomic ?? writeAtomic;
-  if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the set was written — slot taken`);
-  write(o.set, JSON.stringify(set) + '\n');
+  write(o.setStage, JSON.stringify(set) + '\n');
   if (card === null) return EXIT.EMPTY;
-  try {
-    if (!slotIsMine(o.set, o.nonce)) throw new Error(`set ${o.set} changed hands before the card was written — slot taken`);
-    write(o.out, card);
-  } catch (error) {
-    rollbackPair(o.set, o.out, o.nonce, mine.text, o.rollbackHook);
-    throw error;
-  }
+  write(o.cardStage, card);
   return EXIT.OK;
 }
 
@@ -723,9 +616,9 @@ export function citedCount(text, paths) {
 
 const SCOPES = new Set(['main', 'subagent', 'ambiguous']);
 
-/** The measurement object the hook merges into hookstate (after adding `n`)
- *  and appends to the journal. null — never 0, never "main" — wherever the
- *  set could not say: no set, or a set with `files: null`. */
+/** The helper measurement object Task 9 enriches into the sole journal record.
+ *  null — never 0, never "main" — wherever the set could not say: no set,
+ *  or a set with `files: null`. No ordinal is persisted. */
 export function measureCommand(raw, set, trigger) {
   const text = normalizeSummary(raw);
   // A malformed individual `files[]` entry means the working-set denominator
@@ -784,7 +677,16 @@ export function parseArgs(argv) {
   return { cmd, opts };
 }
 
-const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'out', 'set', 'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at', 'nonce'];
+/** ORDER IS BEHAVIOUR: `main`'s loop returns on the FIRST missing key, so the
+ *  message a caller gets names the first gap in THIS order, and `nonce` stays
+ *  last so a test that drops only `--nonce` still reaches the nonce message.
+ *  `out`/`set` are gone (no canonical pathname reaches this process);
+ *  `setStage`/`cardStage` are the two private paths the hook names, and
+ *  `parentLive`/`liveAgents` are the provenance channel `--set` used to carry.
+ *  `trigger` is NOT here and must not be: the record's trigger comes from the
+ *  PostCompact payload at `measure` time, never from a PreCompact flag. */
+const REQUIRED_CARD = ['transcript', 'cwd', 'graph', 'labels', 'setStage', 'cardStage', 'parentLive', 'liveAgents',
+  'maxChars', 'maxFiles', 'built', 'fresh', 'scope', 'at', 'nonce'];
 
 function usage(msg) {
   process.stderr.write(`compact-card: ${msg}\n`);
@@ -805,8 +707,29 @@ export function main(argv) {
       if (!Number.isInteger(maxFiles) || maxFiles <= 0) return usage('--max-files must be a positive integer');
       if (!Number.isInteger(at) || at <= 0) return usage('--at must be epoch milliseconds');
       if (typeof o.nonce !== 'string' || o.nonce === '') return usage('--nonce must be a nonempty string');
+      // THE TWO PROVENANCE FLAGS, CONVERTED EXHAUSTIVELY — empty means JSON
+      // `null`, which is the hook's own measured encoding: `_hook_compact_scope`
+      // leaves `CS_PARENT_LIVE=""`/`CS_LIVE_N=""` and returns on a manual
+      // trigger, and the hook's own initial-set `jq` already decodes `""` as
+      // null on both fields.
+      //
+      // `Number(v)` IS THE TRAP HERE, and this file's own established idiom two
+      // lines above (`const maxChars = Number(o.maxChars), …`) is what makes it
+      // the likely mistake: measured, `Number('') === 0` and
+      // `Number.isInteger(Number('')) === true`, so `Number(o.liveAgents)`
+      // publishes `liveAgents: 0` for every MANUAL compaction whose true value
+      // is null — a tuple §3.0's matrix does not contain, which
+      // `JOURNAL_RECORD_PRED` rejects, so no journal line commits at all on the
+      // dominant population. `REQUIRED_CARD`'s `k in o` presence test is
+      // satisfied by an empty string and cannot catch it either. The regex is
+      // tested BEFORE any numeric conversion, so no conversion ever sees ''.
+      if (o.parentLive !== '' && o.parentLive !== 'true' && o.parentLive !== 'false') return usage('--parent-live must be true, false or empty');
+      if (o.liveAgents !== '' && !/^[0-9]+$/.test(String(o.liveAgents))) return usage('--live-agents must be a non-negative integer or empty');
+      const parentLive = o.parentLive === '' ? null : o.parentLive === 'true';
+      const liveAgents = o.liveAgents === '' ? null : Number(o.liveAgents);
       return cardCommand({ transcript: o.transcript, cwd: o.cwd, graph: o.graph, labels: o.labels,
-        out: o.out, set: o.set, maxChars, maxFiles, built: o.built, fresh: o.fresh,
+        setStage: o.setStage, cardStage: o.cardStage, parentLive, liveAgents,
+        maxChars, maxFiles, built: o.built, fresh: o.fresh,
         scope: o.scope, agent: o.agent ?? null, at, nonce: o.nonce });
     }
     if (p.cmd === 'measure') {

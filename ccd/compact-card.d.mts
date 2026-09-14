@@ -36,18 +36,32 @@ export function fileFacts(file: string, graph: Graph, labels: Record<string, str
 export interface CompactSet {
   v: 1; at: number; nonce: string; scope: 'main' | 'subagent' | 'ambiguous'; agent: string | null; transcript: string | null;
   parentLive: boolean | null; liveAgents: number | null;
-  cwd: string | null; built: string | null; fresh: string | null; steered: boolean; served: boolean;
+  cwd: string | null; built: string | null; fresh: string | null; steered: boolean;
+  /** TOLERATED LEGACY INPUT, for the isolated `measure` path ALONE.
+   *  `readSetForMeasure` may still be handed a set written before D-2605, and
+   *  such a set carries `served`. NO `card`-written set carries it after Task 9
+   *  — the canonical set is never rewritten and `served` is marker-derived at
+   *  measure time — so this optional member documents an input this code READS
+   *  and never an output it WRITES. `Measurement.served` below keeps its own
+   *  REQUIRED `served`, which `measure` still emits and the nonce marker
+   *  decides. */
+  served?: boolean;
   files: SetFile[] | null; stats: SetStats | null;
 }
-export function slotIsMine(setPath: string, nonce: string): CompactSet | null;
 export function renderCard(set: CompactSet & { files: SetFile[] }, graph: Graph, labels: Record<string, string>,
   opts: { maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent'; agent: string | null }): string;
 export function cardCommand(o: {
-  transcript: string; cwd: string; graph: string; labels: string; out: string; set: string;
+  transcript: string; cwd: string; graph: string; labels: string;
+  /** The two PRIVATE stage paths the hook names. There is no `out`/`set`:
+   *  no canonical pathname reaches this process at all (round 7, option A). */
+  setStage: string; cardStage: string;
+  /** Copied VERBATIM from the hook's own §3.0 values — the channel `--set`
+   *  used to carry. Already converted from the wire's strings: empty means
+   *  `null` for both. */
+  parentLive: boolean | null; liveAgents: number | null;
   maxChars: number; maxFiles: number; built: string; fresh: string; scope: 'main' | 'subagent';
   agent: string | null; at: number; nonce: string;
   writeAtomic?: (target: string, text: string) => void;
-  rollbackHook?: (phase: 'setBeforeClaim' | 'setClaimed' | 'setRestored' | 'cardBeforeClaim' | 'cardClaimed' | 'cardRestored', claim: string) => void;
 }): number;
 export function normalizeSummary(raw: string): string;
 export function filesSectionChars(text: string): number | null;

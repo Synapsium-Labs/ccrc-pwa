@@ -256,7 +256,15 @@ const minimalPath = (omit: string[]): string => {
   const bin = path.join(home, 'binmin');
   fs.mkdirSync(bin, { recursive: true });
   for (const t of ['bash', 'jq', 'git', 'tail', 'head', 'grep', 'tr', 'cat', 'mv', 'rm', 'wc', 'sort', 'date',
-    'find', 'timeout', 'node', 'sed', 'mkdir', 'link']) {
+    'find', 'timeout', 'node', 'sed', 'mkdir', 'link',
+    // D-2605's own externals. `flock`, `mktemp` and `touch` are as load-bearing
+    // as `link` now: the stable lock is minted by `mktemp`+`link`, acquired
+    // through a `link` alias and bounded by `flock`, and PostCompact's claim is
+    // stamped by `touch`. Measured, `type -t` answers `file` for every one of
+    // them, so a PATH that omits them makes the arms genuinely refuse — which
+    // is what `minimalPath(['flock'])` is FOR, and what every OTHER caller of
+    // this helper must not accidentally get.
+    'flock', 'mktemp', 'touch']) {
     if (omit.includes(t)) continue;
     const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
     if (real) fs.symlinkSync(real, path.join(bin, t));
@@ -2316,7 +2324,7 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(readState().state).toBe('working');
     const set = readSet();
     expect(set).toMatchObject({ v: 1, scope: 'main', agent: null, transcript, parentLive: null, liveAgents: 0,
-      cwd: tree, built: null, fresh: null, steered: false, served: false, files: null, stats: null });
+      cwd: tree, built: null, fresh: null, steered: false, files: null, stats: null });
     expect(Number.isInteger(set.at)).toBe(true);
     expect(fs.existsSync(cardFile()), 'no graph, so no card').toBe(false);
   });
@@ -2387,28 +2395,58 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     expect(readSet().scope).toBe('main');
   });
 
-  it('sweeps this id\'s STALE compaction temps — a helper killed by timeout leaves one, and _reg_purge never sees a dot-leading name', () => {
+  it('sweeps this id\'s AGED EXACT FAMILIES — and the two legacy grammars of the transition — never a coincidental `*compact*.tmp` match', () => {
     const tree = path.join(home, 'tree'); gitTree(tree, 1);
     const { transcript } = plantSession({ lines: workLines(tree) });
     const reg = path.join(home, '.cc-sessions');
-    const stale = path.join(reg, '.demo-quiet-basin.compactcard.999.tmp');
-    // A retained rollback claim is a direct regular dot file, not a directory.
-    const staleClaim = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactcard-rollback.tmp');
-    const staleSetClaim = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactset-rollback.tmp');
-    const staleRestore = path.join(reg, '.demo-quiet-basin.999.compact-1-999-1-2.compactset-restore.tmp');
-    const young = path.join(reg, '.demo-quiet-basin.4242.compactset.tmp');
-    const other = path.join(reg, '.other-id.compactcard.999.tmp');
-    for (const f of [stale, staleClaim, staleSetClaim, staleRestore, young, other]) fs.writeFileSync(f, 'x');
+    const at = (n: string): string => path.join(reg, n);
+    // RETARGETED (D-2605). The pre-round-7 fixture planted rollback-family
+    // basenames and asserted against `-name ".$id.*compact*.tmp" -delete`; both
+    // the producers and the sweep are gone. What replaces them is the §3.4
+    // target inventory, matched by GRAMMAR after the literal `.<id>.` strip.
+    const swept = [
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.compactcard.999.compact-1-999-1-2.stage',
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.stage.part',
+      '.demo-quiet-basin.compactset.999.compact-1-999-1-2.hook-write.tmp',
+      '.demo-quiet-basin.compactcard.999.compact-1-999-1-2.session-claim.tmp',
+      '.demo-quiet-basin.compactpost.999.1.2.claim',
+      '.demo-quiet-basin.compactions.lock-init.AbCdEf',
+      '.demo-quiet-basin.compactions.lock-open.999.1.2',
+      '.demo-quiet-basin.compactserved-source.compact-1-999-1-2.AbCdEf',
+      '.demo-quiet-basin.generation-init.AbCdEf',
+      '.demo-quiet-basin.generation-read.999.1.2',
+      '.demo-quiet-basin.compactions-stage.999.1.2.tmp',
+      '.demo-quiet-basin.compactions-snapshot.999.1.2.tmp',
+      // THE TRANSITION ALLOWANCE, both legacy grammars. The set temp carries
+      // the id TWICE — `_hook_write_atomic`'s pre-D-2605 `.$id.$$.${1##*/}.tmp`
+      // expands that way — which is why the bare `<pid>.compactset.tmp` an
+      // earlier draft assumed would have matched nothing on a real box.
+      '.demo-quiet-basin.999.demo-quiet-basin.compactset.tmp',
+      '.demo-quiet-basin.999.compactcard-claim.tmp',
+    ];
+    const kept = [
+      // PERMANENT: it spans row generations and safe slug reuse by design.
+      '.demo-quiet-basin.compactions.lock',
+      // The final marker is PostCompact's to remove, under its own validated
+      // final lock, and only after it has been read.
+      '.demo-quiet-basin.compactserved.compact-1-999-1-2',
+      // Another id's residue is not ours, and the literal `.<id>.` strip is
+      // what keeps a NESTED id out rather than a substring match.
+      '.demo-quiet-basin-x.compactset.999.compact-1-999-1-2.stage',
+      '.other-id.compactset.999.compact-1-999-1-2.stage',
+      // A name in no family at all: an unrecognised aged dotfile is LEFT
+      // ALONE, which is the direction a sweep must fail in.
+      '.demo-quiet-basin.something-nobody-declared',
+    ];
+    const young = '.demo-quiet-basin.compactset.4242.compact-9-4242-1-2.stage';
+    for (const n of [...swept, ...kept, young]) fs.writeFileSync(at(n), 'x');
     const old = Math.floor(Date.now() / 1000) - 1200 - 60;
-    fs.utimesSync(stale, old, old); fs.utimesSync(staleClaim, old, old);
-    fs.utimesSync(staleSetClaim, old, old); fs.utimesSync(staleRestore, old, old); fs.utimesSync(other, old, old);
+    for (const n of [...swept, ...kept]) fs.utimesSync(at(n), old, old);
     run(preCompact(tree, transcript, 'auto'));
-    expect(fs.existsSync(stale), 'stale temp of this id swept').toBe(false);
-    expect(fs.existsSync(staleClaim), 'stale retained card rollback claim swept').toBe(false);
-    expect(fs.existsSync(staleSetClaim), 'stale retained set rollback claim swept').toBe(false);
-    expect(fs.existsSync(staleRestore), 'stale failed set restore source swept').toBe(false);
-    expect(fs.existsSync(young), 'a young temp may belong to a helper in flight').toBe(true);
-    expect(fs.existsSync(other), 'another id\'s temp is not ours to sweep').toBe(true);
+    for (const n of swept) expect(fs.existsSync(at(n)), `aged exact family swept: ${n}`).toBe(false);
+    for (const n of kept) expect(fs.existsSync(at(n)), `NOT ours to sweep: ${n}`).toBe(true);
+    expect(fs.existsSync(at(young)), 'a young stage may belong to a helper in flight').toBe(true);
   });
 
   it('a served session (empty transcript_path) and an unreadable path write no set', () => {
@@ -2463,8 +2501,13 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     run(preCompact(tree, transcript));
     const names = fs.readdirSync(path.join(home, '.cc-sessions'));
     expect(names.filter((n) => n.includes('compactset'))).toEqual(['demo-quiet-basin.compactset']);
-    // the temp's shape, pinned in the source: `.<id>.<pid>.<suffix>.tmp`, the hookstate writer's own idiom
-    expect(fs.readFileSync(HOOK, 'utf8')).toContain('local tmp="$REG/.$id.$$.${1##*/}.tmp"');
+    // THE PIN, MOVED ONTO THE NEW CONSTRUCTION in the same commit that migrated
+    // the producer (D-2605): the temp is no longer `.$id.$$.${1##*/}.tmp` — a
+    // name matched only by a `*compact*.tmp` glob — but the §3.4 target family
+    // `compactset.<pid>.<nonce>.hook-write.tmp` after the literal `.<id>.`
+    // prefix, which PreCompact's sweep and `_reg_purge`'s exact cleanup can
+    // both recognise by grammar.
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain('local tmp="$REG/.$id.$base.$$.$2.hook-write.tmp"');
   });
 
   it('the constants are the spec\'s, the total is DERIVED, and the shape predicate is spelled once', () => {
@@ -2488,7 +2531,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     const { transcript } = plantSession({ lines: workLines(tree) });
     expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
     const set = readSet();
-    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, served: false, parentLive: null, liveAgents: null,
+    expect(set).toMatchObject({ scope: 'main', transcript, steered: false, parentLive: null, liveAgents: null,
       files: [{ path: 'server/src/pane/statusline.ts', tag: 'touched', count: 1 },
         { path: 'server/src/watch.ts', tag: 'touched', count: 1 }],
       stats: { tokens: 2, resolved: 2, ambiguous: 0, outside: 0, nomatch: 0 } });
@@ -2579,278 +2622,6 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(readState().state).toBe('working');
   });
 
-  it('timeout rollback restores the exact original bytes when its A-owned helper rewrite carries extra terminal LFs', () => {
-    const tree = cardTree(); plantHelper();
-    const original = path.join(home, 'hook-before-helper.compactset');
-    stub('timeout', [
-      `cp "$HOME/.cc-sessions/demo-quiet-basin.compactset" "${original}"`,
-      'shift; "$@"',
-    ].join('\n'));
-    stub('node', [
-      // This failed helper's rewrite retains the hook JSON but leaves abnormal
-      // terminal bytes while its nonce still owns the canonical set.
-      'set=""',
-      'while [ "$#" -gt 0 ]; do',
-      '  if [ "$1" = --set ]; then set="$2"; break; fi',
-      '  shift',
-      'done',
-      '[ -n "$set" ] || exit 92',
-      `cp "${original}" "$set"`,
-      'printf "\\n\\n" >> "$set"',
-      'exit 71',
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile())).toEqual(fs.readFileSync(original));
-    expect(readSet().files).toBeNull();
-  });
-
-  it('timeout rollback never restores or removes a later nonce owner', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":1,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    stub('timeout', [
-      'shift; "$@"',
-      'rc=$?',
-      `printf '%s' '${laterSet.replace(/'/g, "'\"'\"'")}' > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `printf '%s' '${laterCard.replace(/'/g, "'\"'\"'")}' > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
-      'exit 71',
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
-    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
-  });
-
-  it('timeout rollback claims and validates A before B installs, so B survives byte-for-byte', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    stub('timeout', `shift; "$@"; exit 71`);
-    // The rollback calls `rm` only AFTER it read A's claimed first line. This
-    // seam installs B at that exact point; a pathname read-then-unlink deletes B.
-    stub('rm', [
-      'for arg; do target="$arg"; done',
-      'case "$target" in *compactcard*)',
-      `  printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `  printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard" ;;`,
-      'esac',
-      `exec ${sh(realTool('rm'))} "$@"`,
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
-    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
-  });
-
-  it('timeout rollback moves A before validation so a no-clobber B install owns canonical', () => {
-    const tree = cardTree(); plantHelper();
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    const laterSource = path.join(home, 'later-card-source');
-    fs.writeFileSync(laterSource, laterCard);
-    stub('timeout', 'shift; "$@"; exit 71');
-    // Both wrappers run their real operation, then let B use an atomic
-    // no-clobber link to claim canonical before rollback reads A's claim. The
-    // `cp` wrapper makes the mv->cp mutation diagnostic: A still occupies the
-    // path, B cannot claim it, and the test observes A instead of B.
-    for (const tool of ['mv', 'cp']) {
-      stub(tool, [
-        `real=${sh(realTool(tool))}`,
-        '"$real" "$@"',
-        'rc=$?',
-        'case "$*" in *demo-quiet-basin.compactcard*)',
-        `  ${sh(realTool('link'))} "$HOME/later-card-source" "$HOME/.cc-sessions/demo-quiet-basin.compactcard" 2>/dev/null || true ;;`,
-        'esac',
-        'exit "$rc"',
-      ].join('\n'));
-    }
-    // The cp wrapper is dormant in the shipped path. Mutation swaps mv for cp,
-    // then this exact post-command seam shows B cannot claim A's live pathname.
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(laterCard);
-  });
-
-  it('timeout rollback retains displaced B when C wins its no-clobber restore race', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
-    const currentCard = 'current-hook-nonce\ncurrent card\n';
-    stub('timeout', [
-      'shift; "$@"',
-      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
-      'exit 71',
-    ].join('\n'));
-    // `link claim card` creates exactly the requested target or fails. Install
-    // C immediately before it; B must remain in the dot claim and C survive.
-    stub('link', [
-      `printf '%s' ${sh(currentSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `printf '%s' ${sh(currentCard)} > "$2"`,
-      `exec ${sh(realTool('link'))} "$@"`,
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
-    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(currentCard);
-    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
-      .filter((name) => name.includes('compactcard-rollback.tmp'));
-    expect(claims).toHaveLength(1);
-    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
-  });
-
-  it('timeout rollback does not create a child in C directory while retaining B claim', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    stub('timeout', [
-      'shift; "$@"',
-      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
-      'exit 71',
-    ].join('\n'));
-    // A portable `link source target` treats this target directory as occupied.
-    // GNU/BSD `ln source directory` instead creates a contaminating child.
-    stub('link', [
-      'rm -f "$2"',
-      'mkdir "$2"',
-      'printf C > "$2/sentinel"',
-      `exec ${sh(realTool('link'))} "$@"`,
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.statSync(cardFile()).isDirectory()).toBe(true);
-    expect(fs.readFileSync(path.join(cardFile(), 'sentinel'), 'utf8')).toBe('C');
-    expect(fs.readdirSync(cardFile()).sort()).toEqual(['sentinel']);
-    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
-      .filter((name) => name.includes('compactcard-rollback.tmp'));
-    expect(claims).toHaveLength(1);
-    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
-  });
-
-  it('a successful rollback restore retains B after C replaces the live link', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const laterCard = 'later-hook-nonce\nlater card\n';
-    const currentCard = 'current-hook-nonce\ncurrent card\n';
-    stub('timeout', [
-      'shift; "$@"',
-      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      `printf '%s' ${sh(laterCard)} > "$HOME/.cc-sessions/demo-quiet-basin.compactcard"`,
-      'exit 71',
-    ].join('\n'));
-    // The real link succeeds, then this wrapper replaces its canonical entry.
-    // B must remain available through the retained claim after C wins live path.
-    stub('link', [
-      `real=${sh(realTool('link'))}`,
-      '"$real" "$@"',
-      'rc=$?',
-      'if [ "$rc" -eq 0 ]; then',
-      '  rm -f "$2"',
-      `  printf '%s' ${sh(currentCard)} > "$2"`,
-      'fi',
-      'exit "$rc"',
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(cardFile(), 'utf8')).toBe(currentCard);
-    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
-      .filter((name) => name.includes('compactcard-rollback.tmp'));
-    expect(claims).toHaveLength(1);
-    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterCard);
-  });
-
-  it('timeout rollback claims A set before B installs, so B survives byte-for-byte', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    stub('timeout', 'shift; "$@"; exit 71');
-    // A's set is already in the regular claim when this move returns. B wins
-    // canonical before A can no-clobber-link its staged original back.
-    stub('mv', [
-      `real=${sh(realTool('mv'))}`,
-      '"$real" "$@"',
-      'rc=$?',
-      'case "$*" in *compactset-rollback.tmp*)',
-      `  printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset" ;;`,
-      'esac',
-      'exit "$rc"',
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(laterSet);
-  });
-
-  it('timeout rollback retains claimed B set when C wins before no-clobber restoration', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
-    stub('timeout', [
-      'shift; "$@"',
-      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      'exit 71',
-    ].join('\n'));
-    stub('link', [
-      'case "$2" in *demo-quiet-basin.compactset)',
-      `  printf '%s' ${sh(currentSet)} > "$2" ;;`,
-      'esac',
-      `exec ${sh(realTool('link'))} "$@"`,
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
-    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
-      .filter((name) => name.includes('compactset-rollback.tmp'));
-    expect(claims).toHaveLength(1);
-    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterSet);
-  });
-
-  it('timeout rollback retains B set after a successful restore when C replaces it', () => {
-    const tree = cardTree(); plantHelper();
-    const laterSet = '{"v":1,"at":2,"nonce":"later-hook-nonce","scope":"main","files":null}\n';
-    const currentSet = '{"v":1,"at":3,"nonce":"current-hook-nonce","scope":"main","files":null}\n';
-    stub('timeout', [
-      'shift; "$@"',
-      `printf '%s' ${sh(laterSet)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
-      'exit 71',
-    ].join('\n'));
-    stub('link', [
-      `real=${sh(realTool('link'))}`,
-      '"$real" "$@"',
-      'rc=$?',
-      'if [ "$rc" -eq 0 ] && case "$2" in *demo-quiet-basin.compactset) true;; *) false;; esac; then',
-      '  rm -f "$2"',
-      `  printf '%s' ${sh(currentSet)} > "$2"`,
-      'fi',
-      'exit "$rc"',
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.readFileSync(setFile(), 'utf8')).toBe(currentSet);
-    const claims = fs.readdirSync(path.join(home, '.cc-sessions'))
-      .filter((name) => name.includes('compactset-rollback.tmp'));
-    expect(claims).toHaveLength(1);
-    expect(fs.readFileSync(path.join(home, '.cc-sessions', claims[0]!), 'utf8')).toBe(laterSet);
-  });
-
-  it('timeout rollback does not relocate a canonical set directory', () => {
-    const tree = cardTree(); plantHelper();
-    stub('timeout', 'shift; "$@"; exit 71');
-    stub('mv', [
-      'case "$*" in *compactset-rollback.tmp*)',
-      '  rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
-      '  mkdir "$HOME/.cc-sessions/demo-quiet-basin.compactset"',
-      '  printf sentinel > "$HOME/.cc-sessions/demo-quiet-basin.compactset/sentinel" ;;',
-      'esac',
-      `exec ${sh(realTool('mv'))} "$@"`,
-    ].join('\n'));
-    const { transcript } = plantSession({ lines: workLines(tree) });
-    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
-    expect(fs.statSync(setFile()).isDirectory()).toBe(true);
-    expect(fs.readFileSync(path.join(setFile(), 'sentinel'), 'utf8')).toBe('sentinel');
-    expect(fs.readdirSync(setFile())).toEqual(['sentinel']);
-  });
-
   it('resolves gtimeout when timeout is absent, with the local resolver shape pinned', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     expect(src).toContain(`_hook_timeout() {
@@ -2907,12 +2678,22 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   /** A card+set pair on disk exactly as Task 6 leaves them, without running
    *  the helper: numeric `at` is measurement; `nonce` owns the first line. */
   const plantPair = (at: number, text: string, opts: { nonce?: string; setNonce?: string } = {}): void => {
-    const nonce = opts.setNonce ?? `nonce-${at}`;
+    // WELL-FORMED BY DEFAULT (D-2605). §3.3 step 2 validates the set's nonce
+    // against `^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$` BEFORE it can name the
+    // marker path, so the old `nonce-<at>` fixture spelling is now refused by
+    // the arm — correctly, and not as an accident of this fixture.
+    const nonce = opts.setNonce ?? `compact-${at}-1-2-3`;
     fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: 'main', agent: null,
       transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
       steered: false, served: false, files: null, stats: null }) + '\n');
     fs.writeFileSync(cardFile(), `${opts.nonce ?? nonce}\n${text}\n`);
   };
+  /** The nonce marker §3.3 step 5 publishes instead of rewriting `set.served`
+   *  — `$REG/.<id>.compactserved.<nonce>` — and the list of every marker on
+   *  disk, which is what "exactly one racer served" is now asserted against. */
+  const markerFile = (nonce: string): string => path.join(home, '.cc-sessions', `.demo-quiet-basin.compactserved.${nonce}`);
+  const markers = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => n.startsWith('.demo-quiet-basin.compactserved.'));
   const CARD_TEXT = 'graphify card — this context\'s working set at compaction, from graphify-out/ (built at deadbeef, fresh):\n- a.ts [edited]\nBlast radius: 0 files import or call something in these 1 files.\nRe-derive any node with `graphify explain "<symbol>"`; cite path:symbol:line rather than re-reading whole files.';
   /** `card`, plus the stderr assertion the 13 sibling PreCompact tests already
    *  make via `runFull` and this describe was missing (fix-round M2). */
@@ -2927,6 +2708,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
     const { nonce, text } = readCard();
+    const setBytes = fs.readFileSync(setFile());
     const out = cardChecked(compactStart(tree, transcript));
     expect(out).toContain('graphify: this tree has a knowledge graph');       // the standing subject
     expect(out).toContain('graphify card — this context');                    // the fourth
@@ -2935,9 +2717,14 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(out.includes(` ${nonce} `), 'the nonce line reached the model').toBe(false);
     expect(fs.existsSync(cardFile()), 'consume-once').toBe(false);
     expect(fs.existsSync(setFile()), 'the set is PostCompact\'s to consume').toBe(true);
-    expect(readSet().served, 'the fact of serving is stamped into the set').toBe(true);
-    expect(readSet().nonce, 'the stamp preserves pair ownership').toBe(nonce);
-    expect(typeof readSet().at, 'the stamp preserves numeric measurement').toBe('number');
+    // THE FACT OF SERVING IS A SEPARATE NAME, not a rewrite of the set
+    // (D-2605): the canonical set is never rewritten, so its BYTES are the
+    // assertion, and the marker's existence is what `measure` derives
+    // `served` from under the final lock.
+    expect(fs.existsSync(markerFile(nonce)), 'the fact of serving is a marker for this exact nonce').toBe(true);
+    expect(fs.readFileSync(setFile()), 'the canonical set is byte-identical — nothing rewrote it').toEqual(setBytes);
+    expect(readSet().nonce, 'the set still owns the pair').toBe(nonce);
+    expect(typeof readSet().at, 'and still carries its numeric measurement').toBe('number');
     expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
     // consume-once: a second compact SessionStart has no fourth subject
     const again = cardChecked(compactStart(tree, transcript));
@@ -2959,12 +2746,20 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   it('consume-once is ATOMIC: N concurrent SessionStart(compact) racers against one card serve exactly once (M1)', async () => {
     const tree = cardTree();
     plantPair(1, CARD_TEXT);
+    const setBytes = fs.readFileSync(setFile());
     const outs = await runConcurrent(compactStart(tree, '/t.jsonl'), 8);
     for (const o of outs) expect(o.stderr, 'every racer, silent on stderr').toBe('');
     const served = outs.filter((o) => o.stdout.includes('graphify card'));
     expect(served, 'exactly one of the 8 racers served the card').toHaveLength(1);
     expect(fs.existsSync(cardFile()), 'consumed, not left behind').toBe(false);
-    expect(readSet().served, 'the winner stamped it').toBe(true);
+    // RETARGETED, NOT LOOSENED: this row pins CONSUME-ONCE ATOMICITY, so the
+    // marker is counted rather than merely checked for existence — exactly one
+    // marker for exactly one racer — and the canonical set is asserted
+    // byte-identical, which is the stronger statement the old `served:true`
+    // stamp could not make because it WAS a rewrite.
+    expect(markers(), 'exactly one racer published a marker').toHaveLength(1);
+    expect(markers()[0], 'and it is the pair\'s own nonce').toBe(`.demo-quiet-basin.compactserved.${readSet().nonce}`);
+    expect(fs.readFileSync(setFile()), 'no racer rewrote the canonical set').toEqual(setBytes);
   });
 
   // I4: the brief's mutation #8b (return 1 -> return 0) was CONFOUNDED —
@@ -2984,7 +2779,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     const r = runFull(compactStart(tree, '/t.jsonl'));
     expect(r.stdout.trim(), 'the broken envelope printed nothing').toBe('');
     expect(r.stderr).toBe('');
-    expect(readSet().served, 'no print, no stamp').toBe(false);
+    expect(markers(), 'no print, no marker').toEqual([]);
     expect(fs.existsSync(cardFile()), 'still consumed independent of the print').toBe(false);
   });
 
@@ -3013,7 +2808,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     plantPair(1, CARD_TEXT, { nonce: '2' });
     expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(true);
-    expect(readSet().served).toBe(false);
+    expect(markers(), 'a crossed pair publishes no marker').toEqual([]);
     fs.rmSync(setFile());
     expect(cardChecked(compactStart(tree, '/t.jsonl'))).not.toContain('graphify card');
     expect(fs.existsSync(cardFile())).toBe(true);
@@ -3026,7 +2821,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
   // all: the file IS the nonce, with nothing after it.
   it('a nonce with no text after it is not served — the card stays', () => {
     const tree = cardTree();
-    const nonce = 'nonce-1';
+    const nonce = 'compact-1-1-2-3';
     fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at: 1, nonce, scope: 'main', agent: null,
       transcript: '/t.jsonl', parentLive: null, liveAgents: 0, cwd: null, built: null, fresh: null,
       steered: false, served: false, files: null, stats: null }) + '\n');
@@ -3035,7 +2830,9 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(out).not.toContain('graphify card');
     expect(fs.existsSync(cardFile()), 'restored, not consumed').toBe(true);
     expect(fs.readFileSync(cardFile(), 'utf8')).toBe(nonce);
-    expect(readSet().served).toBe(false);
+    // ITS OWN CASE, retargeted rather than deleted: a body-less nonce restores
+    // the card and serves nothing, so there is no marker either.
+    expect(markers(), 'a body-less nonce publishes no marker').toEqual([]);
   });
 
   // M3: `command -v find` is real, not a no-op — without it, `find "$f"
@@ -3199,5 +2996,143 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
       return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
     };
     expect(median(compactTimes) / median(cheapTimes)).toBeLessThan(4);
+  });
+});
+
+// ── D-2605: the permanent stable lock (spec §3.4, "Stable lock") ──────────
+// The whole of D-2605's ownership story rests on ONE mutex per registry row,
+// and on it being the SAME inode for every owner. The three properties below
+// are what make that true and are each pinned here: canonical is published by
+// `link` off a private `mktemp` source and never opened at its own pathname;
+// every acquisition opens a private hard-link ALIAS and unlinks it once the FD
+// is held, so no acquisition ever has a create-capable operation at canonical;
+// and the bounded wait is the acquire helper's FIRST POSITIONAL PARAMETER, so
+// `COMPACT_LOCK_WAIT_SERVE` (the one acquisition a human waits on) and
+// `COMPACT_LOCK_WAIT` (every other) coexist through one code path.
+describe('the compaction card — the permanent stable lock (spec §3.4)', () => {
+  const lockFile = (): string => path.join(home, '.cc-sessions', '.demo-quiet-basin.compactions.lock');
+  const regNames = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'));
+
+  /** Hold the row's permanent lock from a REAL process for `ms` ms. Resolves
+   *  only once the child reports it HAS the lock, so the racing arm starts
+   *  against a genuinely held mutex rather than a hoped-for one — the
+   *  `a-shared-deadline-hides-serialization` shape, avoided by waiting for the
+   *  holder's own acknowledgement instead of sleeping a guessed interval. */
+  const holdLock = async (ms: number): Promise<() => void> => {
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    const child = spawn('bash', ['-c',
+      `exec {g}<>"$1" || exit 1; flock "$g" || exit 1; echo held; exec sleep ${ms / 1000}`, '_', lockFile()]);
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('the holder never took the lock')), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+  };
+
+  it('the two waits are constants, and the acquire helper takes its wait as its FIRST positional', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src).toMatch(/^COMPACT_LOCK_WAIT=5$/m);
+    expect(src).toMatch(/^COMPACT_LOCK_WAIT_SERVE=2$/m);
+    expect(src.match(/^COMPACT_LOCK_WAIT=/gm)).toHaveLength(1);
+    expect(src.match(/^COMPACT_LOCK_WAIT_SERVE=/gm)).toHaveLength(1);
+    // THE PARAMETERIZATION, which is what lets the two bounds share one path.
+    // A helper that spelled either constant inside its own body would make the
+    // second bound unreachable, and no behaviour test distinguishes "waited 2 s
+    // because it was asked to" from "waited 2 s because that is all it knows".
+    const body = src.slice(src.indexOf('_hook_lock_acquire() {'));
+    const acquire = body.slice(0, body.indexOf('\n}\n') + 3);
+    expect(acquire, 'the acquire helper exists').toContain('flock -w "$1"');
+    expect(acquire).not.toContain('COMPACT_LOCK_WAIT');
+  });
+
+  it('canonical is published by link off an mktemp source and NEVER opened at its own pathname', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    // CODE ONLY. `single-definition.test.ts`'s own bash corpus filters on
+    // non-comment lines for the same reason: the negative below is a claim
+    // about what the file DOES, and the comment that explains why it must not
+    // do it necessarily spells the forbidden form out.
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).toContain('mktemp "$REG/.$id.compactions.lock-init.XXXXXX"');
+    expect(code).toContain('link "$src" "$lock"');
+    // THE MUTATION §3.4 names: `exec {fd}<>"$lock"` at canonical. A direct open
+    // is create-capable, so two racers can each create a DIFFERENT inode at the
+    // same pathname and each hold "the" lock. Nothing about the flock call
+    // itself would look wrong.
+    expect(code).not.toMatch(/exec\s*\{[A-Za-z_][A-Za-z0-9_]*\}<>"\$lock"/);
+    // What it opens instead is the private ALIAS, and the alias is the one the
+    // `lock-open` family names — asserted as a pair so neither half can be
+    // satisfied by a variable that happens to be spelled right and bound wrong.
+    expect(code).toMatch(/exec\s*\{fd\}<>"\$al"/);
+    expect(code).toContain('al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"');
+    expect(code).toContain('link "$lock" "$al"');
+  });
+
+  it('an uncontended acquisition leaves no init source and no open alias behind', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the permanent lock was minted').toBe(true);
+    expect(regNames().filter((n) => n.includes('lock-init'))).toEqual([]);
+    expect(regNames().filter((n) => n.includes('lock-open'))).toEqual([]);
+    // and it is a REGULAR file, not a directory or a symlink someone can swap
+    expect(fs.lstatSync(lockFile()).isFile()).toBe(true);
+  });
+
+  it('the permanent lock is NOT swept, NOT rewritten, and survives a second compaction', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const ino = fs.statSync(lockFile()).ino;
+    run(compactStart(tree, transcript));
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile())).toBe(true);
+    expect(fs.statSync(lockFile()).ino, 'the same inode spans compactions').toBe(ino);
+  });
+
+  it('compact SessionStart waits COMPACT_LOCK_WAIT_SERVE, not COMPACT_LOCK_WAIT, and serves nothing on a miss', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const cardBytes = fs.readFileSync(cardFile());
+    const setBytes = fs.readFileSync(setFile());
+    const release = await holdLock(3000);
+    try {
+      const t0 = Date.now();
+      const r = runFull(compactStart(tree, transcript));
+      const elapsed = Date.now() - t0;
+      expect(r.stderr).toBe('');
+      expect(r.stdout, 'no card was served under a held lock').not.toContain('graphify card —');
+      // THE BOUND, in both directions. `COMPACT_LOCK_WAIT` (5 s) at this call
+      // site outlives the 3 s holder, so the arm would SERVE at ~3 s; the 2 s
+      // bound cannot. Asserting only "< 3000" would pass for an arm that never
+      // took a lock at all, so the lower bound is asserted too.
+      expect(elapsed, 'it actually waited its own bound').toBeGreaterThanOrEqual(1500);
+      expect(elapsed, 'it gave up before the 3 s holder released').toBeLessThan(2900);
+      expect(fs.readFileSync(cardFile()), 'the card it could not claim is untouched').toEqual(cardBytes);
+      expect(fs.readFileSync(setFile()), 'the canonical set is untouched').toEqual(setBytes);
+    } finally { release(); }
+  }, 30_000);
+
+  it('lock-MECHANISM absence is its own condition, established before any acquire: the arms publish nothing', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    // `command -v flock` is the probe, and absence is a property of the PATH.
+    // A contended acquire and a missing binary both spell their failure `1`
+    // (measured), which is why the distinction must live in WHICH probe
+    // answered rather than in an exit status.
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['flock']) });
+    expect(r.stderr).toBe('');
+    expect(fs.existsSync(setFile()), 'no canonical set is published unlocked').toBe(false);
+    expect(fs.existsSync(cardFile()), 'no canonical card is published unlocked').toBe(false);
+    // SCOPED TO COMPACTION ARTIFACTS, in both directions. `compact-card.mjs` is
+    // the planted HELPER — an input to this arm, not anything it published —
+    // and `<id>.hookstate.json` is the `working` stamp, which lands BEFORE any
+    // of this and is not gated on the mutex at all. A scan counting either
+    // would be red for a reason that has nothing to do with the lock.
+    expect(regNames().filter((n) => /^\.?demo-quiet-basin\.(compact|generation)/.test(n))).toEqual([]);
+    expect(readState().state, 'the working stamp is NOT gated on the mutex').toBe('working');
+    expect(fs.existsSync(lockFile()), 'not even the permanent lock is minted').toBe(false);
   });
 });
