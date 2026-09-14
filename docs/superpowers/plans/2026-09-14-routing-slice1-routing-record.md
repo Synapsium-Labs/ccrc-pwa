@@ -1473,6 +1473,66 @@ Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`)
 - **D-2811 (2026-09-14)** — **The `/model` lever, recorded for slice 4.** `/model <alias>` persists top-level `model`
   (`/model default` deletes it); the session-only form is drivable (bare `/model`, ↓, `s`) with the trap that ←/→
   inside the model picker moves EFFORT; `--model` on the argv stays the relaunch lever (Task 6).
+- **D-2813 (2026-09-14)** — **`route` refuses control characters in `--actor`/`--reason`.** Task 4's verbatim
+  `cmd_route` interpolated both free-form arguments into the swap.log line unescaped, so a newline in either
+  forged a second, plausible log line — the threat the function's own byte-count rendering of the OLD value
+  exists to stop. Now any control character in either argument dies before any write; a negative row pins it.
+  Ruling S1-R4.
+- **D-2814 (2026-09-14)** — **`auto` is the escape from the haiku+effort refusal.** The verb had no way to
+  produce absence and treated `auto` as a set level, so a session that had ever had `effort` written could
+  never be routed to `class=haiku` (the refusal named a "clear effort" no verb performs). Spec §5.1 gives
+  `auto` the absent meaning: the pair refusal now fires only for a LEVEL other than `auto`, in `cmd_route` and
+  in `_route_effort_for`, and the message says "set effort=auto or pick another class". No `--clear` in this
+  slice. Ruling S1-R5.
+- **D-2815 (2026-09-14)** — **`inert=effort` is not stamped for `effort=auto`.** Task 6's non-Anthropic arm
+  stamped `inert=effort` for any non-empty effort, `auto` included — a record claiming a field was not applied
+  when nothing was requested. The guard excludes `auto`; a gpt-lane case pins it. Ruling S1-R6. Carried to the
+  slice 4 plan (ruling S1-R7): the stamp covers ANY level today because ccd's settle keystroke is
+  Anthropic-gated, which is honest now and narrower than spec §5.2's "ultracode and workflow only" — slice 4
+  narrows the stamp when its tick types on those lanes, and the spec paragraph is amended then.
+- **D-2816 (2026-09-14)** — **The doctor's routing check WARNs on an unsourceable projection.** Task 9's
+  verbatim `_check_routing` folded "the roster declares no Anthropic lane", "accounts.sh failed to source" and
+  "the projection predates the array" into one vacuous PASS — green having measured nothing. A source/declare
+  failure is its own WARN with the remedy; the PASS is kept for an array declared with zero elements. The two
+  unpinned arms gained tests and the env census corpus is derived from every shipped script under `ccd/`.
+  Ruling S1-R9.
+- **D-2817 (2026-09-14)** — **The act vocabulary is pinned by six suites, not two.** Task 3's one commit red
+  three more suites the plan never named (`ccd-lifecycle-emit` 22→23, `lifecycle-acts`' exhaustive record and
+  counts, `single-definition`'s `LIFECYCLE_ACTS.length`); the fix round updated them. Task 1 likewise had to add
+  `shared/models.mjs` to the enumerated install fixture tree (`installTreeFixture.ts`) — the new sibling import
+  reds 120 install tests otherwise — and Task 2 had to widen `single-definition`'s four-class-names holder list
+  with `ccd/ccd` (`ROUTE_CLASSES`, a legitimate seventh holder because `_route_word_in` walks it).
+- **D-2818 (2026-09-14)** — **Task 8 departs from the brief's draft text on three points, per ruling S1-R8.**
+  `--effort` is composed for `ultracode` too (the ruling's Lever B covers every non-auto level); `--settings`
+  is ordered before `--effort` inside `routeflags`; and the settle test exercises the record-less path, since
+  under Lever B a record short-circuits before the legacy guards. Task 9's brief-mandated
+  `e.parentPath ?? e.path` became `e.parentPath` (a TS2339 on this `@types/node`; the Node floor is ≥22.13). The final
+  wave implemented ruling S1-R2 (the rejection note counts BYTES) through a `_route_bytes` helper with a
+  function-local `LC_ALL=C` rather than `local LC_ALL=C` inside `cmd_route`, which would have changed what
+  `[[:cntrl:]]` matches and silently weakened D-2813's guard.
+- **D-2819 (2026-09-14)** — **The marker gate, again.** Task 8's in-workflow fix round (a comment-only edit to
+  `ccd/ccd`) shipped without the provenance re-stamp D-2788 requires, because the loop's fix prompt did not
+  carry the gate; the controller re-stamped (ea5ea703) and every later dispatch carries the step explicitly.
+- **D-2820 (2026-09-14)** — **A missing subagent vocabulary is not a bad value.** `_route_valid`'s subagent arm folded
+  "this box's roster projection carries no `CCRC_SUBAGENT_CLASSES`" into "the value is not haiku or sonnet", so a
+  legal `haiku` died as `bad value` and a stored one journalled as unrecognised; and the doctor's routing check
+  probed only the older `CCRC_ANTHROPIC_BACKEND` array. Now the validator answers three ways (in vocabulary / bad
+  value / vocabulary unavailable), `cmd_route` and the journal say which, a pure `_route_peek` serves the
+  decide-then-die reads, and `_check_routing` probes the new array too. Whole-branch review finding #1.
+- **D-2821 (2026-09-14)** — **`--model <alias>` on a non-Anthropic lane is composed on an unmeasured claim.** Spec
+  §5.2's parenthetical ("maps onto the lane's tiers through its materialiser") was never measured; the tree's own
+  materialiser resolves those lanes by model ID. The composer stays as the spec says (inert has no word for
+  `class`), its comment names the gap, and the slice 4 plan opens with the headless probe before any writer
+  targets such a lane. Ruling S1-R10.
+- **D-2822 (2026-09-14)** — **Two record semantics fixed before slice 3 and slice 4 lean on them.** (a) The settle
+  keys "has a record" on the EFFORT field's presence, not on any of the seven files — otherwise slice 3's
+  `degraded` stamp alone would switch off the `SPAWN_EFFORT` default (ruling S1-R11). (b) On an Anthropic lane
+  `workflow=off` stamps `inert=workflow` and composes nothing, because `{"enableWorkflows":false}` is unmeasured;
+  slice 4 measures it and clears the stamp (ruling S1-R12).
+- **D-2823 (2026-09-14)** — **Slice-0 residuals landed on their own PR.** The F7 docstring returned above
+  `runHealth`; `FleetSession.usage`'s docstring names the reviver's carried `stale`; `session-hook.sh`'s per-event
+  `tmux display-message` is bounded like the statusline's. The sweep's census-on-refusal stays deferred to its own
+  task with a reader.
 
 ## Self-review against the spec
 
