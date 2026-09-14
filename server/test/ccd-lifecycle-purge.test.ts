@@ -1448,6 +1448,20 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // a distinct token: an operator who reads this knows what to change.
       expect(absent.detail, `${leg.verb}: names the mechanism`).toContain('MECHANISM is absent');
       expect(absent.detail, `${leg.verb}: names the remedy`).toContain('PATH');
+      // AND THE THREE BINARIES ARE NAMED AS TEXT, in one contiguous phrase.
+      // This is not decoration. Written with backticks inside the
+      // double-quoted bash string, those names are COMMAND SUBSTITUTION —
+      // MEASURED on the form that shipped for one commit: bash ran flock,
+      // mktemp and link, leaked two usage messages to stderr, CREATED a real
+      // temp file and spliced its pathname into the operator's journal detail
+      // ("— , /tmp/tmp.nT9Ch9dTSd or  could not be resolved"). The
+      // "MECHANISM is absent" and "PATH" clauses above both SURVIVE that, which
+      // is exactly how it passed this leg. The phrase below does not: any
+      // substitution mangles it. (The names carry no backticks at all now —
+      // `macos-platform.test.ts`'s GNU scan cannot tell an escaped backtick
+      // from a live one, and it is right not to try.)
+      expect(absent.detail, `${leg.verb}: the three binaries are named as TEXT, in one unmangled phrase`)
+        .toContain('flock, mktemp or link could not be resolved');
 
       // (d1b) CONTENTION, the condition status 1 is FOR: a real `flock` and a
       // real holder, same row shape, same generation.

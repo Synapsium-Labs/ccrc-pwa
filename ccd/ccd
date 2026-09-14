@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0bfb000994a4099f35feb20f8eeb1903189402acfe63c311942147657c3e2844
+# ccrc:generated 1 sha256=da415bb2aaa630aa189531e48f0648ca64d7527c4ce467a29b80bdf80d716d55
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5428,7 +5428,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # nothing else: `ws-rm`'s re-run skips the dirty/foreign gates once
     # `[[ -d "$workdir" ]]` is false, so it has no second precondition to meet.
     _lc_fail destroy "$id" "$lctx" purge-mechanism-absent \
-      "the workspace was torn down, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — `flock`, `mktemp` or `link` could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd ws-rm $id\` from a PATH that resolves flock, mktemp and link" \
+      "the workspace was torn down, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd ws-rm $id\` from a PATH that resolves flock, mktemp and link" \
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
@@ -11741,7 +11741,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3), and the
     # header above for why this arm is reachable here at all.
     _lc_fail reap "$id" "$lctx" purge-mechanism-absent \
-      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — `mktemp` or `link` could not be resolved on the PATH ccd ran with (a missing `flock` is refused earlier, by ws-reap's own gate), so the lock was never consulted — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run from a PATH that resolves mktemp and link" \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — mktemp or link could not be resolved on the PATH ccd ran with (a missing flock is refused earlier, by ws-reap's own gate), so the lock was never consulted — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run from a PATH that resolves mktemp and link" \
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
@@ -12302,7 +12302,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # `_lc_refuse_return` and still tallies as declined. Only the token and
         # the detail change, because only the cause and the remedy do.
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-mechanism-absent \
-          "the compaction lock's MECHANISM is absent on this box — \`flock\`, \`mktemp\` or \`link\` could not be resolved on the PATH ccd ran with, so $REG/.$project-$slug.compactions.lock was never consulted and may not exist — while $REG/$project-$slug.generation is present; the registry row is untouched, and waiting changes nothing" \
+          "the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so $REG/.$project-$slug.compactions.lock was never consulted and may not exist — while $REG/$project-$slug.generation is present; the registry row is untouched, and waiting changes nothing" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         _gc_declined "dead registry entry $project-$slug — this box cannot take the compaction lock at all (flock, mktemp or link is off the PATH); nothing was removed"
       elif (( _pr_prc != 0 )); then
@@ -16310,7 +16310,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # `unknown` arm is an `_lc_refuse` that EMITS THEN DIES, so a re-run from a
     # flock-capable PATH still refuses unless a tmux server is answering.
     _lc_fail forget "$id" "$lctx" purge-mechanism-absent \
-      "the session was unsupervised and its pane killed, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — `flock`, `mktemp` or `link` could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd forget $id\` from a PATH that resolves flock, mktemp and link, and only while a tmux server is answering, because forget refuses outright on an unknown session verdict" \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd forget $id\` from a PATH that resolves flock, mktemp and link, and only while a tmux server is answering, because forget refuses outright on an unknown session verdict" \
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1

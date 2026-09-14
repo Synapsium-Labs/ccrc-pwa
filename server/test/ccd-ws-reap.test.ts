@@ -2758,6 +2758,12 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
     expect(detail, 'and no wait is prescribed for a compaction that cannot run')
       .not.toContain('once the compaction settles');
     expect(detail, 'the cause is named').toContain('MECHANISM is absent');
+    // THE BINARIES ARE NAMED AS TEXT, NOT RUN — see the same assertion in
+    // `ccd-lifecycle-purge.test.ts` for the measurement: backticks inside the
+    // double-quoted detail made bash RUN them and splice a real temp pathname
+    // into the record, while every other clause of the sentence survived.
+    expect(detail, 'named as text, in one unmangled phrase')
+      .toContain('mktemp or link could not be resolved');
     // AND THE REAP ITSELF RAN, so this is the tail and not an early refusal.
     expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
