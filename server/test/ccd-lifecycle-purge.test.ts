@@ -434,6 +434,131 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   }, 30_000);
 });
 
+// ── D-2605 §4/§5: A LATER CANONICAL DISAPPEARANCE REFUSES, AND MINTS NOTHING
+// §4's row: "stable canonical lock absent | initializer may publish it only
+// from the private init source using `link`; a later canonical
+// disappearance/replacement refuses, never recreates it." §5's row:
+// "canonical-disappearance/old-inode holder race refuses promptly, recreates no
+// canonical, and never admits split critical sections." Both were UNBUILT: the
+// acquire minted on absence unconditionally, so a stranger's unlink of the
+// permanent lock let a second acquirer publish a SECOND inode at the same
+// pathname while a live holder still owned the first — two processes each told
+// by `flock` that it holds "the" lock, which is the exact hazard
+// `ccd/session-hook.sh`'s own header says the link-based design removes.
+// MEASURED on the tree before this guard, with two real processes: holder
+// acquires canonical inode 167576, canonical is unlinked, the second acquirer
+// answers `RC=0` and canonical is back at inode 167577.
+describe('the stable lock refuses a LATER canonical disappearance (spec §4, §5)', () => {
+  const id = 'demo-quiet-basin';
+  const REG = (): string => path.join(h.home, '.cc-sessions');
+  const lockOfId = (): string => lockOf(id);
+
+  /** A REAL HOLDER, through the SHIPPED acquire: the child sources `ccd` and
+   *  calls `_compact_lock_acquire`, so what it leaves behind is the acquire's
+   *  own artifact and not a fixture's imitation of it — no alias on disk, and
+   *  a descriptor on the unlinked alias inode. Resolves only once the child
+   *  reports it HAS the lock. */
+  const holdThroughAcquire = async (): Promise<() => void> => {
+    // A LIVE ROW. The expensive half of the guard is gated on
+    // `<id>.generation`, for the reason `_reg_purge`'s own fail-open is: with
+    // it absent no hook on this row ever held this lock, so an absent canonical
+    // is a first-ever mint and there is nothing to walk /proc for. A holder
+    // that matters holds the lock of a row that exists, so the fixture builds
+    // one — through ccd's own minting path, not by writing bytes.
+    const mint = h.sh(`_compact_lock_acquire ${id} 5 || { echo LOCKFAIL; exit 0; }
+      fd="$COMPACT_LOCK_FD"
+      if _reg_generation_init ${id}; then echo OK; else echo REFUSED; fi
+      _compact_lock_release "$fd"`);
+    expect(mint, 'the row was minted the way creation mints it').toBe('OK');
+    const child = spawn('bash', ['-c',
+      `source "${CCD}"; _compact_lock_acquire ${id} 5 || { echo "ACQRC=$?"; exit 1; }; echo held; exec sleep 20`],
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never acquired: ${out}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString(); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { out += d.toString(); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
+  };
+
+  it('a live holder leaves NO name in $REG — which is why an alias scan alone cannot see one', async () => {
+    // THE MEASUREMENT THAT SHAPES THE GUARD, asserted rather than remembered.
+    // The acquire unlinks its alias the instant the FD is held, by design and
+    // by its own comment, so "is an exact-family alias present" answers NO for
+    // a holder that is past its acquire. A guard built on that question alone
+    // would be green, correct-looking, and blind to §4's own scenario.
+    const release = await holdThroughAcquire();
+    try {
+      expect(fs.readdirSync(REG()).filter((n) => n.includes('lock-open')),
+        'the holder keeps a descriptor, not a name').toEqual([]);
+      expect(fs.existsSync(lockOfId()), 'canonical itself is of course still there').toBe(true);
+    } finally { release(); }
+  }, 30_000);
+
+  it('REFUSES rather than recreating canonical while a real holder owns the old inode', async () => {
+    const release = await holdThroughAcquire();
+    try {
+      const ino = fs.statSync(lockOfId()).ino;
+      // THE OUT-OF-CONTRACT ACT. Nothing in this tree unlinks the permanent
+      // lock — `_reg_purge` skips it BY NAME and `_ws_private_family` excludes
+      // it — so this is a stranger, which is exactly the condition §4 rules on.
+      fs.unlinkSync(lockOfId());
+      const out = h.sh(`_compact_lock_acquire ${id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(out, 'a later disappearance is refused').toContain('RC=1');
+      expect(out, 'and the refusal says WHICH refusal it is').toContain('WHY=canonical-vanished');
+      // RECREATES NO CANONICAL — the half §4 states twice and §5 once. The
+      // refusal happens BEFORE the mint, so there is nothing to clean up
+      // either: no init source, no alias.
+      expect(fs.existsSync(lockOfId()), 'canonical was NOT recreated').toBe(false);
+      expect(fs.readdirSync(REG()).filter((n) => n.includes('lock-init')),
+        'and the refusal left no private source').toEqual([]);
+      expect(fs.readdirSync(REG()).filter((n) => n.includes('lock-open')),
+        '…nor an open alias').toEqual([]);
+      // THE INODE NEVER CHANGED UNDER THE LIVE HOLDER. There is no second
+      // inode at this pathname because there is no file at this pathname —
+      // which is the strongest form of "the holder's mutex was not displaced".
+      expect(ino, 'the fixture measured a real inode to begin with').toBeGreaterThan(0);
+    } finally { release(); }
+  }, 30_000);
+
+  it('CONTROL: with NO holder, an absent canonical is a first-ever mint and the acquire proceeds', () => {
+    // Without this the refusal above could be an acquire that refuses on every
+    // absent canonical, which would wedge every row ccd ever creates.
+    expect(fs.existsSync(lockOfId()), 'no canonical yet').toBe(false);
+    const out = h.sh(`_compact_lock_acquire ${id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+    expect(out, 'the first-ever acquisition mints and acquires').toContain('RC=0');
+    expect(out, 'and nothing is blamed').toContain('WHY=');
+    expect(out).not.toContain('canonical-vanished');
+    expect(fs.existsSync(lockOfId()), 'canonical was published').toBe(true);
+  });
+
+  it('an acquisition IN FLIGHT is refused too — its alias is on disk between the link and the unlink', () => {
+    // The second arm, and the one a fixture can construct directly: between
+    // its `link "$lock" "$al"` and the `rm -f "$al"` that follows its `exec`,
+    // an acquirer HAS an exact-family name on disk. Planting that name beside
+    // an absent canonical is that process's on-disk state, byte for byte.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), `.${id}.compactions.lock-open.4242.1.2`), '');
+    const out = h.sh(`_compact_lock_acquire ${id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+    expect(out).toContain('RC=1');
+    expect(out).toContain('WHY=canonical-vanished');
+    expect(fs.existsSync(lockOfId()), 'canonical was NOT minted over an in-flight acquisition').toBe(false);
+  });
+
+  it('the family is EXACT — a NESTED id\'s alias does not refuse this id', () => {
+    // Project DIRECTORY names may hold dots, so `demo-quiet-basin.x` is a legal
+    // sibling id whose alias shares this id's prefix. A substring matcher would
+    // read it as this row's and wedge a row that has no holder at all.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), `.${id}.x-y.compactions.lock-open.4242.1.2`), '');
+    const out = h.sh(`_compact_lock_acquire ${id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+    expect(out, 'a NESTED id answers only for itself').toContain('RC=0');
+    expect(fs.existsSync(lockOfId())).toBe(true);
+  });
+});
+
 /** The row mutex and the real process that holds it live in
  *  `lifecycleHelpers.ts`: two test files now drive a caller against a genuinely
  *  held lock (this one, and `ccd-ws-reap.test.ts`'s reap-tail leg), and a

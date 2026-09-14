@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=65f5a3978e05a5f882673d79019b7519c7eaf1200f85ad8313e7fdafe2a7b9a1
+# ccrc:generated 1 sha256=e456e506202c537fdd8e9d8d56877c66c86873c0688f73d8e09feb9f7bc7cae3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1773,14 +1773,52 @@ _compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode
   return 0
 }
 
+# THE CCD-SIDE TWIN of `_hook_lock_vanished` (`ccd/session-hook.sh`), which
+# carries the full argument and the measurements. In short: §4 requires a later
+# canonical disappearance to REFUSE rather than mint a second inode at the same
+# pathname under a live holder, and the two conditions are only distinguishable
+# by finding the holder. (a) an acquisition in flight still has its exact-family
+# alias on disk; (b) a holder past its acquire has unlinked the alias and keeps
+# only a descriptor — MEASURED, `$REG` then lists the canonical file and nothing
+# else, while `/proc/<pid>/fd/<n>` reads back that alias pathname with
+# ` (deleted)` after it. Gated on an ABSENT canonical, so the `/proc` walk never
+# runs on an ordinary acquire.
+_compact_lock_vanished() {   # <id> -> 0 iff an ABSENT canonical is a LATER disappearance
+  local id="$1" f
+  for f in "$REG/.$id.compactions.lock-open."*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } && return 0
+  done
+  # GATED ON A LIVE ROW, then on one `find` rather than a fork per descriptor —
+  # the hook-side twin carries the measurements (8 s against 0.16 s on this
+  # box). `<id>.generation` absent proves no hook on this row ever held this
+  # lock, which is the same argument `_reg_purge`'s own fail-open rests on.
+  [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
+  [ -d /proc ] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
+             -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
+
 _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 mechanism absent
   local id="$1" wait="$2" lock="$REG/.$1.compactions.lock" al="" fd="" tries=0 src=""
   COMPACT_LOCK_FD=""
+  # WHY, NOT A SECOND STATUS — see `_hook_lock_acquire`'s note. `cmd_start` and
+  # `_spawn_start` both fall through an unrecognised code into a silent
+  # continue, so a new numeric value would be a refusal nobody distinguishes
+  # and two spawn paths would quietly treat it as mechanism absence. Cleared on
+  # entry so a stale one is never read as this call's.
+  COMPACT_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
   command -v link   >/dev/null 2>&1 || return 2
   if [ -e "$lock" ] || [ -L "$lock" ]; then
     [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  elif _compact_lock_vanished "$id"; then
+    # REFUSE BEFORE THE MINT: nothing has been created yet, so the refusal owns
+    # nothing to clean up and the live holder's inode is never displaced.
+    COMPACT_LOCK_WHY=canonical-vanished
+    return 1
   else
     src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) || return 1
     [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
@@ -4797,8 +4835,14 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # takes its own — it guards the residue check and the generation mint, and
   # nothing else.
   local gfd=""
+  # THE REMEDY CLAUSE IS CONDITIONAL because the remedy is. Ordinary contention
+  # clears by itself and `retry` is the whole answer; `canonical-vanished` is
+  # the out-of-contract state where the permanent lock file has been unlinked
+  # under a live holder, and this file deliberately does not recreate it — so a
+  # retry can never succeed and saying only "retry" is the same fabricated
+  # remedy the purge callers' messages carried (D-2782).
   _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT" \
-    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was created; retry"
+    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was created; retry${COMPACT_LOCK_WHY:+ — EXCEPT that a retry cannot help here: $COMPACT_LOCK_WHY, i.e. $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it. Restore the file by hand}"
   gfd="$COMPACT_LOCK_FD"
   if ! _reg_generation_init "$id"; then
     _compact_lock_release "$gfd"
@@ -14490,7 +14534,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   local gfd="" _cs_rc=0
   _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _cs_rc=$?
   if (( _cs_rc == 1 )); then
-    die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry"
+    # Same conditional remedy as `cmd_ws_add`'s, and for the same reason.
+    die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry${COMPACT_LOCK_WHY:+ — EXCEPT that a retry cannot help here: $COMPACT_LOCK_WHY, i.e. $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it. Restore the file by hand}"
   elif (( _cs_rc == 0 )); then
     gfd="$COMPACT_LOCK_FD"
     if ! _reg_generation_init "$id"; then

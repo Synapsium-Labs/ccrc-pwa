@@ -894,6 +894,77 @@ _hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical 
   return 0
 }
 
+# ── IS AN ABSENT CANONICAL A FIRST-EVER MINT, OR A LATER DISAPPEARANCE? ──
+# §4: "a later canonical disappearance/replacement refuses, never recreates
+# it." Without this the two are indistinguishable and the mint arm publishes a
+# SECOND inode at the same pathname while a live holder still owns the first —
+# two processes each told by `flock` that it holds "the" lock, which is the
+# exact hazard this file's header says the link-based design exists to remove.
+# MEASURED before this function existed, with two real processes: holder
+# acquires (canonical inode 167576), a stranger unlinks canonical, a second
+# acquirer runs -> `RC=0`, canonical recreated at inode 167577.
+#
+# TWO ARMS, BECAUSE ONE OF THEM CANNOT SEE THE SCENARIO §4 NAMES.
+#
+#  (a) AN ACQUISITION IN FLIGHT leaves its exact-family alias on disk between
+#      its `link` and the `rm -f` that follows its `exec`. Short, but a real
+#      window, and a real on-disk state a fixture can construct.
+#
+#  (b) A LIVE HOLDER PAST ITS ACQUIRE LEAVES NO NAME AT ALL. MEASURED: with a
+#      real process holding this lock, `$REG` lists exactly
+#      `.<id>.compactions.lock`, and ZERO `lock-open` aliases — the acquire
+#      unlinks its alias immediately and deliberately, so (a) alone is blind to
+#      the very race the spec names. What the holder does keep is a DESCRIPTOR
+#      on the unlinked inode, and Linux names it: MEASURED,
+#      `/proc/<pid>/fd/<n>` reads back
+#      `…/.<id>.compactions.lock-open.<pid>.<r>.<r> (deleted)` while the holder
+#      lives, and nothing after it is killed.
+#
+# EXACT FAMILY, NEVER A SUBSTRING: the literal `.<id>.compactions.lock-open.`
+# prefix, so a NESTED id (`demo.quiet` beside `demo`, legal because project
+# directory names may hold dots) answers only for itself.
+#
+# ARM (b) IS GATED THREE TIMES, because it is the only expensive thing in this
+# file. First on an ABSENT canonical, which is out of contract and essentially
+# never true. Then on `$REG/<id>.generation`, the same witness `_reg_purge`
+# gates its own fail-open on: minted only by a flock-capable row creation, so
+# its ABSENCE proves no hook on this row ever held this lock and the absent
+# canonical is an ordinary first-ever mint. Then on `/proc` and `find` being
+# there at all — `find` is asked for rather than assumed, and where `-lname`
+# or `-quit` is missing the expression simply finds nothing and this function
+# answers "first-ever mint", which is the pre-D-2605 behaviour and is stated as
+# a residual rather than hidden behind a refusal this arm could not justify.
+#
+# WHAT IS STILL UNDETECTED, stated rather than implied: a live holder on a row
+# with NO generation. The only in-design holder of that shape is row creation
+# itself, between its own acquire and its `_reg_generation_init` — and row
+# creation owns the slug exclusively for that window, so there is no second
+# actor for it to race.
+_hook_lock_vanished() {   # -> 0 iff an ABSENT canonical is a LATER disappearance, not a first-ever mint
+  local f
+  for f in "$REG/.$id.compactions.lock-open."*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } && return 0
+  done
+  # THE ROW MUST BE LIVE BEFORE ANYTHING EXPENSIVE RUNS. `<id>.generation` is
+  # the same witness `_reg_purge` gates its fail-open on: it is minted only by a
+  # flock-capable row creation, so its ABSENCE proves no hook on this row ever
+  # held this lock and an absent canonical is an ordinary first-ever mint. With
+  # it absent this function is one glob and no fork, which is what every real
+  # `ws-add` and `start` pays.
+  [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
+  [ -d /proc ] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  # ONE FORK, NOT ONE PER DESCRIPTOR. MEASURED on this box (517 processes, 2662
+  # `/proc/<pid>/fd` entries): a bash loop calling `readlink` per entry takes
+  # 7.8-8.4 s — longer than COMPACT_LOCK_WAIT itself — while this single
+  # `find -lname … -quit` takes 0.16 s. `-lname` matches the SYMLINK TARGET,
+  # which for an unlinked file reads `<pathname> (deleted)`, so the exact-family
+  # prefix still matches.
+  [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
+             -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
+
 _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 otherwise
   local lock="$1" src=""
   # EEXIST MEANS VALIDATE THE INCUMBENT — never open it, never recreate it.
@@ -917,9 +988,25 @@ _hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 other
 _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
+  # WHY, NOT A SECOND STATUS. Every one of this file's six acquire sites reads
+  # the acquire as a boolean (`|| return 0`) and ccd's five read the VALUE with
+  # two of them — `cmd_start` and `_spawn_start` — falling through an unknown
+  # code into a silent continue, so a third numeric status would be a distinct
+  # refusal nobody distinguishes. The condition is carried in a named
+  # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
+  # carry theirs, and cleared on entry so a stale one is never read as this
+  # call's.
+  HOOK_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
   command -v link   >/dev/null 2>&1 || return 2
+  # REFUSE BEFORE THE MINT, so "recreates no canonical" is a mechanism and not
+  # an intention: nothing has been created at this point, so the refusal owns
+  # nothing to clean up and the holder's inode is never displaced.
+  if [ ! -e "$lock" ] && [ ! -L "$lock" ] && _hook_lock_vanished; then
+    HOOK_LOCK_WHY=canonical-vanished
+    return 1
+  fi
   _hook_lock_init "$lock" || return 1
   # An absent exact-family alias, NEVER precreated: two independent decimal
   # $RANDOM components, and a candidate collision retries rather than adopting

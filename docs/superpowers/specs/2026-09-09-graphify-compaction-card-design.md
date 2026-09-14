@@ -1020,6 +1020,35 @@ slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD
    the old inode while canonical disappears and requires prompt refusal, zero recreated canonical, and no
    split critical section.
 
+   **HOW AN ABSENT CANONICAL IS TOLD FROM A FIRST-EVER MINT (D-2793).** The refusal above is only
+   expressible if the acquire can distinguish "nobody has ever held this lock" from "somebody holds it and
+   its name was taken away", and those two states are IDENTICAL at the canonical pathname. The acquire
+   therefore asks two questions before it mints, and refuses on either. (a) Is an exact-family
+   `.<id>.compactions.lock-open.<pid>.<r>.<r>` alias present in `$REG`? That is an acquisition IN FLIGHT,
+   between its own `link` and the `rm -f` that follows its `exec`. (b) Does any process hold a DESCRIPTOR
+   on such an alias? MEASURED, and this is why (a) alone is not enough: a holder past its acquire leaves NO
+   NAME — with a real process holding this lock, `$REG` lists exactly `.<id>.compactions.lock` and zero
+   aliases — but Linux names the descriptor, `/proc/<pid>/fd/<n>` reading back that alias pathname with
+   ` (deleted)` after it. (b) is gated on `$REG/<id>.generation` being present, on the same argument
+   `_reg_purge`'s fail-open rests on (no generation means no hook on this row ever held this lock, so an
+   absent canonical is an ordinary first mint), and it is ONE `find … -lname … -print -quit` rather than a
+   `readlink` per descriptor: measured on the fleet box (517 processes, 2662 `/proc/<pid>/fd` entries) the
+   per-descriptor loop costs 7.8–8.4 s, longer than `COMPACT_LOCK_WAIT` itself, against 0.16 s for the
+   single `find`.
+
+   **WHAT IS STILL UNDETECTED, stated rather than implied:** a live holder on a row with NO
+   `<id>.generation`, and any box where `/proc` or `find`'s `-lname`/`-quit` is unavailable. In the first
+   case the only in-design holder of that shape is row creation itself, between its own acquire and its
+   `_reg_generation_init`, and row creation owns the slug exclusively for that window; in the second the
+   acquire answers "first-ever mint" and behaves exactly as it did before D-2793.
+
+   **THE REFUSAL IS A `WHY`, NOT A THIRD STATUS.** `canonical-vanished` is carried in `HOOK_LOCK_WHY` /
+   `COMPACT_LOCK_WHY` beside the ordinary rc 1, because all six hook acquire sites read the acquire as a
+   boolean and two of ccd's five (`cmd_start`, `_spawn_start`) fall through an unrecognised code into a
+   silent continue — a new numeric status would be a distinct refusal nobody distinguishes, and two spawn
+   paths would quietly treat it as mechanism absence. `cmd_ws_add` and `cmd_start` append a conditional
+   remedy clause when it is set, because "retry" is the WRONG remedy for a lock file nothing will recreate.
+
 The first-publish source never leaks: implementation removes it before taking the common open-alias flow
 (or safely uses it as the initial alias with the same single cleanup). Exact aged cleanup of crashed init or
 open-alias residue is allowed only while a later validated stable lock is held (or by exact purge), parses
@@ -1957,7 +1986,7 @@ Plan A.
 | condition | behaviour |
 | --- | --- |
 | compact SessionStart missing/mismatched generation | before lock acquisition, no lifecycle pathname is inspected; card/set/marker remain byte-identical |
-| stable canonical lock absent | initializer may publish it only from the private init source using `link`; a later canonical disappearance/replacement refuses, never recreates it |
+| stable canonical lock absent | initializer may publish it only from the private init source using `link`; a later canonical disappearance/replacement refuses, never recreates it — "later" MEASURED and not assumed: an exact-family `lock-open` alias on disk, or a descriptor on one in `/proc`, under the §3.4 gates and with §3.4's residuals (D-2793) |
 | lock source/alias/FIFO/symlink/directory/mktemp/link/flock failure | close owned FD/source/alias; no critical mutation, no split critical section |
 | card/set pair changes while SessionStart waits | acquire first, then inspect the current pair; no stale age/match/claim observation is reused |
 | marker source link succeeds, EEXIST, or fails | unlink owned source on every handled result; only valid same-nonce final marker is idempotent |
@@ -2041,7 +2070,7 @@ adds the following real process and source pins, each through fixture HOME/PATH 
 | Task 9 mutation | expected red |
 | --- | --- |
 | move any compact SessionStart age/read/match/claim/delete/emission before stable acquisition | missing/mismatched old generation leaves aged card/set/marker byte-identical; a replacement barrier cannot reuse pre-lock observations |
-| restore `exec {fd}<>"$lock"` or create-capable canonical open | canonical-disappearance/old-inode holder race refuses promptly, recreates no canonical, and never admits split critical sections |
+| restore `exec {fd}<>"$lock"` or create-capable canonical open, **or delete the `_hook_lock_vanished` / `_compact_lock_vanished` gate from its acquire** | canonical-disappearance/old-inode holder race refuses promptly, recreates no canonical, and never admits split critical sections. The last mutant is the one this row went unbuilt on: with the gate deleted, a real holder plus a stranger's unlink lets the next acquirer mint a SECOND inode at the same pathname and both be told by `flock` that they hold "the" lock — measured before the gate, inode 167576 held, canonical unlinked, second acquirer `RC=0` at inode 167577 |
 | delete lock init/open alias cleanup or loosen a family matcher | successful publication/open leaves zero owned source/alias; crash residue ages out exact-ID only; dotted/shared-prefix neighbors survive |
 | delete marker-source cleanup or make source grammar overlap final marker | success/EEXIST/failure leaves no owned source; crash source does not read as served marker; independent family matcher red |
 | touch claim before canonical unlink | unlink-failure fixture changes canonical mtime; shipped path retains exact bytes+mtime |

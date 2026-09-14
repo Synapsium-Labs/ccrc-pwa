@@ -3207,6 +3207,103 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     expect(fs.lstatSync(lockFile()).isFile()).toBe(true);
   });
 
+  /** Hold the row's mutex EXACTLY AS THE SHIPPED ACQUIRE DOES: link a private
+   *  exact-family alias off canonical — `<canonical>-open.<pid>.<r>.<r>`, i.e.
+   *  `.<id>.compactions.lock-open.…`, which is the family name and NOT
+   *  `<canonical>.lock-open.…`; the first draft of this helper spelled the
+   *  latter, and the guard correctly ignored it — open THAT, unlink the alias, then
+   *  `flock`. `holdLock` above opens canonical at its own pathname, which is
+   *  the one thing `_hook_lock_acquire` never does, so its descriptor names
+   *  canonical and not a deleted alias — a different on-disk fact entirely.
+   *  This file cannot be SOURCED (it runs to the end on every path), so the
+   *  holder reproduces the acquire's five operations rather than calling it;
+   *  what makes that faithful is the state it leaves, and the leg below
+   *  asserts that state rather than assuming it. */
+  const holdThroughAlias = async (ms: number): Promise<() => void> => {
+    const child = spawn('bash', ['-c',
+      `al="$1-open.$$.$RANDOM.$RANDOM"
+       link "$1" "$al" || exit 1
+       exec {g}<>"$al" || exit 1
+       rm -f "$al"
+       flock "$g" || exit 1
+       echo held
+       exec sleep ${ms / 1000}`, '_', lockFile()]);
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never took the lock: ${out}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { out += d.toString('utf8'); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } };
+  };
+
+  // ── §4 / §5: A LATER CANONICAL DISAPPEARANCE REFUSES AND MINTS NOTHING ──
+  // §4's row: "a later canonical disappearance/replacement refuses, never
+  // recreates it." §5's: "canonical-disappearance/old-inode holder race refuses
+  // promptly, recreates no canonical, and never admits split critical
+  // sections." Both were UNBUILT — `_hook_lock_acquire` minted on absence
+  // unconditionally — so a stranger's unlink of the permanent lock let the next
+  // arm publish a SECOND inode at the same pathname while a live holder still
+  // owned the first: two processes each told by `flock` that it holds "the"
+  // lock, the exact hazard this file's own header says the design removes.
+  it('a holder past its acquire leaves NO name in $REG, only a descriptor — measured', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const release = await holdThroughAlias(20_000);
+    try {
+      // THE MEASUREMENT THAT SHAPES THE GUARD. The acquire unlinks its alias
+      // the instant the FD is held, by design and by its own comment, so
+      // "is an exact-family alias present in $REG" answers NO for every holder
+      // that is past its acquire. A guard built on that question alone would be
+      // green, correct-looking, and blind to the scenario §4 names.
+      expect(regNames().filter((n) => n.includes('lock-open')),
+        'the holder keeps a descriptor, not a name').toEqual([]);
+      // What it DOES keep is nameable, and that is what arm (b) walks.
+      const found = spawnSync('bash', ['-c',
+        `find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' -lname "$1-open.*" -print -quit 2>/dev/null`,
+        '_', lockFile()], { encoding: 'utf8' });
+      expect((found.stdout ?? '').trim(), 'the live holder is nameable through /proc').not.toBe('');
+    } finally { release(); }
+  }, 60_000);
+
+  it('PreCompact REFUSES and recreates no canonical when it vanished under a live holder', async () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the permanent lock was minted').toBe(true);
+    const release = await holdThroughAlias(20_000);
+    try {
+      const setBytes = fs.readFileSync(setFile());
+      // THE OUT-OF-CONTRACT ACT. Nothing in this tree unlinks the permanent
+      // lock — the sweep's own vocabulary excludes it by name — so this is a
+      // stranger, which is the condition §4 rules on.
+      fs.unlinkSync(lockFile());
+      const r = runFull(preCompact(tree, transcript));
+      expect(r.stderr, 'the hook stays silent, as it must on every path').toBe('');
+      // RECREATES NO CANONICAL. The refusal happens BEFORE the mint, so there
+      // is nothing to clean up either: no init source, no open alias.
+      expect(fs.existsSync(lockFile()), 'canonical was NOT recreated').toBe(false);
+      expect(regNames().filter((n) => n.includes('lock-init')), 'no private source').toEqual([]);
+      expect(regNames().filter((n) => n.includes('lock-open')), 'no open alias').toEqual([]);
+      // …and it published nothing, because it never entered the section.
+      expect(fs.readFileSync(setFile()), 'the set it could not claim is untouched').toEqual(setBytes);
+    } finally { release(); }
+  }, 60_000);
+
+  it('CONTROL: with NO holder, an absent canonical is a first-ever mint and PreCompact publishes', () => {
+    // Without this the refusal above could be an acquire that refuses on every
+    // absent canonical, which would make the first compaction of every session
+    // inert for its whole life.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(fs.existsSync(lockFile()), 'no canonical yet').toBe(false);
+    run(preCompact(tree, transcript));
+    expect(fs.existsSync(lockFile()), 'the first-ever acquisition minted it').toBe(true);
+    expect(fs.existsSync(setFile()), 'and the arm ran').toBe(true);
+  });
+
   it('the permanent lock is NOT swept, NOT rewritten, and survives a second compaction', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
@@ -5772,7 +5869,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // those files' lines back under six anchors that had drifted past them.
     // Re-measured against the tree, never adjusted to keep a number green.
     // A later commit in the same round lowered `compact-card.test.ts` by two
-    // the same way, by shifting its lines under two drifted anchors.)
+    // the same way, by shifting its lines under two drifted anchors. Fix round
+    // 2 lowered `ccd/session-hook.sh` by one more, 42->41, for the same
+    // reason: `_hook_lock_vanished` and its header shifted that file's lines
+    // back under one anchor that had drifted past them. RE-MEASURED against
+    // the tree — `vitest run test/session-hook.test.ts -t 'CITATION DEBT'` —
+    // never adjusted to keep a number green.)
     //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
@@ -5782,7 +5884,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       'ccd/ccd': 128,
-      'ccd/session-hook.sh': 42,
+      'ccd/session-hook.sh': 41,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
       'server/test/ccd-ws-reap.test.ts': 7,
