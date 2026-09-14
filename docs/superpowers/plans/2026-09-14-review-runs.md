@@ -1343,10 +1343,11 @@ export async function verifyReviewDone(
   const TIPW = 'c'.repeat(40);
   const reviewInFlight = async (home: string, tipNow: string = TIPW) => {
     const root = project(tipNow, null, 'ws/demo-w1');
-    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w1', 'demo-r1'] });
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w1'] });
     const w = await openApp(home, run, { cfg: { projectsRoot: root } }); app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };
-    await postDispatch(app, opened.id);                       // seeds demo-w1 AND demo-r1 in the registry
+    await postDispatch(app, opened.id);                       // ws-add seeds demo-w1; the registry diff sees ONE new row
+    seed(home, 'demo-r1');                                    // R's row, planted AFTER W's dispatch so that diff stays unambiguous
     expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
     expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
     const r = (await postOpen(app, REVIEW(opened.id))).json() as { id: number };
@@ -1412,7 +1413,7 @@ export async function verifyReviewDone(
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
   });
 ```
-Check the `makeRunner` `ws-add` arm (`run-routes.test.ts:98-104`): it seeds EVERY id in `wsAddCreates` on the FIRST `ws-add`, so `demo-r1` exists in the registry from W's dispatch; that is fine here because R is positioned through `markDispatched`, not through the dispatch route. Run `-t "review run done|stale-review|report-unreadable|review run failed|review close as bad-request"` → FAIL (today a review run's close is `bad-transition` from Task 4's `transitionsFor`, and the body shape is the work one).
+Check the `makeRunner` `ws-add` arm (`run-routes.test.ts:98-104`): it seeds EVERY id in `wsAddCreates` on the FIRST `ws-add`, and the dispatch route diffs the registry for exactly ONE new row — so `demo-r1` must NOT be in `wsAddCreates` (two new rows would refuse W's dispatch `ambiguous-dispatch`); it is planted with `seed()` after W's dispatch instead, and R is positioned through `markDispatched`, not through the dispatch route. Run `-t "review run done|stale-review|report-unreadable|review run failed|review close as bad-request"` → FAIL (today a review run's close is `bad-transition` from Task 4's `transitionsFor`, and the body shape is the work one).
 
 - [ ] **Step 5: The close arm.** In `close.ts`, right after the `not-dispatched` check (`:230-234`) and BEFORE the `transitionsFor(run.kind)[run.state].includes('closing')` check (`:247`), insert:
 ```ts
@@ -1446,7 +1447,10 @@ async function closeReviewRun(
   if (!transitionsFor(run.kind)[run.state].includes(state)) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: state };
   }
-  if (run.sessionId === null) return { ok: false, kind: 'refused', code: 'not-dispatched' };
+  // `run.sessionId` is non-null here: `closeRun`'s own `not-dispatched` check
+  // runs before this arm is entered. The type still says `string | null`, so
+  // narrow it once for the reads below rather than re-check a fact already decided.
+  const sessionId = run.sessionId as string;
 
   if (state !== 'failed') {
     if (run.reviews === null) {
@@ -1467,8 +1471,8 @@ async function closeReviewRun(
       { reviewedTip: fp.reviewedTip, report: fp.report },
     );
     if (!verdict.ok) {
-      coord.recordRejection({ code: verdict.code, runId: run.id, toId: run.sessionId, detail: verdict.detail });
-      queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: run.id,
+      coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });
+      queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: run.id,
         kind: 'status', subject: 'review-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
       return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
     }
@@ -1477,7 +1481,7 @@ async function closeReviewRun(
   // The fleet act, AHEAD of the commit (D-48). A review workspace hosts one
   // run, so the ordinary answer is a release; the sibling check is kept
   // because it is a re-measurement, not an assumption.
-  const sibRead = siblingsOf(run.sessionId);
+  const sibRead = siblingsOf(sessionId);
   if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
   const survivor = survivorOf(sibRead.siblings);
   const release = releaseIsSafe(sibRead.siblings) || survivor === null;
@@ -1485,9 +1489,9 @@ async function closeReviewRun(
   if (!release && survivor !== null) {
     const handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
     if (!handoff.ok) return handoff;
-    argv = CCD_ARGV.wsHold(run.sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`));
+    argv = CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`));
   } else {
-    argv = CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
+    argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
   }
   if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
   const res = await deps.runCcd(argv);
