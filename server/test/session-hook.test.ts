@@ -4571,3 +4571,296 @@ describe('the compaction card — the first held section forks exactly this (spe
     expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
   }, 60_000);
 });
+
+// ── D-2605: the CITATION AUDIT over both documents (spec §3.4, round 14) ──
+// These two documents cite tracked source by line in the hundreds, and a line
+// citation is the one claim that goes false without anybody editing it. The
+// rule, restated so it is decidable:
+//
+//   PREMISE — it relates a QUOTATION to a RANGE. Where a reference's clause
+//     quotes nothing there is nothing to check and the rule does not apply; a
+//     correct citation may point at a line with no token to quote (measured,
+//     `ccd/session-hook.sh:843` is a BLANK line and is cited as one).
+//   THE RULE — at least ONE quoted token or excerpt in the SAME CLAUSE occurs
+//     within the cited lines. One clause may carry several quotations and one
+//     quotation may anchor several references; a single hit anywhere in the
+//     clause satisfies it, and an excerpt with an ellipsis is satisfied when
+//     each part occurs.
+//   SUB-RULE A — a citation naming a function while pointing at a STATEMENT
+//     must have its range inside that function's body.
+//   SUB-RULE B — a `pinned by <test>:N` citation must land on that test's
+//     `it(` / `describe(` / `expect(` line. Evaluated BEFORE the premise's
+//     early-out, because such a clause usually quotes nothing but the
+//     reference itself and what it asserts is about the LINE, not a quotation.
+//   ALLOW-LIST — quoted HISTORY is exempt: a reference inside the
+//     `## Deviations found` ledger, or in a clause the same sentence marks as
+//     superseded. A scan that reds on the record of a correction teaches the
+//     next round to delete that record.
+//
+// PARAGRAPH-JOINED, and the join is load-bearing exactly as it is in the
+// documentation-consistency scan above: this corpus hard-wraps at ~110 columns,
+// and a line-scoped clause cuts the quotation away from the reference it
+// anchors. Measured over these two documents at the commit this task started
+// from, with the prototype this rule grew out of: a line-scoped reading failed
+// 196 references, the joined reading 143, and clause-scoping the bare-`:N`
+// inheritance 36. The rule as landed here — which also reads double-quoted
+// excerpts and applies sub-rule B before the premise's early-out — fails 41 of
+// them on that same tree.
+describe('the compaction card — every line citation is anchored (spec §3.4)', () => {
+  const DOCS_DIR = path.resolve(__dirname, '../../docs/superpowers');
+  const REPO = path.resolve(__dirname, '../..');
+  const CORPUS = [
+    ['spec', path.join(DOCS_DIR, 'specs/2026-09-09-graphify-compaction-card-design.md')],
+    ['plan', path.join(DOCS_DIR, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+  ] as const;
+
+  const FILE_RE = '(?:(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\\.(?:ts|mts|mjs|js|sh)|ccd/ccd|ccd/ccrc)';
+  const REF_RE = new RegExp(`(${FILE_RE})?:(\\d+)(?:[-–](\\d+))?\\b`, 'g');
+  const LEDGER = '## Deviations found';
+  /** ONE RULE, as a mechanism: a clause carrying a retraction marker is quoted
+   *  history. Same device, same reason, as the documentation-consistency scan. */
+  const SUPERSEDED = /supersed|formerly|used to |previously |the old |deleted by|stale|pre-merge|before the merge|no longer|falsif|round \d+ (said|read|claimed|wrote|stated)|this replaces|shifted|corrected|was the wrong|moved →|→ *`?:/i;
+  /** A sentence end, a semicolon, or a table-cell pipe. */
+  const SENT = /(?<![A-Z0-9])\.\s+(?=[A-Z*`(\[—])|;\s+|\|/g;
+
+  type Resolve = (rel: string) => string[] | null;
+  const srcCache = new Map<string, string[] | null>();
+  const fromRepo: Resolve = (rel) => {
+    if (!srcCache.has(rel)) {
+      const full = path.join(REPO, rel);
+      srcCache.set(rel, fs.existsSync(full) ? fs.readFileSync(full, 'utf8').split('\n') : null);
+    }
+    return srcCache.get(rel)!;
+  };
+
+  /** `name`'s body, as a 1-based inclusive line range, or null. */
+  const funcBody = (rel: string, name: string, lines: string[]): [number, number] | null => {
+    const sh = rel.endsWith('.sh') || rel === 'ccd/ccd' || rel === 'ccd/ccrc';
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]!;
+      const got = sh
+        ? (/^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(l)?.[1] ?? null)
+        : (/^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(l)?.[1]
+          ?? /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=/.exec(l)?.[1] ?? null);
+      if (got !== name) continue;
+      if (sh) {
+        for (let j = i + 1; j < lines.length; j++) if (lines[j]!.startsWith('}')) return [i + 1, j + 1];
+      } else {
+        const ind = l.length - l.replace(/^\s+/, '').length;
+        for (let j = i + 1; j < lines.length; j++) {
+          const s = lines[j]!; const t = s.trim();
+          if ((t === '}' || t === '};' || t === '});') && s.length - s.replace(/^\s+/, '').length === ind) return [i + 1, j + 1];
+        }
+      }
+      return [i + 1, lines.length];
+    }
+    return null;
+  };
+
+  const norm = (s: string): string => s.replace(/\s+/g, ' ');
+  /** An excerpt with an ellipsis is satisfied when EACH part occurs. */
+  const occurs = (tok: string, cited: string): boolean => {
+    const c = norm(cited);
+    const parts = tok.split(/…|\.\.\./).map((x) => x.trim()).filter((x) => x !== '');
+    return parts.length > 0 && parts.every((x) => c.includes(norm(x)));
+  };
+
+  /** Blank-line separated, each line stripped and joined with ONE space — and
+   *  each table ROW its own paragraph, because two cells of a table are two
+   *  subjects and joining them would widen every clause in both. */
+  const paragraphs = (text: string): Array<{ line: number; text: string }> => {
+    const out: Array<{ line: number; text: string }> = [];
+    let cur: string[] = []; let start = 0;
+    text.split('\n').forEach((l, idx) => {
+      const i = idx + 1; const s = l.trim();
+      if (s === '') { if (cur.length) { out.push({ line: start, text: cur.join(' ') }); cur = []; } return; }
+      if (s.startsWith('|')) {
+        if (cur.length) { out.push({ line: start, text: cur.join(' ') }); cur = []; }
+        out.push({ line: i, text: s }); return;
+      }
+      if (!cur.length) start = i;
+      cur.push(s);
+    });
+    if (cur.length) out.push({ line: start, text: cur.join(' ') });
+    return out;
+  };
+
+  type Audit = {
+    resolved: number; history: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number; clause: string }>;
+  };
+
+  const audit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): Audit => {
+    const r: Audit = { resolved: 0, history: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      const docLines = text.split('\n');
+      let ledgerStart: number | null = null; let ledgerEnd = docLines.length + 1;
+      docLines.forEach((l, i) => { if (ledgerStart === null && l.startsWith(LEDGER)) ledgerStart = i + 1; });
+      if (ledgerStart !== null) {
+        for (let i = ledgerStart; i < docLines.length; i++) {
+          if (docLines[i]!.startsWith('## ')) { ledgerEnd = i + 1; break; }
+        }
+      }
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        // QUOTED SPANS: backticks, curly quotes, and straight double quotes of
+        // four characters or more — the corpus quotes shipped sentences that
+        // way as often as it backticks tokens.
+        const spans: Array<{ a: number; b: number; tok: string }> = [];
+        for (const m of p.matchAll(/`([^`]+)`|“([^”]+)”|"([^"]{4,})"/g)) {
+          const tok = m[1] ?? m[2] ?? m[3] ?? '';
+          // A bare `:N` or `file:N` is a REFERENCE, never a quotation of the
+          // cited line — counting it would make every reference self-anchoring.
+          if (tok === '' || new RegExp('^:?\\d+(?:[-–]\\d+)?$').test(tok)
+            || new RegExp('^\\S*:\\d+[-–,\\d]*$').test(tok)) continue;
+          spans.push({ a: m.index!, b: m.index! + m[0].length, tok });
+        }
+        const bounds = [0, ...[...p.matchAll(SENT)].map((m) => m.index! + m[0].length), p.length];
+        let last: string | null = null; let lastCs = -1;
+        for (const m of p.matchAll(REF_RE)) {
+          const n1 = Number(m[2]); const n2 = m[3] ? Number(m[3]) : n1;
+          const cs = Math.max(...bounds.filter((b) => b <= m.index!), 0);
+          const ce = Math.min(...bounds.filter((b) => b >= m.index! + m[0].length), p.length);
+          let file: string | null = m[1] ?? null;
+          if (file === null) {
+            // INHERITANCE IS CLAUSE-SCOPED. A bare `:N` takes the file named
+            // before it in the SAME clause; across a sentence boundary the
+            // last-named file is a different subject, and inheriting it invents
+            // a citation the document never wrote. Measured over this corpus,
+            // paragraph-wide inheritance mis-attributed 23 references — every
+            // one of them to a file whose length the range does not even reach.
+            file = lastCs === cs ? last : null;
+            if (file === null || m.index === 0 || p[m.index! - 1] !== '`') continue;
+          } else { last = file; lastCs = cs; }
+          const lines = resolve(file);
+          if (lines === null) continue;           // not a tracked source file
+          r.resolved++;
+          const clause = p.slice(cs, ce);
+          if ((ledgerStart !== null && pstart >= ledgerStart && pstart < ledgerEnd) || SUPERSEDED.test(clause)) {
+            r.history++; continue;
+          }
+          const cited = lines.slice(n1 - 1, n2).join('\n');
+          // SUB-RULE B, before the premise's early-out.
+          if (file.endsWith('.test.ts') && /pinned (by|at)\b/.test(clause)) {
+            r.checked++;
+            if (/\b(it|describe|expect)\s*\(/.test(cited)) continue;
+            r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2, clause: norm(clause).trim().slice(0, 160) });
+            continue;
+          }
+          const toks = spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok);
+          if (!toks.length) { r.unanchored++; continue; }   // the rule does not apply
+          r.checked++;
+          if (toks.some((t) => occurs(t, cited))) continue;
+          // SUB-RULE A.
+          let ok = false;
+          for (const t of toks) {
+            const nm = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\(\))?$/.exec(t);
+            if (!nm) continue;
+            const fb = funcBody(file, nm[1]!, lines);
+            if (fb && fb[0] <= n1 && n2 <= fb[1]) ok = true;
+          }
+          if (ok) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2, clause: norm(clause).trim().slice(0, 160) });
+        }
+      }
+    }
+    return r;
+  };
+
+  const realCorpus = (): Array<readonly [string, string]> =>
+    CORPUS.map(([l, f]) => [l, fs.readFileSync(f, 'utf8')] as const);
+
+  // ── THE CONTROLS, fully HERMETIC: a fixture document against FIXTURE
+  // SOURCES. The audit is a pure function of text, so this is a real control
+  // rather than a stub — and it cannot rot when a real file's lines move,
+  // which is exactly the failure this whole guard is about.
+  const FX_SH = ['_fx_helper() {', '  local a="x"', '  printf "%s" "$a"', '  return 0', '}', '', 'echo done'].join('\n');
+  const FX_TEST = ["describe('x', () => {", "  it('pins the thing', () => {", '    expect(1).toBe(1);', '  });', '});'].join('\n');
+  const FX: Resolve = (rel) => (rel === 'ccd/fx.sh' ? FX_SH.split('\n')
+    : rel === 'server/test/fx.test.ts' ? FX_TEST.split('\n') : null);
+  const FX_DOC = [
+    'The helper writes with `printf "%s" "$a"` (`ccd/fx.sh:3`).',
+    '',
+    '`_fx_helper` (`ccd/fx.sh:4`) leaves nothing behind.',
+    '',
+    'The thing is pinned by `server/test/fx.test.ts:2`.',
+    '',
+    'And it points at a line with nothing to quote: ccd/fx.sh:6.',
+  ].join('\n');
+
+  it('CONTROL: each leg decides, and a ONE-LINE shift reds exactly the reference it moved', () => {
+    const base = audit([['fx', FX_DOC]], FX);
+    expect(base.failures, `the fixture is green: ${JSON.stringify(base.failures)}`).toEqual([]);
+    expect(base.checked, 'and all three anchored references were really checked').toBe(3);
+    expect(base.unanchored, 'with the quoteless one counted, not checked').toBe(1);
+
+    // THE MUTATION §5 names: shift an anchor by ±1 line.
+    for (const delta of [-1, 1]) {
+      const shifted = FX_DOC.replace('ccd/fx.sh:3', `ccd/fx.sh:${3 + delta}`);
+      expect(shifted, 'the mutation applied').not.toBe(FX_DOC);
+      expect(audit([['fx', shifted]], FX).failures.map((f) => `${f.file}:${f.from}`),
+        `a ${delta > 0 ? '+' : ''}${delta}-line shift reds`).toEqual([`ccd/fx.sh:${3 + delta}`]);
+    }
+    // SUB-RULE A in both directions: inside the body passes above, outside reds.
+    expect(audit([['fx', FX_DOC.replace('`ccd/fx.sh:4`', '`ccd/fx.sh:7`')]], FX).failures.map((f) => f.from),
+      'a citation naming a function and landing outside its body reds').toEqual([7]);
+    // SUB-RULE B in both directions: on the `it(` passes above, off it reds.
+    expect(audit([['fx', FX_DOC.replace('fx.test.ts:2', 'fx.test.ts:5')]], FX).failures.map((f) => f.from),
+      'a `pinned by` citation landing off the test reds').toEqual([5]);
+    // THE ALLOW-LIST: the same broken citation, inside a retraction.
+    const hist = audit([['fx', 'The anchor was previously `ccd/fx.sh:1`, which is the wrong line.']], FX);
+    expect(hist.failures, 'quoted history is exempt').toEqual([]);
+    expect(hist.history, 'and counted as history rather than silently skipped').toBe(1);
+    // AND THE CONTROL ON THE ALLOW-LIST: without the marker, the same reference reds.
+    expect(audit([['fx', 'The anchor is `ccd/fx.sh:1`, which is the `return 0` line.']], FX).failures.map((f) => f.from),
+      'the marker is what exempts it, not the shape of the sentence').toEqual([1]);
+  });
+
+  it('the audit reads the whole corpus — the numbers it is entitled to claim anything from', () => {
+    const r = audit(realCorpus());
+    // NON-VACUITY, MANDATORY. An audit that resolves nothing cannot red on
+    // anything, and these two documents are where every D-2605 anchor lives.
+    // LOWER BOUNDS, not equalities: the documents grow, and a grammar that
+    // BROKE would fall below these rather than merely differ from them.
+    expect(r.resolved, 'resolved line references').toBeGreaterThanOrEqual(400);
+    expect(r.checked, 'references the rule actually applies to').toBeGreaterThanOrEqual(240);
+    expect(r.history, 'and the quoted-history allow-list is doing work').toBeGreaterThanOrEqual(120);
+  });
+
+  it('THE CITATION DEBT this task creates is measured, per cited file (Task 11 owns closing it)', () => {
+    // A RATCHET, NOT A PASS, and the honest form of this audit on this branch.
+    // Task 9 REWROTE every file these two documents cite — `ccd/ccd`,
+    // `ccd/session-hook.sh`, `ccd/compact-card.mjs` and four `server/test/*` —
+    // so their line anchors are stale BY CONSTRUCTION, and the plan's own Task
+    // 11 ("Final D-2605 documentation and committed-byte audit") is where they
+    // are re-measured. Measured with THIS audit, run unchanged against both
+    // trees: 41 failing citations at the commit this task started from
+    // (8e457995c23b) and 206 here. The difference is this task's own runtime
+    // edits, not a change in the rule.
+    //
+    // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
+    // message — rather than leaving the number stating a debt that is no longer
+    // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
+    const r = audit(realCorpus());
+    const byFile: Record<string, number> = {};
+    for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
+    expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
+      'ccd/ccd': 133,
+      'ccd/session-hook.sh': 43,
+      'ccd/compact-card.mjs': 7,
+      'server/test/ccd-workspaces.test.ts': 7,
+      'server/test/ccd-ws-reap.test.ts': 7,
+      'server/test/compact-card.test.ts': 9,
+    });
+    // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
+    // claim that makes the census a statement about Task 9 rather than about
+    // the documents' own quality. A stale citation into an untouched file is a
+    // DOCUMENT defect and belongs in a finding, not in this debt.
+    const TOUCHED = ['ccd/ccd', 'ccd/session-hook.sh', 'ccd/compact-card.mjs', 'ccd/compact-card.d.mts',
+      'server/test/ccd-workspaces.test.ts', 'server/test/ccd-ws-reap.test.ts',
+      'server/test/compact-card.test.ts', 'server/test/session-hook.test.ts',
+      'server/test/ccd-lifecycle-purge.test.ts', 'server/test/ccd-reg-set-atomic.test.ts',
+      'server/test/lifecycleHelpers.ts'];
+    expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
+      'a stale citation into a file this task never touched').toEqual([]);
+  });
+});
