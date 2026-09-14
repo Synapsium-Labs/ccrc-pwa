@@ -73,6 +73,34 @@ refused and reported. That refusal is the protocol working against a bad instruc
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
 
+### Fix round 2, verified — and the limit of a regex over prose (2026-09-14)
+
+The fresh-eyes gate, the one verifier with no prior position on the branch, answered **MERGE**: it
+re-derived the core invariant against *wrong* guards rather than deleted ones (pin deleted, pin moved
+after the attach, pin at the CLIENT's grid, refit restored — all four RED), proved the dropped design
+absent in substance, found all five wave-3 interfaces correctly shaped, and confirmed `resizeWindow`
+is defined once and called exactly twice, both inside the one route, with the agent whitelist
+granting no second path to un-latch `manual`.
+
+**The comment guard was found weaker than its own comment for the third round running, and this
+time the false claim landed inside the comment written to fix it.** Seven paraphrases of the
+falsified claim escape `FALSIFIED`, including `tmux 3.4 never reflows a stored line` — a spelling
+this tree's own prose invites — and the branch's own paraphrase of the claim. Two wrong-but-passing
+guards exist, and the commit message's "dropping a root reds" is measurably false for one root.
+
+**Ruling: stop widening the regex.** A regex over prose cannot be made complete, and each widening
+has bought a fresh false claim about the widening. Round 3 pins the wrong guards with two fixtures,
+fixes the false claims, and makes the guard's comment state what it catches and what it cannot.
+
+**D-2773: the worker departed from a coordinator ruling and was right**, proved on a nine-case
+corpus rather than argued. The coordinator's own remedy would have redded a correct file.
+
+**The mandatory security lens shipped no mechanism.** Spec §5.5 named escape-sequence replay as the
+one mandatory lens; it ran as a *review* lens and found the threat largely closed, but nothing in
+the tree pins it — no mention of OSC or DCS anywhere, which is the signature of a lens listed and
+not run. The property holds today by reading; round 3 ships the guard. **That is the coordinator's
+omission: the brief named the lens and then the review read the code instead of asking for a test.**
+
 ### Fix round 1, verified (2026-09-14)
 
 Four opus verifiers on isolated worktrees at `2e14ffbb`, each re-running the round's claimed

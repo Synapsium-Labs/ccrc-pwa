@@ -3402,6 +3402,19 @@ forbid. The worker refused it and reported, which is the protocol working agains
   grandfathering — an `INHERITED_GROUNDS` entry naming `.term-histbar`'s own background, gate
   passing 12.32 dark / 10.41 light against a 4.5 floor. A first attempt using `GROUNDS` was
   correctly refused by the gate.
+- **D-2773** (Task 4 guard, departing from a COORDINATOR ruling — and the worker was right): fix
+  round 2's G3 remedy, as this session wrote it, demanded the *refutation*
+  (`/(FALSE|falsified|measured it false)…1853…9460/i`). Measured against the three scanned files, it
+  tests FALSE on `server/src/server.ts` — which never carried the false claim (`git log -S 'never
+  reflow' -- server/src/server.ts` over the whole branch is empty) and instead asserts the true fact
+  positively. The ruling would have redded a file that is not at fault. The worker departed and
+  demanded the measurement's own terms instead — `resize-window` / `43` / `1853` / `history_size` /
+  `9460` in order. On a nine-case carrier corpus that is **strictly stronger** in three shapes it
+  rejects and the coordinator's accepts: a bare pointer following a refutation, a refutation carrying
+  the wrong numbers, and a bare TypeScript `false` literal 300 characters before `1853` (the
+  coordinator's alternation matched the language keyword). The worker also declined to re-assert
+  "cannot be left behind by a pointer" and documented what the demand cannot do instead.
+
 - **D-2772** (programme shape, against the COORDINATOR): wave 1 was dispatched with this programme's
   spec and plans on a third branch behind an unmerged PR, so the worker's tree contained no plan in
   which an issued deviation number could be defined — and `server/test/deviation-refs.test.ts`
