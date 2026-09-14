@@ -1552,14 +1552,15 @@ is nothing to fall back to; one that resolves to no session is refused
 the runId-less form resolves only while exactly one programme is active, and
 fails shut the moment a second is. Raw session-id addressing stays for ad-hoc
 mail. When a run's session is replaced, the replacement inherits every
-outstanding delivery addressed to its predecessor — queued *and*
-delivered-but-unacked — as a **new** delivery row, freshly rendered, and
+outstanding role-addressed (`toId:'worker'`) delivery on that run — queued
+*and* delivered-but-unacked — as a **new** delivery row, freshly rendered, and
 the predecessor's row is parked — an envelope that names the corpse may
 not be replayed.
 
-**Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers only
-outstanding mail on that programme's runs; add `&all=1` — exactly
-`GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
+**Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers the
+**outstanding** mail on that programme's runs — queued, delivered-but-unacked,
+and any delivery this build parked after giving up retrying it; add `&all=1` —
+exactly `GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
 are mutually exclusive — exactly one, never both and never neither; a request
 naming both is refused `400 bad-request`, because a mailbox and a programme
 thread are two different questions. `GET /api/feed?program=<slug>` is always the
@@ -1574,8 +1575,10 @@ a crossing marker — a glyph *and* the word, because nothing on the board is re
 out by colour alone, and while a programme's `homeProject` is null the marker
 never shows. On the fleet board a worker stays on its own project's card — a
 card is a project's sessions, and a session's workspace lives in one repo — and
-its row reads `<program> wave n/N · home <project>`. The home project's own card
-gains an `abroad` line, one sentence per wave working elsewhere
+when its coordinator is not among that card's live sessions (a rule-3 orphan)
+its row reads `<program> wave n/N`, with `· home <project>` appended only when
+the measured home differs from the card's own project. The home project's own
+card gains an `abroad` line, one sentence per wave working elsewhere
 ("wave 2 in `<other project>`").
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
@@ -1744,8 +1747,8 @@ buy.
    `handoffCommit`. If the consumer depends on an interface from this
    producer, independently prove the producer PR merged at `producerSha`:
    run `ccd pr-state --session <producer-session>`, select that session's
-   merged PR row, require its `phase` to be `merged`, and require raw
-   `headRefOid` to equal both that exact producer closed row's
+   merged PR row, require the answer's `phase` to be `merged`, and require
+   that row's raw `headRefOid` to equal both that exact producer closed row's
    `handoffCommit` and `producerSha`. Only then dispatch into the
    already-held successor workspace.
 
@@ -1840,12 +1843,15 @@ resolves to no session is refused `unknown-recipient`, naming the run.
 `coordinator` keeps its fallback to the single active programme, which fails
 shut the moment a second programme is active, so carry the `runId` on both.
 Raw session-id addressing stays for ad-hoc mail. When a run's session is
-replaced, every outstanding delivery addressed to the predecessor is re-issued
-to the heir as a **new** row, freshly rendered, and the predecessor's row is
-parked — the act a reclaimed coordinator's heir has always had, generalised by
-role and funnelled through `bindSession`, the one writer of `runs.sessionId`.
-Reading it back by programme: `GET /api/mail?program=<slug>` returns only
-outstanding mail and `GET /api/mail?program=<slug>&all=1` returns full history;
+replaced, every outstanding role-addressed (`toId:'worker'`) delivery on that
+run is re-issued to the heir as a **new** row, freshly rendered, and the
+predecessor's row is parked — the act a reclaimed coordinator's heir has
+always had, generalised by role and funnelled through `bindSession`, the one
+writer of `runs.sessionId`.
+Reading it back by programme: `GET /api/mail?program=<slug>` returns the
+**outstanding** mail — queued, delivered-but-unacked, and any delivery this
+build parked after giving up retrying it — and
+`GET /api/mail?program=<slug>&all=1` returns full history;
 `to` and `program` are mutually exclusive — exactly one, never both and
 never neither, and naming both is refused `400 bad-request`. `GET /api/feed?program=<slug>` is
 the full event archive, with no outstanding/history split. Both join through the

@@ -5,8 +5,8 @@
 // current build spec's own §9 paragraph — never in a fixed sentence a later edit could
 // silently falsify, which is `readme-holds.test.ts`'s founding lesson.
 //
-// The helpers below are deliberately local. `box-token-census.test.ts:227` and
-// `readme-holds.test.ts:27` each spell their own slicer for the same reason:
+// The helpers below are deliberately local. `box-token-census.test.ts:239` and
+// `readme-holds.test.ts:29` each spell their own slicer for the same reason:
 // `server/test` is not one of `single-definition.test.ts`'s four ROOTS, and a
 // shared slicer would couple three unrelated ratchets to one another's anchors.
 import { describe, it, expect } from 'vitest';
@@ -213,10 +213,19 @@ describe('README: cross-repo programmes', () => {
     // never generalised to the whole private method.
     expect(STORE, "the worker-arm requeue predicate is not 'd.state IN ${OUTSTANDING_STATES_SQL}' — this claim is over nothing")
       .toContain('d.state IN ${OUTSTANDING_STATES_SQL}');
-    const s = crossSection();
-    expect(s, 'the section does not say the heir inherits outstanding mail')
+    // D-2754: `crossSection()` is 7472 chars and contains THREE unrelated
+    // `/outstanding/i` matches (the heir sentence, the programme-mail read,
+    // and the feed's no-split sentence) — a positive `.toMatch` against the
+    // whole section is satisfied by the other two even with the heir
+    // paragraph deleted entirely, so it can never fire for its stated
+    // subject. Slice the heir paragraph itself first, exactly as the D-2680
+    // describe in `readme-holds.test.ts` slices its own crossing sub-passage,
+    // and assert against that slice instead.
+    const heir = passage('the heir paragraph', crossSection(),
+      "When a run's session is replaced", "**Finding a programme's traffic.**");
+    expect(heir, 'the section does not say the heir inherits outstanding mail')
       .toMatch(/outstanding/i);
-    expect(s, 'the section still calls outstanding mail undelivered')
+    expect(heir, 'the section still calls outstanding mail undelivered')
       .not.toMatch(/undelivered/i);
   });
 });
@@ -229,8 +238,8 @@ const lifecyclePassage = (): string =>
   passage('README, the run lifecycle', README, '**Run lifecycle**', '\n**The mail bus');
 
 /** The programme-mail paragraph alone, between the mail-bus paragraph (whose
- *  own passage `box-token-census.test.ts:307-339` pins count-free) and the caps
- *  paragraph (likewise, `:341-360`). Both anchors are those files' anchors, so
+ *  own passage `box-token-census.test.ts:319-352` pins count-free) and the caps
+ *  paragraph (likewise, `:353-371`). Both anchors are those files' anchors, so
  *  a paragraph inserted into either pinned slice by mistake fails HERE with a
  *  length or ordering error rather than confusing the census. */
 const programmeMailPassage = (): string =>
@@ -294,7 +303,7 @@ describe('README: the run lifecycle and programme mail', () => {
     // edit to this passage must be run against BOTH files.
     //
     // D-2740 fix round 1 (Fix 4): bounded at step 6, exactly as
-    // `readme-holds.test.ts:62` bounds its own `crossing` slice — an unbounded
+    // `readme-holds.test.ts:70` bounds its own `crossing` slice — an unbounded
     // slice ran past step 5 into step 6 and beyond, and mutation 5b measured a
     // cross-arm anchor (`final:true`) resolving there instead of failing.
     const cross = passage('README, cross-project succession', p,
@@ -424,6 +433,7 @@ describe('the programme ledger', () => {
     }
     expect(rows.get('2'), 'wave 2 does not record the allocated acceptance corrections')
       .toMatch(/D-2680[\s\S]*D-2687[\s\S]*D-2715[\s\S]*D-2720/);
+    expect(rows.get('3'), 'the ledger has no wave 3 row').toBeDefined();
     expect(rows.get('3'), 'wave 3 still says it edits the Aug 11 status line')
       .not.toMatch(/Aug 11 spec's status line/i);
     expect(rows.get('3'), 'wave 3 does not name byte-preservation of the historical Aug 11 spec')
