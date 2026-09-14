@@ -14,7 +14,8 @@ import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
-  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
+  isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
@@ -32,7 +33,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
-  type RunHealth, type RunItemTally, type RunState,
+  type RunHealth, type RunItemTally, type RunKind, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -288,10 +289,10 @@ export type AsksByChildResult =
  *  nullability survives unchanged. */
 interface RunRowDb {
   idText: string; program: string; programTitle: string;
-  waveText: string; waveOfText: string | null;
+  waveText: string; waveOfText: string | null; reviewsText: string | null;
   homeProject: string | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
-  state: string; claimedBy: string | null;
+  state: string; kind: string; claimedBy: string | null;
   resumed: number; clearedAt: number | null; openedAt: number;
   dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
   handoffCommit: string | null;
@@ -314,7 +315,7 @@ interface RunRowDb {
 const RUN_ROW_COLUMNS =
   'CAST(r.id AS TEXT) AS idText, r.program, p.title AS programTitle, p.homeProject AS homeProject, ' +
   'CAST(r.wave AS TEXT) AS waveText, CAST(r.waveOf AS TEXT) AS waveOfText, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.claimedBy, ' +
+  'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
@@ -344,32 +345,39 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
-/** The three persisted integers every run-shaped read carries, proven. */
-interface RunNumbers { id: number; wave: number; waveOf: number | null }
+/** The four persisted integers every run-shaped read carries, proven. */
+interface RunNumbers { id: number; wave: number; waveOf: number | null; reviews: number | null }
 
 type RunNumbersResult = { ok: true; nums: RunNumbers } | { ok: false; detail: string };
 
-/** `RunRowDb`'s (and `openRunsForSession`'s narrower row's) three integers,
+/** `RunRowDb`'s (and `openRunsForSession`'s narrower row's) four integers,
  *  measured together so the two reads cannot come to disagree about which
  *  columns are in the domain or how they are worded. */
 const measureRunNumbers = (
-  r: { idText: string; waveText: string; waveOfText: string | null },
+  r: { idText: string; waveText: string; waveOfText: string | null; reviewsText: string | null },
 ): RunNumbersResult => {
   const id = persistedInt(r.idText, 'run id');
   if (!id.ok) return id;
   const wave = persistedInt(r.waveText, 'run wave');
   if (!wave.ok) return wave;
+  // Same NULL rule as `waveOf`: absent is legitimate (every work run), and
+  // `persistedInt` must not be asked to answer "absent" as well as "unrepresentable".
+  const reviews: { ok: true; value: number | null } | { ok: false; detail: string } =
+    r.reviewsText === null ? { ok: true, value: null } : persistedInt(r.reviewsText, 'run reviews');
+  if (!reviews.ok) return reviews;
   // NULL IS DECIDED HERE, not inside `persistedInt` — `waveOf` is legitimately
   // absent (the two documented display forms omit it), and a helper that had to
   // answer "absent" as well as "present but unrepresentable" would be the
   // overloaded value this whole change exists to remove.
-  if (r.waveOfText === null) return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: null } };
+  if (r.waveOfText === null) {
+    return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: null, reviews: reviews.value } };
+  }
   const waveOf = persistedInt(r.waveOfText, 'run waveOf');
   if (!waveOf.ok) return waveOf;
-  return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: waveOf.value } };
+  return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: waveOf.value, reviews: reviews.value } };
 };
 
-/** A `RunRowDb` whose three integers are proven — what `healthFor` and
+/** A `RunRowDb` whose four integers are proven — what `healthFor` and
  *  `hydrateRun` take now that the numeric ids do not exist until after
  *  validation. The order is: read rows -> validate every row -> on any failure
  *  return the refusal -> only then `healthFor` -> then hydrate. */
@@ -747,6 +755,13 @@ export class CoordStore {
      *  OPTIONAL: during the legacy generation an open carries none, and the
      *  column then stays NULL rather than taking a guess. */
     homeProject?: string;
+    /** Design 2026-09-14 §5.1. Absent means `'work'` — every caller that
+     *  predates review runs. `'unknown'` is refused at the route; the store
+     *  writes only the two real kinds. */
+    kind?: Extract<RunKind, 'work' | 'review'>;
+    /** The work run a review run reads. Required by the ROUTE when
+     *  `kind:'review'`; written as-is here. */
+    reviews?: number | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -787,8 +802,8 @@ export class CoordStore {
         const dup = this.db.prepare(
           "SELECT CAST(id AS TEXT) AS idText, state FROM runs " +
           "WHERE program = ? AND wave = ? AND (waveOf IS ?) " +
-          "AND claimedBy = ? AND state = 'planned' ORDER BY id LIMIT 1",
-        ).get(input.program, input.wave, input.waveOf, input.claimedBy) as
+          "AND claimedBy = ? AND state = 'planned' AND kind = ? ORDER BY id LIMIT 1",
+        ).get(input.program, input.wave, input.waveOf, input.claimedBy, input.kind ?? 'work') as
           { idText: string; state: string } | undefined;
         if (dup) {
           // Read as TEXT first: node:sqlite otherwise throws while converting an
@@ -817,14 +832,15 @@ export class CoordStore {
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
+          input.kind ?? 'work', input.reviews ?? null,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -2020,10 +2036,11 @@ export class CoordStore {
     // in words rather than throw out of a sweep or a fleet act.
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText FROM runs ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
       `WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ? ORDER BY id`,
     ).all(sessionId, excludeRunId ?? -1) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null }[];
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null }[];
     const siblings: OpenSibling[] = [];
     for (const r of rows) {
       const m = measureRunNumbers(r);
@@ -2178,9 +2195,10 @@ export class CoordStore {
   private hydrateRun(m: MeasuredRunRow, health: RunHealth): RunRow {
     const row = m.row;
     return {
-      // The three PROVEN integers (D-2545), never `Number(row.…)` here: this
-      // method is handed a row whose id, wave and waveOf have already been
-      // measured, precisely so it cannot be the place the proof is forgotten.
+      // The four PROVEN integers (D-2545), never `Number(row.…)` here: this
+      // method is handed a row whose id, wave, waveOf and reviews have already
+      // been measured, precisely so it cannot be the place the proof is
+      // forgotten.
       id: m.nums.id, program: row.program, programTitle: row.programTitle,
       // Straight off the `programs` join, on `programTitle`'s idiom: a free-form
       // project name, no vocabulary to read it through. NULL means the programme
@@ -2189,6 +2207,8 @@ export class CoordStore {
       wave: m.nums.wave, waveOf: m.nums.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
+      kind: isRunKind(row.kind) ? row.kind : 'unknown',
+      reviews: m.nums.reviews,
       // `runs.claimedBy` — TEXT, nullable — read straight through on
       // `sessionId`/`workspace`/`branch`'s idiom two lines up, with no guard
       // of its own: it is a free-form tmux-derived session id, not an enum, so

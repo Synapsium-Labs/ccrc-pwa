@@ -657,9 +657,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(10);
-    expect(MIGRATIONS.length).toBe(10);
+  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
+    // Bumped to 11 by migration 11, runs.kind/runs.reviews (design 2026-09-14 §5.1).
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(MIGRATIONS.length).toBe(11);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -675,6 +676,48 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
       'state', 'claimedBy', 'resumed', 'clearedAt', 'openedAt', 'dispatchedAt', 'closedAt',
       'handoffCommit', 'prLineage', 'dispatchStartedAt',
     ]));
+    db.close();
+  });
+});
+
+describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-14 §5.1)', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const runsColumn = (db: DatabaseSync, name: string): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(runs)').all() as unknown as ColumnInfo[]).find((c) => c.name === name);
+
+  it('gives a fresh database both columns: kind NOT NULL DEFAULT work, reviews nullable with no default', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const kind = runsColumn(db, 'kind');
+    expect(kind).toBeDefined();
+    expect(kind!.type).toBe('TEXT');
+    expect(kind!.notnull).toBe(1);
+    expect(kind!.dflt_value).toBe("'work'");
+    const reviews = runsColumn(db, 'reviews');
+    expect(reviews).toBeDefined();
+    expect(reviews!.type).toBe('INTEGER');
+    expect(reviews!.notnull).toBe(0);
+    expect(reviews!.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 10 and reads every existing row as a work run', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 10; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 10');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
+    expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
   });
 });

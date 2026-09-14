@@ -3683,6 +3683,20 @@ export function isRunState(v: unknown): v is RunState {
   return typeof v === 'string' && (RUN_STATES as readonly string[]).includes(v);
 }
 
+/** What a run IS (design 2026-09-14 §5.1): `'work'` — a wave's worker, the only
+ *  kind that existed before that design; `'review'` — a reviewer reading one
+ *  work run's finished wave and reporting, never ruling. `'unknown'` is the
+ *  designated we-do-not-know member on `RunState`'s own model (D-2795): NEVER
+ *  WRITTEN, it is what a `kind` token from a newer build reads as, and
+ *  `transitionsFor('unknown')` has no edges at all, so such a row can neither
+ *  advance nor dispatch until a build that knows the word reads it. */
+export type RunKind = 'work' | 'review' | 'unknown';
+export const RUN_KINDS: readonly RunKind[] = ['work', 'review', 'unknown'];
+/** Use THIS, never `RUN_KINDS.includes(x as RunKind)` — `isRunState`'s rule. */
+export function isRunKind(v: unknown): v is RunKind {
+  return typeof v === 'string' && (RUN_KINDS as readonly string[]).includes(v);
+}
+
 /**
  * The machine. A transition absent from this table is REFUSED, and the refusal
  * is an answer the caller reads — never a silent no-op, and never an
@@ -4819,6 +4833,16 @@ export interface RunSummary {
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** `'work'` or `'review'` (design 2026-09-14 §5.1). ADDITIVE; `FLEET_PROTO`
+   *  is not bumped. REQUIRED here because `hydrateRun` returns a literal and
+   *  must compute it; TOLERATED ABSENT at the one PWA reader (`runKindChip`,
+   *  `pwa/src/fleet/runWords.ts`) because an older server omits it — absence
+   *  means `'work'`, the only kind that older server knew. */
+  kind: RunKind;
+  /** On a review run, the id of the work run it reviews; `null` on a work run
+   *  — a first-class answer ("reviews nothing"), never a failed read. Set at
+   *  open, immutable. */
+  reviews: number | null;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
    *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
    *  mechanism behind the `claimed-by-another` refusal — a second coordinator,

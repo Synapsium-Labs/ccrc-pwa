@@ -2984,3 +2984,32 @@ describe('the programme filters', () => {
     expect(s.feedEvents(100).map((e) => e.title)).toEqual(['ours', 'theirs', 'a question']);
   });
 });
+
+describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
+  it('opens a work run by default and reads it back as kind work, reviews null', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    const row = okRun(s.run(a.id))!;
+    expect(row.kind).toBe('work');
+    expect(row.reviews).toBeNull();
+  });
+
+  it('persists kind review and the reviewed id, and hydrates both', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(r.id).not.toBe(w.id);   // the dup arm keys on kind too
+    const row = okRun(s.run(r.id))!;
+    expect(row.kind).toBe('review');
+    expect(row.reviews).toBe(w.id);
+    expect(okRun(s.run(w.id))!.reviews).toBeNull();
+  });
+
+  it('reads an out-of-vocabulary kind token as unknown, never as a raw string (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(okRun(s.run(a.id))!.kind).toBe('unknown');
+  });
+});

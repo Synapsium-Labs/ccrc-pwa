@@ -36,7 +36,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // non-null variants by spreading this builder; they must not re-add the field
   // here.
   project: 'ccrc-pwa', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'coord', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'coord', resumed: false, clearedAt: null,
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
