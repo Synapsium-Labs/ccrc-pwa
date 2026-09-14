@@ -557,6 +557,34 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the two "we do not know" verdicts drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
   },
+  'fleet.css .proj-crossing': {
+    under: ['var(--bg-surface)'],
+    why: "the rule-3 orphan's programme note (F4, cross-repo wave 2) sits directly on .proj-card-body's own ground, same register .proj-nest-bracket and .proj-pending-program already use here. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-crossing-glyph': {
+    under: ['var(--bg-surface)'],
+    why: 'the same marker\'s glyph. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the glyph half of the marker unmeasured while the report looked complete',
+  },
+  'fleet.css .proj-abroad-line': {
+    under: ['var(--bg-surface)'],
+    why: "the home card's own sentence about a wave running in another repo (F4, cross-repo wave 2), same ground and register as .proj-crossing above. Its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-abroad-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the abroad line's glyph, same ground and same reason as .proj-crossing-glyph above",
+  },
+  'fleet.css .mail-chip': {
+    under: ['var(--bg-page)'],
+    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
+  },
+  "fleet.css .mail-chip[data-on]": {
+    under: ['var(--bg-page)'],
+    why: 'the ON state of the same chip, same ground. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the pressed state — the one a reader taps to confirm — unmeasured',
+  },
+  'fleet.css .mail-group-head': {
+    under: ['var(--bg-page)'],
+    why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

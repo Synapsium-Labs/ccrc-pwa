@@ -19,6 +19,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const NOW = 1_000_000_000_000;            // epoch MILLISECONDS, the units the ladder takes
 const SEC = Math.floor(NOW / 1000);       // …and what ccd's `date +%s` actually writes to $REG
@@ -298,7 +299,7 @@ describe('reclaimRun — the order is the guard', () => {
     const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
     expect(r).toEqual({ ok: false, kind: 'unknown-session' });
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('registry-unmeasurable when the directory will not list — and NOTHING is written', async () => {
@@ -310,7 +311,7 @@ describe('reclaimRun — the order is the guard', () => {
     const r = await reclaimRun(depsFor(home, s, GONE, blindIO()), id, LIVE);
     expect(r).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
     expect(s.runEvents(id)).toEqual([]);   // openRun writes no event, so [] is a real "untouched"
   });
 
@@ -338,7 +339,7 @@ describe('reclaimRun — the order is the guard', () => {
     // here would fold the two conditions the route is built not to collapse.
     expect(r.kind === 'registry-unmeasurable' && r.detail).toBe(detail);
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('registry-unmeasurable when the CLAIMANT is listed but unassembled — and NOTHING is written', async () => {
@@ -358,7 +359,7 @@ describe('reclaimRun — the order is the guard', () => {
     if (r.ok) throw new Error('unreachable — narrowed above');
     expect(r.kind === 'registry-unmeasurable' && r.detail).toContain('could not be assembled');
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
     expect(s.runEvents(id)).toEqual([]);
   });
 
@@ -373,7 +374,7 @@ describe('reclaimRun — the order is the guard', () => {
     if (r.ok) throw new Error('unreachable — narrowed above');
     expect(r.kind === 'claimant-alive' && r.detail).toContain('tmux');
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('rewrites EVERY run of the program, terminal rows included (ruling R1)', async () => {
@@ -392,8 +393,8 @@ describe('reclaimRun — the order is the guard', () => {
     expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
     if (!r.ok) throw new Error('unreachable — narrowed above');
     expect([...r.runIds].sort((a, b) => a - b)).toEqual([w1, w2]);
-    expect(s.run(w1)!.claimedBy).toBe(LIVE);
-    expect(s.run(w2)!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(w1))!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(w2))!.claimedBy).toBe(LIVE);
   });
 
   it('a `to` that is already the claimant is a no-op SUCCESS, not a refusal', async () => {
@@ -407,7 +408,7 @@ describe('reclaimRun — the order is the guard', () => {
     // ladder rather than inside it.
     const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
     expect(r).toMatchObject({ ok: true, runIds: [], from: DEAD, to: DEAD });
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 });
 

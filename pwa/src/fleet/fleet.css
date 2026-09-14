@@ -1711,6 +1711,44 @@ button.sess-held {
   color: var(--ink-tertiary);
 }
 
+/* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
+   never a --glow — it explains a row, it is not a row — and it takes
+   `--ink-tertiary` on `.proj-card-body`'s own ground, the register
+   `.proj-nest-bracket` and `.proj-pending-program` already use here: the
+   quietest thing on the card, because the row above it carries the fact. */
+.proj-crossing {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-left: var(--sp-3);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
+
+/* F4 (cross-repo): the home card's own sentence about a wave that is running in
+   another repo. Same register and same ground as `.proj-crossing` above — this
+   card's body — and a top border, because it is about a row that is NOT on this
+   card and must not read as one more session. */
+.proj-abroad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-abroad-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);
@@ -1979,6 +2017,37 @@ button.sess-held {
 }
 .mail-row .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
 
+/* The programme filter and its headers. Chips take the same ground and the same
+   inks the rest of this screen does — `--ink-secondary` for a chip that is off,
+   `--ink-primary` for the one that is on — so nothing here is read out of
+   colour: the pressed chip carries `aria-pressed` and `data-on`, and — for
+   every chip but All, which shows every header at once — the one visible
+   group's own header repeats its label in words (D-2586: the claim used to
+   say this held for every chip, which is false of All). */
+.mail-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+.mail-chip {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: var(--text-2xs);
+}
+.mail-chip[data-on] { color: var(--ink-primary); }
+.mail-group-head {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
 /* — Build 7: the run board. Machine voice throughout (ids, slugs, waves and
    tallies are all things the fleet says, not things a person wrote), and NO
    glow, no breathe, no box-shadow: a run is a record of a lifecycle position.
@@ -2041,6 +2110,22 @@ button.sess-held {
 .run-row .run-glyph { color: var(--ink-tertiary); }
 .run-row .run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
 .run-ws { font-size: var(--text-sm); }
+/* F4 (cross-repo): which repo this run is in, and whether that is its
+   programme's home. Scoped under `.run-row` — self-grounded above, background
+   and colour both set — so these inherit the same recovered ground
+   `.run-row .run-state`/`.run-row .run-dispatch` do: no new token pair for
+   `design/contrast-check.mjs` to price. The badge takes `--ink-tertiary` (it is
+   context, present on every row, and must not compete with the workspace name);
+   the marker takes `--ink-secondary`, one step up, because it is the rarer fact
+   — and it is told apart by its GLYPH and its WORD, never by a hue. */
+.run-row .run-project { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+.run-row .run-crossing {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-crossing-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

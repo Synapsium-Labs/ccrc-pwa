@@ -126,7 +126,7 @@ API="$HOME/.local/bin/ccrc-api"
 # so neither can be got wrong one caller at a time.
 
 body=$("$API" runs open --json - <<JSON
-{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
+{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
 JSON
 )
 ```
@@ -298,14 +298,24 @@ not after.
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
 5. **Review the handoff commit** like any other commit, update the ledger,
-   then `POST /api/runs` **for wave N+1 first** — same `sessionId`, same
-   workspace, and it re-holds with the wave N+1 reason — and only THEN
-   `POST /api/runs/:id/close` this wave's run with `final:false`. Order
-   matters: closing first, even briefly, leaves the program with zero open
-   runs, and the server retires a program with none — silently breaking
-   every `toId:'coordinator'` mail from that point on. Opening first never
-   lets the count reach zero. Then dispatch wave N+1 (step 2) **fresh into
-   the same workspace**.
+   then `POST /api/runs` **for wave N+1 first**. Order matters: closing first,
+   even briefly, leaves the program with zero open runs, and the server retires
+   a program with none — silently breaking every `toId:'coordinator'` mail
+   from that point on. Opening first never lets the count reach zero.
+   **Same project:** open wave N+1 first with this producer's `sessionId`, close
+   the producer with `final:false` so its hold transfers to the already-open
+   successor on the same workspace, then run `"$API" runs list --closed 1`,
+   find the producer by run id, and require its own `state` to be `done`.
+   **Different project:** open wave N+1 first without this producer's
+   `sessionId`, close the producer with `final:true` and require
+   `released:true`, then run `"$API" runs list --closed 1`, find the producer
+   by run id, and require its own `state` to be `done`. If the consumer depends
+   on an interface from that producer, independently prove the producer
+   interface PR merged at the exact `producerSha` carried in the conditional
+   producer contract. A missing or non-`done` row, failed release, or required
+   exact-SHA merge proof that is absent means report and do not dispatch. The
+   closed row proves the fingerprint and terminal run state; it does not prove
+   a required interface merged. Only then dispatch wave N+1 (step 2).
 6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. Nothing
    archives the workspace on its own after that: the merged sweep only pushes
@@ -315,6 +325,77 @@ not after.
    run owns it, which is exactly the state step 5's open-before-close creates.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
+
+## When a wave crosses into another project
+
+A programme has ONE home project — the repo whose `docs/superpowers/programs/<slug>.md`
+ledger you write, and whose plan every wave is measured against — and its waves
+may run in ANY project. The home is stated, never inferred. **Every `POST /api/runs`
+for this programme carries `homeProject`**, the same value on every wave; the
+response answers `ledgerRepo` and `ledgerAbsPath` for it — the ledger itself, under
+`docs/superpowers/programs/`. `ledgerAbsPath` is ONLY that ledger path; it is not
+and cannot be used as the home repository root or as the plan path. For a crossing
+brief, resolve the home checkout separately as `homeRepoRoot`, keep the tracked
+plan path as `planRepoPath` under `docs/superpowers/plans/` with no leading slash,
+and name the full 40-hex commit as `planSha`. A later open naming a different home is
+refused `home-mismatch` with `by:` the stored value — the fix is your body, never
+the server. (An open with no `homeProject` at all is still accepted for one
+deploy generation and recorded as a `legacy-home-project` run event, with the
+column left NULL rather than guessed. You never omit it.)
+
+**Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 5
+above says so itself: its **Same project:** arm — same `sessionId`, same
+workspace — is the one this rule governs, and its **Different project:** arm is
+the one below. A wave that CHANGES project opens WITHOUT `sessionId` and
+spawns a fresh workspace in the target repo,
+which is the path wave 1 already spawns on. Naming the old session for a wave in
+a different project is refused `project-mismatch` with `by:` the project that
+session's workspace belongs to — at the open, and again at the dispatch resume if
+the open ever let one through.
+
+**What a crossing costs, so a cap refusal reads as arithmetic rather than a
+fault.** The cap rule is exact: concurrency counts dispatched non-terminal runs,
+not held workspaces. A terminal producer retained on a hold and a planned
+undispatched consumer consume no running-worker slot, while each actual dispatch
+still consumes daily budget and a dispatched non-terminal consumer consumes one
+concurrency slot. `cap-concurrency`
+or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
+exactly as you would for any other run.
+
+**Every brief for a foreign-repo wave carries the three immutable-plan
+coordinates: `homeRepoRoot`, `planRepoPath`, and `planSha`.** `homeRepoRoot` is
+the absolute home-repository root; `planRepoPath` is the tracked
+repository-relative plan path with no leading slash; and `planSha` is the full
+40-hex plan commit SHA. The worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`; an unresolved repository,
+commit, or path means report and stop, without substituting `HEAD`, reading the
+current checkout, fetching, checking out, or mutating the home repo.
+
+**Only a consumer that depends on a producer interface carries the producer
+contract:** `producerRepoRoot`, `producerSourceRepoPath`, `producerSha`, and the
+contract excerpt inlined verbatim from the merged file. A foreign-repo wave with
+no producer-interface dependency carries none of those producer fields and no
+invented excerpt. `producerRepoRoot` is the absolute producer-repository root;
+`producerSourceRepoPath` is the producer source file's repository-relative path;
+and `producerSha` is the exact full merged producer SHA. The worker proves its
+provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. The
+inline excerpt remains the dispatched authority for interface shape; the
+immutable producer blob proves where that shape came from; and the plan blob
+controls wave scope and requirements. `ledgerAbsPath` names only the programme
+ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
+
+**Deviations found during a foreign-repo wave are minted against the HOME
+project** — `POST /api/ledger/deviations` with the home project's name — and
+defined in the home plan, because that is where the plan lives. The allocator
+takes the project from the caller and cannot cross-check it, so this one is
+discipline rather than a mechanism, which is exactly why it is written down.
+
+**Address the worker as `toId: 'worker'` with this run's `runId`**, and the
+coordinator as you do today. Carry the `runId` either way: it is what makes a
+crossing programme's mail unambiguous when two of its waves are live in two
+repos, and it is what keeps a `worker` mail resolvable at all
+(`references/mail-envelope.md`).
 
 ## What stays discipline
 

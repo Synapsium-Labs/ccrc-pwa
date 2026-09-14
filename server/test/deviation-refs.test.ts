@@ -257,7 +257,16 @@ describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)'
  *  where `origin/main` does not exist) is exactly how this guard would come to
  *  measure nothing while reporting green. CI carries `fetch-depth: 0` already. */
 function resolveLedgerBase(cwd: string): string | null {
-  const candidates = [process.env['CCRC_LEDGER_BASE'], 'origin/main', 'main']
+  // D-2732: `'main'` was the third candidate, and on the fleet host local `main`
+  // is a FOSSIL — measured 356 commits behind `origin/main`, parked by another
+  // worktree that never moves it. With ~10 worktrees on one `.git`, a concurrent
+  // fetch rewrites `packed-refs`, so `rev-parse --verify origin/main` can fail
+  // TRANSIENTLY, which is how the chain reached that third candidate at all. The
+  // fallback was silent, so the gate would compare this branch against a tree
+  // hundreds of commits old and say nothing about which tree it read. An
+  // unresolvable `origin/main` must reach the null-base refusal below instead:
+  // "I could not measure" is an answer, "I measured a fossil" is not.
+  const candidates = [process.env['CCRC_LEDGER_BASE'], 'origin/main']
     .filter((r): r is string => Boolean(r));
   for (const ref of candidates) {
     try {
@@ -327,7 +336,8 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
   // line wraps its subject, which `ENTRY` cannot match (D-1294).
   it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
     expect(LEDGER_BASE,
-      'no $CCRC_LEDGER_BASE, origin/main or main resolved: a shallow checkout cannot see the other ' +
+      'no $CCRC_LEDGER_BASE or origin/main resolved (D-2732 removed the local-main fallback, which ' +
+      'was a fossil): a shallow checkout cannot see the other ' +
       'tree, and this refuses to report a comparison nobody made')
       .not.toBeNull();
   });
@@ -350,9 +360,43 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     // [], which satisfies the assertion below for entirely the wrong reason.
     const here = plansAt('HEAD');
     const there = plansAt(LEDGER_BASE!);
+    // D-2732: `>= 50` was the ONLY thing standing between a stale base and a
+    // silently wrong comparison, and it is a hand-kept cardinal that passed at
+    // 49-on-stale purely by arithmetic — the day the fossil also exceeds 50 it
+    // stops catching anything. The property actually wanted is that the base is
+    // an ANCESTOR of nothing this branch has not seen: a base the working tree
+    // cannot reach is not a base. Kept alongside the counts, which still catch
+    // the empty-list vacuity this pair was written for.
+    const baseSha = execFileSync('git', ['rev-parse', '--short', LEDGER_BASE!],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+    // The property is NOT "the base is reachable from HEAD" — the fossil is
+    // reachable, it is old main. It is "the base is not BEHIND `origin/main`":
+    // `origin/main` must be an ancestor of whatever we are comparing against.
+    // That admits `origin/main` itself and anything built on it, and refuses a
+    // ref that predates it — which is the only way an explicit
+    // `CCRC_LEDGER_BASE` can now hand this gate a stale tree, the silent
+    // fallback having been removed above.
+    const stale = ((): string | null => {
+      try {
+        execFileSync('git', ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'],
+          { cwd: ROOT, stdio: 'pipe' });
+      } catch { return null; }   // no origin/main to compare against: not this test's call
+      try {
+        execFileSync('git', ['merge-base', '--is-ancestor', 'origin/main', LEDGER_BASE!],
+          { cwd: ROOT, stdio: 'pipe' });
+        return null;
+      } catch {
+        const behind = execFileSync('git', ['rev-list', '--count', `${LEDGER_BASE!}..origin/main`],
+          { cwd: ROOT, encoding: 'utf8' }).trim();
+        return behind;
+      }
+    })();
+    expect(stale,
+      `the ledger base ${LEDGER_BASE} (${baseSha}) is ${stale ?? '?'} commits BEHIND origin/main — `
+      + 'a collision report against it is about a tree nobody is merging into').toBeNull();
     expect(here.length, `only ${here.length} plans read from HEAD`).toBeGreaterThanOrEqual(50);
     expect(there.length,
-      `only ${there.length} plans read from ${LEDGER_BASE}`).toBeGreaterThanOrEqual(50);
+      `only ${there.length} plans read from ${LEDGER_BASE} (${baseSha})`).toBeGreaterThanOrEqual(50);
     expect(definitionsIn(here).length,
       `HEAD holds only ${definitionsIn(here).length} ledger entries`).toBeGreaterThanOrEqual(300);
     expect(definitionsIn(there).length,

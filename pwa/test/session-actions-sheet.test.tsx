@@ -457,6 +457,34 @@ describe('hold and release', () => {
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
     expect(await screen.findByText(/Couldn't hold — archived — restore first/)).toBeInTheDocument();
   });
+
+  // D-2731. The route refuses an over-cap reason with a sentence the operator can
+  // act on — `detail` says it is written verbatim and refused rather than
+  // shortened — and `apiErrorText` has no `oversize` entry, so the toast used to
+  // read the bare slug. It must not GROW one either: the kickoff translator
+  // already owns `oversize` with a different sentence, which is why this reader
+  // is surface-local. The fixture is the server's real 413 shape.
+  it('surfaces the hold cap sentence, not the bare `oversize` slug', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({
+        ok: false, error: 'oversize', limit: 512,
+        detail: 'reason exceeds 512 bytes — it is written verbatim into the '
+          + 'registry hold field and refused rather than shortened',
+      }),
+      { status: 413, headers: { 'content-type': 'application/json' } },
+    )));
+    render(
+      <>
+        <SessionActionsSheet session={f({ held: null })} {...sheetProps} />
+        <ToastHost />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'x'.repeat(600) } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect(await screen.findByText(/refused rather than shortened/)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't hold — oversize$/)).toBeNull();
+  });
 });
 
 describe('forget — the end-of-life a non-workspace session never had', () => {

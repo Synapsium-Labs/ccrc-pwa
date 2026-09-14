@@ -602,6 +602,28 @@ describe('the naming sweep', () => {
     expect(renames(h.calls)).toEqual([]);
   });
 
+  // D-2545. The twelfth condition's own comment says "doubt reads as HELD",
+  // and an UNREADABLE run row is doubt: this box could not prove the workspace
+  // unspoken-for, and a rename is the act that changes what every surface
+  // calls a worker. So a refusal skips, exactly like a claim.
+  it('treats an UNREADABLE run row as CLAIMED and skips the rename', async () => {
+    const h = harness();
+    seed(h.home);                                   // deliberately no `hold` field
+    transcript(h.home, [TITLE('Fix the PR sheet')]);
+    const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
+    const opened = coord.openRun({
+      program: 'build8', title: 'Fleet robustness', project: 'demo',
+      wave: 1, waveOf: 4, claimedBy: 'demo-coordinator',
+    }) as { id: number };
+    coord.setSession(opened.id, ID);
+    coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?')
+      .run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, opened.id);
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), coord }, new Bus(), 2000);
+
+    await w.sweepNames();
+    expect(renames(h.calls)).toEqual([]);
+  });
+
   // The direction that decides whether the rung is a skip or an outage: a run
   // that has CLOSED releases the name again, and an unclaimed row is renamed
   // exactly as it was before this wave.

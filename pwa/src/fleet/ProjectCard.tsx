@@ -20,7 +20,7 @@ import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { DISPATCH_GLYPH, dispatchWindow, runForSession } from './runWords';
+import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
 
@@ -80,6 +80,7 @@ export function ProjectCard({
   archivedOpen = false,
   roster = [],
   runs = [],
+  abroad = [],
   nowMs = Date.now(),
 }: {
   group: FleetGroup;
@@ -121,6 +122,17 @@ export function ProjectCard({
    *  has landed — or by a test that is not about the tree — renders the flat
    *  list it always did. */
   runs?: readonly RunSummary[];
+  /** The runs whose programme is HOMED in this project and whose work is
+   *  happening somewhere else (spec §3 F4). A SECOND, additive list, and never
+   *  merged into `runs`: `runs` is what the tree is drawn from and every one of
+   *  its members belongs to this card's project by construction, while every
+   *  member of this list belongs to another card by the same construction.
+   *  Merging them would put a phantom child under a coordinator for a workspace
+   *  that is not in this repo. Computed by `FleetScreen`, which owns the store
+   *  read, for the same reason `runs` is: a card handed one session list cannot
+   *  answer a question about other projects' runs. Defaults to `[]`, so every
+   *  caller and every test that predates this renders exactly as it did. */
+  abroad?: readonly RunSummary[];
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -197,6 +209,72 @@ export function ProjectCard({
   // names the programme, so the operator lands looking at the right group.
   const openRunFor = (session: FleetSession): (() => void) | null =>
     runForSession(runs, session.id) === null ? null : () => navigate('/runs');
+
+  // F4. `nestFleet`'s rule 3 leaves a worker whose coordinator is NOT on this
+  // card at depth 0, unbracketed — right, and until now silent. This is the
+  // sentence that ends the silence, computed HERE (the level that holds the
+  // runs) from the run the card already has, so the tree stays pure and its
+  // five rules stay exactly as they are.
+  //
+  // TWO facts, stated only when measured. The programme and wave come off the
+  // run itself and are always available. The HOME clause is Task 5's own
+  // decision — `crossingNote`, not a second copy of its predicate (D-2575) —
+  // asked against THIS CARD's project, `group.project`, not `run.project`
+  // (D-2576): the two agree today only because `FleetScreen` filters `runs` by
+  // project before handing them down, an invariant enforced in a different
+  // file and not one this component may lean on now that Task 7 adds an
+  // `abroad` list whose whole point is a run naming a DIFFERENT project.
+  // `crossingNote` answers `null` for two distinct reasons — home unknown (the
+  // legacy generation, or an older server) or home genuinely IS this card's
+  // project (measured sameness) — and both read the same way here: nothing to
+  // claim about a home, so nothing is claimed.
+  //
+  // The guard below reads as ONE two-reasons-for-one-silence statement:
+  // `parent === null` (no coordinator at all) and `parent === row.session.id`
+  // (self-claimed) are two different reasons there is no OTHER coordinator to
+  // call off-card, and collapsing either into "coordinator elsewhere" would be
+  // the overloaded silence this repo forbids at a seam. Only the `parent ===
+  // null` clause is independently load-bearing, though (D-2574(c), measured):
+  // a rendered row's own session is, by construction, always a member of
+  // `group.sessions` (rows are built from that exact array), so `parent ===
+  // row.session.id` implies the `group.sessions.some(...)` guard one line
+  // down is already true — dropping the self-claim clause changes nothing for
+  // any reachable row. Kept for what it documents, not for what it guards.
+  //
+  // The `group.sessions.some(...)` guard is what makes this the ORPHAN's marker
+  // and not every worker's: a child whose parent IS on this card is USUALLY
+  // bracketed, and the bracket already says what this sentence would say — but
+  // not always. `nestFleet`'s rule 4 lifts a session that is BOTH a child and
+  // a parent back to depth 0 with no bracket at all (`nestFleet.test.ts:145-157`
+  // pins it), and that row still reaches this guard, still finds its parent on
+  // `group.sessions`, and still returns null here — so this card says nothing
+  // about it either. That silence is acceptable for the same reason rule 4
+  // itself gives: the row IS a parent, rendering its own children beneath it,
+  // and a THIRD sentence ("your parent is also on this card") next to a row
+  // that is already a visible coordinator was judged not worth a marker; it is
+  // not evidence the guard's premise holds for every depth-0 row. It looks only
+  // at `group.sessions`, never `group.archived` — an archived coordinator IS
+  // still a row on this card (`group.archived.map(...)` renders it under the
+  // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
+  // left behind by one still reads as an orphan (and still says nothing about
+  // home when that home is, measured, this card's own project).
+  const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
+    if (row.kind !== 'session' || row.depth !== 0) return null;
+    const run = runForSession(runs, row.session.id);
+    if (run === null) return null;
+    const parent = run.claimedBy;
+    if (parent === null || parent === row.session.id) return null;
+    if (group.sessions.some((s) => s.id === parent)) return null;
+    const crossing = crossingNote({ ...run, project: group.project });
+    const label = `${run.program} ${waveLabel(run)}`;
+    return crossing === null
+      ? { text: label, title: `this worker's coordinator is not among this card's live sessions` }
+      : {
+          text: `${label} · home ${crossing.home}`,
+          title: `this worker's coordinator is not among this card's live sessions; the programme is homed in ${crossing.home}`,
+        };
+  };
+
   const rowBody = (row: FleetRow): ReactNode =>
     row.kind === 'session' ? (
       <SessionLine
@@ -293,19 +371,39 @@ export function ProjectCard({
               nothing, which is the whole reason the card can afford one at
               all. `aria-hidden` on the glyph because it is the picture of an
               edge, not a fact the row does not already carry. */}
-          {rows.map((row) =>
-            row.depth === 0 ? (
+          {rows.map((row) => {
+            const note = orphanNote(row);
+            return row.depth === 0 ? (
               // A Fragment, never a wrapper element: the top-level row's DOM
-              // has to stay byte-identical to the one that shipped before this
-              // task, and `.proj-card-body`'s column flex lays out its
-              // children directly.
-              <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
+              // has to stay byte-identical to the one that shipped before the
+              // tree existed, and `.proj-card-body`'s column flex lays out its
+              // children directly. The marker is a SIBLING line for the same
+              // reason — a wrapper would change the row it explains.
+              <Fragment key={rowKey(row)}>
+                {rowBody(row)}
+                {note !== null && (
+                  <div className="proj-crossing" title={note.title}>
+                    <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+                    {note.text}
+                  </div>
+                )}
+              </Fragment>
             ) : (
               <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
                 <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
                 {rowBody(row)}
               </div>
-            ),
+            );
+          })}
+          {abroad.length > 0 && (
+            <div className="proj-abroad">
+              {abroad.map((r) => (
+                <span key={r.id} className="proj-abroad-line">
+                  <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
+                  {`${r.program} ${waveLabel(r)} in ${r.project}`}
+                </span>
+              ))}
+            </div>
           )}
         </div>
       )}
