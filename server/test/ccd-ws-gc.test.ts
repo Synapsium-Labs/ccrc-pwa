@@ -1010,7 +1010,18 @@ describe('ws-gc --prune', () => {
     fs.writeFileSync(path.join(reg, 'demo-quiet-mesa.archived'), '');
     fs.mkdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
 
-    h.sh('_reg_purge demo-quiet-mesa');
+    // THE REFUSED UNLINK IS NOW REPORTED, so this call's STATUS is part of the
+    // contract and is captured rather than allowed to throw (D-2605). The
+    // fixture's whole mechanism is an `rm -f` that MUST fail, and since
+    // `_reg_purge` began tracking its unlinks a failed one makes the function
+    // return nonzero; `h.sh` is `execFileSync` (ccdWsHelpers.ts:346), which
+    // throws on a nonzero exit, so a bare call would die HERE and not one of
+    // the six ordering assertions below would ever run. Measured: without this
+    // capture the suite is `1 failed | 68 passed` with
+    // `rm: cannot remove '…/demo-quiet-mesa.reaping': Is a directory`.
+    const wedged = h.sh('_reg_purge demo-quiet-mesa; echo "rc=$?"');
+    expect(wedged, 'a purge whose unlink was refused must not report success')
+      .toMatch(/(^|\n)rc=1$/);
 
     expect(fs.existsSync(path.join(reg, 'demo-quiet-mesa.reaping')),
       'the fixture only means anything if rm -f really refused it').toBe(true);
@@ -1024,8 +1035,14 @@ describe('ws-gc --prune', () => {
 
     // With the breadcrumb gone the marker goes too: the normal path is
     // unchanged, and nothing is left behind on it.
+    // …and THIS one must succeed, so its zero is asserted in the same
+    // vocabulary as the nonzero above rather than left to `h.sh`'s throw. The
+    // pair is what makes the status a measurement: one run where every unlink
+    // took, one where one of them could not.
     fs.rmdirSync(path.join(reg, 'demo-quiet-mesa.reaping'));
-    h.sh('_reg_purge demo-quiet-mesa');
+    const clean = h.sh('_reg_purge demo-quiet-mesa; echo "rc=$?"');
+    expect(clean, 'a purge that took everything reports success')
+      .toMatch(/(^|\n)rc=0$/);
     expect(fs.readdirSync(reg).filter((f) => f.startsWith('demo-quiet-mesa.'))).toEqual([]);
   });
 
