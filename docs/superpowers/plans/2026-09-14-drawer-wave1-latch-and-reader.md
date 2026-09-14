@@ -3415,6 +3415,16 @@ forbid. The worker refused it and reported, which is the protocol working agains
   coordinator's alternation matched the language keyword). The worker also declined to re-assert
   "cannot be left behind by a pointer" and documented what the demand cannot do instead.
 
+- **D-2774** (Task 4 guard, self-found during fix round 3): the worker's first repair of the
+  wrong-but-passing `MEASUREMENT` regex used two fixtures, and **dropping the `1853` clause alone
+  stayed GREEN** — both fixtures rejected the loosened regex for the wrong reason (neither carried
+  `resize-window` at all), so neither could distinguish which token had gone. Replaced with **one
+  fixture per token**, each stating the measurement with exactly one token absent. The coordinator
+  re-measured all five drop-one mutants plus the alternation, the dropped root and the dropped
+  `ccd/ccd` extra: seven of seven RED. Recorded because a fixture that reds for the wrong reason is
+  the same defect class as a guard that cannot fail, one level up — and it was found by the worker
+  pinning its own repair rather than by review.
+
 - **D-2772** (programme shape, against the COORDINATOR): wave 1 was dispatched with this programme's
   spec and plans on a third branch behind an unmerged PR, so the worker's tree contained no plan in
   which an issued deviation number could be defined — and `server/test/deviation-refs.test.ts`

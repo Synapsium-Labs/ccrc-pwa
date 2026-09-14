@@ -73,6 +73,39 @@ refused and reported. That refusal is the protocol working against a bad instruc
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
 
+### Fix round 3, verified by hand — ten mutants, ten reds (2026-09-14)
+
+Test-only, 223 lines across two files. The coordinator ran the mutation tables itself rather than
+delegating, and every one reds with the tree clean after each:
+
+| mutant | result |
+|---|---|
+| history terminal: `disableStdin` re-enabled | RED |
+| history terminal: a second addon loaded | RED |
+| history terminal: a `linkHandler` added | RED |
+| `MEASUREMENT`: drop `1853` / `43` / `history_size` / `resize-window`, each alone | RED ×4 |
+| `FALSIFIED`: drop the `does not` half of the alternation | RED |
+| `ROOTS`: drop `agent/src` | RED |
+| `EXTRA`: drop `ccd/ccd` | RED |
+
+**Spec §5.5's mandatory lens now has a mechanism** (`pwa/test/history-term-hardening.test.tsx`): a
+behavioural half against a recording fake — `disableStdin`, exactly one addon and it an instance of
+`FitAddon`, no `allowProposedApi`, no `linkHandler` — plus two source scans, because the behavioural
+half sees one constructor. The addon scan is **derived**: the set of `@xterm/addon-*` packages
+imported anywhere in the app must equal `['@xterm/addon-fit']`, since a denylist would only catch the
+addons someone thought to forbid. Its comment says plainly that this is a claim about *this
+terminal's configuration*, not about xterm's parser.
+
+**D-2774 — the worker found a third weakness while pinning the first two.** Its first repair used two
+fixtures, and dropping the `1853` clause alone stayed GREEN: both fixtures rejected the loosened
+regex for the wrong reason, neither carrying `resize-window` at all. Replaced with one fixture per
+token. A fixture that reds for the wrong reason is the same defect class as a guard that cannot
+fail, one level up — and it was found by the worker pinning its own repair, not by review.
+
+The worker also reported an unnamed flake honestly: the first of three full server runs showed
+`1 failed | 9290 passed` with the file name lost to a tail, and the two runs after it were green.
+Reported rather than smoothed over. CI is the arbiter.
+
 ### Fix round 2, verified — and the limit of a regex over prose (2026-09-14)
 
 The fresh-eyes gate, the one verifier with no prior position on the branch, answered **MERGE**: it
