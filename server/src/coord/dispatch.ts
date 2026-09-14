@@ -305,7 +305,9 @@ export async function dispatchRun(
   // saying what it is is indistinguishable from a bug.
   const { caps, usage, overConcurrency } = capsMeasured(coord);
   if (overConcurrency !== null) {
-    return { ok: false, kind: 'refused', code: 'cap-concurrency', ...overConcurrency };
+    // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
+    return { ok: false, kind: 'refused', code: 'cap-concurrency',
+      limit: overConcurrency.limit, running: overConcurrency.running };
   }
   if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
     return { ok: false, kind: 'refused', code: 'cap-daily',

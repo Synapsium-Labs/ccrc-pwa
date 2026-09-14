@@ -1628,7 +1628,8 @@ export function registerCoordRoutes(
     if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
       const { overConcurrency } = capsMeasured(coord);
       if (overConcurrency !== null) {
-        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency', ...overConcurrency } });
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
+          limit: overConcurrency.limit, running: overConcurrency.running } });
       }
     }
 
