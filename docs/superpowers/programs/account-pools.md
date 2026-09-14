@@ -6878,3 +6878,17 @@ dispatches that shape"*; `SKILL.md:300` drifted. The spec restores it.
 
 Not account-pools scope; recorded here because run 47 is what hit the wall, and because the next
 coordinator reading this ledger should know the cap will change under it.
+
+---
+
+## 2026-09-14 15:3x UTC — review-runs spec approved; PR #103 open; plan next
+
+The operator reviewed the spec and approved it ("looks good"). Status line updated (`7a4dbb91` on
+`spec/review-runs`) and the spec opened as **PR #103** against `main`. Two self-review fixes went in
+before the operator saw it: `unknown` sits in `ACTIVE_RUN_STATES` (a cap counts what it cannot classify),
+and `CoordStore.advance` — the one writer of `state` — joins the surfaces table so the last gate reads
+the same transition table as the first.
+
+Next: the implementation plan, via writing-plans, on the same `spec/review-runs` branch as a sibling
+under `docs/superpowers/plans/`. Run 47 stays `planned`, still cap-blocked; nothing here changes
+account-pools' own state.
