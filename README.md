@@ -1552,7 +1552,7 @@ is nothing to fall back to; one that resolves to no session is refused
 the runId-less form resolves only while exactly one programme is active, and
 fails shut the moment a second is. Raw session-id addressing stays for ad-hoc
 mail. When a run's session is replaced, the replacement inherits its
-predecessor's undelivered mail as a **new** delivery row, freshly rendered, and
+predecessor's outstanding mail as a **new** delivery row, freshly rendered, and
 the predecessor's row is parked — an envelope that names the corpse may not be
 replayed.
 
@@ -1690,9 +1690,11 @@ buy.
    notice. A second coordinator on the same program is refused. The body also
    carries `homeProject`, the programme's home repo, stored on the programme
    row at first insert: a later open naming a *different* one is refused
-   `home-mismatch` (**409**, `by:` the stored value), while a stored home that
-   is still null is backfilled from the body. A `sessionId` whose earlier runs
-   belong to another project is refused `project-mismatch` (**409**, `by:` that
+   `home-mismatch` (**409**, `by:` the stored value) *before the row is
+   opened*, exactly like the guard below, so a refusal leaves no `planned`
+   orphan here either; a stored home that is still null is backfilled from
+   the body instead. A `sessionId` whose earlier runs belong to another
+   project is refused `project-mismatch` (**409**, `by:` that
    project) *before the row is opened*, so a refusal leaves no `planned` orphan.
    The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
    `ledgerPath`, both null while the stored home is. Wave 1 (no
@@ -1747,23 +1749,23 @@ buy.
    `handoffCommit` and `producerSha`. Only then dispatch into the
    already-held successor workspace.
 
-   **For a cross-project successor**, the procedure differs from the arm
-   above. A cross-project successor opens first without the producer's
+   **For a cross-project successor**:
+   A cross-project successor opens first without the producer's
    `sessionId`, leaving the new row planned for fresh dispatch in the
-   target repository. Then close the producer with `final:true` so its
-   now-distinct workspace is released, require `released:true`, then
-   verify the producer's closed row is `done` with a full 40-hex
-   `handoffCommit`. If the consumer depends on an interface from this
-   producer, independently prove through `ccd pr-state --session
-   <producer-session>` that the producer PR's selected `phase` is
-   `merged` and its raw `headRefOid` equals both that `handoffCommit` and
-   `producerSha` — this is what lets the arm
-   prove its PR merged at the named producer SHA, required
-   before dispatching the consumer fresh in its target project.
-   A `done` run proves fingerprint and close, **not merge proof**; missing,
-   ambiguous, or mismatched PR evidence means report and do not dispatch.
-   Using `final:false` on that crossing would strand a synthetic
-   next-wave hold on the producer workspace.
+   target repository. Then close the producer with `final:true` so
+   its now-distinct workspace is released, require `released:true`,
+   then verify the exact producer closed row is `done` with a full
+   40-hex `handoffCommit`. If the consumer depends on an interface
+   from this producer, independently prove through `ccd pr-state --session
+   <producer-session>` that the selected `phase` is `merged` and raw
+   `headRefOid` equals both that `handoffCommit` and `producerSha` —
+   prove its PR merged at the named producer SHA
+   before dispatching the consumer. Only then dispatch the consumer
+   fresh in its target project.
+   A `done` run proves fingerprint and close, **not merge proof**;
+   missing, ambiguous, or mismatched PR evidence means report and do
+   not dispatch. Using `final:false` on that crossing would
+   strand a synthetic next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
    ws-release`); nothing archives the workspace on its own after that — the
    merged sweep only pushes its notification, so the workspace stays live and

@@ -264,7 +264,12 @@ describe('README: the run lifecycle and programme mail', () => {
     expect(sameClose).toBeLessThan(sameClosed);
     expect(sameClosed).toBeLessThan(sameDispatch);
 
-    const cross = p.slice(p.indexOf('For a cross-project successor'));
+    // D-2740 fix round 1 (Fix 4): bounded at step 6, exactly as
+    // `readme-holds.test.ts:62` bounds its own `crossing` slice — an unbounded
+    // slice ran past step 5 into step 6 and beyond, and mutation 5b measured a
+    // cross-arm anchor (`final:true`) resolving there instead of failing.
+    const cross = passage('README, cross-project succession', p,
+      'For a cross-project successor', '\n6. ');
     expect(cross, 'cross-project succession does not omit the producer session')
       .toMatch(/without the producer's\s+`sessionId`/);
     expect(cross, 'cross-project succession does not verify the closed producer')
@@ -300,11 +305,21 @@ describe('README: the run lifecycle and programme mail', () => {
     expect(crossDependency).toBeLessThan(crossMerge);
     expect(crossMerge).toBeLessThan(crossDispatch);
 
-    for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'phase', 'headRefOid', 'producerSha']) {
-      expect(p, `producer merge proof does not name ${evidence}`).toContain(evidence);
+    // D-2740 fix round 1 (Fix 3): scoped PER ARM, not once over the whole
+    // passage `p`. Measured by the reviewer: replacing `headRefOid` with plain
+    // text in the cross arm ALONE left every predicate below green, because
+    // the same-project arm's own copy of the evidence still satisfied both the
+    // containment loop and the SHA-chain regex — the two arms were alibiing
+    // each other. Mutation row W3-2 requires "a dependency-bearing arm loses
+    // its conditional same-SHA merge proof" to go red for EACH arm
+    // independently; checking `p` once cannot detect a single-arm mutation.
+    for (const [armName, arm] of [['same-project', same], ['cross-project', cross]] as const) {
+      for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'phase', 'headRefOid', 'producerSha']) {
+        expect(arm, `${armName} producer merge proof does not name ${evidence}`).toContain(evidence);
+      }
+      expect(arm, `${armName}'s named producer SHA is not pinned to the closed row and raw PR row`)
+        .toMatch(/`headRefOid`[\s\S]{0,160}?`handoffCommit`[\s\S]{0,120}?`producerSha`/);
     }
-    expect(p, 'the named producer SHA is not pinned to the closed row and raw PR row')
-      .toMatch(/`headRefOid`[\s\S]{0,160}?`handoffCommit`[\s\S]{0,120}?`producerSha`/);
   });
 
   it('the programme-mail paragraph names both roles and the exact read semantics', () => {
@@ -326,8 +341,8 @@ describe('README: the run lifecycle and programme mail', () => {
     expect(store, 'bindSession is gone from the store — wave 1 has not landed').toContain('bindSession');
     expect(p, 'the paragraph does not name the funnel the heir promise is kept in')
       .toContain('bindSession');
-    // Ruling 2 (this wave): the identical `to`/`program` correction Task 1 made
-    // in the cross-repo subsection has a second, independent copy here — the
+    // D-2742: the identical `to`/`program` correction Task 1 made in the
+    // cross-repo subsection has a second, independent copy here — the
     // programme-mail paragraph's own read-semantics sentence, which the plan
     // originally wrote as "`to` becomes optional when `program` is given", a
     // claim `server/src/coord/routes.ts:1046-1048` refutes: the two are
