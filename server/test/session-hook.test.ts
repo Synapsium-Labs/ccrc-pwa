@@ -4339,6 +4339,42 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     return { tree, transcript };
   };
 
+  it('THE SERVED-MARKER NONCE IS CAPTURED INSIDE ITS SAFE GATE — an unsafe one forms no pathname at all', () => {
+    // §3.3 step 2's rule is that the grammar gates a PATH COMPONENT: "a nonce
+    // this refuses forms no marker path at all", and the settlement's own
+    // comment says the same ("an unsafe or missing nonce forms no marker path
+    // and reads false"). Both were false: the capture sat OUTSIDE the grammar
+    // test and only `served` was gated by it, while the commit path built
+    // `rm -f "$REG/.$id.compactserved.$nonce"` from the ungated value.
+    // MEASURED on the shipped arm with exactly this fixture: the record
+    // committed AND `$REG/victim` was DELETED.
+    //
+    // Both preconditions need an out-of-contract same-UID writer — no
+    // in-contract path can put an unsafe nonce in the set, since PreCompact
+    // mints `compact-<at>-<pid>-<r>-<r>` and the helper copies it verbatim —
+    // and such a writer can already unlink anything in `$REG`, so this grants
+    // no capability. It is here because a shipped invariant should be true.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const regd = path.join(home, '.cc-sessions');
+    fs.writeFileSync(setFile(), `${JSON.stringify({
+      v: 1, at: 1, nonce: 'x/../victim', scope: 'main', overlap: false, agent: null, transcript: null,
+      parentLive: false, liveAgents: 0, cwd: tree, built: null, fresh: null,
+      steered: false, files: null, stats: null,
+    })}\n`);
+    // A DIRECTORY at the marker's stem is what makes the traversal resolve:
+    // `.../compactserved.x/../victim` is `$REG/victim` only if `.x` is one.
+    fs.mkdirSync(path.join(regd, '.demo-quiet-basin.compactserved.x'), { recursive: true });
+    fs.writeFileSync(path.join(regd, 'victim'), 'a registry file that is not a marker\n');
+    run(postCompact(tree, transcript, SUMMARY));
+    const recs = journal();
+    expect(recs, 'the record still commits — so the assertion below discriminates').toHaveLength(1);
+    expect(recs[0]!['served'], 'an unsafe nonce reads false').toBe(false);
+    expect(fs.existsSync(path.join(regd, 'victim')),
+      'and it forms no pathname for the cleanup to traverse').toBe(true);
+  });
+
   // ── §3.4 SETTLEMENT: the claim is consumed BY IDENTITY, not by name ────
   // "…revalidates generation and claim-FD/current-path identity, then holds it
   // through raw JSONL validation, stage/whole-file atomic rename, and any

@@ -1405,7 +1405,7 @@ _hook_compact_post() {
   # Cleared on entry for the reason every out-parameter in this tree is: a
   # value from a previous call read as this one's is the fabricated fact.
   POST_CLAIM_FD=""
-  local present=0 meas="" rec="" nonce="" served="false" tries=0 head="" old=""
+  local present=0 meas="" rec="" nonce="" cand="" served="false" tries=0 head="" old=""
   local aged=0 norm=""
   summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
   [[ -n "$summary" ]] || return 0
@@ -1576,7 +1576,24 @@ _hook_compact_post() {
   if [[ -n "$snap" ]]; then
     IFS= read -r -N 4096 head 2>/dev/null < "$snap"
     if [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]]; then
-      nonce="${BASH_REMATCH[1]}"
+      # THE GATE CAME FIRST AND `nonce` IS ASSIGNED ONLY INSIDE IT (r3 A-M2).
+      # The capture used to sit here, outside the grammar test, and the commit
+      # path 106 lines below builds `rm -f "$REG/.$id.compactserved.$nonce"`
+      # from it — so an unsafe value DID form a marker pathname, which is the
+      # opposite of what the comment above and §3.3 step 2 both say ("it gates
+      # a PATH COMPONENT ... a nonce this refuses forms no marker path at
+      # all"). MEASURED on the shipped arm: a canonical set carrying
+      # `"nonce":"x/../victim"`, a directory at `$REG/.<id>.compactserved.x`
+      # and a file at `$REG/victim` — one PostCompact committed its record and
+      # DELETED `$REG/victim`, a registry file that is not a marker. It grants
+      # no capability an out-of-contract same-UID writer does not already have,
+      # which is why it is Minor; what it did was falsify a shipped invariant
+      # for the sake of two moved lines.
+      #
+      # `cand` is the local the gate reads. `nonce` stays EMPTY on a refusal,
+      # and the `[[ -z "$nonce" ]] ||` guard on the removal path then means
+      # exactly what its own comment already claimed.
+      cand="${BASH_REMATCH[1]}"
       # `-f` AND NOT `-L`, never a bare `-e`: this is the READING end of the
       # marker the compact SessionStart arm publishes, and a bare existence
       # test answers `served:true` for a symlink to anything and `served:false`
@@ -1586,8 +1603,10 @@ _hook_compact_post() {
       # retained-serve-lock pin asserts that no function body in this file
       # mentions it, which is how "its only call site is top level" is
       # measured.)
-      if [[ "$nonce" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] \
-         && [[ -f "$REG/.$id.compactserved.$nonce" && ! -L "$REG/.$id.compactserved.$nonce" ]]; then served="true"; fi
+      if [[ "$cand" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]]; then
+        nonce="$cand"
+        if [[ -f "$REG/.$id.compactserved.$nonce" && ! -L "$REG/.$id.compactserved.$nonce" ]]; then served="true"; fi
+      fi
     fi
   fi
   # THE SIXTEEN-KEY RECORD: the helper's measurement ENRICHED with the six
