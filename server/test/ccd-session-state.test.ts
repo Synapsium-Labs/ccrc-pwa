@@ -427,13 +427,15 @@ describe('_session_state drives §4.3\'s table', () => {
 });
 
 describe('ccd ls', () => {
-  it('replaces the ALIVE column with STATE and leaves the gpt trailer verbatim', () => {
+  it('replaces the ALIVE column with STATE and leaves the Codex trailer verbatim', () => {
     // §4.4: `ALIVE=no` said the same word about a session somebody stopped,
     // one that died unwatched and one that never started. Nothing parses
     // `ccd ls` — no server/agent/pwa caller, no other test — but
-    // ccd-limits.test.ts pins _gpt_status's strings verbatim, so the trailer
-    // is NOT this task's to touch, and that is asserted here rather than
-    // hoped for.
+    // ccd-limits.test.ts pins _codex_lane_status's strings verbatim, so the
+    // trailer is NOT this task's to touch, and that is asserted here rather
+    // than hoped for. The line names the lane and calls it a `codex lane`:
+    // it used to read `gpt overflow lane`, which by 2026-09-11 was wrong in
+    // both halves — see the trailer's own comment in cmd_ls.
     h.sh(`_reg_set ${ID} uuid u
       _reg_set ${ID} wrapper claude-d
       _reg_set ${ID} workdir /data/projects/demo
@@ -442,7 +444,7 @@ describe('ccd ls', () => {
     expect(out).toContain('STATE');
     expect(out).not.toContain('ALIVE');
     expect(out).toMatch(new RegExp(`${ID}\\s+claude-d\\s+orphan\\s+/data/projects/demo`));
-    expect(out).toContain('gpt overflow lane: not installed  —  0 session(s) currently on it');
+    expect(out).toContain('codex lane gpt: not installed  —  0 session(s) currently on it');
   });
 
   it('prints the same word for a stopped row that _session_state does', () => {

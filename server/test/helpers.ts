@@ -83,12 +83,25 @@ export const DEFAULT_TEST_ROSTER = {
     {
       // `gpt` KEEPS its name through the stage-5 de-brand (D-202): it names
       // OpenAI's backend, not this fleet — and ccd's shipped bash keys its
-      // Codex overflow lane on this literal roster id (`_gpt_enabled() {
-      // _account_ok gpt; }`; `ccd ls` prints its footer only behind
-      // `_is_valid_wrapper gpt`). Rename it here and every gpt-lane test
-      // goes dark: the footer is skipped, not relabelled.
+      // Codex lane on this literal roster id (`_gpt_enabled() { _account_ok
+      // gpt; }`, and `_codex_lanes`' pre-CCRC_CODEX_BACKEND fallback). Rename
+      // it here and every gpt-lane test goes dark.
+      //
+      // `telemetry: 'codex'` CORRECTED 2026-09-14. This row read `'none'` from
+      // the day the field was added, and that is how a stale `ccd ls` trailer
+      // survived a test suite this size: `none` asserts "this lane reports no
+      // usage at all", while a Codex lane reports a weekly figure through
+      // ccgpt-usage — the figure `_codex_lane_status` prints and `_limit_score`
+      // ranks it on. A roster that mis-states the backend cannot fail a test
+      // about the backend.
+      //
+      // `homeAble` stays FALSE here, unlike the live roster (where both Codex
+      // lanes became placeable on 2026-09-11), and that is deliberate: it keeps
+      // this roster's placement set stable for every pool test, and it makes
+      // the trailer assertions prove the thing that actually changed — the
+      // Codex trailer follows `telemetry`, never home-ability.
       id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
-      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none',
+      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'codex',
     },
     {
       id: 'claude-d', label: 'claude-d', configDirSuffix: '.claude-d',
