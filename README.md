@@ -1558,11 +1558,14 @@ replayed.
 
 **Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers only
 outstanding mail on that programme's runs; add `&all=1` — exactly
-`GET /api/mail?program=<slug>&all=1` — for full mail history. `to` becomes optional
-when `program` is given. `GET /api/feed?program=<slug>` is always the full feed
-archive and has no outstanding/history split. An event with no run behind it is
-**programless** and appears only unfiltered. `/mail` groups the feed by programme,
-with a filter chip; programless rows sit under their own header.
+`GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
+are mutually exclusive — exactly one, never both and never neither; a request
+naming both is refused `400 bad-request`, because a mailbox and a programme
+thread are two different questions. `GET /api/feed?program=<slug>` is always the
+full feed archive and has no outstanding/history split. An event with no run
+behind it is **programless** and appears only unfiltered. `/mail` groups the
+feed by programme, with a filter chip; programless rows sit under their own
+header.
 
 **The board says which repo.** Every row on `/runs` carries a project badge
 (`run-project`), and a row whose project differs from its programme's home gains

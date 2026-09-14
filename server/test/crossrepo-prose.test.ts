@@ -132,9 +132,9 @@ describe('README: cross-repo programmes', () => {
     // checked, so a route name alone cannot satisfy this test.
     const feed = passage('the feed handler', ROUTES, "app.get('/api/feed'", '\n  });');
     const mail = passage('the mail list handler', ROUTES, "app.get('/api/mail'", '\n  });');
-    expect(feed, 'the feed handler does not read `program` — wave 1 has not landed').toContain('program');
-    expect(mail, 'the mail list handler does not read `program` — wave 1 has not landed').toContain('program');
-    expect(mail, 'the mail handler no longer reads `all` — full history is not selectable').toContain('all');
+    expect(feed, 'the feed handler does not read `q.program` — wave 1 has not landed').toContain('q.program');
+    expect(mail, 'the mail list handler does not read `q.program` — wave 1 has not landed').toContain('q.program');
+    expect(mail, 'the mail handler no longer reads `q.all` — full history is not selectable').toContain('q.all');
     const s = crossSection();
     expect(s, 'the section does not name the exact full-history URL')
       .toContain('GET /api/mail?program=<slug>&all=1');
@@ -145,6 +145,18 @@ describe('README: cross-repo programmes', () => {
       .toMatch(/feed[\s\S]{0,120}?full\s+(?:feed\s+|event\s+)?archive/i);
     expect(s, 'the section does not say what happens to an event with no run behind it')
       .toContain('programless');
+    // The mailbox and the thread are two different questions, and the route
+    // refuses a request that asks both at once. Grounded in the guard itself,
+    // so the day `to` and `program` stop being mutually exclusive the sentence
+    // saying they are reds with it.
+    expect(mail, 'the mail handler no longer refuses both-or-neither — this claim is over nothing')
+      .toContain('(to === null) === (program === null)');
+    expect(s, 'the section does not say `to` and `program` are mutually exclusive')
+      .toMatch(/`to`[\s\S]{0,120}?`program`[\s\S]{0,60}?mutually exclusive/i);
+    expect(s, 'the section does not say what naming both answers')
+      .toMatch(/naming both[\s\S]{0,60}?400/i);
+    expect(s, 'the folded sentence came back — `to` is not merely optional beside `program`')
+      .not.toMatch(/`to` becomes optional/);
   });
 
   it("names the board's three cues, grounded in the PWA files that render them", () => {
