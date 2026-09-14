@@ -236,13 +236,25 @@ function tmuxSaying(home: string, sessionName: string): string {
   return bin;
 }
 
+/** A fake tmux that NEVER ANSWERS — the measured failure class this fleet has a
+ *  name for (`_substrate_mark`, `FleetSession.substrate`): a client blocked on a
+ *  tmux server it cannot reach. `exec` so the bound's SIGTERM lands on the sleep
+ *  itself rather than orphaning it behind a shell. */
+function tmuxHanging(home: string): string {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+  return bin;
+}
+
 interface UsageRun { out: string; code: number }
-function runUsage(home: string, payload: string, opts: { tmux?: string; pane?: boolean; cfgDir?: string } = {}): UsageRun {
+function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string } = {}): UsageRun {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
   delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE'];
   env['CLAUDE_CONFIG_DIR'] = opts.cfgDir ?? path.join(home, '.zeta');
   if (opts.pane !== false) env['TMUX_PANE'] = '%3';
-  if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${env['PATH'] ?? ''}`;
+  if (opts.tmuxHangs === true) env['PATH'] = `${tmuxHanging(home)}:${env['PATH'] ?? ''}`;
+  else if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${env['PATH'] ?? ''}`;
   const r = spawnSync('bash', [SCRIPT], { input: payload, encoding: 'utf8', env });
   return { out: r.stdout ?? '', code: r.status ?? -1 };
 }
@@ -254,6 +266,25 @@ const usageFile = (home: string, rel: string): unknown => {
 
 describe('statusline-command.sh writes the per-session usage sidecar (routing spec 2026-09-14 §6)', () => {
   const seedReg = (home: string): void => { mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); };
+
+  // The sidecar block's own comment promises "must never cost the status bar",
+  // and this hook's tmux call is the first thing in it that CAN: a tmux client
+  // blocks waiting on a server this fleet has measurably lost before, and the
+  // status line is itself a surface the server reads back (`parseStatusline`).
+  // Bounded by `timeout 2`; drop the bound and this render waits out the whole
+  // sleep, which is what the elapsed assertion measures.
+  it('a tmux that never answers costs the render the bound, not the wait — the status line still prints', () => {
+    const home = seed('ccrc-statusline-usage-hang-'); seedReg(home);
+    const t0 = Date.now();
+    const r = runUsage(home, usagePayload(), { tmuxHangs: true });
+    const elapsed = Date.now() - t0;
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('👤 zeta·one');
+    expect(elapsed).toBeLessThan(15_000);
+    // No ccd id could be derived, so the sidecar is simply not written — the
+    // same silence as a pane outside tmux, never a stall.
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  }, 60_000);
 
   it('writes ~/.cc-sessions/usage/<ccd-id>.json keyed by the tmux name with cc- stripped, carrying ts', () => {
     const home = seed('ccrc-statusline-usage-'); seedReg(home);

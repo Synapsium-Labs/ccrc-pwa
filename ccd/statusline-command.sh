@@ -265,10 +265,26 @@ fi
 #    what the server classifies (`familyClassOf`); the display name is for
 #    people. Every failure below is silent on purpose — this runs on every
 #    render of every session and must never cost the status bar.
+#
+#    WHICH IS WHY THE tmux CALL IS BOUNDED. This is the first thing this hook
+#    has ever asked of tmux, and it runs on EVERY render of every session — a
+#    tmux CLIENT blocks waiting on the server, and an unreachable tmux server is
+#    a measured failure class on this fleet, not a hypothetical (`_substrate_mark`,
+#    `FleetSession.substrate`). Unbounded, the render STALLS instead of printing,
+#    and the status line is itself a surface the server reads back
+#    (`parseStatusline`: model, effort, ultracode, ctxPct, branch) — so an
+#    unreachable tmux would have gone on to blind that too, a new consequence
+#    this block introduced and the sentence above promised it would not. Two
+#    seconds is far beyond a healthy `display-message` and far below anything a
+#    person would watch; on expiry `tname` is empty, which is the same silent
+#    no-sidecar path as a pane outside tmux. If `timeout` itself is missing the
+#    substitution fails and `tname` is empty — the same silence again, never a
+#    stall. (`session-hook.sh` carries the unguarded idiom deliberately: it runs
+#    per hook EVENT, not per render.)
 usage_dir="$HOME/.cc-sessions/usage"
 ccd_id=""
 if [ -n "${TMUX_PANE:-}" ] && [ -d "$HOME/.cc-sessions" ]; then
-  tname=$(tmux display-message -p '#S' 2>/dev/null)
+  tname=$(timeout 2 tmux display-message -p '#S' 2>/dev/null)
   case "$tname" in cc-?*) ccd_id="${tname#cc-}" ;; esac
   case "$ccd_id" in *[!A-Za-z0-9._-]*) ccd_id="" ;; esac
 fi
