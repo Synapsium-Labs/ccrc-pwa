@@ -2974,6 +2974,30 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     // actually lists (delete the nonce compare, delete the age find, delete
     // the consume-once `rm`, etc.) are correctness mutations pinned by the
     // other rows in this describe, not by the ratio.
+    //
+    // RE-MEASURED AND RE-ARGUED FOR D-2605 (2026-09-14), because Task 9 is the
+    // one change that measurably PERTURBS this arm: it adds roughly six to
+    // eight external-binary children per invocation — the lock-open alias
+    // `link`+`rm`, the `flock`, the generation-read alias `link`+`rm`, and the
+    // marker source `mktemp`+`link`+`rm`, every one of which `type -t` answers
+    // `file` for — plus, on a contended row, up to COMPACT_LOCK_WAIT_SERVE of
+    // real waiting.
+    //
+    // THE BOUND WAS NOT RAISED. R stays 4, and the argument is a fresh sample
+    // rather than the old one carried forward. 15 isolated runs on the
+    // post-Task-9 arm (fleet box, load ~7): 2.867-3.324, median 3.108, mean
+    // 3.108, spread 14.7% of the mean — 0/15 crossed R=4, and the band sits
+    // essentially where the pre-Task-9 one did (2.926-3.375, mean 3.089). The
+    // added children are small against this arm's ~90 ms baseline, and an
+    // UNCONTENDED `flock -w` returns immediately, so the cost lands inside the
+    // noise the estimator already absorbs.
+    //
+    // AND THE POWER IS RE-PROVED IN THE SAME ACT, on the same arm: the same
+    // ten-extra-fork mutation measured above gives 4.126-4.509 (median 4.279,
+    // mean 4.273) over 10 isolated runs — 10/10 true positives, cleanly
+    // separated from the shipped band. Raising the bound to make a green is
+    // the repair this row's own D-2549 comment exists to forbid; the sample is
+    // what says it does not need one.
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
