@@ -2173,6 +2173,30 @@ button.metachip:active {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* The drawer's one status strip — for the things a reader cannot see for
+   themselves. Today that is a pasted image on its way to the box: between the
+   paste and the path in the input box there is an upload, and on a slow link
+   that gap is tens of seconds of otherwise-silent waiting. Absolutely
+   positioned inside `.term-screen`, out of the terminal's way at the top. */
+.term-histbar {
+  position: absolute;
+  top: 0;
+  right: var(--sp-2);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well));
+}
+.term-histbar-word {
+  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-on-well);
+  white-space: nowrap;
+}
+
 .term-screen {
   position: relative;
   flex: 1;

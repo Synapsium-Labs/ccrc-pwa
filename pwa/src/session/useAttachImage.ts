@@ -74,6 +74,34 @@ export function clipboardImages(data: DataTransfer | null): File[] {
     .filter((f): f is File => f !== null);
 }
 
+/**
+ * The bytes actually sent for one image, and the one decision behind them: a
+ * PNG small enough to send whole IS sent whole — a screenshot is already a PNG
+ * and re-encoding costs sharpness for nothing — and everything else is
+ * downscaled and renamed to match what came back.
+ *
+ * Lifted out of the tray's own upload when the terminal drawer gained a paste
+ * of its own. Two callers staging into the same `~/.cc-clips/<id>/` may not
+ * each carry their own answer to this: the rule is spelled once and both read
+ * it.
+ */
+export async function uploadPayload(
+  file: File,
+  // A `File`, not `File | Blob`, and the difference is the build. The only
+  // argument this ever passes is the `File` above, so widening the PARAMETER
+  // buys nothing — and under `strictFunctionTypes` it costs the one thing that
+  // matters: `useStagedImages`'s own `(file: File) => …` stops being assignable
+  // to it, `tsc --noEmit` fails, and `npm run build` never reaches vite. The
+  // real `downscaleImage` still takes `File | Blob` and is assignable here
+  // precisely because a wider parameter always is.
+  downscale: (f: File) => Promise<Blob> = downscaleImage,
+): Promise<File> {
+  if (file.type === 'image/png' && file.size < SMALL_PNG_MAX) return file;
+  const blob = await downscale(file);
+  const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+  return new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
+}
+
 export const MAX_IMAGES = 4;
 
 export interface StagedImage {
@@ -121,13 +149,7 @@ export function useStagedImages(
 
   const upload = async (key: string, file: File): Promise<void> => {
     try {
-      const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
-      let payload = file;
-      if (!keepOriginal) {
-        const blob = await downscale(file);
-        const ext = blob.type === 'image/png' ? 'png' : 'jpg';
-        payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
-      }
+      const payload = await uploadPayload(file, downscale);
       // Measure the PAYLOAD on both branches — the caption answers "did the
       // downscale ruin my screenshot", and keepOriginal never decodes otherwise.
       const bitmap = await createImageBitmap(payload);
