@@ -63,7 +63,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -100,25 +100,6 @@ const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
-
-/** How far above the screen the drawer's history read starts. Stated ONCE,
- *  here, and echoed back to the client in the response — the PWA never names a
- *  number of its own, so there is nothing for the two sides to disagree about.
- *  2000 is tmux's DEFAULT `history-limit`; `ccd/tmux.conf` sets none, so that
- *  default is what the fleet runs. Asking for more is not an error — tmux
- *  returns what it has.
- *
- *  It is a CEILING NOTHING HAS REACHED, and raising it is not this file's to
- *  take. Measured across ten live panes: the fullest is 1953/2000 after 22.3h
- *  of continuous work, and none is at its limit. What actually ends a pane's
- *  history is the program inside it — Claude Code emits `ESC[3J`, which resets
- *  `history_size` to 0 (measured on a private socket: 452 -> 0), which is why
- *  four of those ten read 0 and why a fifth begins mid-document at 1802/2000.
- *  So a larger `history-limit` would buy less than its cost suggests, and the
- *  cost is real: history is ~4.2 kB/line at this fleet's 220x50 (measured,
- *  ~26 B per occupied cell, independent of colour), so 20 full panes are
- *  ~168 MB at 2000 and ~840 MB at 10000 on a 7.4 GB box already in swap. */
-const PANE_HISTORY_LINES = 2000;
 
 /** Content-Type for the clip route, keyed by the (real) extension `clipName` wrote. */
 const CLIP_MIME: Record<string, string> = {

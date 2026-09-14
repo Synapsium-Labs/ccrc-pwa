@@ -3005,3 +3005,29 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
     expect(holders).toEqual(['server/test/scratchSlugs.ts']);
   });
 });
+
+describe('the pane read is declared once, in L0', () => {
+  // PANE_HISTORY_LINES is echoed back to the PWA in every history response and
+  // will be read by wave 3's fit floor beside READER_MIN_COLS and
+  // STALL_BUDGET_LINES. A second copy is a second number to keep in step.
+  it('PANE_HISTORY_LINES is defined in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export const PANE_HISTORY_LINES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('PaneProbe is declared in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export type PaneProbe\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('PaneHistoryReply is declared in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export type PaneHistoryReply\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('server.ts no longer spells the 2000 itself — it imports the name', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'server.ts'), 'utf8');
+    expect(src, 'server.ts still defines its own PANE_HISTORY_LINES').not.toMatch(/const PANE_HISTORY_LINES\s*=/);
+    expect(src, 'server.ts uses the constant without importing it').toMatch(/PANE_HISTORY_LINES/);
+  });
+});
