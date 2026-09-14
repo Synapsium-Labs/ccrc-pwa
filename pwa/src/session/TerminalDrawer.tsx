@@ -556,7 +556,17 @@ export function TerminalDrawer({
     // Scrolling UP asks for the console history instead. Scrolling down while
     // live has nothing to do — the pane's newest line is already on screen.
     term.onWheel((ev) => {
-      if (ev.deltaY < 0) openHistory();
+      // A PINCH IS NOT A SCROLL. A trackpad pinch reaches the page as a `wheel`
+      // event with `ctrlKey` set — there is no separate event for it, which is
+      // why xterm's own `attachCustomWheelEventHandler` docs use this very case
+      // as their example. Reading `deltaY` alone turned a zoom-in into a
+      // request to the box and a second terminal over the reader's live pane.
+      //
+      // It still returns `false`: the modifier decides whether to READ, never
+      // whether xterm may process the event. Handing a pinch back to xterm in
+      // the alternate buffer would put arrow keys on the pty, which is the
+      // whole defect this handler exists to stop.
+      if (!ev.ctrlKey && ev.deltaY < 0) openHistory();
       return false;
     });
 

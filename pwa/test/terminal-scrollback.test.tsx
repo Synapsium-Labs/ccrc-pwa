@@ -146,6 +146,9 @@ const fakeTermFactory = () => {
     // The LATEST handler: a re-attach builds a fresh terminal, and the wheel a
     // reader turns after reconnecting is the new one's.
     wheel: (deltaY: number) => wheelHandlers.at(-1)?.(new WheelEvent('wheel', { deltaY })),
+    /** A wheel event with arbitrary modifiers — a trackpad pinch arrives as
+     *  `wheel` with `ctrlKey`, and it is not a reach for older output. */
+    wheelWith: (init: WheelEventInit) => wheelHandlers.at(-1)?.(new WheelEvent('wheel', init)),
   };
 };
 
@@ -1463,5 +1466,48 @@ describe('a finger opens the history from the live glass', () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('a pinch is not a reach for the history', () => {
+  it('a ctrl+wheel-up opens nothing and still keeps the pty clean', async () => {
+    // A trackpad pinch is delivered as `wheel` with `ctrlKey` set — the browser
+    // has no separate event for it, which is why xterm's own
+    // `attachCustomWheelEventHandler` documentation uses exactly this case as
+    // its example. Reading only `deltaY < 0` turns a zoom-in into a history
+    // read: a request to the box, a second terminal mounted, and the reader's
+    // live pane covered by a layer they never asked for.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { t, ws } = mountDrawer();
+
+    act(() => {
+      t.wheelWith({ deltaY: -120, ctrlKey: true });
+    });
+    await act(async () => { await flush(); });
+
+    expect(fetchImpl, 'a pinch read the pane history').not.toHaveBeenCalled();
+    expect(historyDoor()?.getAttribute('aria-pressed') ?? 'false',
+      'a pinch put the history layer up').toBe('false');
+    expect(ws.sent, 'a pinch reached the pty').toEqual([]);
+  });
+
+  it('the ordinary wheel still opens it — the guard is the modifier, not the wheel', async () => {
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { t } = mountDrawer();
+
+    act(() => { t.wheel(-120); });
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+  });
+
+  it('xterm is still told not to process the pinch itself', async () => {
+    // Returning `false` is xterm's own "do not process this", and it is the
+    // only thing between the wheel and the pane in the alternate buffer. The
+    // guard must SKIP THE READ, not hand the event back to xterm.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { t } = mountDrawer();
+    expect(t.wheelWith({ deltaY: -120, ctrlKey: true }),
+      'xterm was handed a pinch it will turn into arrow keys').toBe(false);
   });
 });
