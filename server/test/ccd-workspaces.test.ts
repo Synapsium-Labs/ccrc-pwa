@@ -179,7 +179,13 @@ describe('a partially purged registry never frees the slug', () => {
     expect(out, 'the refusal happened').toContain('REFUSED');
     expect(out, 'and it names the files holding the slug, which is the reclaim step')
       .toContain('slug in use: quiet-mesa');
-    expect(out).toContain('demo-quiet-mesa.{archived}');
+    // RETARGETED (D-2605). The `$REG/<id>.{…}` brace template is gone: it
+    // could not express the dot-LEADING private compaction families
+    // `_ws_slug_free` now also refuses on, so every path it printed for one
+    // would not exist. Both halves of what the line bought are kept — the root
+    // is named once, and the basename is named in full.
+    expect(out, 'the root is named once').toContain(path.join(home, '.cc-sessions'));
+    expect(out, 'and the basename in full').toContain('demo-quiet-mesa.archived');
     // Nothing was created: no worktree, no branch, no registry entry.
     expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid'), 'no new session inherited the marker').toBeNull();
@@ -202,6 +208,78 @@ describe('a partially purged registry never frees the slug', () => {
     fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.x-y.archived'), '');
     expect(sh(`_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN`)).toBe('FREE');
     expect(sh(`_ws_slug_residue demo quiet-mesa`)).toBe('');
+  });
+
+  // ── D-2605: the dot-LEADING private compaction families ────────────────
+  // `_ws_slug_free` globbed `"$REG/$id".*` — id, then a dot — and was
+  // therefore structurally blind to every `.<id>.…` name the compaction
+  // lifecycle creates. A slug handed back while one of those is present is a
+  // slug re-handed with a stranger's claim on it.
+  it('refuses a slug still holding a dot-leading private compaction family — for THAT id only', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock-open.1.2.3'), '');
+    // A SECOND LIVE ID sharing the prefix: an exact `.<id>.` strip cannot
+    // reach it, where a substring match would — the nested-id hazard the
+    // dot-free check was already built to avoid, in its mirror.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-mesa-b.uuid'), 'x');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'the dot-leading family holds the slug').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'the neighbour answers only for itself').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-lake && echo FREE || echo TAKEN'),
+      'and an unrelated slug is free').toBe('FREE');
+    // EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON `_ws_slug_residue`
+    // CAN NAME. The two are pinned as a PAIR, so reverting either alone reds.
+    expect(sh('_ws_slug_residue demo quiet-mesa'))
+      .toBe('.demo-quiet-mesa.compactions.lock-open.1.2.3');
+  });
+
+  it('the PERMANENT lock is the sole exclusion: it never holds a slug, and never appears as residue', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock'), '');
+    // It spans row generations and safe reuse by design, so its presence
+    // proves HISTORY, not a live regime. Gating on it would wedge every
+    // ever-purged id for ever — `_reg_purge` mints one even for an id that
+    // never existed.
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
+  });
+
+  it('the ws-add refusal names what it found, and EVERY path it names EXISTS', () => {
+    makeRepo('demo');
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-basin.compactions.lock-open.1.2.3'), '');
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin.archived'), '');
+    // A second LIVE id sharing the prefix, so the message cannot be right by
+    // naming everything in $REG.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin-mesa.uuid'), 'x');
+    // POSITIONAL, because `--slug` is not a flag `cmd_ws_add` has: its arg
+    // loop's catch-all would bind `project` to the literal `--slug`, which
+    // `_ws_project_valid` accepts, so the verb would die at the not-a-git-repo
+    // check long before the slug gate and this test would pass for the wrong
+    // reason.
+    const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-basin ) 2>&1 || echo REFUSED`);
+    expect(out, '(a) it refuses').toContain('REFUSED');
+    expect(out).toContain('slug in use: quiet-basin');
+    // (b) the exact basename — not an empty brace pair naming no file.
+    expect(out).toContain('.demo-quiet-basin.compactions.lock-open.1.2.3');
+    expect(out).toContain('demo-quiet-basin.archived');
+    expect(out, 'the neighbour id is not named').not.toContain('demo-quiet-basin-mesa.uuid');
+    // (c) THE MUTATION-EFFECTIVE PART: parse the message and stat every path
+    // it names. This is what the `$REG/<id>.{…}` template could never satisfy
+    // for a dot-leading family, and it is why the die had to change alongside
+    // the function rather than after it.
+    // ANCHORED ON THE EM DASH the message actually uses: a bare `/in (\S+): /`
+    // matches "slug in use: " first and captures `use` as the root, which read
+    // as a real failure of the assertion rather than of the parse.
+    const m = /— in (\S+): (.*)$/m.exec(out);
+    expect(m, 'the message roots the list once and then lists basenames').not.toBeNull();
+    const root = m![1]!;
+    const named = m![2]!.trim().split(', ').filter((x) => x !== '');
+    expect(named.length, 'it named something').toBeGreaterThan(0);
+    for (const base of named) {
+      expect(fs.existsSync(path.join(root, base)), `the message names a path that exists: ${base}`).toBe(true);
+    }
   });
 });
 

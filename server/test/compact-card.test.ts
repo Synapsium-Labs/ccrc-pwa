@@ -505,6 +505,34 @@ describe('the card from the graph (spec §3.2)', () => {
     expect(empty.stderr).toContain('--nonce must be a nonempty string');
   });
 
+  it('A STAGE EXISTS IFF IT IS COMPLETE: every stage write goes through `<stage>.part` and a rename', () => {
+    // A SOURCE PIN, and the reason is stated rather than assumed. The property
+    // is "no reader can ever observe a half-written stage", and the reader is
+    // the hook's reacquired-lock `mv` — which renames the stage onto canonical
+    // WITHOUT reading it, so a truncated stage would publish a truncated
+    // canonical artifact. To observe the defect behaviourally a fixture would
+    // have to kill the helper inside `writeFileSync`, between two write(2)
+    // calls on a file small enough that node issues only one: measured, a
+    // mutant that writes the target directly and then renames it onto itself
+    // leaves every assertion in this file GREEN, because on these fixture-sized
+    // payloads the partial state has no window to exist in. A green mutation
+    // means AMBIGUOUS, not untested — so the discipline is pinned where it is
+    // decidable, in the source.
+    const src = fs.readFileSync(HELPER, 'utf8');
+    const start = src.indexOf('function writeAtomic(target, text) {');
+    expect(start, 'writeAtomic exists').toBeGreaterThan(0);
+    const body = src.slice(start, src.indexOf('\n}', start));
+    expect(body).toContain('const tmp = `${target}.part`;');
+    expect(body).toContain('writeFileSync(tmp, text);');
+    expect(body).toContain('renameSync(tmp, target);');
+    // and NEVER a write straight at the target the hook will rename
+    expect(body).not.toMatch(/writeFileSync\(\s*target\s*,/);
+    // NO HELPER PID in the temp: `<stage>` already carries the hook's pid and
+    // the nonce, so the name is private to one compaction already and a second
+    // component would only widen the exact-family grammar.
+    expect(body).not.toContain('process.pid');
+  });
+
   it('NO CANONICAL PATHNAME IN THE ARGV: the two stages are required, --out/--set are rejected outright, and the provenance flags are required', () => {
     const { graph, labels } = plant();
     const transcript = write('t.jsonl', tl.toolUse('Read', { file_path: path.join(dir, 'server/src/watch.ts') }) + '\n');

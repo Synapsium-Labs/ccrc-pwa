@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=773216ebb40c370ab9775dde2dfbcf3b1a10b49f3954a9fdeaa2b3e7b33d5a26
+# ccrc:generated 1 sha256=22d99ed051214a014d4eb1fa6fc39096372fee6e8177c89912d73c6c20d7c576
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3937,6 +3937,28 @@ _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE
 # recycled by ws-reap) rather than costing the next workspace its archive and
 # reap gates. Refusing to build is the safe direction, it is visible — `ws-add`
 # names the files below — and `rm` on the named files reclaims it.
+# THE PRIVATE COMPACTION FAMILIES (D-2605, spec 3.4's inventory), asked of a
+# basename whose literal `.<id>.` prefix has ALREADY been stripped. These are
+# dot-LEADING, so the `"$REG/$id".*` glob below — id, then dot — is
+# structurally blind to every one of them, and a slug handed back while one is
+# still present is a slug re-handed with a stranger's claim on it.
+#
+# THE PERMANENT LOCK IS THE SOLE EXCLUSION, and by name rather than by shape:
+# it deliberately outlives the row, spanning generations and safe reuse, so it
+# proves history and never a live regime. Gating reuse on it would wedge every
+# ever-purged id forever.
+_ws_private_family() {   # <suffix after the literal `.<id>.` strip> -> 0 iff it BLOCKS slug reuse
+  case "$1" in
+    compactions.lock) return 1 ;;
+    compactset.*|compactcard.*|compactpost.*) return 0 ;;
+    compactserved.*|compactserved-source.*) return 0 ;;
+    compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
+    compactions-stage.*|compactions-snapshot.*) return 0 ;;
+    generation-init.*|generation-read.*) return 0 ;;
+  esac
+  return 1
+}
+
 _ws_slug_free() {   # project slug -> 0 when no registry file exists for the id
   local id="$1-$2" f suffix
   for f in "$REG/$id".*; do
@@ -3947,16 +3969,45 @@ _ws_slug_free() {   # project slug -> 0 when no registry file exists for the id
     [[ "$suffix" == *.* ]] && continue
     return 1
   done
+  # THE DOT-LEADING PRIVATE FAMILIES (D-2605). The literal `.<id>.` prefix is
+  # what keeps a NESTED id out: `.demo-quiet.` and `.demo-quiet-mesa.` are
+  # different strings, so this glob cannot reach across ids the way a substring
+  # match would — the same hazard the dot-free check above was built to avoid.
+  for f in "$REG/.$id".*; do
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/.$id."}"
+    _ws_private_family "$suffix" || continue
+    return 1
+  done
   return 0
 }
 
-_ws_slug_residue() {   # project slug -> the field names the registry still holds
+# EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON THIS CAN NAME. Widening
+# only the first breaks `cmd_ws_add`'s shipped contract — its refusal NAMES
+# WHAT IT FOUND, and an unwidened residue answers the empty string, so the
+# operator is told a slug is in use and handed nothing to reclaim while
+# `_ws_slug_new` skips that slug forever.
+#
+# It emits complete `$REG`-relative BASENAMES — dot-free fields as
+# `<id>.<field>`, private families as `.<id>.<suffix>` — rather than bare
+# suffixes, because the caller prints them as a list rooted once. The old
+# `$REG/<id>.{...}` brace template could not express a dot-LEADING name at all,
+# and measured, its `, ` separator already defeated the brace expansion it
+# implied even for the dot-free case: `echo prefix.{uuid,workdir}` expands,
+# `echo prefix.{uuid, workdir}` prints the braces literally.
+_ws_slug_residue() {   # project slug -> the $REG-relative basenames the registry still holds
   local id="$1-$2" f suffix out=""
   for f in "$REG/$id".*; do
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
-    out+="${out:+, }$suffix"
+    out+="${out:+, }$id.$suffix"
+  done
+  for f in "$REG/.$id".*; do
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/.$id."}"
+    _ws_private_family "$suffix" || continue
+    out+="${out:+, }.$id.$suffix"
   done
   printf '%s' "$out"
 }
@@ -4350,11 +4401,15 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
-  # looking for a workspace that is not there. The field list is the reclaim
+  # looking for a workspace that is not there. The list is the reclaim
   # instruction: those are the files, in $REG, and nothing else holds the slug.
+  # A PLAIN LIST ROOTED ONCE (D-2605), not the old `$REG/<id>.{...}` brace
+  # template: since `_ws_slug_free` now also refuses on the dot-LEADING private
+  # compaction families, the template's dot-AFTER-the-id shape could name no
+  # such file, and every path it printed for one would not exist.
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
                         _ws_slug_free "$project" "$slug" \
-                          || die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project" "$slug")}"; }
+                          || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
                         || die "could not find a free slug for $project"; }
 
