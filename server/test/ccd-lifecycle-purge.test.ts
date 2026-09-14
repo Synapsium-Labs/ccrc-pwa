@@ -16,7 +16,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { CCD, makeCcdHarness, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
-import { eventsOf, measOf, lcDir } from './lifecycleHelpers.js';
+import { eventsOf, measOf, lcDir, readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-purge-'); });
@@ -384,26 +384,31 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
   }, 30_000);
 });
 
+const lockOf = (id: string): string => path.join(h.home, '.cc-sessions', `.${id}.compactions.lock`);
+
+/** Hold the row's mutex from a REAL process, resolving only once the child
+ *  reports it HAS it — so the caller under test races a genuinely held lock
+ *  rather than a hoped-for one.
+ *
+ *  MODULE SCOPE, not inside one describe: the one-terminal-fact guard below
+ *  drives the same four callers against the same held lock, and a second copy
+ *  of a fixture whose whole job is to make a race deterministic is exactly the
+ *  drift this repo's single-definition doctrine exists to refuse. */
+const hold = async (id: string, secs: number): Promise<() => void> => {
+  fs.mkdirSync(path.dirname(lockOf(id)), { recursive: true });
+  fs.closeSync(fs.openSync(lockOf(id), 'a'));
+  const child = spawn('bash', ['-c',
+    `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep ${secs}`, '_', lockOf(id)]);
+  await new Promise<void>((res, rej) => {
+    const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
+    child.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
+    child.on('error', (e) => { clearTimeout(t); rej(e); });
+  });
+  return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
+};
+
 // ── D-2605: the four callers, each answering for what it actually did ─────
 describe('the purge callers read its status (spec §3.4, "Locked purge and honest callers")', () => {
-  const lockOf = (id: string): string => path.join(h.home, '.cc-sessions', `.${id}.compactions.lock`);
-
-  /** Hold the row's mutex from a REAL process, resolving only once the child
-   *  reports it HAS it — so the caller under test races a genuinely held lock
-   *  rather than a hoped-for one. */
-  const hold = async (id: string, secs: number): Promise<() => void> => {
-    fs.mkdirSync(path.dirname(lockOf(id)), { recursive: true });
-    fs.closeSync(fs.openSync(lockOf(id), 'a'));
-    const child = spawn('bash', ['-c',
-      `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep ${secs}`, '_', lockOf(id)]);
-    await new Promise<void>((res, rej) => {
-      const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
-      child.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
-      child.on('error', (e) => { clearTimeout(t); rej(e); });
-    });
-    return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
-  };
-
   it('the DEAD-REG arm DECLINES: one refused fact for its own tx, no done, no reclaimed, and the row STANDS', async () => {
     const id = seed('demo-quiet-basin');
     const release = await hold(id, 8);
@@ -508,4 +513,179 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
     expect(fn).toContain('spawning without CCRC_SESSION_GENERATION');
     expect(fn).toContain('inert until its next respawn');
   });
+});
+
+// ── D-2605: ONE TERMINAL FACT PER MINTED TRANSACTION (spec §3.4, §5) ──────
+// The guard the four-caller work needs and did not have. Each caller mints a
+// `$lctx`, emits its `intent`, and must close it EXACTLY ONCE — with its own
+// `_lc_done <act>`, `_lc_fail <act>` or `_lc_refuse_return <act>`. Two terminal
+// facts for one act is a record that says the act both completed and did not;
+// zero is an intent that stands open for ever on every sweep. Neither is
+// visible to any assertion that counts one outcome at a time, which is how the
+// status-blind arms shipped: `_ws_gc_prune_row`'s dead-reg arm emitted
+// `_lc_done destroy` beside a refusal, and nothing named the pair.
+//
+// THE KEY IS THE MINTED, NON-EMPTY tx (`_lc_tx`'s `printf '%s.%s.%s'`, never
+// empty), and that is what keeps the three literal-empty-tx emitters outside
+// the guard rather than an exemption list: `_lc_refuse` (which never returns),
+// `_lc_done purge` (empty by design — it is not half of a pair) and
+// `cmd_ws_restore`'s `done`/`fail` pair, which is the GREEN CONTROL below. A
+// guard that admitted `""` would red on the correct shipped tree.
+describe('one terminal fact per minted transaction (spec §3.4)', () => {
+  const TERMINAL = new Set(['done', 'failed', 'refused']);
+
+  /** Every (act, id, tx) group the journal carries for a MINTED tx, with the
+   *  terminal outcomes in it. Grouping on the intent as well as the outcome is
+   *  what lets the guard see ZERO terminals — an orphaned intent forms a group
+   *  of its own, where a scan over terminal rows alone would find nothing to
+   *  complain about. */
+  const txGroups = (home: string, admitEmptyTx = false): Map<string, string[]> => {
+    const m = new Map<string, string[]>();
+    for (const e of readJournal(home)) {
+      const tx = String(e['tx'] ?? '');
+      if (tx === '' && !admitEmptyTx) continue;
+      const k = `${String(e['act'])} ${String(e['id'])} ${tx}`;
+      const cur = m.get(k) ?? [];
+      if (TERMINAL.has(String(e['outcome']))) cur.push(String(e['outcome']));
+      m.set(k, cur);
+    }
+    return m;
+  };
+
+  /** THE GUARD. Returns the groups that break it, spelled so the failure names
+   *  the act, the id and what it found. */
+  const breaches = (home: string, admitEmptyTx = false): string[] =>
+    [...txGroups(home, admitEmptyTx)]
+      .filter(([, outs]) => outs.length !== 1)
+      .map(([k, outs]) => `${k} -> [${outs.join(', ')}]`);
+
+  /** NON-VACUITY, applied at every call site: a fixture that minted no
+   *  transaction proves nothing, and an empty journal passes the guard
+   *  trivially. */
+  const assertGuard = (label: string): void => {
+    expect([...txGroups(h.home).keys()].length, `${label}: the fixture minted a transaction`).toBeGreaterThan(0);
+    expect(breaches(h.home), `${label}: one terminal fact per minted tx`).toEqual([]);
+  };
+
+  /** A real worktree on a real branch, so `git worktree remove` and
+   *  `git branch -d` both answer for real rather than through a stub. */
+  const wsRow = (id = 'demo-still-river'): { main: string; wt: string } => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'commit', '--allow-empty', '-m', 'base');
+    const wt = path.join(h.home, 'worktrees', 'demo', 'still-river');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    h.git(main, 'worktree', 'add', '-b', 'ws/still-river', wt);
+    h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
+      _reg_set ${id} workspace still-river; _reg_set ${id} branch ws/still-river
+      _reg_set ${id} workdir ${wt}`);
+    return { main, wt };
+  };
+  const RM_STUB = '_ws_unsupervise() { :; }; _tmux() { echo t; }; tmux() { :; };';
+  const FORGET_STUB = '_ws_unsupervise() { :; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
+
+  it('ws-rm closes its transaction once — on the completed path AND on the purge-refused one', async () => {
+    wsRow();
+    h.sh(`${RM_STUB} cmd_ws_rm demo-still-river 2>/dev/null || true`);
+    assertGuard('ws-rm, completed');
+    expect(eventsOf(h.home, 'destroy').map((e) => e['outcome'])).toEqual(['intent', 'done']);
+
+    h = makeCcdHarness('ccrc-lc-purge-');
+    wsRow();
+    const release = await hold('demo-still-river', 8);
+    try {
+      h.sh(`${RM_STUB} cmd_ws_rm demo-still-river 2>/dev/null || true`);
+      assertGuard('ws-rm, purge refused');
+      // The FAILURE closes it — not a second `done`, and not silence. `return 1`
+      // after the `_lc_fail` is what keeps the success line below unreachable,
+      // and dropping it is one of this guard's two named mutants.
+      expect(eventsOf(h.home, 'destroy').map((e) => e['outcome'])).toEqual(['intent', 'failed']);
+    } finally { release(); }
+  }, 60_000);
+
+  it('ws-rm closes it once when GIT refuses the worktree record — the `die` is what stops a second fact', () => {
+    // A LOCKED worktree: `git worktree remove` refuses it, and this arm takes
+    // no `--force`, so the failure is real rather than injected. The `_lc_fail`
+    // is followed by a `die`, and dropping that `die` lets the same
+    // transaction reach `_lc_done destroy` at the end of the verb.
+    const { main, wt } = wsRow();
+    h.git(main, 'worktree', 'lock', wt);
+    // IN A SUBSHELL: the refusal here is `die`, i.e. `exit 1`, which in the
+    // sourcing shell ends the snippet before `|| true` can run — the same
+    // idiom, for the same reason, as `ccd-ws-reap.test.ts`'s flock-absence leg.
+    h.sh(`${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`);
+    assertGuard('ws-rm, worktree-remove-failed');
+    const outs = eventsOf(h.home, 'destroy');
+    expect(outs.map((e) => e['outcome'])).toEqual(['intent', 'failed']);
+    expect(outs[1]!['refusal'], 'git refused the record, and the record says so').toBe('worktree-remove-failed');
+  });
+
+  it('forget closes its transaction once — completed, and purge-refused', async () => {
+    h.sh(`_reg_set claude-corp-demo uuid u; _reg_set claude-corp-demo project demo
+      _reg_set claude-corp-demo workdir /data/projects/demo; _reg_set claude-corp-demo wrapper claude-corp`);
+    h.sh(`${FORGET_STUB} cmd_forget claude-corp-demo 2>/dev/null || true`);
+    assertGuard('forget, completed');
+    expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'done']);
+
+    h = makeCcdHarness('ccrc-lc-purge-');
+    h.sh(`_reg_set claude-corp-demo uuid u; _reg_set claude-corp-demo project demo
+      _reg_set claude-corp-demo workdir /data/projects/demo; _reg_set claude-corp-demo wrapper claude-corp`);
+    const release = await hold('claude-corp-demo', 8);
+    try {
+      h.sh(`${FORGET_STUB} cmd_forget claude-corp-demo 2>/dev/null || true`);
+      assertGuard('forget, purge refused');
+      expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'failed']);
+    } finally { release(); }
+  }, 60_000);
+
+  it('the dead-reg arm closes its transaction once — reclaimed, and declined', async () => {
+    seed('demo-quiet-basin');
+    h.sh('_ws_gc_prune_row dead-reg demo quiet-basin /nowhere 0');
+    assertGuard('ws-gc dead-reg, reclaimed');
+    expect(eventsOf(h.home, 'destroy').map((e) => e['outcome'])).toEqual(['intent', 'done']);
+
+    h = makeCcdHarness('ccrc-lc-purge-');
+    seed('demo-quiet-basin');
+    const release = await hold('demo-quiet-basin', 8);
+    try {
+      h.sh('_ws_gc_prune_row dead-reg demo quiet-basin /nowhere 0');
+      assertGuard('ws-gc dead-reg, declined');
+      // `_lc_refuse_return` is the third terminal form, and the whole reason it
+      // exists: `_lc_refuse` dies, and a sweep may not die on its first
+      // declining row. Flattening this arm's `if`/`else` so both facts fire
+      // under one `$lctx` is this guard's other named mutant.
+      expect(eventsOf(h.home, 'destroy').map((e) => e['outcome'])).toEqual(['intent', 'refused']);
+    } finally { release(); }
+  }, 60_000);
+
+  it('GREEN CONTROL: ws-restore\'s empty-tx done/fail pair passes — and a guard admitting "" reds it', () => {
+    // A LANDED UNDO PLUS A FAILED SPAWN: `_lc_done restore` fires when the
+    // archive stamps come off, and `_lc_fail restore` when the session does not
+    // come back — both with a LITERAL empty tx, so they are two terminal facts
+    // about one id that the guard must NOT red on.
+    wsRow('demo-still-river');
+    // The ARCHIVED state is planted rather than produced by `cmd_ws_archive`:
+    // that verb reads a wrapper status file this row has no session for and
+    // dies `status-unknown` (measured), and what this control needs is the
+    // RESTORE's two emits, not the archive's ladder.
+    h.sh('_reg_set demo-still-river archived 1787000000; _reg_set demo-still-river archivedreason merged:#42');
+    const RESTORE_STUB = '_ws_supervise() { :; }; _reg_claim() { :; };'
+      + ' _spawn_start() { SPAWN_FROMSWAP=0; return 3; }; _spawn_settle() { :; };'
+      + ' tmux() { return 1; }; _session_verdict() { echo gone; };';
+    h.sh(`${RESTORE_STUB} ( cmd_ws_restore --session demo-still-river ) 2>/dev/null || true`);
+    const restores = eventsOf(h.home, 'restore');
+    expect(restores.map((e) => e['outcome']), 'the undo landed and the spawn did not').toEqual(['done', 'failed']);
+    expect(restores.map((e) => String(e['tx'] ?? '')), 'both carry a LITERAL empty tx').toEqual(['', '']);
+    // NO `assertGuard` HERE, and the difference is the control itself: this
+    // fixture mints NOTHING, so the guard's own non-vacuity clause (which every
+    // other leg asserts) would red on it for the right reason. What this leg
+    // says instead is that the two facts are invisible to the guard BY THE
+    // RULE — there is no group for them to break.
+    expect([...txGroups(h.home).keys()], 'the empty-tx pair forms no minted group').toEqual([]);
+    expect(breaches(h.home), 'and the guard passes').toEqual([]);
+    // WIDENING THE GUARD REDS THIS SAME CONTROL, which is what makes the
+    // empty-tx rule a mechanism rather than a convenient omission.
+    const widened = breaches(h.home, true);
+    expect(widened.some((b) => b.startsWith('restore demo-still-river ')),
+      'a ""-admitting guard reds on the correct shipped tree').toBe(true);
+  }, 60_000);
 });
