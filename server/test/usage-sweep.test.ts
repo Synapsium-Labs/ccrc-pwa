@@ -220,9 +220,34 @@ describe('ccd-usage-sweep.py', () => {
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
     const s = runSweep({ home, dirs: { [a]: 'claude' } });
+    // parseErrors 2: the unparseable `["type":"assistant"]` line, and the
+    // assistant line whose `message` is a string (D-2792 — a line the scanner
+    // cannot read is reported, never dropped in silence).
     expect(s['scan']).toMatchObject({
-      records: 1, assistantLines: 3, prefilterNotAssistant: 2, parseErrors: 1,
+      records: 1, assistantLines: 3, prefilterNotAssistant: 2, parseErrors: 2,
     });
+  });
+
+  // D-2792. A transcript line whose `message` is not an object is one the
+  // scanner cannot account for: it must cost exactly ONE parseErrors and the
+  // pass must still finish and WRITE its output. Before this the line was
+  // dropped in silence — no abort (the isinstance fallback landed with M2), but
+  // no signal either, so a lane emitting such lines undercounted invisibly.
+  it('an assistant line whose message is not an object costs one parse error and the pass still writes its output', () => {
+    const home = mkTmp('ccrc-usage-sweep-msgshape-');
+    const a = path.join(home, '.claude');
+    const proj = path.join(a, 'projects', '-w-demo'); mkdirSync(proj, { recursive: true });
+    writeFileSync(path.join(proj, 'shape.jsonl'),
+      '{"type":"assistant","timestamp":"' + iso(NOW - 3600) + '","sessionId":"sess-1","message":"not-an-object"}\n'
+      + line({ message: { id: 'msg-good' } }));
+    stamp(path.join(proj, 'shape.jsonl'), NOW - 3600);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    const s = runSweep({ home, dirs: { [a]: 'claude' } });
+    // the run finished and WROTE: runSweep reads the out file, and the good
+    // line beside it is still accounted.
+    expect(s['scan']).toMatchObject({ assistantLines: 2, parseErrors: 1, records: 1 });
+    expect((s['perClass'] as Record<string, { n: number }>)['opus']?.n).toBe(1);
   });
 
   it('a malformed usage value counts as a parse error instead of aborting the whole sweep', () => {

@@ -22,8 +22,9 @@ absent from `PROXY_RATES_USD_PER_MTOK` (e.g. a non-Anthropic lane's model) is
 UNPRICED, not free: its records are excluded from every apiUsd sum and
 reported separately per account (`fableShare.unpricedRecords` /
 `.unpricedClasses`) so "not priced" never silently reads as "cost nothing".
-A malformed `usage` value (wrong type, non-numeric count) counts as one
-`parseErrors`, never aborts the run. The `"type":"assistant"` byte test is a
+A malformed `usage` value (wrong type, non-numeric count), and an assistant
+line whose `message` is not an object at all, each count as one `parseErrors`
+and cost only that line, never the run. The `"type":"assistant"` byte test is a
 PREFILTER only: a line is counted in `assistantLines` after the PARSE agrees it
 is an assistant record, and a prefilter hit the parse contradicts (or a line
 that is not a JSON object at all) is counted in `prefilterNotAssistant`. `--reap-orphans`, the tool's only
@@ -152,9 +153,18 @@ def scan(dirs, tokens, now, days, stats, carried):
                                 ts = ""
                             if ts[:19] < cutoff_iso:
                                 continue
+                            # `message` must be an OBJECT to be accounted: the
+                            # usage counts and the dedupe id both live in it. A
+                            # line carrying anything else is one this scanner
+                            # cannot read, so it costs exactly one parseErrors
+                            # and is skipped -- never an abort (the isinstance
+                            # test is what keeps `.get` off a str/list), and
+                            # never a silent drop, which would undercount a
+                            # whole lane with no signal in the output (D-2792).
                             msg = d.get("message")
                             if not isinstance(msg, dict):
-                                msg = {}
+                                stats["parseErrors"] += 1
+                                continue
                             usage = msg.get("usage")
                             mid = msg.get("id")
                             if not usage or not mid:
