@@ -1577,6 +1577,18 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.runEvents(opened.id).length).toBe(2);
   });
 
+  it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    w.coord.db.prepare("UPDATE runs SET kind = 'x-newer' WHERE id = ?").run(opened.id);
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
+    expect(calls).toEqual([]);
+  });
+
   it('a wave-2 double dispatch never re-injects /clear into a live, already-resumed worker (D-46)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing3');

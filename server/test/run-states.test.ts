@@ -86,7 +86,7 @@ describe('transitions by kind (spec §5.2)', () => {
       e.name.startsWith('__') ? [] : e.isDirectory() ? walk(path.join(d, e.name))
         : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []);
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
-    const offenders = walk(root).filter((f) => /\b(RUN_TRANSITIONS|REVIEW_RUN_TRANSITIONS)\[/.test(readFileSync(f, 'utf8')));
+    const offenders = walk(root).filter((f) => /\b\w*RUN_TRANSITIONS\[/.test(readFileSync(f, 'utf8')));
     expect(offenders.map((f) => path.relative(root, f))).toEqual([]);
   });
 });

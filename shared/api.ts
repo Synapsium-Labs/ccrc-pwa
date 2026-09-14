@@ -3800,12 +3800,17 @@ export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonl
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
  * or release-with-ceremony, and reusing those states would make the table lie
  * about what a row is doing. `failed` is reachable from every non-terminal
- * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close route
- * skips the `closing` hop for this kind (`viaClosing: false`, the same skip
- * the abandon-of-a-planned-run already takes).
+ * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close
+ * route's review arm (Task 7 of the plan) skips the `closing` hop for this
+ * kind (`viaClosing: false`, the same skip the abandon-of-a-planned-run
+ * already takes).
  *
  * Every state is a key so the two tables have one shape and one reader; the
- * three work-only states are dead ends here, never reached.
+ * three work-only states are dead ends here, never reached. Those three dead
+ * ends are unreachable by construction — `advanceInner` refuses every edge
+ * into them for this kind — so a review row can never need an exit from one;
+ * `run-states.test.ts` pins that every REACHABLE non-terminal review state
+ * has one.
  */
 export const REVIEW_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
   planned:           ['dispatched', 'failed'],

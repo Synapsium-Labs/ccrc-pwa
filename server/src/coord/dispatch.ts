@@ -211,6 +211,10 @@ export async function dispatchRun(
   // this only answers the question early enough that `ccd ensure`/`/clear`/
   // `ws-add`/`ws-hold` never fire for a transition that was always going to
   // be refused.
+  // Read by KIND through `transitionsFor` (design 2026-09-14 §5.2): identical
+  // for both real kinds — only `planned` carries a `dispatched` edge in
+  // either table — and it refuses a `kind:'unknown'` row (D-2795) here,
+  // BEFORE `ccd ensure`/`ws-add`/`ws-hold` fire.
   if (!transitionsFor(run.kind)[run.state].includes('dispatched')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
   }
